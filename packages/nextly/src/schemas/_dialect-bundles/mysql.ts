@@ -9,6 +9,9 @@
  * @module schemas/_dialect-bundles/mysql
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/mysql.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 export { users } from "../users/mysql";
 
@@ -62,6 +65,7 @@ export { emailProvidersMysql as emailProviders } from "../email-providers/mysql"
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
 export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
 export { emailQueueMysql as emailQueue } from "../email-queue/mysql";
+export { emailQueueRecipientsMysql as emailQueueRecipients } from "../email-queue-recipients/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";

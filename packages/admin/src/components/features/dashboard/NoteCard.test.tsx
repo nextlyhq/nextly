@@ -70,6 +70,13 @@ describe("a note", () => {
     expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
+  it("draws its text as written, so a leading indent keeps its meaning", async () => {
+    // 🔴 Four leading spaces nest a list item one level in. Trimmed before it
+    // is drawn, the note's first item came out at the top level instead.
+    const root = await drawn("    - nested");
+    expect(root.querySelector("ul ul")).not.toBeNull();
+  });
+
   it("says it is empty until it is written, and for a value that is not text", () => {
     const { unmount } = render(<NoteCard {...props("   ")} />);
     expect(screen.getByTestId("card-empty")).toHaveTextContent("An empty note");

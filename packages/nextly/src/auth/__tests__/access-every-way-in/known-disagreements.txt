@@ -1061,6 +1061,21 @@ no-service key-role-based read collection malformed-filter at widget  # holds-pe
 no-service key-role-based read collection malformed-filter at capabilities  # no-service
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
+service user-with new-pub collection other-operation at rest
+service user-with new-pub collection other-operation at direct  # lifecycle-judged-alone
+service user-with new-pub collection other-operation at service  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at rest
+service custom-role new-pub collection other-operation at direct  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at rest
+service key-full-access new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at rest
+service key-role-based new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at rest
+service key-super-admin new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at service  # lifecycle-judged-alone
 
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there

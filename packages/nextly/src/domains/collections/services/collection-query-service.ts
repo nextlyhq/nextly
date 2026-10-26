@@ -113,9 +113,10 @@ import {
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -131,9 +132,11 @@ import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildCompanionExists,
@@ -2430,11 +2433,13 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     fields: FieldDefinition[],
     /** The SQL table the rows came from, for its contributed columns. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    const clearsPasswords = hasPasswordField(fields);
+    const clearsPasswords = reachesPasswordField(fields, reach);
     for (const row of rows) {
-      if (clearsPasswords) stripPasswordFieldValues(row, fields);
+      if (clearsPasswords) stripPasswordFieldValues(row, fields, reach);
       stripServerOnlyColumns(row, tableName);
     }
   }
@@ -2524,12 +2529,28 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // The field groups held inline in this collection's containers, whose
+    // passwords sit in those containers' values: resolved once for the read.
+    // A read of every translation returns each translated field keyed by
+    // language, the fields `decodeJsonFieldValues` decodes that way.
+    const inline = await passwordReachOf(fields, this.fieldGroupDataService);
+    const reach: FieldGroupReach =
+      params.locale === EVERY_TRANSLATION
+        ? {
+            ...inline,
+            keyedByLanguage: field =>
+              isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                true
+              ),
+          }
+        : inline;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields, tableName);
+    this.redactServerOnlyFields(rows, fields, tableName, reach);
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2638,7 +2659,7 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields, tableName);
+    this.redactServerOnlyFields(finalData, fields, tableName, reach);
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.

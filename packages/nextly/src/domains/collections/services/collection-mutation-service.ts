@@ -108,6 +108,7 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  type FieldGroupReach,
   hasPasswordField,
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -141,16 +142,13 @@ import {
   liveFieldGroupReadPass,
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
-import {
-  fieldGroupSlugList,
-  referencedFieldGroupFields,
-} from "../../field-groups/storage/field-group-field-type";
-import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
 import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
@@ -219,6 +217,7 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  asIdSet,
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
@@ -1146,9 +1145,11 @@ export class CollectionMutationService extends BaseService {
      * columns are keyed by the physical name and a `dbName` collection's
      * differs from `dc_<slug>`.
      */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    stripPasswordFieldValues(row, fields);
+    stripPasswordFieldValues(row, fields, reach);
     stripServerOnlyColumns(row, tableName);
   }
 
@@ -1156,7 +1157,9 @@ export class CollectionMutationService extends BaseService {
     row: Record<string, unknown>,
     fields: readonly unknown[],
     /** The SQL table the row came from, for its contributed columns. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): Record<string, unknown> {
     const doc = convertTimestampsToCamelCase(
       this.deserializeJsonFieldsForSnapshot(
@@ -1166,10 +1169,23 @@ export class CollectionMutationService extends BaseService {
     );
     stripPasswordFieldValues(
       doc,
-      fields as Parameters<typeof stripPasswordFieldValues>[1]
+      fields as Parameters<typeof stripPasswordFieldValues>[1],
+      reach
     );
     stripServerOnlyColumns(doc, tableName);
     return doc;
+  }
+
+  /**
+   * Where the password walk follows the field groups `fields` hold inline,
+   * read on `executor`: a write inside a transaction passes its own, since a
+   * pooled read there waits on the connection the transaction holds.
+   */
+  private passwordReach(
+    fields: readonly unknown[],
+    executor?: unknown
+  ): Promise<FieldGroupReach> {
+    return passwordReachOf(fields, this.fieldGroupDataService, executor);
   }
 
   /**
@@ -1419,7 +1435,8 @@ export class CollectionMutationService extends BaseService {
         parentRow: this.readShapeEventDocument(
           args.entry,
           args.fields,
-          args.tableName
+          args.tableName,
+          await this.passwordReach(args.fields, tx.getDrizzle())
         ),
         fields: args.fields,
         manyToManyFields: args.manyToManyFields,
@@ -1599,7 +1616,12 @@ export class CollectionMutationService extends BaseService {
     }
 
     const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
-    this.redactSnapshotRow(parentRow, fields, tableName);
+    this.redactSnapshotRow(
+      parentRow,
+      fields,
+      tableName,
+      await this.passwordReach(fields, tx.getDrizzle())
+    );
 
     const { components, manyToMany } = await this.buildFullSnapshotRelations(
       tx,
@@ -2149,7 +2171,8 @@ export class CollectionMutationService extends BaseService {
     return this.readShapeEventDocument(
       { ...args.row, ...translated },
       args.fields,
-      args.tableName
+      args.tableName,
+      await this.passwordReach(args.fields, args.tx?.getDrizzle())
     );
   }
 
@@ -3550,7 +3573,11 @@ export class CollectionMutationService extends BaseService {
       },
       args.fields
     );
-    stripPasswordFieldValues(document, args.fields);
+    stripPasswordFieldValues(
+      document,
+      args.fields,
+      await this.passwordReach(args.fields, args.connection.getDrizzle())
+    );
     return document;
   }
 
@@ -4261,87 +4288,26 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Delete password-field values from component instances in a snapshot's
-   * component map, descending through nested components. `stripPasswordFieldValues`
-   * handles a component instance's own passwords and any nested in a
-   * group/repeater, but cannot follow a component referenced by slug; this
-   * resolves each instance's schema (from the tagged `_componentType`, or the
-   * field's single declared component) and recurses so a password two components
-   * deep is removed too. Mutates in place: on every path that reaches here the
-   * component data has already been saved (promote) or will never be saved
-   * (draft edit), so stripping the snapshot copy cannot affect a live write.
+   * Delete password-field values from the field-group instances of a
+   * snapshot's component map, at every depth: through the field groups they
+   * reference, by their own type where a dynamic zone's row names it, and
+   * through those held inline in their containers. One walk with every other
+   * password handler (`stripPasswordFieldValues`), so it cannot miss a place
+   * the hash reaches. An instance whose fields are not known is dropped rather
+   * than stored un-inspected. Mutates in place: on every path that reaches
+   * here the component data has already been saved (promote) or will never be
+   * saved (draft edit), so stripping the snapshot copy cannot affect a live
+   * write.
    */
   private stripComponentPasswordsInPlace(
     components: Record<string, unknown>,
     schema: FieldConfig[],
     componentFields: Map<string, FieldConfig[]>
   ): void {
-    const declaredSlugs = (field: FieldConfig): string[] =>
-      // A strip walk that misses a migrated definition's slugs leaves the
-      // plaintext inside the working-draft snapshot.
-      fieldGroupSlugList(field);
-    const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {
-      if (
-        !instance ||
-        typeof instance !== "object" ||
-        Array.isArray(instance)
-      ) {
-        return;
-      }
-      const rec = instance as Record<string, unknown>;
-      stripPasswordFieldValues(rec, cfields);
-      for (const child of cfields) {
-        const childSlugs = declaredSlugs(child);
-        if (childSlugs.length > 0) stripField(rec, child, childSlugs);
-      }
-    };
-    const stripField = (
-      owner: Record<string, unknown>,
-      field: FieldConfig,
-      slugs: string[]
-    ): void => {
-      if (!field.name) return;
-      const value = owner[field.name];
-      const isArray = Array.isArray(value);
-      const instances = isArray ? value : value != null ? [value] : [];
-      const kept: unknown[] = [];
-      let dropped = false;
-      for (const inst of instances) {
-        if (!inst || typeof inst !== "object") {
-          kept.push(inst);
-          continue;
-        }
-        // Asked rather than read: an instance already stored may carry either spelling of
-        // this key, depending on which side of the storage migration wrote it.
-        const tagged = readFieldGroupType(inst);
-        const slug =
-          typeof tagged === "string"
-            ? tagged
-            : slugs.length === 1
-              ? slugs[0]
-              : undefined;
-        const cfields = slug ? componentFields.get(slug) : undefined;
-        if (cfields) {
-          stripInstance(inst, cfields);
-          kept.push(inst);
-        } else {
-          // The instance's schema cannot be resolved (a dynamic-zone row naming
-          // a component the field does not allow, or one absent from the
-          // registry), so a password nested inside it cannot be located and
-          // removed. Drop the instance rather than store an un-inspected value
-          // in plaintext, the same safe direction the restore filter takes for
-          // an unknown subtree.
-          dropped = true;
-        }
-      }
-      if (!dropped) return;
-      if (isArray) owner[field.name] = kept;
-      else delete owner[field.name];
-    };
-    for (const field of schema) {
-      const slugs = declaredSlugs(field);
-      if (slugs.length > 0) stripField(components, field, slugs);
-    }
+    stripPasswordFieldValues(components, schema, {
+      fieldsOf: slug => componentFields.get(slug),
+      direct: true,
+    });
   }
 
   private async buildFullSnapshotRelations(
@@ -4477,13 +4443,21 @@ export class CollectionMutationService extends BaseService {
     },
   >(
     finalData: Record<string, unknown>,
-    fields: T[]
+    fields: T[],
+    /** The write's transaction-bound executor, when it holds a connection. */
+    executor?: unknown
   ): Promise<{
     manyToManyFields: T[];
     manyToManyData: Record<string, string[]>;
     componentFieldData: Record<string, unknown>;
   }> {
-    await hashPasswordFieldValues(finalData, fields);
+    // At every depth, through the field groups held inline in a container:
+    // their passwords are stored in that container's value.
+    await hashPasswordFieldValues(
+      finalData,
+      fields,
+      await this.passwordReach(fields, executor)
+    );
 
     // AFTER every mutating hook has run. A field-level
     // beforeValidate/beforeChange hook can (re)introduce an own
@@ -4619,7 +4593,11 @@ export class CollectionMutationService extends BaseService {
         }
       }
     }
-    stripPasswordFieldValues(entry, fields);
+    stripPasswordFieldValues(
+      entry,
+      fields,
+      await this.passwordReach(fields, executor)
+    );
     // Strip the system owner column so a mutation response (e.g. an admin or
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
@@ -5579,7 +5557,12 @@ export class CollectionMutationService extends BaseService {
             fields
           )
         );
-        this.redactSnapshotRow(snapshotParent, fields, tableName);
+        this.redactSnapshotRow(
+          snapshotParent,
+          fields,
+          tableName,
+          await this.passwordReach(fields, tx.getDrizzle())
+        );
         // Components + m2m are read from the transaction: the write above just
         // persisted them, and an empty relationship reads as [] — so the
         // document is complete and read-shaped with no in-memory overlay. These
@@ -6638,7 +6621,12 @@ export class CollectionMutationService extends BaseService {
                   fields
                 )
               );
-              this.redactSnapshotRow(parentRow, fields, tableName);
+              this.redactSnapshotRow(
+                parentRow,
+                fields,
+                tableName,
+                await this.passwordReach(fields, tx.getDrizzle())
+              );
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -6698,7 +6686,8 @@ export class CollectionMutationService extends BaseService {
               status: direction.nextStatus,
             },
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           );
           // Overlay the committed publish instant AFTER camelCasing: the source
           // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
@@ -6714,7 +6703,8 @@ export class CollectionMutationService extends BaseService {
           const previousDocument = this.readShapeEventDocument(
             preImageRow as Record<string, unknown>,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           );
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
@@ -6871,13 +6861,17 @@ export class CollectionMutationService extends BaseService {
               ...localeValues,
               status: direction.nextStatus,
             };
-            stripPasswordFieldValues(localeDataParent, fields);
+            const localeReach = await this.passwordReach(
+              fields,
+              tx.getDrizzle()
+            );
+            stripPasswordFieldValues(localeDataParent, fields, localeReach);
             const localePrevParent = {
               ...previousDocument,
               ...localeValues,
               status: priorLocaleStatus,
             };
-            stripPasswordFieldValues(localePrevParent, fields);
+            stripPasswordFieldValues(localePrevParent, fields, localeReach);
             const localeData = assembleDocument({
               parentRow: localeDataParent,
               components: localeComponents,
@@ -7305,7 +7299,8 @@ export class CollectionMutationService extends BaseService {
       args.fields,
       args.tableName,
       previousLocalizedValues,
-      committedLocaleStatus
+      committedLocaleStatus,
+      await this.passwordReach(args.fields, tx.getDrizzle())
     );
     const { components: previousComponents, manyToMany: previousM2M } =
       await this.buildFullSnapshotRelations(
@@ -7415,7 +7410,9 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[],
     tableName: string,
     localizedValues: Record<string, unknown>,
-    companionStatus: string | null
+    companionStatus: string | null,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): Record<string, unknown> {
     const parent = this.deserializeJsonFieldsForSnapshot(
       {
@@ -7425,7 +7422,7 @@ export class CollectionMutationService extends BaseService {
       },
       fields
     );
-    this.redactSnapshotRow(parent, fields, tableName);
+    this.redactSnapshotRow(parent, fields, tableName, reach);
     return parent;
   }
 
@@ -7448,6 +7445,7 @@ export class CollectionMutationService extends BaseService {
     reads: GoingLiveReads;
   }): Promise<Map<string, Record<string, unknown>>> {
     const ids = [...args.rows.keys()];
+    const reach = await this.passwordReach(args.fields);
     const componentFields = args.fields.filter(isFieldGroupField);
     const populated =
       this.fieldGroupDataService !== undefined && componentFields.length > 0
@@ -7499,7 +7497,8 @@ export class CollectionMutationService extends BaseService {
             args.locale === undefined
               ? {}
               : await args.reads.translations(id, args.locale),
-            null
+            null,
+            reach
           ),
           components,
           manyToMany,
@@ -7659,6 +7658,12 @@ export class CollectionMutationService extends BaseService {
    */
   async resolveTransitionAuthorization(args: {
     collectionName: string;
+    /**
+     * The one entry the write changes, where it changes one, so a caller who
+     * may not read it is answered as if it were missing. A create or a
+     * batch resolved ahead names no one existing entry.
+     */
+    entryId?: string;
     accessUser?: UserContext;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
@@ -7687,6 +7692,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "publish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -7696,6 +7702,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "unpublish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -8627,7 +8634,11 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      await hashPasswordFieldValues(finalData, fields);
+      await hashPasswordFieldValues(
+        finalData,
+        fields,
+        await this.passwordReach(fields)
+      );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
       // A field-level beforeValidate/beforeChange hook can (re)introduce an own
@@ -9608,11 +9619,15 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
-              // What the caller sent that differs from the draft it promotes,
-              // the draft read as the same kind of document: an echo of the
-              // draft, or a system field the write ignores, is no edit.
-              promotionCarriesContent = editsOver(
-                this.deserializeJsonFieldsForSnapshot(
+              // Whether the caller's write moves the document off the draft it
+              // promotes: the merged document, before access is judged,
+              // against the draft alone assembled by the same pass, so a
+              // component patch counts merged and an echo of the draft, a
+              // junction's ids in another order, or a system field the write
+              // ignores, is no edit.
+              promotionCarriesContent = editsOver({
+                entity: "collection",
+                draft: this.deserializeJsonFieldsForSnapshot(
                   this.assemblePromotedDocument(
                     draftInput,
                     {},
@@ -9624,8 +9639,11 @@ export class CollectionMutationService extends BaseService {
                   ),
                   fields
                 ),
-                callerContribution
-              );
+                promoted: mergedPromoteData,
+                views: new Map(
+                  manyToManyFields.map(field => [field.name, asIdSet])
+                ),
+              });
             }
           }
 
@@ -10024,7 +10042,11 @@ export class CollectionMutationService extends BaseService {
                 },
                 fields
               );
-              stripPasswordFieldValues(parentRow, fields);
+              stripPasswordFieldValues(
+                parentRow,
+                fields,
+                await this.passwordReach(fields, tx.getDrizzle())
+              );
               // Strip the system owner column (created_by) — see create path.
               stripServerOnlyColumns(parentRow, tableName);
               const {
@@ -10146,7 +10168,11 @@ export class CollectionMutationService extends BaseService {
                   { ...currentParent, ...priorLocalizedValues },
                   fields
                 );
-                stripPasswordFieldValues(liveParentRow, fields);
+                stripPasswordFieldValues(
+                  liveParentRow,
+                  fields,
+                  await this.passwordReach(fields, tx.getDrizzle())
+                );
                 stripServerOnlyColumns(liveParentRow, tableName);
                 const draftWrite = await this.storeWorkingDraftInTx(tx, {
                   collection,
@@ -11637,7 +11663,11 @@ export class CollectionMutationService extends BaseService {
       }
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
-        await this.prepareCreateWritePayload(finalData, fields);
+        await this.prepareCreateWritePayload(
+          finalData,
+          fields,
+          tx.getDrizzle()
+        );
 
       // Before the localized split below, which copies these values into the
       // companion payload for the row this create is about to insert.
@@ -12215,7 +12245,11 @@ export class CollectionMutationService extends BaseService {
         (collection as { status?: boolean }).status === true &&
         finalData.status === "published";
 
-      await hashPasswordFieldValues(finalData, fields);
+      await hashPasswordFieldValues(
+        finalData,
+        fields,
+        await this.passwordReach(fields, tx.getDrizzle())
+      );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
       // A field-level beforeValidate/beforeChange hook can (re)introduce an own
@@ -12294,6 +12328,7 @@ export class CollectionMutationService extends BaseService {
         params.transitionAuth ??
         (await this.resolveTransitionAuthorization({
           collectionName: params.collectionName,
+          entryId,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
           // This fallback fires only for a direct caller-owned-tx write (the bulk
@@ -12660,7 +12695,8 @@ export class CollectionMutationService extends BaseService {
           parentRow: this.readShapeEventDocument(
             previousEntry,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           ),
           fields,
           manyToManyFields,
@@ -12701,12 +12737,14 @@ export class CollectionMutationService extends BaseService {
                 ),
               },
               fields,
-              tableName
+              tableName,
+              await this.passwordReach(fields, tx.getDrizzle())
             ),
             liveParentRow: this.readShapeEventDocument(
               existingEntry,
               fields,
-              tableName
+              tableName,
+              await this.passwordReach(fields, tx.getDrizzle())
             ),
             snapshotComponents: previousParts.components,
             snapshotM2M: previousParts.manyToMany,
@@ -12773,7 +12811,8 @@ export class CollectionMutationService extends BaseService {
           parentRow: this.readShapeEventDocument(
             updated as Record<string, unknown>,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           ),
           fields,
           manyToManyFields,
@@ -13184,6 +13223,9 @@ export class CollectionMutationService extends BaseService {
         }>({
           collectionName: params.collectionName,
           operation: "delete",
+          // The one entry it deletes, so a caller who may not read it is
+          // answered as if it were missing, as the ordinary delete answers.
+          entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),

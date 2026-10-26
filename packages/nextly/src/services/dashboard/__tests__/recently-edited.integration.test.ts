@@ -46,6 +46,8 @@ const SECRET = "re_secret";
 const HOME = "re-home";
 /** A Single with Draft/Published, saved but never published. */
 const ABOUT = "re-about";
+/** A Single that holds an edit of its live page as a draft, with a component of two sub-fields. */
+const LANDING = "re-landing";
 /** More collections than the cross-collection read it replaces ever looked at. */
 const MANY = Array.from({ length: 22 }, (_, i) => `re_c${i}`);
 
@@ -67,11 +69,16 @@ afterEach(async () => {
 
 const card = () =>
   defineFieldGroup({ slug: "re_card", fields: [text({ name: "caption" })] });
+const banner = () =>
+  defineFieldGroup({
+    slug: "re_banner",
+    fields: [text({ name: "heading" }), text({ name: "subheading" })],
+  });
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   const t = await createTestNextly({
     dialect,
-    fieldGroups: [card()],
+    fieldGroups: [card(), banner()],
     collections: [
       defineCollection({
         slug: NOTES,
@@ -120,6 +127,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         access: { read: () => true, update: () => true },
         fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: LANDING,
+        label: { singular: "Landing" },
+        status: true,
+        versions: true,
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "headline" }),
+          fieldGroup({ name: "hero", component: "re_banner" }),
+        ],
       }),
     ],
   });
@@ -420,6 +438,74 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await recentlyEdited(as(ANA))).map(row => [row.collection, row.status])
       ).toEqual([[ABOUT, "draft"]]);
+    });
+
+    it("keeps the editor's row when a Single's publish sends part of the draft's component back, and takes the publisher's when the part differs", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update: (
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ) => Promise<{ success: boolean }>;
+      };
+      const by = (person: typeof ANA) => ({
+        overrideAccess: true,
+        actor: { type: "user", id: person.id },
+      });
+      await written(t, at(30), () =>
+        singles.update(
+          LANDING,
+          {
+            headline: "Live",
+            hero: { heading: "Live", subheading: "Sub" },
+            status: "published",
+          },
+          by(BEN)
+        )
+      );
+      // No `status`: held as a draft of the live page.
+      await written(t, at(20), () =>
+        singles.update(
+          LANDING,
+          { hero: { heading: "Pending", subheading: "Sub" } },
+          by(ANA)
+        )
+      );
+
+      // 🔴 Ben publishes, sending one sub-field of the draft's component as
+      // the draft holds it. Compared as the fragment sent, it lacks the
+      // other sub-field and reads as an edit; merged, as it is written, it is
+      // the draft's own component.
+      const [echo] = await written(t, at(10), () =>
+        singles.update(
+          LANDING,
+          { status: "published", hero: { heading: "Pending" } },
+          by(BEN)
+        )
+      );
+      expect(metadataOf(echo!)).toMatchObject({ published: true });
+      expect(metadataOf(echo!)).not.toHaveProperty("publishedWithEdits");
+
+      // The must-differ half: a part the draft does not hold is an edit.
+      await written(t, at(5), () =>
+        singles.update(
+          LANDING,
+          { hero: { heading: "Again", subheading: "Sub" } },
+          by(ANA)
+        )
+      );
+      const [edit] = await written(t, at(1), () =>
+        singles.update(
+          LANDING,
+          { status: "published", hero: { heading: "Ben's" } },
+          by(BEN)
+        )
+      );
+      expect(metadataOf(edit!)).toMatchObject({
+        published: true,
+        publishedWithEdits: true,
+      });
     });
 
     it("fills the card from older readable saves when the newest are all of a collection the reader may not read", async () => {

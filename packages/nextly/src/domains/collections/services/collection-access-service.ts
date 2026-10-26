@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
+  answerForRefusal,
   collectionGateVerdict,
   type GateVerdict,
 } from "../../../auth/access/gate-adapters";
@@ -22,7 +23,10 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
@@ -107,8 +111,9 @@ export class CollectionAccessService extends BaseService {
     if (params.overrideAccess) {
       return null;
     }
-    const verdict = await this.gateVerdict(params, false);
-    return verdict.allowed ? null : this.refusalOf<T>(verdict, params);
+    const ask = this.gateFor(params, false);
+    const verdict = await ask(params.operation);
+    return verdict.allowed ? null : this.refusalOf<T>(verdict, params, ask);
   }
 
   /**
@@ -128,109 +133,170 @@ export class CollectionAccessService extends BaseService {
   > {
     if (params.overrideAccess) return { denied: null };
     const asked = { ...params, operation: "read" as const };
-    const verdict = await this.gateVerdict(asked, true);
+    const ask = this.gateFor(asked, true);
+    const verdict = await ask("read");
     if (verdict.allowed) return { denied: null };
     if (verdict.refusal === "only-matching-entries") {
       return { denied: null, filter: verdict.filter };
     }
-    return { denied: await this.refusalOf<T>(verdict, asked) };
+    return { denied: await this.refusalOf<T>(verdict, asked, ask) };
   }
 
   /**
-   * The gate's verdict for the caller, asked of the one access decision
-   * through the adapter that keeps this gate's answers as they were
+   * How the gate is asked about the caller, for any action: of the one access
+   * decision, through the adapter that keeps this gate's answers as they were
    * (`auth/access/gate-adapters`). `appliesFilter` says whether the asker
    * limits what it reads to the entries a read rule's filter matches.
+   *
+   * The key scope is the caller's own, or the request's when this caller did
+   * not name one. Two of this service's callers cannot name one: the
+   * transaction entry points (`createEntryInTransaction` and its siblings)
+   * take write params that declare no `authenticatedScope`, and the plugin
+   * service facade exposes them, so an API-key request reaching a write
+   * through a transaction would otherwise be judged on the key OWNER's roles
+   * while the identical write through `createEntry` was held to the key's own
+   * grants. An explicit argument still wins, so a caller may narrow.
    */
-  private gateVerdict(
+  private gateFor(
     params: CollectionAccessParams,
     appliesFilter: boolean
-  ): Promise<GateVerdict> {
-    const {
-      collectionName,
-      operation,
-      user,
-      routeAuthorized,
-      authenticatedScope,
-      executor,
-    } = params;
-    // The key scope is the caller's own, or the request's when this caller did
-    // not name one. Two of this method's callers cannot name one: the
-    // transaction entry points (`createEntryInTransaction` and its siblings)
-    // take write params that declare no `authenticatedScope`, and the plugin
-    // service facade exposes them, so an API-key request reaching a write
-    // through a transaction would otherwise be judged on the key OWNER's roles
-    // while the identical write through `createEntry` was held to the key's own
-    // grants. An explicit argument still wins, so a caller may narrow.
-    return collectionGateVerdict({
-      slug: collectionName,
-      action: operation,
-      user,
-      routeAuthorized,
-      scope: effectiveCallerScope(authenticatedScope),
-      principal: currentPrincipal(),
-      executor,
-      appliesFilter,
-      rules: this.rbacAccessControlService,
-      // On this service's own database, with its dialect's tables. Without
-      // them the check reads through the global container and the process's
-      // configured dialect, which a setup with no access-control service may
-      // not have set, or may have set for another instance.
-      permissionWithoutService: () =>
-        hasPermission(
-          user?.id ?? "",
-          operation,
-          collectionName,
-          executor ?? this.db,
-          this.dialect
-        ),
-    });
+  ): (action: AccessOperation) => Promise<GateVerdict> {
+    const { collectionName, user, routeAuthorized, authenticatedScope } =
+      params;
+    const { executor } = params;
+    return action =>
+      collectionGateVerdict({
+        slug: collectionName,
+        action,
+        user,
+        routeAuthorized,
+        scope: effectiveCallerScope(authenticatedScope),
+        principal: currentPrincipal(),
+        executor,
+        appliesFilter,
+        rules: this.rbacAccessControlService,
+        // On this service's own database, with its dialect's tables. Without
+        // them the check reads through the global container and the process's
+        // configured dialect, which a setup with no access-control service may
+        // not have set, or may have set for another instance.
+        permissionWithoutService: () =>
+          hasPermission(
+            user?.id ?? "",
+            action,
+            collectionName,
+            executor ?? this.db,
+            this.dialect
+          ),
+      });
   }
 
-  /** The envelope a refused verdict is handed back as, worded as always. */
+  /** The envelope a refused verdict is handed back as. */
   private async refusalOf<T>(
     verdict: Exclude<GateVerdict, { allowed: true }>,
-    params: CollectionAccessParams
+    params: CollectionAccessParams,
+    ask: (action: AccessOperation) => Promise<GateVerdict>
   ): Promise<CollectionServiceResult<T>> {
     const { collectionName, operation, user, executor } = params;
-    if (verdict.refusal === "failed") {
-      const error = verdict.error;
-      this.logger.error("RBAC access check failed", {
+    // A caller naming one entry it may not read is answered as if the entry
+    // were missing. A caller with no identity, neither a user nor a plugin's
+    // own principal, is left to the sign-in answer, which comes before this.
+    const answer = await answerForRefusal(
+      verdict,
+      operation,
+      params.entryId !== undefined &&
+        (user !== undefined || currentPrincipal() !== null),
+      ask
+    );
+
+    if (answer.answer === "failed") {
+      return this.accessUnreadable<T>(answer.error, {
         collectionName,
         operation,
         userId: user?.id,
-        error: error instanceof Error ? error.message : String(error),
       });
-      // Fail-secure: deny on unexpected RBAC errors. A typed refusal keeps
-      // its own code and status (a busy database is DATABASE_BUSY, 503).
-      return {
-        success: false,
-        statusCode: 500,
-        message: "Failed to verify RBAC permissions",
-        data: null as unknown as T,
-        ...errorEnvelopeFields(error),
-      };
     }
-    // The caller is told what was refused in the site's words. Which check
-    // refused rides along for the server's log, written where the refusal
-    // reaches its caller: a caller asking only whether it may is not refused.
+    if (answer.answer === "missing") {
+      return answeredAsMissing<T>(collectionName, operation);
+    }
+    return refusedInWords<T>({
+      collectionName,
+      operation,
+      unauthenticated: verdict.refusal === "unauthenticated",
+      namesOne: params.entryId !== undefined,
+      executor,
+    });
+  }
+
+  /**
+   * The answer when the caller's access could not be read. Fail-secure: the
+   * request is refused, and a typed failure keeps its own code and status (a
+   * busy database is DATABASE_BUSY, 503).
+   */
+  private accessUnreadable<T>(
+    error: unknown,
+    context: { collectionName: string; operation: string; userId?: string }
+  ): CollectionServiceResult<T> {
+    this.logger.error("RBAC access check failed", {
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       success: false,
-      statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
-      code: "FORBIDDEN",
-      refusalReason:
-        verdict.refusal === "unauthenticated"
-          ? `${operation} on ${collectionName} requires an authenticated user`
-          : `the caller may not ${operation} ${collectionName}`,
-      // Named by the service's caller, so its slug is the site's own. Read
-      // on the gate's own transaction, where it runs in one.
-      message: await refusalMessageFor(
-        operation,
-        collectionName,
-        params.entryId === undefined ? "all" : "one",
-        { named: true, executor }
-      ),
-      data: null as unknown as T,
+      statusCode: 500,
+      message: "Failed to verify RBAC permissions",
+      data: null,
+      ...errorEnvelopeFields(error),
     };
   }
+}
+
+/**
+ * The answer to a caller naming one entry it may not read: exactly what a
+ * missing entry gets, NOT_FOUND in the generic words. Which check refused
+ * rides along for the server's log.
+ */
+function answeredAsMissing<T>(
+  collectionName: string,
+  operation: string
+): CollectionServiceResult<T> {
+  return {
+    success: false,
+    statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
+    code: "NOT_FOUND",
+    message: genericPublicMessage("NOT_FOUND"),
+    refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
+    data: null,
+  };
+}
+
+/**
+ * The refusal of a caller who may not do what it asked, told in the site's
+ * words. Which check refused rides along for the server's log, written where
+ * the refusal reaches its caller: a caller asking only whether it may is not
+ * refused. Named by the service's caller, so its slug is the site's own, and
+ * read on the gate's own transaction where it runs in one.
+ */
+async function refusedInWords<T>(refusal: {
+  collectionName: string;
+  operation: string;
+  unauthenticated: boolean;
+  namesOne: boolean;
+  executor: unknown;
+}): Promise<CollectionServiceResult<T>> {
+  const { collectionName, operation } = refusal;
+  return {
+    success: false,
+    statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
+    code: "FORBIDDEN",
+    refusalReason: refusal.unauthenticated
+      ? `${operation} on ${collectionName} requires an authenticated user`
+      : `the caller may not ${operation} ${collectionName}`,
+    message: await refusalMessageFor(
+      operation,
+      collectionName,
+      refusal.namesOne ? "one" : "all",
+      { named: true, executor: refusal.executor }
+    ),
+    data: null as unknown as T,
+  };
 }

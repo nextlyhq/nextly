@@ -119,7 +119,8 @@ describe("related-row collection access (integration)", () => {
       user: { id: "claim-aware" },
     });
     expect(direct.success).toBe(false);
-    expect(direct.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(direct.statusCode).toBe(404);
 
     const result = await handler.getEntry({
       collectionName: "refs",
