@@ -291,6 +291,33 @@ describe("carryStoredPasswords", () => {
     expect(lines[0]?.pw).toBeUndefined();
   });
 
+  it("gives a field group's instance none of the password of a different instance it replaces", () => {
+    const fields = [
+      {
+        name: "box",
+        type: "group",
+        fields: [{ name: "held", type: "component", component: "pin" }],
+      },
+    ];
+    // One list per field group, as a resolved reach returns it.
+    const pin = [{ name: "pw", type: "password" }];
+    const reach = {
+      fieldsOf: (slug: string) => (slug === "pin" ? pin : undefined),
+    };
+    const data: Record<string, unknown> = { box: { held: { id: "b" } } };
+
+    carryStoredPasswords(
+      data,
+      { box: { held: { id: "a", pw: HASH_A } } },
+      fields,
+      reach
+    );
+
+    expect(
+      ((data.box as Record<string, unknown>).held as Record<string, unknown>).pw
+    ).toBeUndefined();
+  });
+
   it("treats a password sent as undefined as left out", () => {
     const fields = [
       {
