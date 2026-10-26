@@ -127,11 +127,9 @@ describe("a test of the editor's draft", () => {
       }
     );
 
-    expect(send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attachments: [{ mediaId: "added", filename: "new.pdf" }],
-      })
-    );
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      attachments: [{ mediaId: "added", filename: "new.pdf" }],
+    });
   });
 
   it("sends none when the draft removed them", async () => {
