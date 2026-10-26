@@ -674,13 +674,22 @@ async function seedUsers(t: TestNextly) {
     await permissionIds(t, slug => slug === "read-refs"),
     [superAdminRole]
   );
+  // `user-without` holds nothing on any target the table judges, but may read
+  // `refs`, the row its relationships are populated through: its rule no
+  // longer lets in a user without the permission, and without it every
+  // population cell would answer for `refs` rather than for the related row.
+  const refsReaderRole = await makeRole(
+    t,
+    "refs-reader",
+    await permissionIds(t, slug => slug === "read-refs")
+  );
 
   const users: Record<string, SeededUser> = {
     root: { id: rootId, roleIds: [superAdminRole] },
   };
   for (const [name, roleId] of [
     ["with", editorRole],
-    ["without", undefined],
+    ["without", refsReaderRole],
     ["custom", reviewerRole],
     ["chief", chiefRole],
     ["partial", partialRole],

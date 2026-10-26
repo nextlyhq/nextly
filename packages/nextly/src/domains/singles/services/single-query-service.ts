@@ -268,8 +268,8 @@ export function buildSingleHookContext<T>(
  *    anonymous context; a rule that names nothing lets a read through to
  *    the public default and refuses an update.
  * 6. No access-control service → null (skip)
- * 7. The decision for the user or key (super-admin → code-defined →
- *    permissions)
+ * 7. The decision for the user or key (super-admin → the permission → the
+ *    code-defined rule, which only narrows it)
  * 8. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied

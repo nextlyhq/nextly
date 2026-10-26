@@ -5252,6 +5252,10 @@ service user-partial create collection async-throws at direct  403 FORBIDDEN thr
 service user-partial create collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
 service user-partial create collection async-throws at route  403 FORBIDDEN error  | You can't create c async throws.
 service user-partial create collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-partial create collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-partial create collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service user-partial create collection async-true at route  403 FORBIDDEN error  | You can't create c async trues.
+service user-partial create collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
 service user-partial create collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
 service user-partial create collection false at rest  403 FORBIDDEN error  | You can't create c falses.
 service user-partial create collection false at route  403 FORBIDDEN error  | You can't create c falses.
@@ -5300,6 +5304,10 @@ service user-partial create collection returns-string at direct  403 FORBIDDEN t
 service user-partial create collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
 service user-partial create collection returns-string at route  403 FORBIDDEN error  | You can't create c returns strings.
 service user-partial create collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-partial create collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-partial create collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service user-partial create collection returns-true at route  403 FORBIDDEN error  | You can't create c returns trues.
+service user-partial create collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
 service user-partial create collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
 service user-partial create collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
 service user-partial create collection returns-undefined at route  403 FORBIDDEN error  | You can't create c returns undefineds.
@@ -5316,6 +5324,10 @@ service user-partial create collection throws at direct  403 FORBIDDEN thrown  |
 service user-partial create collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
 service user-partial create collection throws at route  403 FORBIDDEN error  | You can't create c throws.
 service user-partial create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service user-partial create collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service user-partial create collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service user-partial create collection true at route  403 FORBIDDEN error  | You can't create c trues.
+service user-partial create collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
 service user-partial create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service user-partial create collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
 service user-partial create collection user-is-key-maker at route  403 FORBIDDEN error  | You can't create c user is key makers.
@@ -5338,6 +5350,10 @@ service user-partial delete collection async-throws at direct  403 FORBIDDEN thr
 service user-partial delete collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this c async throws.
 service user-partial delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service user-partial delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
+service user-partial delete collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
+service user-partial delete collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c async true.
+service user-partial delete collection async-true at route  403 FORBIDDEN error  | You can't delete c async trues.
+service user-partial delete collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
 service user-partial delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
 service user-partial delete collection false at rest  403 FORBIDDEN error  missing=same  | You can't delete this c false.
 service user-partial delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
@@ -5386,6 +5402,10 @@ service user-partial delete collection returns-string at direct  403 FORBIDDEN t
 service user-partial delete collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns string.
 service user-partial delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service user-partial delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
+service user-partial delete collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
+service user-partial delete collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns true.
+service user-partial delete collection returns-true at route  403 FORBIDDEN error  | You can't delete c returns trues.
+service user-partial delete collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
 service user-partial delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
 service user-partial delete collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns undefined.
 service user-partial delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
@@ -5402,6 +5422,10 @@ service user-partial delete collection throws at direct  403 FORBIDDEN thrown  m
 service user-partial delete collection throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this c throws.
 service user-partial delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
 service user-partial delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
+service user-partial delete collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
+service user-partial delete collection true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c true.
+service user-partial delete collection true at route  403 FORBIDDEN error  | You can't delete c trues.
+service user-partial delete collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
 service user-partial delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
 service user-partial delete collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't delete this c user is key maker.
 service user-partial delete collection user-is-key-maker at route  403 FORBIDDEN error  | You can't delete c user is key makers.
@@ -5693,6 +5717,10 @@ service user-partial unpublish collection async-throws at direct  403 FORBIDDEN 
 service user-partial unpublish collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async throws.
 service user-partial unpublish collection async-throws at route  403 FORBIDDEN error  | You can't unpublish c async throws.
 service user-partial unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service user-partial unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
+service user-partial unpublish collection async-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c async true.
+service user-partial unpublish collection async-true at route  403 FORBIDDEN error  | You can't unpublish c async trues.
+service user-partial unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
 service user-partial unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service user-partial unpublish collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c false.
 service user-partial unpublish collection false at route  403 FORBIDDEN error  | You can't unpublish c falses.
@@ -5741,6 +5769,10 @@ service user-partial unpublish collection returns-string at direct  403 FORBIDDE
 service user-partial unpublish collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns string.
 service user-partial unpublish collection returns-string at route  403 FORBIDDEN error  | You can't unpublish c returns strings.
 service user-partial unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service user-partial unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
+service user-partial unpublish collection returns-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
+service user-partial unpublish collection returns-true at route  403 FORBIDDEN error  | You can't unpublish c returns trues.
+service user-partial unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
 service user-partial unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
 service user-partial unpublish collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns undefined.
 service user-partial unpublish collection returns-undefined at route  403 FORBIDDEN error  | You can't unpublish c returns undefineds.
@@ -5757,6 +5789,10 @@ service user-partial unpublish collection throws at direct  403 FORBIDDEN thrown
 service user-partial unpublish collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c throws.
 service user-partial unpublish collection throws at route  403 FORBIDDEN error  | You can't unpublish c throws.
 service user-partial unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service user-partial unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
+service user-partial unpublish collection true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c true.
+service user-partial unpublish collection true at route  403 FORBIDDEN error  | You can't unpublish c trues.
+service user-partial unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
 service user-partial unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
 service user-partial unpublish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service user-partial unpublish collection user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish c user is key makers.
@@ -5770,6 +5806,9 @@ service user-partial unpublish single-pub async-filter at route  403 FORBIDDEN e
 service user-partial unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Throws.
 service user-partial unpublish single-pub async-throws at rest  403 FORBIDDEN error  | You can't edit S Pub Async Throws.
 service user-partial unpublish single-pub async-throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Async Throws.
+service user-partial unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async True.
+service user-partial unpublish single-pub async-true at rest  403 FORBIDDEN error  | You can't unpublish S Pub Async True.
+service user-partial unpublish single-pub async-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Async True.
 service user-partial unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
 service user-partial unpublish single-pub false at rest  403 FORBIDDEN error  | You can't edit S Pub False.
 service user-partial unpublish single-pub false at route  403 FORBIDDEN error  | You can't unpublish S Pub False.
@@ -5806,6 +5845,9 @@ service user-partial unpublish single-pub returns-null at route  403 FORBIDDEN e
 service user-partial unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns String.
 service user-partial unpublish single-pub returns-string at rest  403 FORBIDDEN error  | You can't edit S Pub Returns String.
 service user-partial unpublish single-pub returns-string at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns String.
+service user-partial unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns True.
+service user-partial unpublish single-pub returns-true at rest  403 FORBIDDEN error  | You can't unpublish S Pub Returns True.
+service user-partial unpublish single-pub returns-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns True.
 service user-partial unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Undefined.
 service user-partial unpublish single-pub returns-undefined at rest  403 FORBIDDEN error  | You can't edit S Pub Returns Undefined.
 service user-partial unpublish single-pub returns-undefined at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns Undefined.
@@ -5818,6 +5860,9 @@ service user-partial unpublish single-pub role-screen-spelling at route  403 FOR
 service user-partial unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Throws.
 service user-partial unpublish single-pub throws at rest  403 FORBIDDEN error  | You can't edit S Pub Throws.
 service user-partial unpublish single-pub throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Throws.
+service user-partial unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub True.
+service user-partial unpublish single-pub true at rest  403 FORBIDDEN error  | You can't unpublish S Pub True.
+service user-partial unpublish single-pub true at route  403 FORBIDDEN error  | You can't unpublish S Pub True.
 service user-partial unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
 service user-partial unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S Pub User Is Key Maker.
 service user-partial unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish S Pub User Is Key Maker.
@@ -6593,6 +6638,9 @@ service user-without count collection async-filter at service  403 FORBIDDEN thr
 service user-without count collection async-throws at direct  403 FORBIDDEN thrown  | You can't see c async throws.
 service user-without count collection async-throws at rest  403 FORBIDDEN error  | You can't see c async throws.
 service user-without count collection async-throws at service  403 FORBIDDEN thrown  | You can't see c async throws.
+service user-without count collection async-true at direct  403 FORBIDDEN thrown  | You can't see c async trues.
+service user-without count collection async-true at rest  403 FORBIDDEN error  | You can't see c async trues.
+service user-without count collection async-true at service  403 FORBIDDEN thrown  | You can't see c async trues.
 service user-without count collection false at direct  403 FORBIDDEN thrown  | You can't see c falses.
 service user-without count collection false at rest  403 FORBIDDEN error  | You can't see c falses.
 service user-without count collection false at service  403 FORBIDDEN thrown  | You can't see c falses.
@@ -6629,6 +6677,9 @@ service user-without count collection returns-null at service  403 FORBIDDEN thr
 service user-without count collection returns-string at direct  403 FORBIDDEN thrown  | You can't see c returns strings.
 service user-without count collection returns-string at rest  403 FORBIDDEN error  | You can't see c returns strings.
 service user-without count collection returns-string at service  403 FORBIDDEN thrown  | You can't see c returns strings.
+service user-without count collection returns-true at direct  403 FORBIDDEN thrown  | You can't see c returns trues.
+service user-without count collection returns-true at rest  403 FORBIDDEN error  | You can't see c returns trues.
+service user-without count collection returns-true at service  403 FORBIDDEN thrown  | You can't see c returns trues.
 service user-without count collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see c returns undefineds.
 service user-without count collection returns-undefined at rest  403 FORBIDDEN error  | You can't see c returns undefineds.
 service user-without count collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see c returns undefineds.
@@ -6641,6 +6692,9 @@ service user-without count collection role-screen-spelling at service  403 FORBI
 service user-without count collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service user-without count collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service user-without count collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service user-without count collection true at direct  403 FORBIDDEN thrown  | You can't see c trues.
+service user-without count collection true at rest  403 FORBIDDEN error  | You can't see c trues.
+service user-without count collection true at service  403 FORBIDDEN thrown  | You can't see c trues.
 service user-without count collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service user-without count collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service user-without count collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
@@ -6656,6 +6710,10 @@ service user-without create collection async-throws at direct  403 FORBIDDEN thr
 service user-without create collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
 service user-without create collection async-throws at route  403 FORBIDDEN error  | You can't create c async throws.
 service user-without create collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-without create collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-without create collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service user-without create collection async-true at route  403 FORBIDDEN error  | You can't create c async trues.
+service user-without create collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
 service user-without create collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
 service user-without create collection false at rest  403 FORBIDDEN error  | You can't create c falses.
 service user-without create collection false at route  403 FORBIDDEN error  | You can't create c falses.
@@ -6704,6 +6762,10 @@ service user-without create collection returns-string at direct  403 FORBIDDEN t
 service user-without create collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
 service user-without create collection returns-string at route  403 FORBIDDEN error  | You can't create c returns strings.
 service user-without create collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-without create collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-without create collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service user-without create collection returns-true at route  403 FORBIDDEN error  | You can't create c returns trues.
+service user-without create collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
 service user-without create collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
 service user-without create collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
 service user-without create collection returns-undefined at route  403 FORBIDDEN error  | You can't create c returns undefineds.
@@ -6720,6 +6782,10 @@ service user-without create collection throws at direct  403 FORBIDDEN thrown  |
 service user-without create collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
 service user-without create collection throws at route  403 FORBIDDEN error  | You can't create c throws.
 service user-without create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service user-without create collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service user-without create collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service user-without create collection true at route  403 FORBIDDEN error  | You can't create c trues.
+service user-without create collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
 service user-without create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service user-without create collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
 service user-without create collection user-is-key-maker at route  403 FORBIDDEN error  | You can't create c user is key makers.
@@ -6742,6 +6808,10 @@ service user-without delete collection async-throws at direct  403 FORBIDDEN thr
 service user-without delete collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this c async throws.
 service user-without delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
 service user-without delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
+service user-without delete collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
+service user-without delete collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c async true.
+service user-without delete collection async-true at route  403 FORBIDDEN error  | You can't delete c async trues.
+service user-without delete collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
 service user-without delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
 service user-without delete collection false at rest  403 FORBIDDEN error  missing=same  | You can't delete this c false.
 service user-without delete collection false at route  403 FORBIDDEN error  | You can't delete c falses.
@@ -6790,6 +6860,10 @@ service user-without delete collection returns-string at direct  403 FORBIDDEN t
 service user-without delete collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns string.
 service user-without delete collection returns-string at route  403 FORBIDDEN error  | You can't delete c returns strings.
 service user-without delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
+service user-without delete collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
+service user-without delete collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns true.
+service user-without delete collection returns-true at route  403 FORBIDDEN error  | You can't delete c returns trues.
+service user-without delete collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
 service user-without delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
 service user-without delete collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't delete this c returns undefined.
 service user-without delete collection returns-undefined at route  403 FORBIDDEN error  | You can't delete c returns undefineds.
@@ -6806,6 +6880,10 @@ service user-without delete collection throws at direct  403 FORBIDDEN thrown  m
 service user-without delete collection throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this c throws.
 service user-without delete collection throws at route  403 FORBIDDEN error  | You can't delete c throws.
 service user-without delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
+service user-without delete collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
+service user-without delete collection true at rest  403 FORBIDDEN error  missing=same  | You can't delete this c true.
+service user-without delete collection true at route  403 FORBIDDEN error  | You can't delete c trues.
+service user-without delete collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
 service user-without delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
 service user-without delete collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't delete this c user is key maker.
 service user-without delete collection user-is-key-maker at route  403 FORBIDDEN error  | You can't delete c user is key makers.
@@ -6825,6 +6903,9 @@ service user-without list collection async-filter at service  403 FORBIDDEN thro
 service user-without list collection async-throws at direct  403 FORBIDDEN thrown  | You can't see c async throws.
 service user-without list collection async-throws at rest  403 FORBIDDEN error  | You can't see c async throws.
 service user-without list collection async-throws at service  403 FORBIDDEN thrown  | You can't see c async throws.
+service user-without list collection async-true at direct  403 FORBIDDEN thrown  | You can't see c async trues.
+service user-without list collection async-true at rest  403 FORBIDDEN error  | You can't see c async trues.
+service user-without list collection async-true at service  403 FORBIDDEN thrown  | You can't see c async trues.
 service user-without list collection false at direct  403 FORBIDDEN thrown  | You can't see c falses.
 service user-without list collection false at rest  403 FORBIDDEN error  | You can't see c falses.
 service user-without list collection false at service  403 FORBIDDEN thrown  | You can't see c falses.
@@ -6861,6 +6942,9 @@ service user-without list collection returns-null at service  403 FORBIDDEN thro
 service user-without list collection returns-string at direct  403 FORBIDDEN thrown  | You can't see c returns strings.
 service user-without list collection returns-string at rest  403 FORBIDDEN error  | You can't see c returns strings.
 service user-without list collection returns-string at service  403 FORBIDDEN thrown  | You can't see c returns strings.
+service user-without list collection returns-true at direct  403 FORBIDDEN thrown  | You can't see c returns trues.
+service user-without list collection returns-true at rest  403 FORBIDDEN error  | You can't see c returns trues.
+service user-without list collection returns-true at service  403 FORBIDDEN thrown  | You can't see c returns trues.
 service user-without list collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see c returns undefineds.
 service user-without list collection returns-undefined at rest  403 FORBIDDEN error  | You can't see c returns undefineds.
 service user-without list collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see c returns undefineds.
@@ -6873,6 +6957,9 @@ service user-without list collection role-screen-spelling at service  403 FORBID
 service user-without list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service user-without list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service user-without list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service user-without list collection true at direct  403 FORBIDDEN thrown  | You can't see c trues.
+service user-without list collection true at rest  403 FORBIDDEN error  | You can't see c trues.
+service user-without list collection true at service  403 FORBIDDEN thrown  | You can't see c trues.
 service user-without list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service user-without list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service user-without list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
@@ -6888,6 +6975,10 @@ service user-without publish collection async-throws at direct  403 FORBIDDEN th
 service user-without publish collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async throws.
 service user-without publish collection async-throws at route  403 FORBIDDEN error  | You can't publish c async throws.
 service user-without publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service user-without publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service user-without publish collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
+service user-without publish collection async-true at route  403 FORBIDDEN error  | You can't publish c async trues.
+service user-without publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
 service user-without publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service user-without publish collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c false.
 service user-without publish collection false at route  403 FORBIDDEN error  | You can't publish c falses.
@@ -6936,6 +7027,10 @@ service user-without publish collection returns-string at direct  403 FORBIDDEN 
 service user-without publish collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns string.
 service user-without publish collection returns-string at route  403 FORBIDDEN error  | You can't publish c returns strings.
 service user-without publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service user-without publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service user-without publish collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
+service user-without publish collection returns-true at route  403 FORBIDDEN error  | You can't publish c returns trues.
+service user-without publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
 service user-without publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
 service user-without publish collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns undefined.
 service user-without publish collection returns-undefined at route  403 FORBIDDEN error  | You can't publish c returns undefineds.
@@ -6952,6 +7047,10 @@ service user-without publish collection throws at direct  403 FORBIDDEN thrown  
 service user-without publish collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c throws.
 service user-without publish collection throws at route  403 FORBIDDEN error  | You can't publish c throws.
 service user-without publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service user-without publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service user-without publish collection true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c true.
+service user-without publish collection true at route  403 FORBIDDEN error  | You can't publish c trues.
+service user-without publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
 service user-without publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
 service user-without publish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service user-without publish collection user-is-key-maker at route  403 FORBIDDEN error  | You can't publish c user is key makers.
@@ -6965,6 +7064,9 @@ service user-without publish single-pub async-filter at route  403 FORBIDDEN err
 service user-without publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Throws.
 service user-without publish single-pub async-throws at rest  403 FORBIDDEN error  | You can't edit S Pub Async Throws.
 service user-without publish single-pub async-throws at route  403 FORBIDDEN error  | You can't publish S Pub Async Throws.
+service user-without publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async True.
+service user-without publish single-pub async-true at rest  403 FORBIDDEN error  | You can't edit S Pub Async True.
+service user-without publish single-pub async-true at route  403 FORBIDDEN error  | You can't publish S Pub Async True.
 service user-without publish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
 service user-without publish single-pub false at rest  403 FORBIDDEN error  | You can't edit S Pub False.
 service user-without publish single-pub false at route  403 FORBIDDEN error  | You can't publish S Pub False.
@@ -7001,6 +7103,9 @@ service user-without publish single-pub returns-null at route  403 FORBIDDEN err
 service user-without publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns String.
 service user-without publish single-pub returns-string at rest  403 FORBIDDEN error  | You can't edit S Pub Returns String.
 service user-without publish single-pub returns-string at route  403 FORBIDDEN error  | You can't publish S Pub Returns String.
+service user-without publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns True.
+service user-without publish single-pub returns-true at rest  403 FORBIDDEN error  | You can't edit S Pub Returns True.
+service user-without publish single-pub returns-true at route  403 FORBIDDEN error  | You can't publish S Pub Returns True.
 service user-without publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Undefined.
 service user-without publish single-pub returns-undefined at rest  403 FORBIDDEN error  | You can't edit S Pub Returns Undefined.
 service user-without publish single-pub returns-undefined at route  403 FORBIDDEN error  | You can't publish S Pub Returns Undefined.
@@ -7013,6 +7118,9 @@ service user-without publish single-pub role-screen-spelling at route  403 FORBI
 service user-without publish single-pub throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Throws.
 service user-without publish single-pub throws at rest  403 FORBIDDEN error  | You can't edit S Pub Throws.
 service user-without publish single-pub throws at route  403 FORBIDDEN error  | You can't publish S Pub Throws.
+service user-without publish single-pub true at direct  403 FORBIDDEN thrown  | You can't edit S Pub True.
+service user-without publish single-pub true at rest  403 FORBIDDEN error  | You can't edit S Pub True.
+service user-without publish single-pub true at route  403 FORBIDDEN error  | You can't publish S Pub True.
 service user-without publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
 service user-without publish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S Pub User Is Key Maker.
 service user-without publish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You can't publish S Pub User Is Key Maker.
@@ -7028,6 +7136,10 @@ service user-without read collection async-throws at direct  403 FORBIDDEN throw
 service user-without read collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't see this c async throws.
 service user-without read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
 service user-without read collection async-throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this c async throws.
+service user-without read collection async-true at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c async true.
+service user-without read collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't see this c async true.
+service user-without read collection async-true at route  403 FORBIDDEN error  | You can't see c async trues.
+service user-without read collection async-true at service  403 FORBIDDEN thrown  missing=same  | You can't see this c async true.
 service user-without read collection false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c false.
 service user-without read collection false at rest  403 FORBIDDEN error  missing=same  | You can't see this c false.
 service user-without read collection false at route  403 FORBIDDEN error  | You can't see c falses.
@@ -7076,6 +7188,10 @@ service user-without read collection returns-string at direct  403 FORBIDDEN thr
 service user-without read collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns string.
 service user-without read collection returns-string at route  403 FORBIDDEN error  | You can't see c returns strings.
 service user-without read collection returns-string at service  403 FORBIDDEN thrown  missing=same  | You can't see this c returns string.
+service user-without read collection returns-true at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c returns true.
+service user-without read collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns true.
+service user-without read collection returns-true at route  403 FORBIDDEN error  | You can't see c returns trues.
+service user-without read collection returns-true at service  403 FORBIDDEN thrown  missing=same  | You can't see this c returns true.
 service user-without read collection returns-undefined at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c returns undefined.
 service user-without read collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns undefined.
 service user-without read collection returns-undefined at route  403 FORBIDDEN error  | You can't see c returns undefineds.
@@ -7092,6 +7208,10 @@ service user-without read collection throws at direct  403 FORBIDDEN thrown  mis
 service user-without read collection throws at rest  403 FORBIDDEN error  missing=same  | You can't see this c throws.
 service user-without read collection throws at route  403 FORBIDDEN error  | You can't see c throws.
 service user-without read collection throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this c throws.
+service user-without read collection true at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c true.
+service user-without read collection true at rest  403 FORBIDDEN error  missing=same  | You can't see this c true.
+service user-without read collection true at route  403 FORBIDDEN error  | You can't see c trues.
+service user-without read collection true at service  403 FORBIDDEN thrown  missing=same  | You can't see this c true.
 service user-without read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c user is key maker.
 service user-without read collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't see this c user is key maker.
 service user-without read collection user-is-key-maker at route  403 FORBIDDEN error  | You can't see c user is key makers.
@@ -7112,6 +7232,9 @@ service user-without read single async-filter at route  403 FORBIDDEN error  | Y
 service user-without read single async-throws at direct  403 FORBIDDEN thrown  | You can't see S Async Throws.
 service user-without read single async-throws at rest  403 FORBIDDEN error  | You can't see S Async Throws.
 service user-without read single async-throws at route  403 FORBIDDEN error  | You can't see S Async Throws.
+service user-without read single async-true at direct  403 FORBIDDEN thrown  | You can't see S Async True.
+service user-without read single async-true at rest  403 FORBIDDEN error  | You can't see S Async True.
+service user-without read single async-true at route  403 FORBIDDEN error  | You can't see S Async True.
 service user-without read single false at direct  403 FORBIDDEN thrown  | You can't see S False.
 service user-without read single false at rest  403 FORBIDDEN error  | You can't see S False.
 service user-without read single false at route  403 FORBIDDEN error  | You can't see S False.
@@ -7148,6 +7271,9 @@ service user-without read single returns-null at route  403 FORBIDDEN error  | Y
 service user-without read single returns-string at direct  403 FORBIDDEN thrown  | You can't see S Returns String.
 service user-without read single returns-string at rest  403 FORBIDDEN error  | You can't see S Returns String.
 service user-without read single returns-string at route  403 FORBIDDEN error  | You can't see S Returns String.
+service user-without read single returns-true at direct  403 FORBIDDEN thrown  | You can't see S Returns True.
+service user-without read single returns-true at rest  403 FORBIDDEN error  | You can't see S Returns True.
+service user-without read single returns-true at route  403 FORBIDDEN error  | You can't see S Returns True.
 service user-without read single returns-undefined at direct  403 FORBIDDEN thrown  | You can't see S Returns Undefined.
 service user-without read single returns-undefined at rest  403 FORBIDDEN error  | You can't see S Returns Undefined.
 service user-without read single returns-undefined at route  403 FORBIDDEN error  | You can't see S Returns Undefined.
@@ -7160,6 +7286,9 @@ service user-without read single role-screen-spelling at route  403 FORBIDDEN er
 service user-without read single throws at direct  403 FORBIDDEN thrown  | You can't see S Throws.
 service user-without read single throws at rest  403 FORBIDDEN error  | You can't see S Throws.
 service user-without read single throws at route  403 FORBIDDEN error  | You can't see S Throws.
+service user-without read single true at direct  403 FORBIDDEN thrown  | You can't see S True.
+service user-without read single true at rest  403 FORBIDDEN error  | You can't see S True.
+service user-without read single true at route  403 FORBIDDEN error  | You can't see S True.
 service user-without read single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see S User Is Key Maker.
 service user-without read single user-is-key-maker at rest  403 FORBIDDEN error  | You can't see S User Is Key Maker.
 service user-without read single user-is-key-maker at route  403 FORBIDDEN error  | You can't see S User Is Key Maker.
@@ -7177,6 +7306,10 @@ service user-without unpublish collection async-throws at direct  403 FORBIDDEN 
 service user-without unpublish collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async throws.
 service user-without unpublish collection async-throws at route  403 FORBIDDEN error  | You can't unpublish c async throws.
 service user-without unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service user-without unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service user-without unpublish collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
+service user-without unpublish collection async-true at route  403 FORBIDDEN error  | You can't unpublish c async trues.
+service user-without unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
 service user-without unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service user-without unpublish collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c false.
 service user-without unpublish collection false at route  403 FORBIDDEN error  | You can't unpublish c falses.
@@ -7225,6 +7358,10 @@ service user-without unpublish collection returns-string at direct  403 FORBIDDE
 service user-without unpublish collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns string.
 service user-without unpublish collection returns-string at route  403 FORBIDDEN error  | You can't unpublish c returns strings.
 service user-without unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service user-without unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service user-without unpublish collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
+service user-without unpublish collection returns-true at route  403 FORBIDDEN error  | You can't unpublish c returns trues.
+service user-without unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
 service user-without unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
 service user-without unpublish collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns undefined.
 service user-without unpublish collection returns-undefined at route  403 FORBIDDEN error  | You can't unpublish c returns undefineds.
@@ -7241,6 +7378,10 @@ service user-without unpublish collection throws at direct  403 FORBIDDEN thrown
 service user-without unpublish collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c throws.
 service user-without unpublish collection throws at route  403 FORBIDDEN error  | You can't unpublish c throws.
 service user-without unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service user-without unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service user-without unpublish collection true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c true.
+service user-without unpublish collection true at route  403 FORBIDDEN error  | You can't unpublish c trues.
+service user-without unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
 service user-without unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
 service user-without unpublish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service user-without unpublish collection user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish c user is key makers.
@@ -7254,6 +7395,9 @@ service user-without unpublish single-pub async-filter at route  403 FORBIDDEN e
 service user-without unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Throws.
 service user-without unpublish single-pub async-throws at rest  403 FORBIDDEN error  | You can't edit S Pub Async Throws.
 service user-without unpublish single-pub async-throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Async Throws.
+service user-without unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async True.
+service user-without unpublish single-pub async-true at rest  403 FORBIDDEN error  | You can't edit S Pub Async True.
+service user-without unpublish single-pub async-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Async True.
 service user-without unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
 service user-without unpublish single-pub false at rest  403 FORBIDDEN error  | You can't edit S Pub False.
 service user-without unpublish single-pub false at route  403 FORBIDDEN error  | You can't unpublish S Pub False.
@@ -7290,6 +7434,9 @@ service user-without unpublish single-pub returns-null at route  403 FORBIDDEN e
 service user-without unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns String.
 service user-without unpublish single-pub returns-string at rest  403 FORBIDDEN error  | You can't edit S Pub Returns String.
 service user-without unpublish single-pub returns-string at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns String.
+service user-without unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns True.
+service user-without unpublish single-pub returns-true at rest  403 FORBIDDEN error  | You can't edit S Pub Returns True.
+service user-without unpublish single-pub returns-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns True.
 service user-without unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Undefined.
 service user-without unpublish single-pub returns-undefined at rest  403 FORBIDDEN error  | You can't edit S Pub Returns Undefined.
 service user-without unpublish single-pub returns-undefined at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns Undefined.
@@ -7302,6 +7449,9 @@ service user-without unpublish single-pub role-screen-spelling at route  403 FOR
 service user-without unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Throws.
 service user-without unpublish single-pub throws at rest  403 FORBIDDEN error  | You can't edit S Pub Throws.
 service user-without unpublish single-pub throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Throws.
+service user-without unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't edit S Pub True.
+service user-without unpublish single-pub true at rest  403 FORBIDDEN error  | You can't edit S Pub True.
+service user-without unpublish single-pub true at route  403 FORBIDDEN error  | You can't unpublish S Pub True.
 service user-without unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
 service user-without unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S Pub User Is Key Maker.
 service user-without unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish S Pub User Is Key Maker.
@@ -7320,6 +7470,11 @@ service user-without update collection async-throws at lock  403 FORBIDDEN error
 service user-without update collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async throws.
 service user-without update collection async-throws at route  403 FORBIDDEN error  | You can't edit c async throws.
 service user-without update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service user-without update collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service user-without update collection async-true at lock  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
+service user-without update collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
+service user-without update collection async-true at route  403 FORBIDDEN error  | You can't edit c async trues.
+service user-without update collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
 service user-without update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service user-without update collection false at lock  403 FORBIDDEN error  missing=same  | You can't edit this c false.
 service user-without update collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c false.
@@ -7380,6 +7535,11 @@ service user-without update collection returns-string at lock  403 FORBIDDEN err
 service user-without update collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns string.
 service user-without update collection returns-string at route  403 FORBIDDEN error  | You can't edit c returns strings.
 service user-without update collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service user-without update collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service user-without update collection returns-true at lock  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
+service user-without update collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
+service user-without update collection returns-true at route  403 FORBIDDEN error  | You can't edit c returns trues.
+service user-without update collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
 service user-without update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
 service user-without update collection returns-undefined at lock  403 FORBIDDEN error  missing=same  | You can't edit this c returns undefined.
 service user-without update collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns undefined.
@@ -7400,6 +7560,11 @@ service user-without update collection throws at lock  403 FORBIDDEN error  miss
 service user-without update collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this c throws.
 service user-without update collection throws at route  403 FORBIDDEN error  | You can't edit c throws.
 service user-without update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service user-without update collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service user-without update collection true at lock  403 FORBIDDEN error  missing=same  | You can't edit this c true.
+service user-without update collection true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c true.
+service user-without update collection true at route  403 FORBIDDEN error  | You can't edit c trues.
+service user-without update collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
 service user-without update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
 service user-without update collection user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service user-without update collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
@@ -7421,6 +7586,10 @@ service user-without update single async-throws at direct  403 FORBIDDEN thrown 
 service user-without update single async-throws at lock  403 FORBIDDEN error  missing=same  | You can't edit S Async Throws.
 service user-without update single async-throws at rest  403 FORBIDDEN error  | You can't edit S Async Throws.
 service user-without update single async-throws at route  403 FORBIDDEN error  | You can't edit S Async Throws.
+service user-without update single async-true at direct  403 FORBIDDEN thrown  | You can't edit S Async True.
+service user-without update single async-true at lock  403 FORBIDDEN error  missing=same  | You can't edit S Async True.
+service user-without update single async-true at rest  403 FORBIDDEN error  | You can't edit S Async True.
+service user-without update single async-true at route  403 FORBIDDEN error  | You can't edit S Async True.
 service user-without update single false at direct  403 FORBIDDEN thrown  | You can't edit S False.
 service user-without update single false at lock  403 FORBIDDEN error  missing=same  | You can't edit S False.
 service user-without update single false at rest  403 FORBIDDEN error  | You can't edit S False.
@@ -7469,6 +7638,10 @@ service user-without update single returns-string at direct  403 FORBIDDEN throw
 service user-without update single returns-string at lock  403 FORBIDDEN error  missing=same  | You can't edit S Returns String.
 service user-without update single returns-string at rest  403 FORBIDDEN error  | You can't edit S Returns String.
 service user-without update single returns-string at route  403 FORBIDDEN error  | You can't edit S Returns String.
+service user-without update single returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Returns True.
+service user-without update single returns-true at lock  403 FORBIDDEN error  missing=same  | You can't edit S Returns True.
+service user-without update single returns-true at rest  403 FORBIDDEN error  | You can't edit S Returns True.
+service user-without update single returns-true at route  403 FORBIDDEN error  | You can't edit S Returns True.
 service user-without update single returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Returns Undefined.
 service user-without update single returns-undefined at lock  403 FORBIDDEN error  missing=same  | You can't edit S Returns Undefined.
 service user-without update single returns-undefined at rest  403 FORBIDDEN error  | You can't edit S Returns Undefined.
@@ -7485,6 +7658,10 @@ service user-without update single throws at direct  403 FORBIDDEN thrown  | You
 service user-without update single throws at lock  403 FORBIDDEN error  missing=same  | You can't edit S Throws.
 service user-without update single throws at rest  403 FORBIDDEN error  | You can't edit S Throws.
 service user-without update single throws at route  403 FORBIDDEN error  | You can't edit S Throws.
+service user-without update single true at direct  403 FORBIDDEN thrown  | You can't edit S True.
+service user-without update single true at lock  403 FORBIDDEN error  missing=same  | You can't edit S True.
+service user-without update single true at rest  403 FORBIDDEN error  | You can't edit S True.
+service user-without update single true at route  403 FORBIDDEN error  | You can't edit S True.
 service user-without update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S User Is Key Maker.
 service user-without update single user-is-key-maker at lock  403 FORBIDDEN error  missing=same  | You can't edit S User Is Key Maker.
 service user-without update single user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S User Is Key Maker.
