@@ -650,6 +650,65 @@ describe("useCurrentUserPermissions", () => {
     expect(result.current.canAccessCollection("posts", "read")).toBe(false);
   });
 
+  it("leaves a newer language's answer alone when returning to an older one fails", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    onScreen.locale = "fr";
+    server.capabilities = answering({ read: true });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    // German answers later, which marks French stale.
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // Back to French during an outage: its refresh fails.
+    server.capabilities = new Error("capabilities unavailable");
+    onScreen.locale = "fr";
+    rerender();
+    await waitFor(() => expect(result.current.content.error).not.toBeNull());
+
+    // German's answer, newer than anything French had, still counts.
+    onScreen.locale = "de";
+    rerender();
+    expect(result.current.content.hasAnswer).toBe(true);
+    expect(result.current.canAccessCollection("posts", "read")).toBe(true);
+  });
+
+  it("asks the permission list again on the schedule when only its refresh failed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    server.capabilities = answering({ read: true });
+    const client = newClient();
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+
+    // A role change: the content answer comes back, the permission list
+    // cannot be had.
+    server.permissions = new Error("permissions unavailable");
+    act(() => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    // POPULATION CONTROL: the content half answered.
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.hasAnswer).toBe(false);
+
+    // The endpoint recovers; the next scheduled ask brings the list back.
+    server.permissions = EDITOR;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() => expect(result.current.hasAnswer).toBe(true));
+  });
+
   it("keeps asking on the schedule after a change's refresh fails", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     server.capabilities = answering({ read: true });

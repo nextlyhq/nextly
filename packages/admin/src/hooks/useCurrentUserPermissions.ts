@@ -4,7 +4,7 @@ import {
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { LOCALE_PARAM } from "../constants/search-params";
@@ -468,7 +468,11 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-    refetchInterval: () =>
+    // Asked again on the schedule when its own refresh failed with no answer
+    // that counts, and while the content answer has none, whose end it
+    // would otherwise be told.
+    refetchInterval: query =>
+      unansweredAfterFailure(query.state) ||
       contentUnanswered(queryClient, capabilitiesKey)
         ? UNANSWERED_RECHECK_MS
         : false,
@@ -507,9 +511,18 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // are marked stale without being fetched, so returning to a language asks
   // again rather than restoring its older answer.
   const languageAnsweredAt = answer.dataUpdatedAt;
+  // The answer a language already had when the screen moved to it is not
+  // news: only one that arrived after that is newer than the other
+  // languages', and only that one marks them.
+  const seenAnswer = useRef<{ key: string; at: number } | null>(null);
   useEffect(() => {
-    if (languageAnsweredAt === 0) return;
     const shown = JSON.stringify(capabilitiesKey);
+    if (seenAnswer.current?.key !== shown) {
+      seenAnswer.current = { key: shown, at: languageAnsweredAt };
+      if (languageAnsweredAt !== 0) return;
+    }
+    if (languageAnsweredAt <= seenAnswer.current.at) return;
+    seenAnswer.current.at = languageAnsweredAt;
     const others = {
       queryKey: CURRENT_USER_CAPABILITIES_KEY,
       predicate: (query: { queryKey: readonly unknown[] }) =>
