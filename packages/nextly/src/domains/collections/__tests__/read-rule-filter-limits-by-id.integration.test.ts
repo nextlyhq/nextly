@@ -14,10 +14,17 @@
  *
  * @module domains/collections/__tests__/read-rule-filter-limits-by-id.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
-import { defineCollection, text } from "../../../config";
+import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
+import { consoleLogger } from "../../../shared/types";
 import {
   createTestNextly,
   type TestNextly,
@@ -31,6 +38,11 @@ const NOTES = "rulefilter_byid_notes";
 const DRAFTED = "rulefilter_byid_drafted";
 // A read rule whose filter names a field the collection does not have.
 const VANISHED = "rulefilter_byid_vanished";
+// A component, and read rules whose filters name a field inside it: one the
+// component has, and one it no longer has.
+const META = "rulefilter_byid_meta";
+const COMPONENTED = "rulefilter_byid_componented";
+const RENAMED_CHILD = "rulefilter_byid_renamed_child";
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
@@ -39,10 +51,15 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  clearRuleFilterReports();
+  vi.restoreAllMocks();
 });
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    fieldGroups: [
+      defineFieldGroup({ slug: META, fields: [text({ name: "heading" })] }),
+    ],
     collections: [
       defineCollection({
         slug: NOTES,
@@ -58,6 +75,22 @@ async function boot(): Promise<TestNextly> {
           update: () => true,
         },
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: COMPONENTED,
+        access: { read: answering({ "meta.heading": { equals: "x" } }) },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "meta", component: META }),
+        ],
+      }),
+      defineCollection({
+        slug: RENAMED_CHILD,
+        access: { read: answering({ "meta.gone": { equals: "x" } }) },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "meta", component: META }),
+        ],
       }),
       defineCollection({
         slug: VANISHED,
@@ -202,4 +235,40 @@ describe("a read by id under a read rule that answers a filter", () => {
     expect(listed.items).toEqual([]);
     expect(listed.meta.total).toBe(0);
   });
+
+  it.each([
+    ["a field the component has", COMPONENTED],
+    ["a field the component no longer has", RENAMED_CHILD],
+  ])(
+    "refuses a filter naming %s inside a component, and reports it once",
+    async (_name, collection) => {
+      const t = await boot();
+      const reported = vi
+        .spyOn(consoleLogger, "error")
+        .mockImplementation(() => {});
+      const made = await t.nextly.create({
+        collection,
+        data: { title: "kept" },
+      });
+      const id = String((made.item as { id: string | number }).id);
+      const gone = await t.nextly.create({
+        collection,
+        data: { title: "gone" },
+      });
+      const goneId = String((gone.item as { id: string | number }).id);
+      await t.nextly.delete({ collection, id: goneId });
+      // Answered as missing, not as an error from a query the database could
+      // not run, and the list finds nothing.
+      expect(await readAsVisitor(t, id, collection)).toEqual(
+        await readAsVisitor(t, goneId, collection)
+      );
+      const listed = await t.nextly.find({ collection, overrideAccess: false });
+      expect(listed.items).toEqual([]);
+      const reports = reported.mock.calls
+        .map(call => String(call[0]))
+        .filter(message => message.includes(`read rule of "${collection}"`));
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toContain("FILTER_COMPONENT_IN_RULE");
+    }
+  );
 });

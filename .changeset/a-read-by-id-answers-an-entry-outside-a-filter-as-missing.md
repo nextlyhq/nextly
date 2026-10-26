@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A read by id under a collection `read` rule that answers with a filter, through the Direct API, a plugin service or REST, now reads an entry the filter matches and answers one it does not match exactly as an entry that does not exist, where it refused such a caller before.
+A read by id under a collection `read` rule that answers with a filter, through the Direct API, a plugin service or REST, now reads an entry the filter matches and answers one it does not match exactly as an entry that does not exist, where it refused such a caller before. Such a read returns the entry the filter matched, without its pending working draft. A read rule's filter can't name a field inside a component yet: a rule whose filter does is refused, and the refusal is logged once.

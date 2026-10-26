@@ -54,6 +54,8 @@ export interface PreparedFilterCondition {
   readonly componentTables: Map<string, string>;
   /** The discriminator column of each component table it reaches. */
   readonly componentTypeColumns: Map<string, string>;
+  /** Whether the filter names a field inside a component. */
+  readonly namesComponentFields: boolean;
   /**
    * The filter as one SQL condition over `schema`, or `undefined` for a
    * filter that constrains nothing. Pure: it reads nothing, so it may be
@@ -86,6 +88,7 @@ export async function prepareFilterCondition(
     return {
       componentTables: params.resolvedComponentTables ?? new Map(),
       componentTypeColumns: params.resolvedComponentTypeColumns ?? new Map(),
+      namesComponentFields: false,
       condition: () => undefined,
     };
   }
@@ -113,6 +116,7 @@ export async function prepareFilterCondition(
   return {
     componentTables,
     componentTypeColumns,
+    namesComponentFields: componentFilters.length > 0,
     condition(schema, localizedCtx) {
       const parts: SQLWrapper[] = [];
       const componentCondition = componentFieldCondition(

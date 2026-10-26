@@ -32,7 +32,11 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import type { RuleFilter } from "../../../auth/access/rule-answer";
+import {
+  FILTER_NAMES_A_COMPONENT_FIELD,
+  reportRuleFilterMisuse,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
 import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -192,6 +196,7 @@ import {
   componentTableNamesFor,
   prepareFilterCondition,
   type FilterConditionSources,
+  type PreparedFilterCondition,
 } from "../query/filter-condition";
 import {
   isPlainObject,
@@ -1884,18 +1889,39 @@ export class CollectionQueryService extends BaseService {
     schema: DynamicSchema,
     localizedCtx: LocalizedQueryContext | null
   ): Promise<SQLWrapper | undefined> {
-    try {
-      const prepared = await prepareFilterCondition(
-        { collectionName, filter },
-        this.filterSources()
-      );
-      return prepared.condition(schema, localizedCtx);
-    } catch (error) {
+    const unbuildable = (error: unknown): SQLWrapper => {
       this.logger.error("A read rule's filter could not be built", {
         collectionName,
         code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
       });
       return sql`1 = 0`;
+    };
+    let prepared: PreparedFilterCondition;
+    try {
+      prepared = await prepareFilterCondition(
+        { collectionName, filter },
+        this.filterSources()
+      );
+    } catch (error) {
+      return unbuildable(error);
+    }
+    // A field inside a component cannot be used in a rule's filter yet: it is
+    // refused as a filter that is not well formed, reported once and raised
+    // in development, and matches no entry. Asked before any condition is
+    // built, so no query runs on a component path the component may not have.
+    if (prepared.namesComponentFields) {
+      reportRuleFilterMisuse(
+        collectionName,
+        "read",
+        "collection",
+        FILTER_NAMES_A_COMPONENT_FIELD
+      );
+      return sql`1 = 0`;
+    }
+    try {
+      return prepared.condition(schema, localizedCtx);
+    } catch (error) {
+      return unbuildable(error);
     }
   }
 
