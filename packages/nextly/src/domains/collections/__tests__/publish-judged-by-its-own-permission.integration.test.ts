@@ -51,6 +51,8 @@ const PUBLISHER = "publisher-1";
 const EDITOR = "editor-1";
 /** May read, and not update, publish or unpublish. */
 const READER = "reader-1";
+/** May not even read posts. */
+const STRANGER = "stranger-1";
 
 /** A system column's value no hook should be handed from a status-only body. */
 const SENT_SYSTEM_VALUE = "1999-01-01T00:00:00.000Z";
@@ -537,6 +539,25 @@ describe.each(getConfiguredTestDialects())(
           )
         )
         .toEqual({ status: 403, message: "You can't edit this notes." });
+    });
+
+    it("answers a status-only write by a caller who may not read the entry as a missing entry", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, STRANGER, "read", [NOTES]);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      // A caller who may not read the entry is told it is missing, whatever
+      // the write asks: naming the action would confirm the entry exists.
+      const missing = { status: 404, message: "Not found." };
+      expect(
+        await restRefusal(STRANGER, entry, { status: "published" })
+      ).toEqual(missing);
+      // The control: an ordinary update by the same caller is answered alike.
+      expect(await restRefusal(STRANGER, entry, { title: "edited" })).toEqual(
+        missing
+      );
+      expect((await stored(POSTS, id)).status).toBe("draft");
     });
 
     it("asks publish of a status-only row in a batch, for a caller who may update", async () => {
