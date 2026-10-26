@@ -140,6 +140,27 @@ const GENERATED_CARD = new RegExp(
   `^collection/([a-z0-9-]+)-(${Object.keys(SUCCESSORS).join("|")})$`
 );
 
+/**
+ * The facts of today's generated cards that a conversion's exactness reads,
+ * as scope-token inputs: each card whose kind converts only when
+ * `EXACT_WHEN` says so, with its query.
+ *
+ * 🔴 A timeline's date field can change with no widget id changing, turning a
+ * card the reader was handed converted back into one stored as it was. A save
+ * from that snapshot would write the lossy conversion, so it must be refused
+ * as stale. A card appearing or going already moves the token by its id.
+ */
+export function conversionFacts(
+  generated: readonly { id: string; query?: unknown }[]
+): string[] {
+  return generated.flatMap(card => {
+    const kind = GENERATED_CARD.exec(card.id)?.[2] as GeneratedKind | undefined;
+    return kind !== undefined && EXACT_WHEN[kind] !== undefined
+      ? [`${card.id}=${stableJson(card.query ?? null)}`]
+      : [];
+  });
+}
+
 /** The widths a successor allows by its own declaration in core. */
 function declaredWidths(successor: string): readonly WidgetWidth[] {
   const definition = CORE_WIDGETS.find(widget => widget.id === successor);

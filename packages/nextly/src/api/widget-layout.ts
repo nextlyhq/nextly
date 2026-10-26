@@ -48,10 +48,12 @@ import {
   collectionWidgets,
   unreadableCollectionCard,
 } from "../domains/widgets/collection-cards";
-import { generatedWidgets } from "../domains/widgets/collection-widgets";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
-import { generatedCardConversion } from "../domains/widgets/generated-card-conversion";
+import {
+  conversionFacts,
+  generatedCardConversion,
+} from "../domains/widgets/generated-card-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -312,8 +314,11 @@ async function visibleWidgets(auth: AuthContext) {
   // are all taken from.
   const readable = readableCollectionsOf(audience.visible);
   const registered = audience.registeredCollections;
+  // The generated cards from the audience's own snapshot, taken in the same
+  // span as the visible widgets and the registered collections: a re-read of
+  // the global set could hold another request's refresh.
   const generatedById = new Map(
-    generatedWidgets().map(widget => [widget.id, widget])
+    audience.generated.map(widget => [widget.id, widget])
   );
   return {
     caller,
@@ -347,7 +352,8 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets)
+      collectionSettingsToken(widgets),
+      conversionFacts(audience.generated)
     ),
   };
 }

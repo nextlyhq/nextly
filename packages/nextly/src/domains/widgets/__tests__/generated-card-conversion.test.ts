@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { CORE_WIDGETS } from "../core-widgets";
 import {
+  conversionFacts,
   generatedCardConversion,
   resolveGeneratedCardCollection,
   type GeneratedCard,
@@ -477,5 +478,30 @@ describe("the successors' defaults a converted card relies on", () => {
     // 🔴 A converted card stores no range, so it is this default that keeps
     // the promise; changing it changes every converted card.
     expect(setting("core/over-time", "dateRange")?.defaultValue).toBe("30d");
+  });
+});
+
+describe("the facts a conversion is exact on, as scope-token inputs", () => {
+  const timeline = (dateField: string) => ({
+    id: "collection/posts-timeline",
+    query: { op: "timeseries", dateField },
+  });
+
+  it("changes when a timeline's date field changes, its id unchanged", () => {
+    // 🔴 Counted by another date, a converted timeline is stored as it was
+    // again: a save from the snapshot that converted it must be stale.
+    expect(conversionFacts([timeline("createdAt")])).not.toEqual(
+      conversionFacts([timeline("eventOn")])
+    );
+  });
+
+  it("holds only the cards whose conversion depends on more than their id", () => {
+    expect(
+      conversionFacts([
+        timeline("createdAt"),
+        { id: "collection/posts-count", query: { op: "count" } },
+        { id: "collection/posts-breakdown", query: { op: "groupBy" } },
+      ])
+    ).toHaveLength(1);
   });
 });
