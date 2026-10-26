@@ -250,6 +250,7 @@ describe("a read rule that answers a filter", () => {
       .map(call => String(call[0]))
       .filter(message => message.includes(`read rule of "${PLACES}"`));
     expect(reports).toHaveLength(1);
-    expect(reports[0]).toContain("near");
+    // Named by its problem's code, as every misuse is, never by its keys.
+    expect(reports[0]).toContain("FILTER_GEO_IN_RULE");
   });
 });

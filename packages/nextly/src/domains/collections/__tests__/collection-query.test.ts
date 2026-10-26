@@ -488,7 +488,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ overrideAccess: true })
+        expect.objectContaining({ overrideAccess: true }),
+        // The page's own access, so the total counts what the page read.
+        expect.objectContaining({ denied: null })
       );
     });
 
@@ -505,7 +507,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "draft" })
+        expect.objectContaining({ status: "draft" }),
+        // The page's own access, so the total counts what the page read.
+        expect.objectContaining({ denied: null })
       );
     });
 
@@ -526,7 +530,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       // A count evaluated for a different caller than the rows would report a
       // total the caller cannot page through.
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ user, routeAuthorized: true })
+        expect.objectContaining({ user, routeAuthorized: true }),
+        // The page's own access, so the total counts what the page read.
+        expect.objectContaining({ denied: null })
       );
     });
 
@@ -552,7 +558,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(countSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ authenticatedScope })
+        expect.objectContaining({ authenticatedScope }),
+        // The page's own access, so the total counts what the page read.
+        expect.objectContaining({ denied: null })
       );
     });
 

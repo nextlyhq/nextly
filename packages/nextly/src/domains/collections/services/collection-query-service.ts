@@ -3299,7 +3299,7 @@ export class CollectionQueryService extends BaseService {
         // We call countEntries separately to get total (it handles same filters)
         const [fetchedEntries, countResult] = await Promise.all([
           query,
-          this.countEntriesAs(
+          this.countEntries(
             {
               collectionName: params.collectionName,
               user: params.user,
@@ -4000,17 +4000,13 @@ export class CollectionQueryService extends BaseService {
   }
 
   async countEntries(
-    params: FilteredReadParams
-  ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
-    return this.countEntriesAs(params);
-  }
-
-  /**
-   * A count, under `settled` access when it continues a read that already
-   * settled it (see {@link resolveReadPlan}), and otherwise judged here.
-   */
-  private async countEntriesAs(
     params: FilteredReadParams,
+    /**
+     * The access a list already settled for the page this count totals, so
+     * the total is counted under the filter the page was read with. Only
+     * this service's own list passes it; any other caller leaves it out and
+     * the count judges access itself (see {@link resolveReadPlan}).
+     */
     settled?: SettledRead
   ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {

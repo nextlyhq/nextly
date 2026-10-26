@@ -65,7 +65,7 @@ describe("ruleAnswer", () => {
         answer.kind === "malformed-filter"
           ? answer.problems.map(p => p.code)
           : []
-      ).toContain("geo-in-rule-filter");
+      ).toContain("FILTER_GEO_IN_RULE");
     }
   );
 

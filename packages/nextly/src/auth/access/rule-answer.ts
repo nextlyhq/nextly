@@ -135,7 +135,7 @@ function geoProblems(
       .filter(operator => GEO_OPERATORS.has(operator))
       .map(operator => ({
         path: `${path}.${key}.${operator}`,
-        code: "geo-in-rule-filter",
+        code: "FILTER_GEO_IN_RULE",
         message: `${operator} cannot be used in a rule's filter yet`,
       }));
   });
