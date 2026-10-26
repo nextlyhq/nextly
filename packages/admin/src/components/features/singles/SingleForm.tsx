@@ -287,6 +287,7 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  */
 function SingleFormLanguagePanel({
   actionsDisabled,
+  navigationDisabled,
   enabled,
   hasStatus,
   locale,
@@ -295,6 +296,7 @@ function SingleFormLanguagePanel({
   translations,
 }: {
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   enabled: boolean;
   hasStatus: boolean;
   locale?: string;
@@ -311,6 +313,7 @@ function SingleFormLanguagePanel({
         {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
       />
     </div>
   );
@@ -365,6 +368,7 @@ function SingleFormFieldsPanel({
  */
 function SingleFormRail({
   actionsDisabled,
+  navigationDisabled,
   entry,
   hasStatus,
   isDirty,
@@ -373,6 +377,7 @@ function SingleFormRail({
   railCollapsed,
 }: {
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   isDirty: boolean;
@@ -390,6 +395,7 @@ function SingleFormRail({
           hasStatus={hasStatus}
           isDirty={isDirty}
           actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
           {...(locale === undefined ? {} : { locale })}
           {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         />
@@ -1034,7 +1040,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView}
+                open={previewPane.open && !documentView && !readOnlyForReader}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1138,7 +1144,13 @@ export function SingleForm({
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                                  {...previewPane.toggle}
+                                  // A reader is offered no preview, as the
+                                  // share link beside it: opening one mints a
+                                  // credential the server grants only to a
+                                  // user who may change the Single.
+                                  {...(readOnlyForReader
+                                    ? {}
+                                    : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
@@ -1190,6 +1202,8 @@ export function SingleForm({
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
                                   actionsDisabled={editsHeld}
+                                  // A reader may still open the other languages.
+                                  navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
                                   railCollapsed={railCollapsed}
@@ -1223,6 +1237,7 @@ export function SingleForm({
                               {/* Rail (collapsible). */}
                               <SingleFormRail
                                 actionsDisabled={editsHeld}
+                                navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
                                 isDirty={isDirty}

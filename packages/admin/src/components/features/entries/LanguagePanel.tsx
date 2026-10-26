@@ -66,6 +66,12 @@ export interface LanguagePanelProps {
    * write the live document). States stay readable.
    */
   actionsDisabled?: boolean;
+  /**
+   * Withholds opening another language. The same as `actionsDisabled` unless
+   * given: a user who may only read the document is held from every mutation
+   * here and may still read its other languages.
+   */
+  navigationDisabled?: boolean;
   className?: string;
 }
 
@@ -264,6 +270,7 @@ function LanguageRows({
   canSeed,
   metaKnown,
   actionsDisabled,
+  navigationDisabled,
   onSelect,
 }: {
   shown: readonly { code: string; label: string; rtl: boolean }[];
@@ -283,6 +290,7 @@ function LanguageRows({
   /** Whether `translations` was supplied at all — see `seedVerb`. */
   metaKnown: boolean;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
@@ -325,6 +333,7 @@ function LanguageRows({
             onSelect?.(locale.code, { seedFrom: active });
           }}
           actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
         />
       ))}
     </ul>
@@ -513,6 +522,7 @@ function LanguageRow({
   onSelect,
   onSeed,
   actionsDisabled,
+  navigationDisabled,
 }: {
   code: string;
   label: string;
@@ -529,6 +539,7 @@ function LanguageRow({
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
 }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
@@ -607,11 +618,11 @@ function LanguageRow({
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs"
-              // Switching languages is withheld under the same gate that
-              // withholds the mutations: while a past version is on screen,
-              // changing the document underneath the history banner shows one
-              // language's history labelled as another's.
-              disabled={actionsDisabled}
+              // Switching languages is withheld while a past version is on
+              // screen: changing the document underneath the history banner
+              // shows one language's history labelled as another's. A reader
+              // is not held here, only from the mutations beside it.
+              disabled={navigationDisabled}
               aria-label={`Open ${label}`}
               onClick={() => onSelect(code)}
             >
@@ -630,6 +641,7 @@ export function LanguagePanel({
   onSelect,
   hasStatus,
   actionsDisabled = false,
+  navigationDisabled = actionsDisabled,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -719,6 +731,7 @@ export function LanguagePanel({
         canSeed={copy?.available ?? false}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
         onSelect={onSelect}
       />
       <StateLegend />

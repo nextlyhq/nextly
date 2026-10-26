@@ -1171,6 +1171,8 @@ export function EntryForm({
                                         : { onSelect: onLocaleChange })}
                                       hasStatus={hasStatus}
                                       actionsDisabled={editsHeld}
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={writesHeld}
                                     />
                                   </div>
                                 )}
@@ -1235,6 +1237,8 @@ export function EntryForm({
                                         ? {}
                                         : { onLocaleChange })}
                                       actionsDisabled={editsHeld}
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={writesHeld}
                                       isDirty={isDirty}
                                     />
                                   </div>
