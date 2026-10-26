@@ -240,8 +240,14 @@ describe("publishAllLocales (singles)", () => {
           localized: true,
           status: true,
           // Update is granted so the base gate passes and only the publish gate
-          // can refuse; otherwise a 403 would prove nothing about publish.
-          access: { update: () => true, publish: () => false },
+          // can refuse; otherwise a 403 would prove nothing about publish. Read
+          // is granted too: a caller refused read is answered as if the Single
+          // were missing, and this one may see it, so the refusal stays a 403.
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => false,
+          },
           fields: [text({ name: "siteName", localized: true })],
         }),
       ],
