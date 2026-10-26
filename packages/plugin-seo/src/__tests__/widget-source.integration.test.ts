@@ -33,8 +33,11 @@ const PROBE_NAME = "@test/seo-probe";
 // plugin name is two segments because it contains a slash.
 const PROBE_PARAMS = ["plugins", "@test", "seo-probe", "count"];
 
-/** A reader the collection's own `access.read` admits. */
-const reader: ReadCaller = { user: { id: "reader-1", roles: ["editor"] } };
+/**
+ * A reader holding `read-pages`, which the collection's own `access.read` then
+ * admits: a code rule only narrows the permission. Seeded by `boot`.
+ */
+let reader: ReadCaller = { user: { id: "", roles: [] } };
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -212,6 +215,41 @@ async function boot(collections: string[]): Promise<TestNextly> {
     ] as never,
   });
   current = t;
+  // The install's first account holds super-admin, so an owner is made first,
+  // and the reader is a second account holding read-pages and nothing else.
+  await t.nextly.users.create({
+    email: "owner@example.com",
+    password: "Password123!",
+    data: { name: "Owner", isActive: true },
+  });
+  const permissions = await t.nextly.permissions.find({ limit: 1000 });
+  const readPages =
+    permissions.items.find(permission => permission.slug === "read-pages") ??
+    (
+      await t.nextly.permissions.create({
+        data: {
+          action: "read",
+          resource: "pages",
+          name: "Read pages",
+          slug: "read-pages",
+        },
+      })
+    ).item;
+  const role = await t.nextly.roles.create({
+    data: {
+      name: "Pages reader",
+      slug: "pages-reader",
+      permissionIds: [readPages.id],
+    },
+  });
+  const created = await t.nextly.users.create({
+    email: "reader@example.com",
+    password: "Password123!",
+    data: { name: "Reader", isActive: true, roles: [String(role.item.id)] },
+  });
+  reader = {
+    user: { id: String(created.item.id), roles: ["pages-reader"] },
+  };
   return t;
 }
 
