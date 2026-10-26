@@ -42,6 +42,10 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
+import {
+  formTemplateReferences,
+  type TemplateReference,
+} from "./utils/email-template-references";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
@@ -529,6 +533,29 @@ export function formBuilder(
       const declaredFormsSlug = resolvedConfig.formOverrides.slug;
       const formsSlug =
         nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug;
+
+      // What sends each email: the admin shows a template's senders, and
+      // names them before it is deleted. A form's notification rules name
+      // templates by slug, so every form is read; with notifications off, no
+      // form sends anything. Rules live in a JSON field, which can't be
+      // queried by template, so the forms are paged through.
+      nextly.filters.add(
+        "email.templateReferences",
+        async (references: TemplateReference[]) => {
+          if (!resolvedConfig.notifications.enabled) return references;
+          const forms: Array<Record<string, unknown>> = [];
+          const pageSize = 200;
+          for (let page = 1; ; page += 1) {
+            const result = await nextly.services.collections.listEntries(
+              formsSlug,
+              { pagination: { limit: pageSize, page } }
+            );
+            forms.push(...(result.data as Array<Record<string, unknown>>));
+            if (result.data.length < pageSize) break;
+          }
+          return [...references, ...formTemplateReferences(forms)];
+        }
+      );
 
       // `beforeChange` rather than `beforeCreate`: it is the last
       // COLLECTION-level mutating phase before the insert. Core runs stored
