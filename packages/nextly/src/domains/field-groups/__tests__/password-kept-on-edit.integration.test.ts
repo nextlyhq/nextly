@@ -29,6 +29,7 @@ import {
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
+import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -111,6 +112,12 @@ describe.each(getConfiguredTestDialects())(
                 fields: [text({ name: "label" }), password({ name: "pw" })],
               }),
               fieldGroup({ name: "fg", component: "kbox" }),
+              fieldGroup({ name: "fgs", component: "kbox", repeatable: true }),
+              fieldGroup({
+                name: "zone",
+                components: ["kbox"],
+                repeatable: true,
+              }),
               fieldGroup({ name: "direct", component: "kpin" }),
             ],
           }),
@@ -299,6 +306,41 @@ describe.each(getConfiguredTestDialects())(
       expect(open(row.box).a).toBe("2");
       expect(await hashes(open(row.box).secret, "box-1")).toBe(true);
       expect(await hashes(open(open(row.box).held).pin, "inner-1")).toBe(true);
+    });
+
+    it("keeps the password inside each repeatable field group and zone block", async () => {
+      const typeKey = currentFieldGroupTypeKey;
+      const id = await entry({
+        fgs: [{ heading: "f", box: { a: "1", secret: "rep-1" } }],
+        zone: [
+          {
+            [typeKey]: "kbox",
+            heading: "z",
+            box: { a: "1", secret: "zone-1" },
+          },
+        ],
+      });
+      const read = (await trusted.findByID({
+        collection: "kentries",
+        id,
+        depth: 0,
+      } as never)) as Doc;
+      const fgsId = String(((read.fgs as Doc[] | undefined) ?? [])[0]?.id);
+      const zoneId = String(((read.zone as Doc[] | undefined) ?? [])[0]?.id);
+
+      await update(id, {
+        fgs: [{ id: fgsId, heading: "f2", box: { a: "2" } }],
+        zone: [
+          { id: zoneId, [typeKey]: "kbox", heading: "z2", box: { a: "2" } },
+        ],
+      });
+      const rep = await rawRow("comp_kbox", { id: fgsId });
+      const block = await rawRow("comp_kbox", { id: zoneId });
+
+      expect([rep.heading, open(rep.box).a]).toEqual(["f2", "2"]);
+      expect(await hashes(open(rep.box).secret, "rep-1")).toBe(true);
+      expect([block.heading, open(block.box).a]).toEqual(["z2", "2"]);
+      expect(await hashes(open(block.box).secret, "zone-1")).toBe(true);
     });
 
     it("keeps a Single's group password", async () => {
