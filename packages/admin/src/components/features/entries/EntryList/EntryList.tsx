@@ -28,6 +28,7 @@ import {
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -297,9 +298,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
+  // Asked only of a user the server lets read every language's state: the
+  // overview reads them all, so without that the whole list would be refused
+  // rather than shown without its translation column.
   const { enabled: localizationEnabled } = useLocalization();
+  const mayReadTranslations = useCanRequest(collectionSlug, "readTranslations");
   const wantsTranslationStatus =
     localizationEnabled &&
+    mayReadTranslations &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
 
   // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's

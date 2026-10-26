@@ -37,6 +37,7 @@ import {
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
@@ -215,7 +216,17 @@ export function VersionHistorySheet({
     setRenaming(null);
   }
 
-  const list = useVersions({ scope, enabled: open });
+  // The whole history reads every language's versions. A user the server
+  // lets read only some of them is shown the language being edited instead,
+  // rather than a list the server refuses outright.
+  const mayReadAllHistory = useCanRequest(scope.slug, "readHistory");
+  const list = useVersions({
+    scope,
+    enabled: open,
+    ...(mayReadAllHistory || editingLocale === null
+      ? {}
+      : { locale: editingLocale }),
+  });
   // The document's events, which the story shows beside its versions.
   const eventList = useDocumentEvents({ scope, enabled: open });
   // Destructured so the boundary-fetch effect can depend on the paging members

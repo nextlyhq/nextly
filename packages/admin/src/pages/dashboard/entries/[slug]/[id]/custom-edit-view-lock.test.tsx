@@ -84,6 +84,11 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     error: populated.error,
   }),
 }));
+// The requests judged in other languages: allowed, so these cases stay
+// about the claim.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: () => true,
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));

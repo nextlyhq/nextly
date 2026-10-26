@@ -84,7 +84,10 @@ import {
   currentUserCapabilitiesKey,
   invalidateCurrentUserAccess,
 } from "../current-user-access";
-import { useCurrentUserPermissions } from "../useCurrentUserPermissions";
+import {
+  namedEndsAfter,
+  useCurrentUserPermissions,
+} from "../useCurrentUserPermissions";
 
 function wrapperFor(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -960,5 +963,164 @@ describe("invalidateCurrentUserAccess", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: CURRENT_USER_CAPABILITIES_KEY,
     });
+  });
+});
+
+describe("the requests judged in other languages", () => {
+  const render = () =>
+    renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+
+  it("answers each from its own cell, not from the action it is a kind of", async () => {
+    server.capabilities = answering({
+      read: true,
+      update: true,
+      publish: true,
+      create: true,
+      readTranslations: false,
+      readHistory: false,
+      publishEveryLanguage: false,
+      updateInDefaultLanguage: false,
+      duplicate: false,
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    const may = (
+      access: Parameters<typeof result.current.canAccessCollection>[1]
+    ) => result.current.canAccessCollection("posts", access);
+    expect([may("read"), may("readTranslations"), may("readHistory")]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect([may("publish"), may("publishEveryLanguage")]).toEqual([
+      true,
+      false,
+    ]);
+    expect([may("update"), may("updateInDefaultLanguage")]).toEqual([
+      true,
+      false,
+    ]);
+    expect(may("duplicate")).toBe(false);
+  });
+
+  it("answers a create as the admin sends one, with no language", async () => {
+    // Every create the admin sends writes the default language, so the cell
+    // for that create answers it, and with it the list's New and the
+    // create page.
+    server.capabilities = answering({
+      read: true,
+      create: true,
+      createInDefaultLanguage: false,
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "create")).toBe(false);
+    expect(result.current.can("create-posts")).toBe(false);
+  });
+
+  it("falls back to the action's own cell for a server that names no such cell", async () => {
+    server.capabilities = answering({
+      read: true,
+      create: true,
+      update: false,
+      publish: true,
+    });
+    const { result } = render();
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    const may = (
+      access: Parameters<typeof result.current.canAccessCollection>[1]
+    ) => result.current.canAccessCollection("posts", access);
+    expect([
+      may("readTranslations"),
+      may("readHistory"),
+      may("publishEveryLanguage"),
+      may("updateInDefaultLanguage"),
+      may("duplicate"),
+      may("create"),
+    ]).toEqual([true, true, true, false, true, true]);
+  });
+});
+
+describe("the end the permission list names", () => {
+  it("asks again when only the permission list names an end", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The content answer names no end; the permission list, read under an
+    // assignment ending in a minute, does.
+    server.permissions = { ...EDITOR, validUntil: Date.now() + 60_000 };
+    server.capabilities = answering({ read: true });
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() =>
+      expect(result.current.hasPermission("read-posts")).toBe(true)
+    );
+    const before = server.asked.filter(p => p === "/me/permissions").length;
+
+    // The assignment ends and takes the permission with it.
+    server.permissions = { ...EDITOR, permissions: [], validUntil: null };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    await waitFor(() =>
+      expect(result.current.hasPermission("read-posts")).toBe(false)
+    );
+    expect(
+      server.asked.filter(p => p === "/me/permissions").length
+    ).toBeGreaterThan(before);
+  });
+
+  it("keeps an end until an answer newer than the one that named it leaves it out", () => {
+    const end = 5_000;
+    const named = [{ end, namedAt: 100 }];
+    const now = 1_000;
+    // The permission list named it; a content answer from before then, which
+    // does not, retires nothing.
+    expect(
+      namedEndsAfter(
+        named,
+        [
+          { validUntil: null, answeredAt: 50 },
+          { validUntil: end, answeredAt: 100 },
+        ],
+        now
+      )
+    ).toEqual(named);
+    // An answer that still names it keeps it, though a newer one does not:
+    // the list read under it is acted on at that end, at the cost of one
+    // refresh at most.
+    expect(
+      namedEndsAfter(
+        named,
+        [
+          { validUntil: null, answeredAt: 200 },
+          { validUntil: end, answeredAt: 100 },
+        ],
+        now
+      )
+    ).toEqual(named);
+    // Once no answer names it, a newer one retires it: the assignment was
+    // removed or extended.
+    expect(
+      namedEndsAfter(
+        named,
+        [
+          { validUntil: null, answeredAt: 200 },
+          { validUntil: null, answeredAt: 150 },
+        ],
+        now
+      )
+    ).toEqual([]);
+    // Once passed, an end stands whatever is answered after.
+    expect(
+      namedEndsAfter(named, [{ validUntil: null, answeredAt: 200 }], 6_000)
+    ).toEqual(named);
+    // Each answer's own end is learned.
+    expect(
+      namedEndsAfter([], [{ validUntil: 9_000, answeredAt: 300 }], now)
+    ).toEqual([{ end: 9_000, namedAt: 300 }]);
   });
 });

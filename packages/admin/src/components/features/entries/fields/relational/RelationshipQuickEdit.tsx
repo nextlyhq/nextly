@@ -30,6 +30,7 @@ import { AlertCircle, Loader2, ExternalLink } from "@admin/components/icons";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { entryKeys } from "@admin/services/entryApi";
 
@@ -129,6 +130,7 @@ function ModalContent({
   // the embedded form submits with no intent, so every live-loaded field is sent
   // and the server merges those older live values over the saved draft. Showing
   // and saving onto the draft keeps quick-edit consistent and non-destructive.
+  const mayReadTranslations = useCanRequest(collectionSlug, "readTranslations");
   const draftsEnabled =
     (collection as { draftsEnabled?: boolean } | undefined)?.draftsEnabled ===
     true;
@@ -141,7 +143,8 @@ function ModalContent({
     collectionSlug,
     entryId,
     enabled: !!collectionSlug && !!entryId,
-    translationStatus: localizationEnabled,
+    // Asked only of a user the server lets read every language's state.
+    translationStatus: localizationEnabled && mayReadTranslations,
     draft: draftsEnabled,
   });
 

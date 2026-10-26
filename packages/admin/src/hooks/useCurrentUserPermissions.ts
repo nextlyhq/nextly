@@ -439,6 +439,46 @@ interface NamedEnd {
 }
 
 /**
+ * One answer's word on when the access it was read under ends: the soonest
+ * end of a role assignment, or null, and when that answer was asked.
+ */
+interface EndSource {
+  validUntil: number | null;
+  answeredAt: number;
+}
+
+/**
+ * The ends known once `sources` have answered, from the ends known before.
+ *
+ * Both answers state the same thing, the soonest end of the caller's role
+ * assignments, each from its own read. An end is kept once it has passed,
+ * and until then while every answer newer than the one that named it names
+ * it too: a newer answer that does not says no such end remains, the
+ * assignment having been removed or extended. Each answer's own end is added
+ * where it is not known yet. Exported so a test can drive it directly.
+ */
+export function namedEndsAfter(
+  ends: readonly NamedEnd[],
+  sources: readonly EndSource[],
+  now: number
+): readonly NamedEnd[] {
+  let named = ends.filter(
+    ({ end, namedAt }) =>
+      end <= now ||
+      sources.every(
+        ({ validUntil, answeredAt }) =>
+          validUntil === end || answeredAt <= namedAt
+      )
+  );
+  for (const { validUntil, answeredAt } of sources) {
+    if (validUntil !== null && !named.some(({ end }) => end === validUntil)) {
+      named = [...named, { end: validUntil, namedAt: answeredAt }];
+    }
+  }
+  return named;
+}
+
+/**
  * A request's answer, stamped with when it was asked. That moment, not when
  * the answer arrived, says whether the answer could have seen an end: one
  * asked before an end and delivered after it still describes the role before.
@@ -623,6 +663,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = askedAtOf(answer.data);
+  // The permission list names the same end, from its own read of the roles.
+  const permissionsValidUntil = data?.validUntil ?? null;
+  const permissionsAnsweredAt = askedAtOf(data);
   // Every end an answer has named, kept apart from the answer that named it:
   // an answer given after an end can drop it (with null, once the ending
   // assignment is gone) before that end's timer has run, and the other
@@ -635,16 +678,21 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // from the cache, retires nothing. Kept in the render that first sees it,
   // so no ordering of responses and timers can lose one.
   const [ends, setEnds] = useState<readonly NamedEnd[]>([]);
-  const namedEnds = useMemo(() => {
-    const now = Date.now();
-    const kept = ends.filter(
-      ({ end, namedAt }) =>
-        end === validUntil || end <= now || answeredAt <= namedAt
-    );
-    return validUntil === null || kept.some(({ end }) => end === validUntil)
-      ? kept
-      : [...kept, { end: validUntil, namedAt: answeredAt }];
-  }, [ends, validUntil, answeredAt]);
+  const namedEnds = useMemo(
+    () =>
+      namedEndsAfter(
+        ends,
+        [
+          { validUntil, answeredAt },
+          {
+            validUntil: permissionsValidUntil,
+            answeredAt: permissionsAnsweredAt,
+          },
+        ],
+        Date.now()
+      ),
+    [ends, validUntil, answeredAt, permissionsValidUntil, permissionsAnsweredAt]
+  );
   if (
     namedEnds.length !== ends.length ||
     namedEnds.some((named, index) => named !== ends[index])
@@ -655,7 +703,6 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // The latest end that has passed, read at render, so an answer already past
   // its end when this mounts never counts, not even until a timer fires.
   const endedAt = latestPassed(knownEnds, Date.now());
-  const permissionsAnsweredAt = askedAtOf(data);
   const [, setEndsReached] = useState(0);
   useEffect(() => {
     // `since`: the moment the step was due. Another caller that asked after it
