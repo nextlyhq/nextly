@@ -1539,17 +1539,19 @@ export class CollectionBulkService extends BaseService {
         // it).
         authenticatedScope: params.authenticatedScope,
       });
-    // A caller refused update may still change only entries' status: then
-    // each row is judged on its own, a status-only row by the gate its status
-    // names and any other by update.
-    let rowGate: "access-service" | "batch-hoisted" = "batch-hoisted";
-    if (accessDenied) {
-      const perRow = await this.rowGateWithoutUpdate(
-        params.collectionName,
-        entries
-      );
-      if (!perRow) return everyItemRefused(accessDenied, entries.length);
-      rowGate = perRow;
+    // Where a row changes only an entry's status, each row is judged on its
+    // own: a status-only row by the gate its status names, whether or not the
+    // caller may update, and any other by update. So a caller refused update
+    // may still change only entries' status, and one allowed it is still
+    // asked publish of a status-only row. Otherwise the gate above judges
+    // every row.
+    const rowGate =
+      (params.overrideAccess
+        ? undefined
+        : await this.statusRowsGate(params.collectionName, entries)) ??
+      "batch-hoisted";
+    if (accessDenied && rowGate === "batch-hoisted") {
+      return everyItemRefused(accessDenied, entries.length);
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
@@ -1695,16 +1697,16 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    // As above: a caller refused update may still change only entries' status.
-    let rowGate: "access-service" | "batch-hoisted" = "batch-hoisted";
-    if (accessDenied) {
-      const perRow = await this.rowGateWithoutUpdate(
+    // As above: where a row changes only an entry's status, each row is
+    // judged on its own.
+    const rowGate =
+      (await this.statusRowsGate(
         params.collectionName,
         entries,
         tx.getDrizzle()
-      );
-      if (!perRow) return everyItemRefused(accessDenied, entries.length);
-      rowGate = perRow;
+      )) ?? "batch-hoisted";
+    if (accessDenied && rowGate === "batch-hoisted") {
+      return everyItemRefused(accessDenied, entries.length);
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
@@ -2098,19 +2100,13 @@ export class CollectionBulkService extends BaseService {
   }
 
   /**
-   * The update batch's per-item worker and abort policy, shared by both entry
-   * points so the operation's loop exists exactly once. Only marked
-   * write-integrity failures abort an update batch; every other throw
-   * soft-fails its item unless stopOnError says otherwise.
+   * Whether a batch's rows are gated each on its own (`access-service`): where
+   * the collection has a lifecycle and some row changes only an entry's
+   * status, since such a row is judged by the gate its status names, whether
+   * or not the caller may update and whether or not its status moves.
+   * Otherwise `undefined`: the batch's one update gate judges every row.
    */
-  /**
-   * How a batch's rows are gated when the caller is refused update: each on
-   * its own (`access-service`), where the collection has a lifecycle and some
-   * row changes only an entry's status, since such a row is judged by the
-   * gate its status names; otherwise `undefined`, and the whole batch is
-   * refused as before.
-   */
-  private async rowGateWithoutUpdate(
+  private async statusRowsGate(
     collectionName: string,
     entries: BulkUpdateEntry[],
     executor?: Parameters<CollectionMutationService["hasLifecycle"]>[1]
@@ -2123,6 +2119,12 @@ export class CollectionBulkService extends BaseService {
       : undefined;
   }
 
+  /**
+   * The update batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort an update batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
   private async runUpdateBatch(
     tx: TransactionContext,
     params: {
@@ -2141,7 +2143,7 @@ export class CollectionBulkService extends BaseService {
       batchSize: number;
       stopOnError: boolean;
       skipHooks: boolean;
-      /** How each row is gated; see {@link rowGateWithoutUpdate}. */
+      /** How each row is gated; see {@link statusRowsGate}. */
       rowGate: "access-service" | "batch-hoisted";
     },
     state: LegacyBatchState
