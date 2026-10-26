@@ -19,10 +19,9 @@
  * @module domains/email/queued-erasure
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Column, SQL, Table } from "drizzle-orm";
 import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
-
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors";
 import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";

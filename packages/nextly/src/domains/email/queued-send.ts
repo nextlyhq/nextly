@@ -66,8 +66,8 @@ import {
   QUEUED_EMAIL_MAX_ATTEMPTS,
   QUEUED_EMAIL_PRUNE_JOB,
 } from "./queued-email-job";
-import type { EmailService } from "./services/email-service";
 import type { QueuedErasureDb } from "./queued-erasure";
+import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
