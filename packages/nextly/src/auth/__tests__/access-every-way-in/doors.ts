@@ -1143,6 +1143,7 @@ export async function ask(
   landed?: boolean;
   done?: boolean;
   outsideKept?: boolean;
+  outside?: { answer: Answer; refusal?: Refusal };
 }> {
   if (!writes(row, door)) return answer(world, row, door);
   await markUpdated(world, row);
@@ -1165,7 +1166,15 @@ export async function ask(
   // answered as refused that wrote all the same is caught here.
   const outside = await askingOutside.run(true, () => answer(world, row, door));
   const outsideKept = isDeepStrictEqual(after, await storedTable(world, row));
-  return { ...filteredAnswer(inside, outside), landed, done, outsideKept };
+  return {
+    ...filteredAnswer(inside, outside),
+    landed,
+    done,
+    outsideKept,
+    // The twin's own answer, kept apart from the cell's: an `M` says it was
+    // refused, and this says how, so a 403 where the twin is unreadable shows.
+    outside: { answer: outside.answer, refusal: outside.refusal },
+  };
 }
 
 /**
@@ -1176,7 +1185,7 @@ export async function ask(
  */
 function filteredAnswer(
   inside: { answer: Answer; deviations: Deviation[]; refusal?: Refusal },
-  outside: { answer: Answer; deviations: Deviation[] }
+  outside: { answer: Answer; deviations: Deviation[]; refusal?: Refusal }
 ): { answer: Answer; deviations: Deviation[]; refusal?: Refusal } {
   const deviations = DEVIATIONS.filter(
     deviation =>

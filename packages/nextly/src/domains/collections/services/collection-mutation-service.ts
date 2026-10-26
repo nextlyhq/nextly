@@ -10976,15 +10976,26 @@ export class CollectionMutationService extends BaseService {
     options: { locale?: string; executor?: unknown } = {}
   ): Promise<FilteredWriteMatch | undefined> {
     if (!access.filter || !access.read) return undefined;
+    const { executor } = options;
+    // Every read the filter's facts need runs on the caller's transaction
+    // where it holds one, as the write's own reads do: a pooled read inside it
+    // would wait for the connection the transaction holds.
     const sources: FilterConditionSources = {
       getCollection: name =>
-        this.collectionService.getCollection(name, options.executor),
-      adapter: this.adapter,
+        this.collectionService.getCollection(name, executor),
+      adapter: executor
+        ? {
+            dialect: this.adapter.dialect,
+            getDrizzle: <T>() => executor as T,
+          }
+        : this.adapter,
       ...(this.fieldGroupDataService
         ? {
             getComponentTableName: slug =>
-              this.fieldGroupDataService?.getComponentTableName(slug) ??
-              Promise.resolve(undefined),
+              this.fieldGroupDataService?.getComponentTableName(
+                slug,
+                executor
+              ) ?? Promise.resolve(undefined),
           }
         : {}),
     };

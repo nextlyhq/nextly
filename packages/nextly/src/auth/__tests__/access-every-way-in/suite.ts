@@ -193,8 +193,15 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       for (const row of rows()) {
         const byDoor = new Map<Door, Answer>();
         for (const door of doorsAsking(row)) {
-          const { answer, deviations, refusal, landed, done, outsideKept } =
-            await ask(world, row, door);
+          const {
+            answer,
+            deviations,
+            refusal,
+            landed,
+            done,
+            outsideKept,
+            outside,
+          } = await ask(world, row, door);
           byDoor.set(door, answer);
           deviated.set(cellKey(row, door), deviations);
           // Every answer that is a status is a refusal some door answered with,
@@ -205,6 +212,20 @@ export function describeEveryWayIn(dialect: TestDialect): void {
             refused.set(cellKey(row, door), {
               refusal: refusal ?? {
                 status: Number(answer),
+                code: "?",
+                shape: "other",
+                message: "",
+              },
+              slug: targetSlug(row),
+            });
+          }
+          // A filtered write's twin outside the filter is refused as its own
+          // cell is, so how it was refused is recorded beside the cell: an
+          // unreadable twin must read as a missing entry, not a 403.
+          if (outside && isStatus(outside.answer)) {
+            refused.set(`${cellKey(row, door)} outside`, {
+              refusal: outside.refusal ?? {
+                status: Number(outside.answer),
                 code: "?",
                 shape: "other",
                 message: "",
