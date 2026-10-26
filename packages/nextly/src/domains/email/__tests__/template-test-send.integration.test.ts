@@ -249,6 +249,17 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(preview.preheader).not.toContain("<b>");
       expect(preview.preheader).toContain("Priya");
 
+      // A link in it shows as its text, as an inbox shows it: the plain-text
+      // part's "(https://…)" is not in the inbox line.
+      const linked = await templates.previewDraft(
+        {
+          ...draft,
+          preheader: 'See <a href="https://example.com/o/1">your order</a>',
+        },
+        {}
+      );
+      expect(linked.preheader).toBe("See your order");
+
       // A From that can't render fails the preview, as it fails the send.
       await expect(
         templates.previewDraft(
