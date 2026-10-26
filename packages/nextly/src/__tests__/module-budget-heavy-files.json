@@ -52,10 +52,12 @@
     "src/dispatcher/handlers/__tests__/single-dispatcher-update-ddl.test.ts",
     "src/dispatcher/handlers/__tests__/versions-dispatch.test.ts",
     "src/domains/auth/__tests__/system-write-policy.test.ts",
+    "src/domains/entity-rename/__tests__/rename-loads-every-dialect.test.ts",
     "src/domains/schema/migrate-create/__tests__/app-stream.contributions.test.ts",
     "src/domains/schema/migrate-create/__tests__/app-stream.test.ts",
     "src/route-handler/__tests__/auth-handler.localization-after-get-nextly.test.ts",
     "src/route-handler/__tests__/dispatcher-singleton.test.ts",
+    "src/route-handler/__tests__/request-boot-awaits-seeding.test.ts",
     "src/route-handler/__tests__/route-parser.email-send.test.ts",
     "src/services/dashboard/__tests__/admin-counts.test.ts"
   ]

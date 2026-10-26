@@ -60,13 +60,13 @@ export const JUDGED_PROJECT = "nextly (isolated)";
 
 /**
  * The judged project's pins, each a margin above what it measured when they
- * were set (58 heavy files and 981 modules at the 90th percentile, over 582
+ * were set (60 heavy files and 1,029 modules at the 90th percentile, over 583
  * files), and the heavy files of that measurement. A run that measures below a
  * pin by more than its margin fails, naming the pin to set; the list is
  * refreshed with them. The pins are edited by hand so that a change to one is
  * a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 60, p90Modules: 1_016 };
+export const BUDGET = { heavyFiles: 63, p90Modules: 1_064 };
 const MARGIN = { heavyFiles: 3, p90Modules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
