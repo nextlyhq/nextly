@@ -24,6 +24,10 @@ import {
   recordServiceRefusal,
 } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  isStatusOnlyWrite,
+  statusGate,
+} from "../../../lib/immutable-system-fields";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { TrustBound } from "../../../services/collections/trust-grant";
@@ -902,12 +906,21 @@ export class CollectionBulkService extends BaseService {
     // access denial is a request-level authorization failure, not a per-item
     // partial failure. Throw NextlyError.forbidden so the dispatcher emits
     // a 403 error envelope instead of a 200 with a synthetic empty-id row.
+    // A body that changes only the status of entries with a lifecycle is a
+    // publish or an unpublish alone, judged by the gate its status names in
+    // place of update; each row is judged again as it is written.
+    const gate =
+      isStatusOnlyWrite(params.data, "collection") &&
+      (await this.mutationService.hasLifecycle(params.collectionName))
+        ? statusGate(params.data.status)
+        : "update";
     const accessDenied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
-      operation: "update",
+      operation: gate,
       user: accessUser,
       overrideAccess: params.overrideAccess,
-      routeAuthorized: params.routeAuthorized,
+      // The route attests only an update it ran itself.
+      routeAuthorized: gate === "update" && params.routeAuthorized,
       // A scoped API key is judged on its own grants here too, so the session
       // super-admin bypass does not apply to it on the collection-level gate.
       authenticatedScope: params.authenticatedScope,
@@ -1526,7 +1539,18 @@ export class CollectionBulkService extends BaseService {
         // it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
+    // A caller refused update may still change only entries' status: then
+    // each row is judged on its own, a status-only row by the gate its status
+    // names and any other by update.
+    let rowGate: "access-service" | "batch-hoisted" = "batch-hoisted";
+    if (accessDenied) {
+      const perRow = await this.rowGateWithoutUpdate(
+        params.collectionName,
+        entries
+      );
+      if (!perRow) return everyItemRefused(accessDenied, entries.length);
+      rowGate = perRow;
+    }
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
     // connection before the shared transaction, so each worker enforces its
@@ -1559,7 +1583,7 @@ export class CollectionBulkService extends BaseService {
           params,
           transitionAuth,
           entries,
-          { batchSize, stopOnError, skipHooks },
+          { batchSize, stopOnError, skipHooks, rowGate },
           state
         );
       });
@@ -1671,7 +1695,17 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
+    // As above: a caller refused update may still change only entries' status.
+    let rowGate: "access-service" | "batch-hoisted" = "batch-hoisted";
+    if (accessDenied) {
+      const perRow = await this.rowGateWithoutUpdate(
+        params.collectionName,
+        entries,
+        tx.getDrizzle()
+      );
+      if (!perRow) return everyItemRefused(accessDenied, entries.length);
+      rowGate = perRow;
+    }
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
     // the workers, so each transition is enforced under the row lock without a
@@ -1694,7 +1728,7 @@ export class CollectionBulkService extends BaseService {
       params,
       transitionAuth,
       entries,
-      { batchSize, stopOnError, skipHooks },
+      { batchSize, stopOnError, skipHooks, rowGate },
       state
     );
 
@@ -2069,6 +2103,26 @@ export class CollectionBulkService extends BaseService {
    * write-integrity failures abort an update batch; every other throw
    * soft-fails its item unless stopOnError says otherwise.
    */
+  /**
+   * How a batch's rows are gated when the caller is refused update: each on
+   * its own (`access-service`), where the collection has a lifecycle and some
+   * row changes only an entry's status, since such a row is judged by the
+   * gate its status names; otherwise `undefined`, and the whole batch is
+   * refused as before.
+   */
+  private async rowGateWithoutUpdate(
+    collectionName: string,
+    entries: BulkUpdateEntry[],
+    executor?: Parameters<CollectionMutationService["hasLifecycle"]>[1]
+  ): Promise<"access-service" | undefined> {
+    if (!entries.some(entry => isStatusOnlyWrite(entry.data, "collection"))) {
+      return undefined;
+    }
+    return (await this.mutationService.hasLifecycle(collectionName, executor))
+      ? "access-service"
+      : undefined;
+  }
+
   private async runUpdateBatch(
     tx: TransactionContext,
     params: {
@@ -2083,7 +2137,13 @@ export class CollectionBulkService extends BaseService {
       ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
     >,
     entries: BulkUpdateEntry[],
-    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    options: {
+      batchSize: number;
+      stopOnError: boolean;
+      skipHooks: boolean;
+      /** How each row is gated; see {@link rowGateWithoutUpdate}. */
+      rowGate: "access-service" | "batch-hoisted";
+    },
     state: LegacyBatchState
   ): Promise<void> {
     await runLegacyBatch(
@@ -2098,7 +2158,8 @@ export class CollectionBulkService extends BaseService {
             { ...params, transitionAuth },
             id,
             data,
-            options.skipHooks
+            options.skipHooks,
+            options.rowGate
           );
         return updateResult.success && updateResult.data
           ? {

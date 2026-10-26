@@ -46,7 +46,11 @@ import { getEventBus } from "../../../events/event-bus";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
-import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
+import {
+  isStatusOnlyWrite,
+  statusGate,
+  stripImmutableSystemFields,
+} from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
@@ -6174,6 +6178,13 @@ export class CollectionMutationService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The gate the write is judged by: `update`, or, for a write that changes
+     * only the status of an entry with a lifecycle, the `publish` or
+     * `unpublish` its status names, asked whether or not the status moves.
+     * `null` asks none here, for a caller that asks its own lifecycle gate.
+     */
+    gate: "update" | "publish" | "unpublish" | null;
   }) {
     const accessUser = params.overrideAccess ? undefined : params.user;
     const schema = await this.fileManager.loadDynamicSchema(
@@ -6193,13 +6204,15 @@ export class CollectionMutationService extends BaseService {
       };
       return { answer };
     }
+    if (params.gate === null) return { accessUser, schema, existingEntry };
     const accessDenied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
-      operation: "update",
+      operation: params.gate,
       entryId: params.entryId,
       user: accessUser,
       overrideAccess: params.overrideAccess,
-      routeAuthorized: params.routeAuthorized,
+      // The route attests only an update it ran itself.
+      routeAuthorized: params.gate === "update" && params.routeAuthorized,
       // A scoped API key is judged on its own grants here too, so the session
       // super-admin bypass does not apply to it on the update gate.
       authenticatedScope: params.authenticatedScope,
@@ -6230,10 +6243,10 @@ export class CollectionMutationService extends BaseService {
     // saved rather than one the caller should send again.
     let committedWrite = false;
     try {
-      // The route already ran the `update` gate (against the API key's scope,
-      // when applicable), so the update gate here skips the redundant RBAC
-      // re-check; the publish gate below still runs.
-      const toUpdate = await this.entryToUpdate(params);
+      // Every language's status moves and nothing else, so this is a publish
+      // or an unpublish alone, judged by the publish gate below: no update
+      // gate.
+      const toUpdate = await this.entryToUpdate({ ...params, gate: null });
       if (toUpdate.answer) return toUpdate.answer;
       const { accessUser, schema, existingEntry } = toUpdate;
 
@@ -6271,7 +6284,7 @@ export class CollectionMutationService extends BaseService {
       }
 
       // This method exists to publish every locale, so it is unconditionally a
-      // publish and needs the publish permission on top of update — checked
+      // publish and needs the publish permission — checked
       // directly rather than via a transition, since it publishes companion
       // locales even when the main row is already published. Runs only once
       // there is actually something publishable.
@@ -7589,9 +7602,11 @@ export class CollectionMutationService extends BaseService {
    * Publishing is an ordinary write that sets `status: "published"`, so the
    * `update`/`create` gate a path already ran does not distinguish it. A move
    * into published needs `publish`, a move out of it needs `unpublish`, and
-   * both are ON TOP of the write permission — editing and publishing are
-   * separate capabilities. A write that is not a transition returns `null` and
-   * nothing extra is required.
+   * both are ON TOP of the write permission for a write that also edits the
+   * entry — editing and publishing are separate capabilities. A write that
+   * changes only the status asks no write permission, so this gate is the
+   * whole of it. A write that is not a transition returns `null` and nothing
+   * extra is required.
    *
    * `collectionHasStatus` is the draft/published lifecycle flag
    * (`collection.status === true`), the same signal the read path filters on. It
@@ -8435,7 +8450,21 @@ export class CollectionMutationService extends BaseService {
       //
       // A rule that must be judged against the row as locked belongs in the
       // under-lock re-check the publish path already uses, not here.
-      const toUpdate = await this.entryToUpdate(params);
+      // A write that changes only the status of an entry with a lifecycle is a
+      // publish or an unpublish alone, judged by the gate its status names in
+      // place of update. Any other field it names is an edit, which needs
+      // update whatever its value. The lifecycle is read only for such a body.
+      const statusOnly =
+        isStatusOnlyWrite(body, "collection") &&
+        (
+          (await this.collectionService.getCollection(
+            params.collectionName
+          )) as { status?: boolean }
+        ).status === true;
+      const toUpdate = await this.entryToUpdate({
+        ...params,
+        gate: statusOnly ? statusGate(body.status) : "update",
+      });
       if (toUpdate.answer) return toUpdate.answer;
       const { accessUser, schema, existingEntry } = toUpdate;
 
@@ -12050,15 +12079,24 @@ export class CollectionMutationService extends BaseService {
         // collection-level update gate out of the loop, and there is no
         // row-ownership rule left for a safety net to compare against.
       } else {
+        // A write that changes only the status of an entry with a lifecycle
+        // is a publish or an unpublish alone, judged by the gate its status
+        // names in place of update, whether or not the status moves.
+        const gate =
+          isStatusOnlyWrite(body, "collection") &&
+          (collection as { status?: boolean }).status === true
+            ? statusGate(body.status)
+            : "update";
         // The transaction API asks the access service for the whole verdict,
         // with the caller's overrideAccess / routeAuthorized forwarded.
         const accessDenied = await this.accessService.checkCollectionAccess({
           collectionName: params.collectionName,
-          operation: "update",
+          operation: gate,
           entryId: entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
+          // The route attests only an update it ran itself.
+          routeAuthorized: gate === "update" && params.routeAuthorized,
           // See the create path: without this a narrowed scope never reaches
           // the gate, because the transaction methods sit outside the plugin
           // facade's re-pinning wrapper.
@@ -13565,16 +13603,39 @@ export class CollectionMutationService extends BaseService {
     params: UpdateEntryWriteParams,
     entryId: string,
     body: Record<string, unknown>,
-    skipHooks: boolean
+    skipHooks: boolean,
+    /**
+     * `access-service` where the batch could not hoist its gate: a caller
+     * refused update may still change only entries' status, so each row is
+     * judged on its own.
+     */
+    rowGate: "access-service" | "batch-hoisted" = "batch-hoisted"
   ): Promise<CollectionServiceResult<unknown>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.updateEntryWrite(tx, params, entryId, body, {
-        rowGate: "batch-hoisted",
+        rowGate,
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to update entry",
       })
     );
+  }
+
+  /**
+   * Whether the collection has the draft/published lifecycle: the flag on its
+   * config, not a `status` column, which an ordinary field may also be called.
+   * Pass `executor` when the caller owns a transaction, so the read is bound
+   * to its connection.
+   */
+  async hasLifecycle(
+    collectionName: string,
+    executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
+  ): Promise<boolean> {
+    const collection = await this.collectionService.getCollection(
+      collectionName,
+      executor
+    );
+    return (collection as { status?: boolean }).status === true;
   }
 
   /**

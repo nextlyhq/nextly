@@ -70,6 +70,37 @@ export function immutableSystemFieldsFor(
 }
 
 /**
+ * The gate a status-only write is judged by: `publish` for `"published"`, the
+ * one value that puts an entry live, and `unpublish` for any other, which can
+ * only take a published entry down.
+ */
+export function statusGate(status: unknown): "publish" | "unpublish" {
+  return status === "published" ? "publish" : "unpublish";
+}
+
+/**
+ * Whether a write's body changes nothing but the entry's status: it names
+ * `status`, and every other key it names is a system column the write never
+ * stores from a body ({@link immutableSystemFieldsFor}). Such a write is a
+ * publish or an unpublish alone, judged by that permission and rule.
+ *
+ * Judged by the keys the body names, never their values: a body naming any
+ * other field, even at its stored value, edits the entry and needs update. A
+ * declared field with no column of its own counts as an edit too, since hooks
+ * may still read it.
+ */
+export function isStatusOnlyWrite(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind
+): boolean {
+  if (!("status" in body)) return false;
+  const neverStored = immutableSystemFieldsFor(entity);
+  return Object.keys(body).every(
+    key => key === "status" || neverStored.has(key)
+  );
+}
+
+/**
  * The payload keys that name a declared field with no column on the entity's own row.
  *
  * Asked of `fieldProducesColumn`, the descriptor's answer to which fields become columns, so the
