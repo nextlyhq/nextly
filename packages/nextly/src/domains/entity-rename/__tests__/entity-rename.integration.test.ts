@@ -45,7 +45,6 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
-import { PermissionCacheService } from "../../auth/services/permission-cache-service";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
@@ -178,15 +177,10 @@ function camel(column: string): string {
  * stable order, to compare a database before and after a refused rename.
  */
 async function snapshot(): Promise<string> {
-  // The permission cache is left out: every permission write retires it,
-  // committed or not, by design, and a retired answer is recomputed rather
-  // than lost.
   const tables = [
     ...Object.values(REGISTRY),
     "role_permissions",
-    ...renamedSlugColumns()
-      .map(column => column.table)
-      .filter(table => table !== "user_permission_cache"),
+    ...renamedSlugColumns().map(column => column.table),
     ...jsonSlugColumns().map(column => column.table),
   ];
   const out: Record<string, string[]> = {};
@@ -360,14 +354,6 @@ async function seedHistory(
     acquiredAt: now,
     expiresAt: new Date(now.getTime() + 60_000),
   });
-  // A kept answer about the entity, written by the cache's own writer.
-  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
-    ANA.id,
-    "read",
-    slug,
-    true,
-    []
-  );
   await adapter.insert("nextly_preview_links", {
     id: randomUUID().replace(/-/g, ""),
     documentKind: kind === "collection" ? "entry" : "single",
@@ -416,13 +402,6 @@ async function seedEphemeral(
     expiresAt: new Date(now.getTime() + 60_000),
     generation: 0,
   });
-  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
-    ANA.id,
-    "read",
-    slug,
-    true,
-    []
-  );
   return { lockId, linkId };
 }
 
@@ -1070,15 +1049,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await mayDo(editor, COLLECTION_ACTIONS, "journal")).toEqual(
         all(COLLECTION_ACTIONS, true)
       );
-      // No kept answer says yes about the old name: the ones the questions
-      // above just kept say no, and any yes could only be the old entity's.
-      expect(
-        (await rowsOf("user_permission_cache")).filter(
-          row =>
-            row.resource === "notes" &&
-            (row.hasPermission === true || row.hasPermission === 1)
-        )
-      ).toEqual([]);
       expect((await filters()).get(endpointId)).toEqual({
         version: 1,
         collections: ["journal"],
@@ -1182,14 +1152,14 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 120_000);
 
-    it("ends locks, preview links and kept answers an earlier entity left under the new name", async () => {
+    it("ends locks and preview links an earlier entity left under the new name", async () => {
       await bootForAccess(dialect);
       for (const [kind, from, to] of [
         ["collection", "notes", "journal"],
         ["single", "masthead", "header"],
       ] as const) {
         // What a deleted entity under the new name leaves behind: a lease on
-        // one of its documents, a preview link to it, a kept "yes".
+        // one of its documents and a preview link to it.
         const earlier = await seedEphemeral(kind, to);
 
         await rename(kind, from, to);
@@ -1202,11 +1172,6 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await rowsOf("nextly_preview_links")).filter(
             row => row.id === earlier.linkId
-          )
-        ).toEqual([]);
-        expect(
-          (await rowsOf("user_permission_cache")).filter(
-            row => row.resource === to
           )
         ).toEqual([]);
       }

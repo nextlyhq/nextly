@@ -484,6 +484,7 @@ function CellSettings({
       onOpenChange={onOpenChange}
       title={widget.title}
       settings={widget.settings ?? []}
+      widget={widget}
       config={row.config}
       onDone={done.done}
       {...(done.blocked === undefined ? {} : { blocked: done.blocked })}

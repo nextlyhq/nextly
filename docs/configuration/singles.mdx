@@ -56,8 +56,9 @@ export default defineSingle({
     }),
   ],
   access: {
+    // Visitors can read, and signed-in callers holding read-site-settings;
+    // the role's update-site-settings decides an update.
     read: true,
-    update: ({ permissions }) => permissions.includes("update-site-settings"),
   },
   hooks: {
     afterChange: [
@@ -205,12 +206,12 @@ A single's access rules are `read`, `update`, `publish` and `unpublish` — ther
 ```typescript
 access: {
   read: true,
-  update: ({ permissions, target }) =>
-    permissions.includes(`update-${target.slug}`),
+  // On top of the role's update permission: not while a content freeze is on.
+  update: () => process.env.CONTENT_FREEZE !== "on",
 }
 ```
 
-Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. A Single's rule is handed the same context as a collection's, with `target.kind` set to `"single"`: see [collections](/docs/configuration/collections#access-control).
+Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule only narrows the permission: a signed-in user or an API key needs it first, and the rule lets them through only by returning `true`; don't decide by a role's name. Super-admin always bypasses checks. A Single's rule is handed the same context as a collection's, with `target.kind` set to `"single"`: see [collections](/docs/configuration/collections#access-control).
 
 ## Hooks
 
@@ -304,8 +305,9 @@ export default defineSingle({
     }),
   ],
   access: {
+    // Visitors can read, and signed-in callers holding read-header; the
+    // role's update-header decides an update.
     read: true,
-    update: ({ permissions }) => permissions.includes("update-header"),
   },
 });
 ```

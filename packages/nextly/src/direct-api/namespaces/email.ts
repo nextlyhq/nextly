@@ -84,6 +84,12 @@ function directResult(result: EmailSendOutcome): SendEmailResult {
       : {}),
     ...(result.refused ? { refused: result.refused } : {}),
     ...(result.repeat ? { repeat: result.repeat } : {}),
+    ...(result.partlyDelivered
+      ? {
+          partlyDelivered: result.partlyDelivered,
+          recipients: result.recipients,
+        }
+      : {}),
   };
 }
 

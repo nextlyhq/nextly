@@ -4,8 +4,8 @@
  *
  * `canReadEntity` and `readableEntities` are the one answer to "may this
  * caller read that entity" — the dashboard scope, the version reads and the
- * list endpoints all ask it, so that a collection authorised entirely in code
- * is visible on every one of them or on none. This is the bridge from a
+ * list endpoints all ask it, so that a collection whose read grant a code
+ * rule narrows is visible on every one of them or on none. This is the bridge from a
  * dispatcher request to that answer, kept as one address so no handler builds
  * its own caller and quietly asks a different question.
  *

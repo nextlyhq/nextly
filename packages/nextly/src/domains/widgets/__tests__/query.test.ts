@@ -1318,6 +1318,8 @@ describe("a timeseries' range", () => {
       /range and since or until each name a window/,
     ],
     [{ range: "30d", interval: "day" }, /range sets the interval/],
+    // 🔴 The range sets the points drawn, so a limit beside it would be accepted and ignored.
+    [{ range: "30d", limit: 1 }, /range sets how many points are drawn/],
     [{ range: "60d" }, /range must be one of 7d, 30d, 90d, 12m/],
   ])("refuses %j on a timeseries", (keys, reason) => {
     expect(() =>

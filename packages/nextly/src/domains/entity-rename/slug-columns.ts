@@ -497,13 +497,6 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     },
   },
   {
-    table: "user_permission_cache",
-    slugColumn: "resource",
-    onRename: "end",
-    reason:
-      'Kept answers to "may this person act on <slug>". Ones about the old slug answer for nothing once it is gone, and would answer for whatever is created there next.',
-  },
-  {
     // Endpoints whose filter lists the collection. A Single never feeds the
     // `collections` filter, so only a collection's rename touches it.
     table: "nextly_webhooks",

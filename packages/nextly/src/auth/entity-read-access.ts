@@ -248,10 +248,9 @@ export function authorizationScheduler(
  * The decision is {@link canReadEntity}'s, taken per entity, because that is
  * the only thing that agrees with what a row read will answer. Deriving the set
  * from permission SLUGS instead — filtering `read-{slug}` or `{slug}:read` —
- * looks equivalent and is not: `checkAccess` resolves a code-defined
- * `access.read` BEFORE it falls back to the stored grants, so a collection
- * authorized purely in code has no permission row to find, and one REFUSED in
- * code still has the row that a slug filter would admit it on.
+ * looks equivalent and is not: `checkAccess` asks a code-defined `access.read`
+ * after the stored grant, and a collection REFUSED in code still has the row
+ * that a slug filter would admit it on.
  *
  * Coarse only in WHAT it decides — whether an entity is in reach at all. The
  * per-row rules of whatever query follows still decide which documents come

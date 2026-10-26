@@ -42,7 +42,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/sqlite";
 
 export { apiKeys } from "../api-keys/sqlite";

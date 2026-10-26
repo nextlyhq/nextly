@@ -33,6 +33,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+
 /**
  * The Builder's many-to-many shape: the target lives on `options.target`, not
  * on `relationTo`, and the typed helper cannot express it.
@@ -140,6 +142,8 @@ describe("related-row collection access (integration)", () => {
 
   it("still populates the target for a caller the rule admits", async () => {
     const { handler, refId } = await boot();
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current!, "permitted", "read", ["pages"]);
 
     const result = await handler.getEntry({
       collectionName: "refs",
@@ -255,6 +259,8 @@ describe("related-row collection access — many-to-many (integration)", () => {
 
   it("still populates them for a caller the rule admits", async () => {
     const { rel, postId } = await seedM2M();
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current!, "permitted", "read", ["tags"]);
 
     const expanded = await rel.expandRelationships(
       { id: postId, title: "Hello", slug: "hello" },
@@ -468,6 +474,8 @@ describe("related-row collection access — one verdict per target (integration)
       );
     }
 
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current, "anyone", "read", ["pages"]);
     evaluations = 0;
     const result = await handler.listEntries({
       collectionName: "refs",
@@ -567,6 +575,8 @@ describe("related-row collection access — anonymous readers (integration)", ()
     // signed-in reader, whose expansion must reach the loader for `pages`.
     // Without this, a spy on the wrong object satisfies the assertion above
     // by seeing nothing at all.
+    // A signed-in reader who holds the read permission the rule narrows.
+    await userWhoMay(current!, "reader", "read", ["pages"]);
     const admitted = await handler.getEntry({
       collectionName: "refs",
       entryId: refId,
@@ -705,6 +715,8 @@ describe("related-row collection access — one verdict per expansion (integrati
       { name: "r", many: pageIds }
     );
 
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current, "anyone", "read", ["pages"]);
     evaluations = 0;
     const result = await handler.getEntry({
       collectionName: "refs",

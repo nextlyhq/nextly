@@ -786,10 +786,11 @@ interface CapabilitiesBody {
  * once per caller and setup and each row reads its own cell; the row's
  * deviations are the ones that request recorded in deciding that cell.
  *
- * A target the answer never names is `=absent` rather than a refusal. An
- * endpoint that dropped an entity would otherwise be pinned here as having
- * refused it, which is the answer a caller with no access gets, so the two
- * would be indistinguishable in the file.
+ * A target the answer never names is `=absent` rather than `R`. The answer
+ * leaves out what the caller may not read, so absence is how it refuses
+ * every action on such a target, and the verdict counts it as a refusal; the
+ * file keeps it apart from a named `false`, so a change in which entities are
+ * named shows in the diff as itself.
  */
 async function capabilities(
   world: World,

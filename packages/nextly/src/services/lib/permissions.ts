@@ -28,11 +28,10 @@ import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
-import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { NextlyError } from "../../errors/nextly-error";
+import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
 import { consoleLogger } from "../../shared/types";
-import type { Logger } from "../shared";
 
 import {
   bumpEpoch,
@@ -96,20 +95,7 @@ function getAdapter(): DrizzleAdapter {
   return container.get<DrizzleAdapter>("adapter");
 }
 
-function getLogger(): Logger {
-  return container.has("logger")
-    ? container.get<Logger>("logger")
-    : consoleLogger;
-}
-
 export type PermissionCheck = { action: string; resource: string };
-
-/**
- * The life the stored-answer service is built with. Nothing is served from
- * the stored answers any more; the service is only asked to empty them, which
- * this does not affect.
- */
-const STORED_ANSWER_TTL_SECONDS = 300;
 
 // The configured dialect's tables, looked up on each use. Kept for the whole
 // process, the first dialect's definitions answered for every later one, and
@@ -838,12 +824,12 @@ export function rbacRevision(): string {
  * The failing direction is a missed cache write, which costs one re-resolution.
  *
  * A retirement that is still running counts as not current, whatever the
- * numbers say. Clearing the shared tier is an awaited database write, and the
- * revision cannot be advanced once at the end to cover it: a check that starts
- * and finishes entirely inside that window reads a row the tombstone has not
- * reached yet, compares two numbers that have not moved since it captured one,
- * and promotes the retired answer into a tier that outlives the retirement.
- * Nothing is cacheable while the caches are being emptied.
+ * numbers say. A batch of permission writes holds one open for its whole
+ * length, and publishing the role version, after emptying the retired stored
+ * answers while they exist, is itself awaited: a check that starts and
+ * finishes inside either reads rows mid-change, compares two
+ * numbers that have not moved since it captured one, and would keep an answer
+ * the change is about to retire. Nothing is cacheable while a retirement runs.
  */
 export function resolvedUnderCurrentRevision(revision: string): boolean {
   // Nothing of its own left. Whether a retirement is running was the one thing
@@ -855,9 +841,10 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 }
 
 /**
- * Invalidate permission cache (both in-memory and database tiers).
+ * Retire what is kept about users' access: the actors this process keeps, and,
+ * by publishing the role version, what every other instance keeps.
  *
- * This function clears cached permissions when user roles or role permissions change.
+ * Called when user roles or role permissions change.
  *
  * @param hint - Invalidation hint with userId or roleId
  * @param hint.userId - Invalidate all permissions for this user
@@ -882,8 +869,9 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
  * reached no cache at all — a role-based key kept a renamed slug and a
  * super-admin's key kept a deleted grant until their entries aged out.
  *
- * Clears the process-local tiers, tombstones the shared one, and advances the
- * revision so derived caches in this process retire with them.
+ * Forgets every actor this process keeps and publishes the role version, which
+ * retires what every instance keeps and the caches derived from it, an API
+ * key's copied grants among them.
  */
 /**
  * The batch the CURRENT operation is part of, or nothing if it is not in one.
@@ -899,13 +887,13 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 const permissionSweep = new AsyncLocalStorage<{ dirty: boolean }>();
 
 /**
- * Run a batch of permission-row writes under ONE table-wide invalidation.
+ * Run a batch of permission-row writes under ONE publish of the role version.
  *
- * The database tier is tombstoned by an unfiltered update of every cached row,
+ * Every publish sends every instance back to read its users' access again,
  * which is the right cost once and the wrong cost per row: a seeder calls
- * `ensurePermission` once per permission, so a single new collection rewrote
- * and locked the whole cache table six times over, each after the first
- * already having expired everything the next one would find.
+ * `ensurePermission` once per permission, so a single new collection would
+ * publish six times over, each after the first retiring access the previous
+ * one had already retired.
  *
  * Nested batches collapse into the outermost, and the flush happens on the way
  * out whether the batch succeeded or threw — a partial write still changed
@@ -965,17 +953,10 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   const batch = permissionSweep.getStore();
   if (batch) {
     batch.dirty = true;
-    // Retired here, announced at the exit. The tiers this process holds cost
-    // nothing to empty, so an answer it is already holding does not outlive the
-    // row it came from; what the batch defers is the unfiltered rewrite of
-    // every STORED row, which is the cost it exists for.
-    //
-    // The epoch stays where it is until that rewrite has happened. Publishing
-    // per write would tell every other instance to drop its in-memory answer
-    // and read a stored row this batch has deliberately not tombstoned yet,
-    // filing it under the new epoch where the batch's own exit cannot reach it
-    // — and for as long as the batch runs, which for a seeder is not bounded by
-    // anything this module controls.
+    // Retired here, announced at the exit. The actors this process keeps cost
+    // nothing to forget, so none outlives the row it came from. The role
+    // version is published once rather than per write: a batch can make many
+    // writes, and every instance reads its actors again after each publish.
     clearInMemoryTiers();
     return;
   }
@@ -1016,54 +997,42 @@ export async function writingPermissions<TTable, T>(
 }
 
 /**
- * Empty the stored answers, then publish the role version that retires every
- * actor kept in every instance.
+ * Empty the retired stored answers, then publish the role version that retires
+ * every actor kept in every instance.
  *
  * Nothing here reads the stored answers, but an instance still running an
- * earlier release does, during a rolling upgrade, and the version is the only
- * signal it receives. So a retirement that failed publishes nothing: published,
- * the version would tell such an instance to drop its in-memory answer and read
- * a stored row the failed retirement left live, filing it under the new
- * version where nothing left to happen can reach it. Withheld, those rows are
- * served until their own expiry, as they would have been. This process still
- * retires what it kept: its actors were dropped before this ran, and
- * everything else it filed under the role version, an API key's copied grants
- * among them, stops being current here.
+ * earlier release does, while the table exists, and the version is the only
+ * signal it receives; see `init/retired-permission-answers`. So a retirement
+ * whose emptying failed publishes nothing: published, the version would tell
+ * such an instance to drop its in-memory answer and read a stored row the
+ * failure left live, filing it under the new version where nothing left to
+ * happen can reach it. Withheld, those rows are served until their own expiry,
+ * as they would have been. This process still retires what it kept: its actors
+ * were dropped before this ran, and everything else it filed under the role
+ * version, an API key's copied grants among them, stops being current here.
  *
  * The depth is held across both steps, so nothing this process resolves while
- * they run is kept as current; see {@link resolvedUnderCurrentRevision}.
+ * they run is kept as current; see {@link resolvedUnderCurrentRevision}. A
+ * version write that fails is owed rather than lost; see `bumpEpoch`.
  */
-async function retireSharedThenPublish(
-  // Whatever the retirement answers is discarded: how many rows a tombstone
-  // touched is not a signal anything here acts on, and a driver that reports it
-  // differently must not become a branch. Whether it THREW is the signal.
-  retireShared: () => Promise<unknown>,
-  logContext: Record<string, unknown> = {}
-): Promise<void> {
-  return duringRetirement(async () => {
-    // Where the stored answers were turned off, no instance on the release
-    // that reads them reads any, so there is nothing to empty and nothing to
+async function publishRetirement(): Promise<void> {
+  await duringRetirement(async () => {
+    // Where the stored answers were turned off, no instance on a release that
+    // reads them reads any, so there is nothing to empty and nothing to
     // withhold the version for.
     if (!storedAnswersReadElsewhere()) {
       await bumpEpoch();
       return;
     }
     try {
-      // A later release drops the table once nothing reads it, possibly while
-      // this one still serves. Gone, it holds nothing to empty, and failing on
-      // it would withhold the version from every other instance. Asked inside
-      // this `try`, so a probe that fails is handled as a failed emptying.
-      if (await getAdapter().tableExists(STORED_ANSWERS_TABLE)) {
-        await retireShared();
-      }
+      await emptyRetiredPermissionAnswers(getAdapter());
     } catch (error) {
       // Reported, not thrown: an invalidation failure must not break the
       // write that raised it. Unpublished, though, for the reason above.
       getAuthLogger()?.log?.("error", {
         category: "auth",
         op: "cache",
-        message: "DB cache invalidation failed",
-        ...logContext,
+        message: "Emptying the retired stored permission answers failed",
         error: String(error),
       });
       retireHereOnly();
@@ -1072,9 +1041,6 @@ async function retireSharedThenPublish(
     await bumpEpoch();
   });
 }
-
-/** The table the earlier release stored permission answers in. */
-const STORED_ANSWERS_TABLE = "user_permission_cache";
 
 /**
  * Whether an instance on the release that reads the stored answers may be
@@ -1092,12 +1058,7 @@ function storedAnswersReadElsewhere(): boolean {
 
 async function flushPermissionCaches(): Promise<void> {
   clearInMemoryTiers();
-
-  await retireSharedThenPublish(() =>
-    new PermissionCacheService(getAdapter(), getLogger(), {
-      cacheTtlSeconds: STORED_ANSWER_TTL_SECONDS,
-    }).invalidateAll()
-  );
+  await publishRetirement();
 }
 
 export async function invalidatePermissionCache(
@@ -1115,30 +1076,7 @@ export async function invalidatePermissionCache(
   if (userId) actorCache.delete(userId);
   if (roleId) actorCache.clear();
 
-  // Invalidate the database tier (Tier 2), and only then announce it. Same
-  // ordering as `flushPermissionCaches`, for the reason stated on
-  // `retireSharedThenPublish`: a scoped tombstone is still an awaited write, so
-  // announcing first still lets another instance promote the row it is about to
-  // remove into a place the removal cannot reach.
-  await retireSharedThenPublish(
-    async () => {
-      const cacheService = new PermissionCacheService(
-        getAdapter(),
-        getLogger(),
-        {
-          cacheTtlSeconds: STORED_ANSWER_TTL_SECONDS,
-        }
-      );
-
-      if (userId) {
-        await cacheService.invalidateByUser(userId);
-      }
-      if (roleId) {
-        await cacheService.invalidateByRole(roleId);
-      }
-    },
-    { userId, roleId }
-  );
+  await publishRetirement();
 }
 
 /**

@@ -435,6 +435,38 @@ describe.each(getConfiguredTestDialects())(
       ]);
     }, 120_000);
 
+    it("clears the key digest from every record of a keyed send to a deleted person, past the first 50", async () => {
+      // Records are written 50 to a statement, and only the first carries the
+      // person: the rest must lose the key digest too.
+      const t = await boot(dialect);
+      const gone = await person("acc_keyed_many");
+      await plugin().principals!.reportDeleted(gone);
+      const copies = Array.from(
+        { length: 60 },
+        (_, index) => `copy-${index}@example.com`
+      );
+
+      const written = await added(t, () =>
+        plugin().services.email.send({
+          to: "member@example.com",
+          cc: copies,
+          subject: "Order placed",
+          html: "<p>hi</p>",
+          person: gone,
+          idempotencyKey: "order-3:member@example.com",
+        })
+      );
+
+      expect(written).toHaveLength(61);
+      expect(
+        written.filter(
+          row =>
+            (row as DeliveryRow & { keyDigest: string | null }).keyDigest !==
+            null
+        )
+      ).toEqual([]);
+    }, 120_000);
+
     it("writes the deletion email erased when it is sent in the reporting transaction", async () => {
       const t = await boot(dialect);
       const gone = await person("acc_in_tx");

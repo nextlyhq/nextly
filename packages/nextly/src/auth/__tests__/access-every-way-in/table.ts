@@ -109,6 +109,14 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * one, answers it differently. `publish-false` declares only a refusing
  * publish and unpublish rule, so a door that judges a publish by the update
  * rule allows what it refuses.
+ *
+ * The filter kinds answer with a filter over the target's entries instead of
+ * a boolean: `returns-filter` one matching the probe entry and `async-filter`
+ * the same from a promise. `returns-empty-in` gives an empty `in` and
+ * `malformed-filter` an operator no filter has, neither of them a well-formed
+ * filter, so they stay refused once filters apply. A door that applies filters
+ * returns only the entries a well-formed one matches; until one does, a filter
+ * is not `true`, and every door refuses it.
  */
 export const RULES = [
   "none",
@@ -130,6 +138,10 @@ export const RULES = [
   "principal-kind",
   "user-is-key-maker",
   "publish-false",
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -437,6 +449,12 @@ const NO_SERVICE_RULES: readonly Rule[] = [
   "returns-true",
   "returns-false",
   "returns-null",
+  // A rule's filter reaches the fallbacks a missing service leaves too, which
+  // judge a rule's answer apart from the service's doors.
+  "returns-filter",
+  "async-filter",
+  "returns-empty-in",
+  "malformed-filter",
 ];
 
 /** Every combination of the lists, target first and caller last. */
@@ -542,6 +560,11 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "user-is-key-maker": (_action, caller) => MADE_BY_USER_WITH.includes(caller),
   "publish-false": action =>
     action === "publish" || action === "unpublish" ? false : null,
+  // A filter is not `true`, and no door applies one yet, so each refuses.
+  "returns-filter": SAYS_NOT_TRUE,
+  "async-filter": SAYS_NOT_TRUE,
+  "returns-empty-in": SAYS_NOT_TRUE,
+  "malformed-filter": SAYS_NOT_TRUE,
 };
 
 /**
@@ -699,7 +722,10 @@ export function oneAnswer(row: Row): Verdict {
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken
  * off: the way a trusted read bounded away from media presents a refusal, so
- * it counts as one.
+ * it counts as one. `=absent` is a capabilities answer that does not name the
+ * target, which the admin offers nothing for, so it counts as a refusal too:
+ * an entity left out where the caller may act on it still disagrees with the
+ * allow expected there.
  */
 export type Answer = string;
 
@@ -708,6 +734,7 @@ export function verdictOf(answer: Answer): Verdict | "error" {
   if (answer === "R" || answer === "401" || answer === "403") return "refuse";
   if (answer === "S") return "refuse";
   if (answer === "404") return "refuse";
+  if (answer === "=absent") return "refuse";
   return "error";
 }
 

@@ -83,7 +83,8 @@ export const POST = withErrorHandler(
 
     const preview = await service.previewDraft(
       validated.template,
-      validated.data
+      validated.data,
+      validated.brand
     );
 
     return respondData(preview);

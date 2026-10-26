@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import {
+  askableQuery,
+  askableWith,
   settingsAsAsked,
   titleAsAsked,
   widgetAsAsked,
@@ -148,5 +150,64 @@ describe("a custom card asking through cells", () => {
       "Count: drafts"
     );
     expect(titleAsAsked(count, {}, [posts])).toBe("Count");
+  });
+});
+
+describe("whether a card can be asked", () => {
+  const choices = [{ value: "a", label: "A" }];
+  const sources: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      fields: [{ name: "status", type: "string", choices }],
+    },
+    {
+      collection: "notes",
+      label: "Notes",
+      lifecycle: false,
+      fields: [{ name: "title", type: "string" }],
+    },
+  ];
+  const breakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "bars",
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+    query: { op: "groupBy", status: "all" },
+  } as unknown as DashboardWidget;
+
+  it("is asked where its collection gives it a source and a group key", () => {
+    expect(
+      widgetAsAsked(breakdown, { collection: "posts" }, sources).query
+    ).toMatchObject({ source: "collection:posts", groupBy: "status" });
+    expect(askableWith(breakdown, { collection: "posts" }, sources)).toBe(true);
+  });
+
+  it("is not asked where the collection has nothing to divide by", () => {
+    // 🔴 The query has a source, so a test of the source alone sends it, and
+    // the endpoint refuses a grouping of nothing.
+    expect(
+      widgetAsAsked(breakdown, { collection: "notes" }, sources).query?.source
+    ).toBe("collection:notes");
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("asks a query with a source and, where grouped, a group key", () => {
+    expect(askableQuery({ source: "collection:posts", op: "list" })).toBe(true);
+    expect(askableQuery({ op: "list" })).toBe(false);
+    expect(askableQuery({ source: "collection:posts", op: "groupBy" })).toBe(
+      false
+    );
   });
 });

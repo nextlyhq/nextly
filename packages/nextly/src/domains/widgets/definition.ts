@@ -1744,18 +1744,24 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
  * can: it declares a source, or it declares none and a Collection setting
  * supplies one. Both together is a source the card's Collection setting
  * replaces once it is set, and reads while it is not.
+ *
+ * A grouped query's group key is read the same way: stated, or supplied by a
+ * Group by setting that always has a value to give, a static default or one
+ * taken from the collection. Left to a setting that may give none, the card
+ * would be asked a grouping of nothing, which the endpoint refuses.
  */
 function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
   const fromSetting = declaresCollectionSetting(d.settings);
+  const groupedBySetting = suppliesGrouping(d.settings);
   // The card's own query and each of a custom card's cells, judged alike: the
   // Collection setting supplies every one of their sources, or none.
-  const asked: Array<[string, { source?: string } | undefined]> = [
+  const asked: Array<[string, AskedQuery | undefined]> = [
     ["its query", d.query],
     // Judged before the cells' own rule runs, so a malformed list is left to
     // that rule to refuse by name.
     ...(d.archetype === "custom" && Array.isArray(d.cells)
       ? (d.cells as Partial<WidgetQueryCell>[]).map(
-          (cell): [string, { source?: string } | undefined] => [
+          (cell): [string, AskedQuery | undefined] => [
             `its cell "${String(cell?.key)}"`,
             typeof cell?.query === "object" && cell.query !== null
               ? cell.query
@@ -1769,8 +1775,45 @@ function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
     if (query.source === undefined && !fromSetting) {
       return `${what} names no source, and no Collection setting supplies one`;
     }
+    if (
+      query.op === "groupBy" &&
+      query.groupBy === undefined &&
+      !groupedBySetting
+    ) {
+      return `${what} names no groupBy, and no Group by setting with a default supplies one`;
+    }
   }
   return undefined;
+}
+
+/** The parts of a declared query `sourceProblem` reads, read defensively. */
+interface AskedQuery {
+  source?: string;
+  op?: unknown;
+  groupBy?: unknown;
+}
+
+/**
+ * Whether a definition declares a Group by setting that always gives a value:
+ * one with a default, or one taking its default from the collection. Read
+ * defensively, as {@link declaresCollectionSetting} reads.
+ */
+function suppliesGrouping(settings: unknown): boolean {
+  return (
+    Array.isArray(settings) &&
+    settings.some((setting: unknown) => {
+      if (typeof setting !== "object" || setting === null) return false;
+      const { type, defaultValue, defaultFrom } = setting as {
+        type?: unknown;
+        defaultValue?: unknown;
+        defaultFrom?: unknown;
+      };
+      return (
+        type === "groupBy" &&
+        (typeof defaultValue === "string" || defaultFrom === "collection")
+      );
+    })
+  );
 }
 
 /**
