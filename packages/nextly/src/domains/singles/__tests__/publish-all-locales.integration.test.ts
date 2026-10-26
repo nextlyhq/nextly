@@ -9,6 +9,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -241,8 +242,9 @@ describe("publishAllLocales (singles)", () => {
           status: true,
           // Update is granted so the base gate passes and only the publish gate
           // can refuse; otherwise a 403 would prove nothing about publish. Read
-          // is granted too: a caller refused read is answered as if the Single
-          // were missing, and this one may see it, so the refusal stays a 403.
+          // is allowed too, and the caller holds the read permission below: a
+          // caller refused read is answered as if the Single were missing, and
+          // this one may see it, so the refusal stays a 403.
           access: {
             read: () => true,
             update: () => true,
@@ -265,6 +267,8 @@ describe("publishAllLocales (singles)", () => {
       { locale: "de", overrideAccess: true }
     );
 
+    // A code rule only narrows the permission, so the caller holds read.
+    await userWhoMay(t, "user-1", "read", ["preferences"]);
     const res = await singlesOf(t).publishAllLocales("preferences", {
       user: { id: "user-1" },
       routeAuthorized: true,
