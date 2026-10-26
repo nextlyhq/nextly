@@ -2175,14 +2175,19 @@ export class FieldGroupMutationService extends BaseService {
     });
     if (!schema) return undefined;
     // Before its migration the companion is not there, and a translated
-    // container is still on the instance's own row. A write resolves this
-    // verdict before it opens a transaction.
-    if (
-      cachedCompanionReadiness(this.adapter, schema.companionTableName) !==
-      "ready"
-    ) {
-      return undefined;
-    }
+    // container is still on the instance's own row. Off a transaction the
+    // verdict is resolved here, so a cold cache cannot skip the read; inside
+    // one only the cached verdict is read, which the write resolved before
+    // opening it.
+    const readiness =
+      scope.executor === undefined
+        ? await resolveCompanionReadiness(this.adapter, {
+            companionTableName: schema.companionTableName,
+            mainTableName: meta.tableName,
+            localizedColumns: schema.localizedFields.map(f => f.column),
+          })
+        : cachedCompanionReadiness(this.adapter, schema.companionTableName);
+    if (readiness !== "ready") return undefined;
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
