@@ -8,6 +8,7 @@
  * same editor for a user who may change the entry, so a seam the reader's
  * state never reaches shows as the two calls agreeing.
  */
+import { act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
@@ -21,9 +22,23 @@ const hooks = vi.hoisted(() => ({
     dismiss: () => undefined,
   })),
   versionAwareToolbarSlots: vi.fn(() => undefined),
+  headerProps: vi.fn(),
+  versionBodyProps: vi.fn(),
+  previewPanesProps: vi.fn(),
 }));
 
-vi.mock("../EntrySystemHeader", () => ({ EntrySystemHeader: () => null }));
+vi.mock("../EntrySystemHeader", () => ({
+  EntrySystemHeader: (props: Record<string, unknown>) => {
+    hooks.headerProps(props);
+    return null;
+  },
+}));
+vi.mock("../../PreviewMode/PreviewPanes", () => ({
+  PreviewPanes: (props: { children?: unknown }) => {
+    hooks.previewPanesProps(props);
+    return props.children ?? null;
+  },
+}));
 vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
   useReadOnlyForReader: () => hooks.readOnlyForReader,
 }));
@@ -46,6 +61,10 @@ vi.mock(
       typeof import("@admin/components/features/versions/viewed-version-host")
     >()),
     versionAwareToolbarSlots: hooks.versionAwareToolbarSlots,
+    ViewedVersionBody: (props: { children?: unknown }) => {
+      hooks.versionBodyProps(props);
+      return props.children ?? null;
+    },
   })
 );
 
@@ -60,6 +79,9 @@ const collection = {
     enabled: true,
     drafts: { enabled: true, autosave: { enabled: true } },
   },
+  // A preview, so an editor is offered one and the reader's absence of it is
+  // the permission.
+  admin: { preview: { hasPreview: true } },
 } as never;
 
 /** The options the editor last handed `mock`. */
@@ -110,5 +132,53 @@ describe("the entry editor for a user who may only read the entry", () => {
     vi.clearAllMocks();
     renderAs(false);
     expect(lastOptions(hooks.versionAwareToolbarSlots)[1]).toBe(false);
+  });
+
+  it("holds restoring a past version, on every width", () => {
+    // The version body carries the phone's Restore; the header's is held by
+    // the same decision.
+    renderAs(true);
+    expect(lastOptions(hooks.versionBodyProps)[0]).toMatchObject({
+      actionsDisabled: true,
+    });
+    vi.clearAllMocks();
+    renderAs(false);
+    expect(lastOptions(hooks.versionBodyProps)[0]).toMatchObject({
+      actionsDisabled: false,
+    });
+  });
+
+  it("hands the header no document to share, so no share popover can stay open", () => {
+    renderAs(true);
+    expect(lastOptions(hooks.headerProps)[0]).not.toHaveProperty(
+      "shareDocument"
+    );
+    vi.clearAllMocks();
+    renderAs(false);
+    expect(lastOptions(hooks.headerProps)[0]).toHaveProperty("shareDocument");
+  });
+
+  it("closes an open preview once the user may only read the entry", async () => {
+    hooks.readOnlyForReader = false;
+    const view = render(
+      <EntryForm collection={collection} entry={entry} mode="edit" />
+    );
+    const toggle = lastOptions(hooks.headerProps)[0] as {
+      onTogglePreviewPane?: () => void;
+    };
+    // POPULATION CONTROL: the editor opens it, so the pane is open below
+    // until the reader's state closes it.
+    expect(toggle.onTogglePreviewPane).toEqual(expect.any(Function));
+    await act(async () => toggle.onTogglePreviewPane?.());
+    expect(lastOptions(hooks.previewPanesProps)[0]).toMatchObject({
+      open: true,
+    });
+    hooks.readOnlyForReader = true;
+    view.rerender(
+      <EntryForm collection={collection} entry={entry} mode="edit" />
+    );
+    expect(lastOptions(hooks.previewPanesProps)[0]).toMatchObject({
+      open: false,
+    });
   });
 });

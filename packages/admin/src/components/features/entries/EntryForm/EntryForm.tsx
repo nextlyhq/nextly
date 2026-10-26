@@ -611,6 +611,9 @@ export function EntryForm({
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
   const editsHeld = writesHeld || readOnlyForReader;
+  // A colleague's claim or a reader's page, without the version on screen:
+  // what holds the actions a version's own surfaces offer, Restore among them.
+  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -700,8 +703,10 @@ export function EntryForm({
   // the entry is saved, which is when it has an id to name, and while the
   // language is unknown: a link minted without a resolvable locale is either
   // refused or a grant over every translation.
+  // Withheld from a reader too, so the share popover cannot stay mounted
+  // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    savedEntryId === "" || linkLocale.kind === "unresolved"
+    readOnlyForReader || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -916,10 +921,13 @@ export function EntryForm({
                */
               // Nor beside a document view, which takes the window alone; the
               // flag survives a move from the edit screen into the view.
+              // Nor for a reader, who is offered no preview: an open pane
+              // closes once the user may no longer change the entry.
               open={
                 previewOpen &&
                 translationMode.source === undefined &&
-                !documentView
+                !documentView &&
+                !readOnlyForReader
               }
               onClose={() => setPreviewOpen(false)}
               scope={{
@@ -1089,7 +1097,7 @@ export function EntryForm({
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
-                                    editsHeld,
+                                    versionWritesHeld,
                                     "collection",
                                     controllerNames[0]
                                   )}
@@ -1192,8 +1200,9 @@ export function EntryForm({
                                   // restore racing the ordinary save would let
                                   // completion order decide which contents
                                   // survive.
+                                  // A reader's page holds restoring as well.
                                   actionsDisabled={
-                                    lock.actionsDisabled || isSubmitting
+                                    versionWritesHeld || isSubmitting
                                   }
                                 >
                                   {mainFields.length > 0 && (

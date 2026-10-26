@@ -645,6 +645,14 @@ export default function EditEntryPage({
     entryId: id,
     collection: collection,
     entry: apiEntryData,
+    // The gates a custom edit view receives, for a user who may only read
+    // the entry: the slots open on read as the editor does, so one written to
+    // change the entry is told to hold its writes. A colleague's claim is the
+    // form's, below, and not stated here.
+    documentLock: {
+      readOnly: customViewReader,
+      actionsDisabled: customViewReader,
+    },
   };
 
   return (

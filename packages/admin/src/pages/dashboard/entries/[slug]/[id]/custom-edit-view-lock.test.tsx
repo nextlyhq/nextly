@@ -322,6 +322,32 @@ describe("a custom collection edit view", () => {
     expect(claimRequest()).toMatchObject({ enabled: false });
   });
 
+  it("tells an edit injection a reader's page holds its writes", () => {
+    // Before/AfterEdit open on read as the editor does, so one written to
+    // change the entry is told to hold its writes, as a custom view is.
+    let slotProps: Record<string, unknown> | undefined;
+    registerComponent(
+      "@acme/notes/admin#BeforeEdit",
+      (props: Record<string, unknown>) => {
+        slotProps = props;
+        return <div>before the editor</div>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { BeforeEdit: "@acme/notes/admin#BeforeEdit" } },
+    };
+    readOnlyForReader = true;
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("before the editor")).toBeInTheDocument();
+    expect(slotProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
+  });
+
   it("leaves the claim to the form when there is no custom view", () => {
     // 🔴 The page must not claim on this branch. `EntryForm` claims for the
     // default editor, and a second claim here would put two on one document

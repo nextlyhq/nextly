@@ -629,6 +629,9 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || readOnlyForReader;
+  // A colleague's claim or a reader's page, without the version on screen:
+  // what holds the actions a version's own surfaces offer, Restore among them.
+  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
 
   //
   // The synchronous half of the same gate. `isSubmitting` is render state: it
@@ -1132,7 +1135,10 @@ export function SingleForm({
                                     previewLink.isAvailable &&
                                     !readOnlyForReader
                                   }
-                                  {...(previewLink.shareDocument === undefined
+                                  // Withheld from a reader, so the share
+                                  // popover cannot stay mounted for them.
+                                  {...(previewLink.shareDocument ===
+                                    undefined || readOnlyForReader
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1154,7 +1160,7 @@ export function SingleForm({
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
-                                    editsHeld,
+                                    versionWritesHeld,
                                     "single",
                                     controllerNames[0]
                                   )}
@@ -1228,9 +1234,8 @@ export function SingleForm({
                                   // restore racing the ordinary save would let
                                   // completion order decide which contents
                                   // survive.
-                                  versionActionsHeld={
-                                    lock.actionsDisabled || busy
-                                  }
+                                  // A reader's page holds restoring as well.
+                                  versionActionsHeld={versionWritesHeld || busy}
                                 />
                               </div>
 

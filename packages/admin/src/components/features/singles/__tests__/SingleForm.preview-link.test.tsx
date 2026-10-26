@@ -104,11 +104,14 @@ describe("SingleForm wires the shareable link into its header", () => {
 
     expect(lastHeaderProps().isLinkAvailable).toBe(false);
     expect(lastHeaderProps().onTogglePreviewPane).toBeUndefined();
+    // No document to share either, so no share popover can stay mounted.
+    expect(lastHeaderProps()).not.toHaveProperty("shareDocument");
     // POPULATION CONTROL: the same Single offers both to one who may change it.
     reader.current = false;
     renderForm();
     expect(lastHeaderProps().isLinkAvailable).toBe(true);
     expect(lastHeaderProps().onTogglePreviewPane).toEqual(expect.any(Function));
+    expect(lastHeaderProps()).toHaveProperty("shareDocument");
   });
 
   it("offers the link once the language resolves", () => {
