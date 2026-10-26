@@ -51,9 +51,9 @@ import {
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
-  COUNT_WIDGET_ID,
-  countCardConversion,
-} from "../domains/widgets/count-conversion";
+  conversionFacts,
+  generatedCardConversion,
+} from "../domains/widgets/generated-card-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -181,8 +181,8 @@ function wholeArrangement(
   stored: StoredLayout | undefined,
   conversion: WidgetRetirements
 ): WidgetPlacement[] {
-  // The saved count and health cards as Count cards, for THIS reader
-  // (`countCardConversion`): applied here, so what a reader is shown, what a
+  // The saved generated cards as the widgets offered per collection, for THIS
+  // reader (`generatedCardConversion`): applied here, so what a reader is shown, what a
   // writer carries back and what a query may ask for are one converted
   // arrangement.
   return applyRetirements(
@@ -314,18 +314,32 @@ async function visibleWidgets(auth: AuthContext) {
   // are all taken from.
   const readable = readableCollectionsOf(audience.visible);
   const registered = audience.registeredCollections;
-  const count = audience.visible.find(widget => widget.id === COUNT_WIDGET_ID);
+  // The generated cards from the audience's own snapshot, taken in the same
+  // span as the visible widgets and the registered collections: a re-read of
+  // the global set could hold another request's refresh.
+  const generatedById = new Map(
+    audience.generated.map(widget => [widget.id, widget])
+  );
   return {
     caller,
     audience,
     probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
-    conversion: countCardConversion(
+    conversion: generatedCardConversion(
       readable,
       registered,
       new Set(declaredWidgets().map(widget => widget.id)),
-      count === undefined ? undefined : widthFacts(count).allowedWidths
+      // Each successor's widths as registered, where this reader is shown it.
+      successor => {
+        const widget = audience.visible.find(entry => entry.id === successor);
+        return widget === undefined
+          ? undefined
+          : widthFacts(widget).allowedWidths;
+      },
+      // The cards core generates today, by id: only one of them is a retired
+      // core card, and a timeline converts only while it counts as Over time.
+      widgetId => generatedById.get(widgetId)
     ),
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the
@@ -338,7 +352,8 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets)
+      collectionSettingsToken(widgets),
+      conversionFacts(audience.generated)
     ),
   };
 }

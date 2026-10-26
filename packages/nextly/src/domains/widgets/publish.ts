@@ -81,7 +81,7 @@ export type { PublishedContentSource } from "./published-content-source";
  * each collection whose own generated card is visible to them.
  *
  * ONE derivation for what a card's content settings may name and for which
- * collection a saved count card resolves to (`countCardConversion`), so the
+ * collection a saved count card resolves to (`generatedCardConversion`), so the
  * two never disagree about what this reader may read.
  */
 export function readableCollectionsOf(

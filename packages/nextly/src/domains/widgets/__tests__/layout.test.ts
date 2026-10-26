@@ -889,6 +889,14 @@ describe("the visibility token", () => {
     );
   });
 
+  it("moves when a fact a conversion is exact on changes, with nothing else changing", () => {
+    expect(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=createdAt"])
+    ).not.toBe(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=eventOn"])
+    );
+  });
+
   it("cannot mistake a held gate for a widget id", () => {
     expect(visibilityToken(["x"], [])).not.toBe(visibilityToken([], ["x"]));
   });
