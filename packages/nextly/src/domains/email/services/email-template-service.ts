@@ -470,7 +470,7 @@ function renderPreheaderText(
     data,
     options
   );
-  return htmlToText(html).trim();
+  return htmlToText(html, { linkTargets: false }).trim();
 }
 
 /**
