@@ -26,6 +26,11 @@ interface PluginSlotProps<P extends object> {
    * its error state, so a throw reads as that card's failure, with its Retry.
    */
   errorFallback?: ReactNode;
+  /**
+   * Told when the component throws while drawing, so a host that draws the
+   * failure itself (a dashboard card's frame) can.
+   */
+  onError?: () => void;
 }
 
 /**
@@ -41,6 +46,7 @@ export function PluginSlot<P extends object = Record<string, unknown>>({
   props,
   fallback,
   errorFallback,
+  onError,
 }: PluginSlotProps<P>): ReactNode {
   // Resolved as taking `Partial<P>`: `props` is optional here, so the
   // component is told the truth that it may be rendered with none of them.
@@ -54,6 +60,7 @@ export function PluginSlot<P extends object = Record<string, unknown>>({
     <PluginComponentBoundary
       componentPath={path as string}
       {...(errorFallback === undefined ? {} : { fallback: errorFallback })}
+      {...(onError === undefined ? {} : { onError })}
     >
       <Component {...props} />
     </PluginComponentBoundary>

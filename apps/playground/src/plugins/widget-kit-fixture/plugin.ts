@@ -11,8 +11,9 @@
  * declared widget never is); a contributor meets them only in the add panel,
  * named as test fixtures.
  */
-import { definePlugin } from "@nextlyhq/plugin-sdk";
-import { defineWidget } from "nextly";
+// Through the plugin SDK, as a plugin imports them, so this fixture proves
+// the SDK's own exports.
+import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
 
 /** The two components, as the generated component map imports them. */
 const KIT_CARD_COMPONENT = "@/plugins/widget-kit-fixture/admin#KitCard";

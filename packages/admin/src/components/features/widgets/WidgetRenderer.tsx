@@ -35,7 +35,8 @@ import type {
 
 import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
-import { DeclaredComponent } from "./declared-component";
+import { DeclaredComponent, useComponentDraw } from "./declared-component";
+import { DREW_NOTHING } from "./draw-failures";
 import type { SkeletonShape } from "./frame/states";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
@@ -383,6 +384,62 @@ function selfDrawnCard(
   );
 }
 
+/**
+ * A declared widget's own component, with its data, inside the frame, which
+ * has already drawn every other state, marked busy through a refetch like any
+ * card with an answer.
+ *
+ * 🔴 A throw while drawing is the FRAME's error state, not a body swapped
+ * inside a card that still says it is ready: the card's state, its footer and
+ * quick setting, and the grid's count all read it as failed, and its Retry
+ * draws again once the answer it asks for has settled (`useComponentDraw`).
+ */
+function declaredCard(
+  definition: WidgetRendererProps["definition"],
+  shared: ReturnType<typeof sharedCardProps>,
+  data: unknown,
+  draw: ReturnType<typeof useComponentDraw>,
+  live: {
+    placement: WidgetRendererProps["placement"];
+    updatedAt: Date | null;
+    isFetching: boolean;
+    onRetry: (() => void) | undefined;
+  }
+): JSX.Element {
+  if (draw.failed) {
+    const drawn = cardForOutcome(
+      { state: "failed", message: DREW_NOTHING },
+      {
+        updatedAt: live.updatedAt,
+        isFetching: live.isFetching,
+        onRetry: draw.retry,
+      }
+    );
+    return (
+      <WidgetCard {...shared} {...drawn.props}>
+        {drawn.body}
+      </WidgetCard>
+    );
+  }
+  return (
+    <WidgetCard
+      {...shared}
+      updatedAt={live.updatedAt}
+      isLoading={live.isFetching}
+    >
+      <DeclaredComponent
+        key={draw.drawKey}
+        definition={definition}
+        placement={live.placement}
+        data={data}
+        refreshing={live.isFetching}
+        {...(live.onRetry ? { onRetry: live.onRetry } : {})}
+        onCaught={draw.caught}
+      />
+    </WidgetCard>
+  );
+}
+
 export function WidgetRenderer({
   definition,
   slot,
@@ -406,6 +463,14 @@ export function WidgetRenderer({
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+  // Whether a declared widget's own component threw drawing this answer: asked
+  // for every card, as a hook must be, and false for any other.
+  const draw = useComponentDraw({
+    slot,
+    isFetching,
+    ...(onRetry ? { onRetry } : {}),
+    placementId: placement?.id ?? definition.id,
+  });
   // A custom card that declares several reads is handed each answer by key; a
   // key with no answer yet is left out, as `slot` is.
   const cellAnswers = customCellAnswers(definition, slotFor);
@@ -451,21 +516,13 @@ export function WidgetRenderer({
     });
   }
 
-  // A declared widget's own component, with its data: inside the frame, which
-  // has already drawn every other state, marked busy through a refetch like
-  // any card with an answer.
   if (outcome.state === "answered") {
-    return (
-      <WidgetCard {...shared} updatedAt={updatedAt} isLoading={isFetching}>
-        <DeclaredComponent
-          definition={definition}
-          placement={placement}
-          data={outcome.data}
-          refreshing={isFetching}
-          {...(onRetry ? { onRetry } : {})}
-        />
-      </WidgetCard>
-    );
+    return declaredCard(definition, shared, outcome.data, draw, {
+      placement,
+      updatedAt,
+      isFetching,
+      onRetry,
+    });
   }
 
   const drawn = cardForOutcome(outcome, { updatedAt, isFetching, onRetry });

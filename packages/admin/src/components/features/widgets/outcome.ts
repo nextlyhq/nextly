@@ -231,16 +231,19 @@ function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
  * A declared widget drawn by its own component: core builds its data, so the
  * frame draws loading, no permission and error as for any card core answers,
  * and the component is called only once there is data (`WidgetProps`).
+ *
+ * Its data is what the declaration types it as: a data function's answer,
+ * carried as an `op: "data"` result and unwrapped here, or, for a widget
+ * whose data is `{ query }`, the query's own answer as it is, a count, a list
+ * or a grouped result (`QueryAnswer`).
  */
 function declaredComponentOutcome(slot: WidgetSlot | undefined): WidgetOutcome {
   if (!slot) return { state: "loading" };
   if (!slot.ok) return slotFailure(slot);
-  return slot.result.op === "data"
-    ? { state: "answered", data: slot.result.data }
-    : {
-        state: "failed",
-        message: `Expected this widget's own data, and received a "${slot.result.op}" answer.`,
-      };
+  return {
+    state: "answered",
+    data: slot.result.op === "data" ? slot.result.data : slot.result,
+  };
 }
 
 export function resolveWidgetOutcome(

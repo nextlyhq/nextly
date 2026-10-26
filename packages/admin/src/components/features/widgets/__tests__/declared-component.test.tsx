@@ -3,7 +3,8 @@
  * frame draws loading, no permission and error itself, the component is called
  * only once there is data and is handed the props its declaration types
  * (`WidgetProps`), its size follows the card's tier, and a throw while drawing
- * is that card's error alone, with a Retry that draws it again.
+ * puts that card alone in its error state, with a Retry that draws it again
+ * once the answer it asked for has settled.
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -21,6 +22,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { DeclaredComponent } from "../declared-component";
+import { DrawFailureContext } from "../draw-failures";
 import { CardTierContext } from "../frame/tier";
 import { WidgetRenderer } from "../WidgetRenderer";
 
@@ -41,7 +43,9 @@ const declared: DashboardWidget = {
   serverData: true,
 };
 
-const dataSlot = (data: number | Record<string, number>): WidgetSlot => ({
+const dataSlot = (
+  data: number | Record<string, number | boolean>
+): WidgetSlot => ({
   ok: true,
   result: { op: "data", data },
 });
@@ -123,6 +127,7 @@ describe("a declared widget drawn by its own component", () => {
           placement={{ id: "card-1", settings: {}, width: "quarter" }}
           data={1}
           refreshing={false}
+          onCaught={() => undefined}
         />
       </CardTierContext.Provider>
     );
@@ -133,22 +138,38 @@ describe("a declared widget drawn by its own component", () => {
     expect(seen.at(-1)?.size.class).toBe("large");
   });
 
-  it("shows a throw while drawing as that card's error alone, and Retry draws it again", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    let fail = true;
-    const Revenue = (): JSX.Element => {
-      if (fail) throw new Error("boom");
-      return <p data-testid="revenue">drawn</p>;
-    };
-    registerComponent(PATH, Revenue);
-    registerComponent("@acme/admin#Other", () => <p>other card</p>);
-    const onRetry = vi.fn();
+  it("hands a widget whose data is a query the query's own answer as its data", () => {
+    // 🔴 Not an `op: "data"` result: a `{ query }` widget's data is the
+    // query's answer itself, as `WidgetData` types it.
+    const seen = recording();
+    const answer = { op: "count" as const, total: 3 };
     render(
-      <>
+      <WidgetRenderer
+        definition={declared}
+        slot={{ ok: true, result: answer }}
+      />
+    );
+    expect(screen.queryByTestId("widget-card-error")).toBeNull();
+    expect(seen.at(-1)?.data).toEqual(answer);
+  });
+
+  it("puts the card itself in its error state when its component throws, and leaves the card beside it alone", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    registerComponent(PATH, (): JSX.Element => {
+      throw new Error("boom");
+    });
+    registerComponent("@acme/admin#Other", () => <p>other card</p>);
+    const reports: [string, boolean][] = [];
+    render(
+      <DrawFailureContext.Provider
+        value={(id, failed) => reports.push([id, failed])}
+      >
         <WidgetRenderer
           definition={declared}
           slot={dataSlot(1)}
-          onRetry={onRetry}
+          placement={{ id: "card-1", settings: {} }}
+          updatedAt={new Date()}
+          onRetry={vi.fn()}
         />
         <WidgetRenderer
           definition={{
@@ -158,21 +179,79 @@ describe("a declared widget drawn by its own component", () => {
             component: "@acme/admin#Other",
           }}
           slot={dataSlot(2)}
+          placement={{ id: "card-2", settings: {} }}
         />
-      </>
+      </DrawFailureContext.Provider>
     );
-    // The card's own error state, not the plugin boundary's generic message.
+    // The card's own error state, not a body swapped inside a ready card.
+    const card = screen.getByRole("region", { name: "Revenue" });
+    expect(card).toHaveAttribute("data-state", "error");
     expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
     expect(
       screen.queryByText(/This plugin component failed to load/)
     ).toBeNull();
-    // The card beside it is untouched.
+    // The grid is told, so it counts the card as failed.
+    expect(reports).toContainEqual(["card-1", true]);
+    expect(reports).not.toContainEqual(["card-2", true]);
     expect(screen.getByText("other card")).toBeInTheDocument();
-    fail = false;
+  });
+
+  it("draws again on Retry only once the answer it asked for has settled, and recovers when that answer draws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Fails while `fail` holds or its data is bad: what the retry fixes is
+    // not known when Retry is pressed, only once its answer is in.
+    let fail = true;
+    registerComponent(PATH, (props: DeclaredComponentProps): JSX.Element => {
+      if (fail || (props.data as { bad?: boolean }).bad) {
+        throw new Error("cannot draw");
+      }
+      return <p data-testid="revenue">drawn</p>;
+    });
+    const onRetry = vi.fn();
+    const answer = dataSlot({ total: 5 });
+    const card = (slot: WidgetSlot, isFetching: boolean) => (
+      <WidgetRenderer
+        definition={declared}
+        slot={slot}
+        isFetching={isFetching}
+        onRetry={onRetry}
+      />
+    );
+    const { rerender } = render(card(answer, false));
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Retry Revenue" })
     );
     expect(onRetry).toHaveBeenCalledTimes(1);
+    // The retry's answer is on its way, and what broke the draw is fixed.
+    fail = false;
+    rerender(card(answer, true));
+    // 🔴 It settles as the same answer (unchanged data keeps its object):
+    // drawn again now, though nothing new arrived. Drawn again on the click
+    // instead, it would have failed while `fail` held, and stayed failed.
+    rerender(card(answer, false));
+    expect(screen.getByTestId("revenue")).toHaveTextContent("drawn");
+    // A failure that depends on the data: failed for the bad answer, drawn for
+    // the next good one, with no click.
+    rerender(card(dataSlot({ bad: true }), false));
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    rerender(card(dataSlot({ total: 6 }), false));
+    expect(screen.getByTestId("revenue")).toHaveTextContent("drawn");
+  });
+
+  it("draws again at once on Retry when there is no answer to ask again for", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let fail = true;
+    registerComponent(PATH, (): JSX.Element => {
+      if (fail) throw new Error("boom");
+      return <p data-testid="revenue">drawn</p>;
+    });
+    render(<WidgetRenderer definition={declared} slot={dataSlot(1)} />);
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    fail = false;
+    await userEvent.click(
+      screen.getByRole("button", { name: "Retry Revenue" })
+    );
     expect(screen.getByTestId("revenue")).toHaveTextContent("drawn");
   });
 
