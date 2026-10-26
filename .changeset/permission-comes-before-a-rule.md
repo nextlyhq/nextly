@@ -34,7 +34,7 @@ A code access rule can no longer let in a signed-in user who lacks the permissio
 - **A collection or a Single.** A Single's own rule narrows the permission as a collection's does: with `read: () => true`, a user without the Single's read permission is refused.
 - **Related rows.** A related row is shown only to a user who could read it directly, with the permission on their role and the target's rule. Before, the target's rule alone decided.
 - **Writes.** A create or update by a signed-in user needs the permission before the collection's rule is asked. The fields such a write may set are then judged by their own rules, as before.
-- `nextly.access.check` answers the same way.
+- `nextly.access.check` answers the same way, as does the deprecated `checkCollectionAccess` from `nextly/auth`: it asks the permission before the rule its `evaluateCodeAccess` runs, and that rule then allows only by returning `true`.
 
 To keep such a user's access, tick the permission on their role.
 

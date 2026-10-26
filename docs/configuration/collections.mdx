@@ -51,10 +51,9 @@ export default defineCollection({
     description: "Blog posts and articles",
   },
   access: {
+    // Anyone can read. Create, update and delete declare no rule, so the
+    // role's create-posts, update-posts and delete-posts decide.
     read: true,
-    create: ({ permissions }) => permissions.includes("create-posts"),
-    update: ({ permissions }) => permissions.includes("update-posts"),
-    delete: ({ permissions }) => permissions.includes("delete-posts"),
   },
   hooks: {
     beforeChange: [
@@ -376,7 +375,7 @@ Rules were once handed permissions as `posts:update`. For one release that spell
 
 **Rules:**
 
-- Code-defined access is what a signed-in user is judged by when it is declared, so it includes the permission check itself.
+- Code-defined access only narrows the permission: a signed-in user or an API key needs the permission first, and a declared rule lets them through only by returning `true`.
 - Omitting an operation falls back to the database role/permission system.
 - Super-admin always bypasses all access checks.
 

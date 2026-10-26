@@ -221,7 +221,7 @@ export type AccessControlFunction = (
  *   access: {
  *     // Only admins and editors can create
  *     create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
- *     // Any authenticated user can read
+ *     // Visitors can read, and signed-in callers holding read-posts
  *     read: true,
  *     // Only the user's own posts (checked via roles/permissions)
  *     update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
