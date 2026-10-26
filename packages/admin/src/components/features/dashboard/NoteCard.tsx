@@ -27,15 +27,20 @@ const TextMarkdown = lazy(() =>
   )
 );
 
-/** The note's text, or `""` for a note not written yet or a value that is not text. */
+/**
+ * The note's text as written, or `""` for a note not written yet or a value
+ * that is not text. Not trimmed: leading spaces are Markdown (four of them
+ * make a code block), so only the empty test below reads past them.
+ */
 function noteText(settings: WidgetComponentProps["settings"]): string {
   const text = settings?.text;
-  return typeof text === "string" ? text.trim() : "";
+  return typeof text === "string" ? text : "";
 }
 
 export const NoteCard: React.FC<WidgetComponentProps> = ({ settings }) => {
   const text = noteText(settings);
-  if (text === "") {
+  // Blank as well as absent is an empty note: whitespace alone draws nothing.
+  if (text.trim() === "") {
     return (
       <CardEmpty
         title="An empty note"

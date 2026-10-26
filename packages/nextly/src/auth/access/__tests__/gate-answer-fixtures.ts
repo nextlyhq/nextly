@@ -198,6 +198,8 @@ export function gateRules(slug: string): Record<string, GateRule | undefined> {
     },
     "async-true": async () => true,
     "role-name": ({ roles }) => roles.includes("editor"),
+    // The spelling rules were once handed, `<resource>:<operation>`. No rule
+    // is handed it any more, so this one never allows.
     "permission-spelling": ({ permissions, operation }) =>
       permissions.includes(`${slug}:${operation}`),
     "signed-in": ({ user }) => user !== null,

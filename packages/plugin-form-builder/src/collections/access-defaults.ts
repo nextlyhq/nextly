@@ -30,9 +30,9 @@ export type AccessOverrides = Pick<
  * the role screen grants it: `read-form-submissions` to read submissions,
  * `update-forms` to edit a form.
  *
- * A collection's rule is the whole answer for a signed-in user, so "signed in"
- * here would admit every staff member whatever their role holds, and a role
- * name would refuse a custom role that holds the permission. The rule is given
+ * The grant is checked before a collection's rule, and the rule only narrows
+ * it, so this check repeats the gate's and keeps the default plain; a role
+ * name here would refuse a custom role that holds the permission. The rule is given
  * the caller's permissions as the role screen spells them, `<action>-<slug>`,
  * for a session and an API key alike, and a visitor holds none. `collection` is the slug the host installed
  * the collection under, so a renamed collection is judged by its own

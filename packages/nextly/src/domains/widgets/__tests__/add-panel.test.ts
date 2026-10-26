@@ -36,6 +36,7 @@ describe("the group each widget is listed in", () => {
       "core/recent-activity": "team",
       // Offered per collection, inside each collection's part of Content.
       "core/count": "content",
+      "core/breakdown": "content",
       // Offered on request: one row of Overview.
       "core/note": "overview",
       // Offered per collection, as Count is.

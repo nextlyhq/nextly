@@ -59,6 +59,13 @@ export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
  * that row was returned.
  */
 export const PROBE_WHERE = { slug: { equals: "probe" } };
+/**
+ * The filter the filter rule kinds answer with: it matches the probe entry
+ * and no other, so a door that applies it returns the probe and withholds the
+ * rest of the collection.
+ */
+const PROBE_FILTER = { slug: { equals: "probe" } };
+
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
@@ -120,6 +127,10 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "user-is-key-maker": ({ user }) =>
     keyMaker.id !== undefined && user?.id === keyMaker.id,
   "publish-false": () => false,
+  "returns-filter": () => PROBE_FILTER,
+  "async-filter": async () => PROBE_FILTER,
+  "returns-empty-in": () => ({ slug: { in: [] } }),
+  "malformed-filter": () => ({ slug: { resembles: "probe" } }),
 };
 
 /**
@@ -284,6 +295,8 @@ const SERVICE_CALLS: Record<
 > = {
   read: (c, slug, id, opts) => c.findEntryById(slug, id, opts),
   create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
+  "new-pub": (c, slug, _id, opts) =>
+    c.createEntry(slug, { title: "made", status: "published" }, opts),
   update: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { title: "changed" }, opts),
   delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
@@ -663,13 +676,22 @@ async function seedUsers(t: TestNextly) {
     await permissionIds(t, slug => slug === "read-refs"),
     [superAdminRole]
   );
+  // `user-without` holds nothing on any target the table judges, but may read
+  // `refs`, the row its relationships are populated through: its rule no
+  // longer lets in a user without the permission, and without it every
+  // population cell would answer for `refs` rather than for the related row.
+  const refsReaderRole = await makeRole(
+    t,
+    "refs-reader",
+    await permissionIds(t, slug => slug === "read-refs")
+  );
 
   const users: Record<string, SeededUser> = {
     root: { id: rootId, roleIds: [superAdminRole] },
   };
   for (const [name, roleId] of [
     ["with", editorRole],
-    ["without", undefined],
+    ["without", refsReaderRole],
     ["custom", reviewerRole],
     ["chief", chiefRole],
     ["partial", partialRole],

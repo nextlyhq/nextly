@@ -42,7 +42,11 @@ const ORIGIN = "http://localhost";
 const PLAIN = ["posts", "notes"];
 /** Its read rule refuses everyone, whatever permission they hold. */
 const REFUSED = "secrets";
-/** Its read rule admits the German language alone. */
+/**
+ * Readable by permission; its update rule admits the German language alone.
+ * The rule is on update rather than read so the collection stays readable,
+ * and so named, in every language.
+ */
 const GERMAN = "german";
 
 interface Capabilities {
@@ -59,6 +63,10 @@ describe.each(getConfiguredTestDialects())(
     let readerRoleId: string;
     let superAdminId: string;
     let readerKey: string;
+    /** Reads Posts and nothing else. */
+    let postsReader: { id: string; roleId: string };
+    /** Reads Posts and Notes: the control for `postsReader`. */
+    let bothReader: { id: string; roleId: string };
     let visitingId: string;
     /** The visiting reader's read-only and role-based keys, and when each ends. */
     let visitingKeys: { readOnly: string; roleBased: string; keyEnds: number };
@@ -101,6 +109,25 @@ describe.each(getConfiguredTestDialects())(
       return (await res.json()) as Capabilities;
     }
 
+    /** The slugs the collection or Single list shows this caller. */
+    async function listed(
+      headers: Record<string, string>,
+      kind: "collections" | "singles"
+    ): Promise<string[]> {
+      const handlers = createDynamicHandlers();
+      const res = await handlers.GET(
+        new Request(`${ORIGIN}/api/${kind}?limit=100`, {
+          headers: { origin: ORIGIN, ...headers },
+        }),
+        { params: Promise.resolve({ params: [kind] }) }
+      );
+      expect(res.status).toBe(200);
+      const { items } = (await res.json()) as {
+        items: { slug?: string; name?: string }[];
+      };
+      return items.map(item => String(item.slug ?? item.name));
+    }
+
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
@@ -117,7 +144,7 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: GERMAN,
             localized: true,
-            access: { read: ({ locale }) => locale === "de" },
+            access: { update: ({ locale }) => locale === "de" },
             fields: [text({ name: "title" })],
           }),
         ],
@@ -173,6 +200,7 @@ describe.each(getConfiguredTestDialects())(
               idOf("read-posts"),
               idOf(`read-${REFUSED}`),
               idOf(`read-${GERMAN}`),
+              idOf(`update-${GERMAN}`),
             ],
           },
         })
@@ -184,6 +212,23 @@ describe.each(getConfiguredTestDialects())(
           data: { name: "Reader", isActive: true, roles: [readerRoleId] },
         })
       ).item.id;
+      const readerOf = async (name: string, slugs: string[]) => {
+        const roleId = (
+          await direct.roles.create({
+            data: { name, slug: name, permissionIds: slugs.map(idOf) },
+          })
+        ).item.id;
+        const id = (
+          await direct.users.create({
+            email: `${name}@example.com`,
+            password: "Password123!",
+            data: { name, isActive: true, roles: [roleId] },
+          })
+        ).item.id;
+        return { id, roleId };
+      };
+      postsReader = await readerOf("posts-reader", ["read-posts"]);
+      bothReader = await readerOf("both-reader", ["read-posts", "read-notes"]);
       // Holds the readers' role for an hour, so the answer stops holding then.
       visitingId = (
         await direct.users.create({
@@ -228,8 +273,9 @@ describe.each(getConfiguredTestDialects())(
       await t?.destroy();
     });
 
-    it("names every collection and Single, with the actions each one has", async () => {
-      const { entities } = await ask(await session(readerId, [readerRoleId]));
+    it("names every collection and Single to a caller who may read them all, with the actions each one has", async () => {
+      // A super-admin reads every entity, so every one is named.
+      const { entities } = await ask(await session(superAdminId, []));
 
       expect(Object.keys(entities).sort()).toEqual(
         [...PLAIN, REFUSED, GERMAN, "home"].sort()
@@ -256,6 +302,39 @@ describe.each(getConfiguredTestDialects())(
       expect(entities.home!.kind).toBe("single");
     });
 
+    it("names only what the caller may read", async () => {
+      const { entities } = await ask(
+        await session(postsReader.id, [postsReader.roleId])
+      );
+
+      // Notes, the Single and the rule-guarded collections exist, and a role
+      // that may read only Posts is not told so.
+      expect(Object.keys(entities)).toEqual(["posts"]);
+    });
+
+    it("names a second collection once the caller may read it too", async () => {
+      // POPULATION CONTROL for the case above: the same install, a role that
+      // also reads Notes, so Notes' absence there is the missing read and not
+      // a collection the answer never names.
+      const { entities } = await ask(
+        await session(bothReader.id, [bothReader.roleId])
+      );
+
+      expect(Object.keys(entities).sort()).toEqual(["notes", "posts"]);
+    });
+
+    it("names exactly what the collection and Single lists show the same caller", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+      const { entities } = await ask(headers);
+
+      expect(Object.keys(entities).sort()).toEqual(
+        [
+          ...(await listed(headers, "collections")),
+          ...(await listed(headers, "singles")),
+        ].sort()
+      );
+    });
+
     it("allows the read the role holds and refuses the writes it does not", async () => {
       const { entities } = await ask(await session(readerId, [readerRoleId]));
 
@@ -268,27 +347,34 @@ describe.each(getConfiguredTestDialects())(
         unpublish: false,
       });
       // POPULATION CONTROL: a collection the role names no permission for is
-      // refused, so the `true` above is the permission and not a default.
-      expect(entities.notes).toMatchObject({ read: false, create: false });
+      // not offered at all, so the `true` above is the permission and not a
+      // default.
+      expect(entities.notes).toBeUndefined();
     });
 
-    it("refuses a read the permission allows and the collection's rule does not", async () => {
+    it("leaves out a collection whose rule refuses a read the permission allows", async () => {
       const { entities } = await ask(await session(readerId, [readerRoleId]));
 
       // The role holds `read-secrets`; only the rule refuses it. An endpoint
-      // answering from the held permissions alone would say `true` here.
-      expect(entities[REFUSED]).toMatchObject({ read: false });
+      // answering from the held permissions alone would name it, readable.
+      expect(entities[REFUSED]).toBeUndefined();
     });
 
     it("judges a rule in the language the request asks for", async () => {
       const headers = await session(readerId, [readerRoleId]);
 
       // The same caller, the same permission, the same rule: only the
-      // language the read is in differs, and the rule answers by it.
+      // language the update is in differs, and the rule answers by it.
       const german = await ask(headers, "?locale=de");
       const english = await ask(headers, "?locale=en");
-      expect(german.entities[GERMAN]).toMatchObject({ read: true });
-      expect(english.entities[GERMAN]).toMatchObject({ read: false });
+      expect(german.entities[GERMAN]).toMatchObject({
+        read: true,
+        update: true,
+      });
+      expect(english.entities[GERMAN]).toMatchObject({
+        read: true,
+        update: false,
+      });
       // POPULATION CONTROL: a collection whose rule reads no language is the
       // same in both, so the move above is the rule reading the language.
       expect(german.entities.posts!.read).toBe(true);
@@ -316,7 +402,7 @@ describe.each(getConfiguredTestDialects())(
       // and writes nothing, and carries no super-admin authority of its own.
       expect(isSuperAdmin).toBe(false);
       expect(entities.posts).toMatchObject({ read: true, update: false });
-      expect(entities[REFUSED]).toMatchObject({ read: false });
+      expect(entities[REFUSED]).toBeUndefined();
     });
 
     it("is never stored, and says when it stops holding", async () => {

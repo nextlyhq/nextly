@@ -1,8 +1,4 @@
 import { readAccessTokenCookie } from "../cookies/access-token-cookie";
-import {
-  INSTEAD_OF_A_ROLE_CHECK,
-  warnDeprecatedExport,
-} from "../deprecated-exports";
 import { JWT_INTERNAL_CLAIMS, type NextlyJwtPayload } from "../jwt/claims";
 import { verifyAccessToken, type VerifyResult } from "../jwt/verify";
 
@@ -83,53 +79,4 @@ function payloadToSessionUser(payload: NextlyJwtPayload): SessionUser {
   }
 
   return user as SessionUser;
-}
-
-/**
- * The role checks themselves, without the deprecation warning, for the
- * deprecated `requireRole*` guards, which warn under their own names.
- */
-export function holdsRole(user: SessionUser, roleSlug: string): boolean {
-  return user.roleIds.includes(roleSlug);
-}
-
-export function holdsAnyRole(user: SessionUser, roleSlugs: string[]): boolean {
-  return roleSlugs.some(slug => user.roleIds.includes(slug));
-}
-
-export function holdsAllRoles(user: SessionUser, roleSlugs: string[]): boolean {
-  return roleSlugs.every(slug => user.roleIds.includes(slug));
-}
-
-/**
- * Check if a session user has a specific role.
- *
- * @deprecated Compares the user's role ids with role names, so it never
- * matches a role by name. Check a permission with
- * `nextly.access.check({ userId, resource, operation })`, or use
- * `isSuperAdmin(userId)`. Removed in the next release.
- */
-export function hasRole(user: SessionUser, roleSlug: string): boolean {
-  warnDeprecatedExport("hasRole", INSTEAD_OF_A_ROLE_CHECK);
-  return holdsRole(user, roleSlug);
-}
-
-/**
- * Check if a session user has any of the specified roles.
- *
- * @deprecated As {@link hasRole}. Removed in the next release.
- */
-export function hasAnyRole(user: SessionUser, roleSlugs: string[]): boolean {
-  warnDeprecatedExport("hasAnyRole", INSTEAD_OF_A_ROLE_CHECK);
-  return holdsAnyRole(user, roleSlugs);
-}
-
-/**
- * Check if a session user has all of the specified roles.
- *
- * @deprecated As {@link hasRole}. Removed in the next release.
- */
-export function hasAllRoles(user: SessionUser, roleSlugs: string[]): boolean {
-  warnDeprecatedExport("hasAllRoles", INSTEAD_OF_A_ROLE_CHECK);
-  return holdsAllRoles(user, roleSlugs);
 }

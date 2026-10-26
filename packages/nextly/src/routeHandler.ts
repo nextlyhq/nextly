@@ -124,6 +124,7 @@ import {
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
+import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
@@ -854,10 +855,7 @@ export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
  * What a refused read of permissions names, whichever of the grants it
  * accepts the caller lacked.
  */
-const READING_PERMISSIONS: RefusalTarget = {
-  action: "read",
-  resource: "permissions",
-};
+const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.names;
 
 /**
  * Centralized permission resolver for all API service endpoints.
@@ -873,7 +871,9 @@ async function resolveAuthorization(
   method: string,
   operation: string,
   routeParams: Record<string, string> | undefined,
-  httpMethod: string
+  httpMethod: string,
+  // Whether the request's path names one entry; see the caller.
+  entryInPath = false
 ): Promise<AuthContext | ErrorResponse> {
   // --- Collection endpoints ---
   if (service === "collections") {
@@ -884,6 +884,7 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        namesOne: entryInPath,
       });
     }
     if (method === "getCollection") {
@@ -924,6 +925,8 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        // A Single is its one document, named by its slug.
+        namesOne: true,
       });
     }
     if (method === "getSingleSchema") {
@@ -1081,13 +1084,13 @@ async function resolveAuthorization(
       );
     }
 
-    // listPermissions: allow users with read-roles (for role form's permission matrix)
+    // The permissions and roles lists: the gates the dashboard's counts of
+    // them read too.
     if (method === "listPermissions") {
-      return requireAnyPermission(
-        req,
-        [{ action: "read", resource: "roles" }],
-        READING_PERMISSIONS
-      );
+      return requireListRead(req, LIST_READ_GATES.permissions);
+    }
+    if (method === "listRoles") {
+      return requireListRead(req, LIST_READ_GATES.roles);
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1142,6 +1145,11 @@ async function resolveAuthorization(
     // (listRoles, getRoleById, createRole, updateRole, deleteRole, etc.)
     const action = getActionFromMethod(httpMethod);
     return requirePermission(req, action, "roles");
+  }
+
+  // The users list: the gate the dashboard's user count reads too.
+  if (service === "users" && method === "listUsers") {
+    return requireListRead(req, LIST_READ_GATES.users);
   }
 
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
@@ -1328,6 +1336,11 @@ async function serveServiceRequest(
     httpMethod,
     searchParams
   );
+  // Whether the PATH names one entry. The parsed parameters also carry the
+  // query, so a list request with `?entryId=` would otherwise read as naming
+  // one; parsed without its query, only a route that names one has an id.
+  const entryInPath =
+    parseRestRoute(params, httpMethod).routeParams?.entryId !== undefined;
 
   if (!service || !operation || !method) {
     // Only now. A plugin may claim a top-level path, and this is the point at
@@ -1609,7 +1622,8 @@ async function serveServiceRequest(
         method,
         operation,
         routeParams,
-        httpMethod
+        httpMethod,
+        entryInPath
       );
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
@@ -1819,6 +1833,8 @@ const NO_WIDGETS: WidgetAudience = {
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
+  // No reader and no cards, so no collection a card could name.
+  registeredCollections: undefined,
 };
 
 /**
@@ -2144,7 +2160,10 @@ function refuseRequest(
 ): Response {
   // Answered with the request's own id, as every other error is.
   const response = createJsonErrorResponse(refusal, req);
-  return SESSION_PRIVATE_METHODS.has(method)
+  // A named entry answered as missing depends on who asked, unlike a missing
+  // entry's 404, and a 404 is cacheable by default: kept private, so a shared
+  // cache never replays one caller's answer to another who may read it.
+  return SESSION_PRIVATE_METHODS.has(method) || refusal.statusCode === 404
     ? withSessionCacheHeaders(response)
     : response;
 }

@@ -51,7 +51,11 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { noticeRuleNoLongerAllows } from "./rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "./rule-answer-log";
+import { askReadAsPlainRead } from "./rule-language";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
 export type GateVerdict =
@@ -66,6 +70,41 @@ export type GateVerdict =
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
     };
+
+/**
+ * How a gate answers a refusal: `failed` when the caller's access could not
+ * be read, `missing` when the caller named one entry it may not read (it is
+ * answered exactly as a missing entry is), else `refused`, in words.
+ */
+export type RefusalAnswer =
+  | { readonly answer: "failed"; readonly error: unknown }
+  | { readonly answer: "missing" }
+  | { readonly answer: "refused" };
+
+/**
+ * The answer to `refused`, a refusal of `action`. A caller that names one
+ * entry (`namesOne`) and was refused it for want of a grant is asked whether it
+ * may read it, as a plain read is asked: one it may not read is answered as
+ * missing, so the refusal does not confirm the entry exists. `ask` asks the
+ * gate's own question about another action.
+ */
+export async function answerForRefusal(
+  refused: Extract<GateVerdict, { allowed: false }>,
+  action: string,
+  namesOne: boolean,
+  ask: (action: "read") => Promise<GateVerdict>
+): Promise<RefusalAnswer> {
+  if (refused.refusal === "failed") {
+    return { answer: "failed", error: refused.error };
+  }
+  if (!namesOne || refused.refusal !== "insufficient") {
+    return { answer: "refused" };
+  }
+  const read = action === "read" ? refused : await askReadAsPlainRead(ask);
+  if (read.allowed) return { answer: "refused" };
+  if (read.refusal === "failed") return { answer: "failed", error: read.error };
+  return { answer: "missing" };
+}
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
@@ -508,11 +547,30 @@ async function plainRuleVerdict(
   if (await userIsSuperAdmin(userId, { executor: q.executor })) {
     return ALLOWED;
   }
+  // The permission first; a rule only narrows it. A rule of `false` refused
+  // this caller before too, so its refusal is not named as new.
+  const holds = await userHoldsPermission(userId, q.action, q.slug, {
+    executor: q.executor,
+  });
+  if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
+  if (!isLifecycle(q.action)) return verdictOf(plain);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", plain, () =>
+    await deviate("lifecycle-judged-alone", plain, () =>
       decided(looked(), q.action, target)
     )
   );
+}
+
+/**
+ * A signed-in user refused for want of the permission, where the target
+ * declares a rule for the action: named once, since that rule used to decide
+ * alone.
+ */
+function refusedWithoutPermission(q: GateQuestion): GateVerdict {
+  noticePermissionNowComesFirst(q.slug, q.action, "signed-in user");
+  return INSUFFICIENT;
 }
 
 /** A rule function, handed the caller's roles and permissions. */
@@ -529,11 +587,15 @@ async function ruleVerdict({
     return ALLOWED;
   }
   const actor = await looked();
+  // The permission first: a user without it is refused before the rule is
+  // asked, as the decision refuses.
+  if (!holdsPermission(actor, q.action, q.slug)) {
+    return refusedWithoutPermission(q);
+  }
   const outcome = await askRule(actor, q.action, target);
-  // The rule lets a signed-in user through only by answering `true`, as it
-  // has always done for a key.
-  const today = outcomeAllows(outcome);
-  if (!today) {
+  // The rule then lets the user through only by answering `true`.
+  const allowed = outcomeAllows(outcome);
+  if (!allowed) {
     noticeWhereRuleAllowedBefore(
       outcome,
       allowedUserBefore,
@@ -541,8 +603,11 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
+  if (!isLifecycle(q.action)) return verdictOf(allowed);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", today, () =>
+    await deviate("lifecycle-judged-alone", allowed, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );

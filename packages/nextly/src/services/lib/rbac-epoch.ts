@@ -104,12 +104,13 @@ let observed = true;
 /**
  * How many retirements are running right now.
  *
- * A retirement empties caches, and emptying the shared tier is an awaited
- * database write: while it runs, the stored rows are still readable and the
- * epoch has not moved yet, so a check that starts and finishes inside that
- * window sees two values that never changed and files a retired answer as
- * current. A batch of permission writes holds this for its whole length, where
- * the deferral is deliberate and the window is as long as the batch.
+ * A retirement forgets what this process keeps and publishes the epoch, and
+ * the publish is an awaited database write, preceded, while the retired stored
+ * answers still exist, by emptying them: while those run the epoch has not
+ * moved yet, so a check that starts and finishes inside that window sees two
+ * values that never changed and keeps an answer the change is about to retire.
+ * A batch of permission writes holds this for its whole length, where the
+ * deferral is deliberate and the window is as long as the batch.
  *
  * It lives HERE rather than beside the caches because every tier has to ask it
  * and only some of them remembered to. The one that did not was a derived cache
@@ -278,8 +279,8 @@ export function epochIsTrustworthy(): boolean {
  * whole life on an install whose epoch table is not yet reconciled.
  *
  * Every cache derives its own predicate from this rather than restating it:
- * the in-memory tiers add their expiry, the shared tier adds its retirement,
- * and the API key's copied grants add their own freshness window.
+ * the kept actors add their expiry, and the API key's copied grants add their
+ * own freshness window.
  */
 export function stampIsCurrent(stamp: string): boolean {
   // Nothing is current while a retirement is running. The caches it is emptying

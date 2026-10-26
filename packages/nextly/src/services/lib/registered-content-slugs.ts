@@ -9,9 +9,8 @@
  * 🔴 Candidates, not an answer. Nothing here decides anything -- each slug still
  * goes to `canReadEntity`, which is what makes the set agree with what a row
  * read would give. Filtering these names by permission SLUGS instead is the
- * mistake `readableEntities` documents: a collection authorized purely in code
- * has no permission row to find, and one REFUSED in code still has the row a
- * slug filter admits it on.
+ * mistake `readableEntities` documents: a collection REFUSED in code still has
+ * the row a slug filter admits it on, since a code rule only narrows the grant.
  *
  * A registry that cannot be reached contributes NOTHING rather than an unbounded
  * list. An empty candidate set admits nothing, which is visible and reportable;

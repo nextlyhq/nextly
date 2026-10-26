@@ -512,6 +512,10 @@ export class RoleMutationService extends BaseService {
       }
 
       const currentRole = roleResult[0];
+      // Written as the role's row spells its id. MySQL matches ids
+      // case-insensitively, so the request's spelling can differ from the
+      // row's own, and the rows written below are read back by comparing ids.
+      const storedRoleId = String(currentRole.id);
       const isSystemRole = Boolean(currentRole.isSystem);
 
       // Prevent modifying system roles. The caller is told the role is built
@@ -635,7 +639,7 @@ export class RoleMutationService extends BaseService {
               guardTx,
               this.dialect,
               uniqueChildRoleIds,
-              { roleId }
+              { roleId: storedRoleId }
             );
             await refuseRemovingLastSuperAdmin(
               guardTx,
@@ -643,20 +647,27 @@ export class RoleMutationService extends BaseService {
               this.dialect,
               {
                 kind: "replaceChildren",
-                roleId,
+                roleId: storedRoleId,
                 childRoleIds: uniqueChildRoleIds,
               }
             );
           }
           // Update role basic fields if any provided
           if (Object.keys(updateData).length > 0) {
-            await tx.update("roles", updateData, this.whereEq("id", roleId));
+            await tx.update(
+              "roles",
+              updateData,
+              this.whereEq("id", storedRoleId)
+            );
           }
 
           // Handle permission updates
           if (changes.permissionIds !== undefined) {
             // Delete all existing role-permission mappings
-            await tx.delete("role_permissions", this.whereEq("roleId", roleId));
+            await tx.delete(
+              "role_permissions",
+              this.whereEq("roleId", storedRoleId)
+            );
 
             // Insert new role-permission mappings. `createdAt` is set here
             // because the schema's default for it is applied by the query
@@ -667,7 +678,7 @@ export class RoleMutationService extends BaseService {
                 "role_permissions",
                 uniquePermissionIds.map(permissionId => ({
                   id: randomUUID(),
-                  roleId,
+                  roleId: storedRoleId,
                   permissionId,
                   createdAt,
                 }))
@@ -680,7 +691,7 @@ export class RoleMutationService extends BaseService {
             // Delete all existing role inheritance relationships for this parent
             await tx.delete(
               "role_inherits",
-              this.whereEq("parentRoleId", roleId)
+              this.whereEq("parentRoleId", storedRoleId)
             );
 
             // Insert new role inheritance relationships
@@ -689,7 +700,7 @@ export class RoleMutationService extends BaseService {
                 "role_inherits",
                 uniqueChildRoleIds.map(childRoleId => ({
                   id: randomUUID(),
-                  parentRoleId: roleId,
+                  parentRoleId: storedRoleId,
                   childRoleId,
                 }))
               );
@@ -699,13 +710,14 @@ export class RoleMutationService extends BaseService {
 
         // Invalidate cache after successful transaction. A new slug changes
         // the roles a code-defined rule reads, as new grants change the
-        // permissions it reads.
+        // permissions it reads. Named by the role's own id, as the caches
+        // holding its grants keep it.
         if (
           changes.permissionIds !== undefined ||
           changes.childRoleIds !== undefined ||
           changes.slug !== undefined
         ) {
-          await afterRoleGrantsChanged(roleId);
+          await afterRoleGrantsChanged(storedRoleId);
         }
 
         return;

@@ -217,6 +217,35 @@ describe("several series over one range", () => {
   );
 });
 
+describe("bars", () => {
+  it("stands every bar inside the drawing, the first and last as wide as the rest", () => {
+    // 🔴 Centred on a line's edge-to-edge points, the first and last bars of a week
+    // started outside the drawing and were cut to about two thirds of the others.
+    const { container } = render(
+      <CardTierContext.Provider value="medium">
+        <OverTimeChart
+          title="Posts created"
+          intervals={days(7)}
+          series={[series("Posts", [1, 2, 3, 4, 5, 6, 7])]}
+          chartStyle="bars"
+        />
+      </CardTierContext.Provider>
+    );
+    const bars = [
+      ...container.querySelectorAll('[data-chart-style="bars"] rect'),
+    ].map(rect => ({
+      x: Number(rect.getAttribute("x")),
+      width: Number(rect.getAttribute("width")),
+    }));
+    expect(bars).toHaveLength(7);
+    for (const bar of bars) {
+      expect(bar.x).toBeGreaterThanOrEqual(0);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(240);
+      expect(bar.width).toBeCloseTo(bars[0]?.width ?? 0);
+    }
+  });
+});
+
 describe("the table's rows", () => {
   it("keep apart two rows whose series and point keys join to the same text", () => {
     const errors = vi

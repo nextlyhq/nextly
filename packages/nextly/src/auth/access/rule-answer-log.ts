@@ -13,6 +13,7 @@
  * rule to fix. The notice goes for the release that removes the behaviour it
  * describes.
  */
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import { consoleLogger } from "../../shared/types";
 
 /** What was refused, already named, so each is logged once per process. */
@@ -54,6 +55,32 @@ export function noticeRuleNoLongerAllows(
       `so a ${caller} is now refused where it was allowed before. ` +
       `A code access rule allows only by returning true; return true to allow, ` +
       `false to refuse.`
+  );
+}
+
+/**
+ * Names, once, a refusal for want of the permission where the target declares
+ * a rule for the action. That rule used to decide alone for a signed-in user,
+ * so a role without the permission may have been let in by it before; a rule
+ * now only narrows the permission, so the permission is what to grant.
+ *
+ * Once per collection or Single, action and kind of caller, for the reason
+ * {@link noticeRuleNoLongerAllows} gives.
+ */
+export function noticePermissionNowComesFirst(
+  slug: string,
+  action: string,
+  caller: string
+): void {
+  const key = `permission:${slug}:${action}:${caller}`;
+  if (named.has(key)) return;
+  named.add(key);
+  const permission = permissionSlug(action, slug);
+  consoleLogger.warn(
+    `[rbac] "${slug}" declares a ${action} rule, and a ${caller} without ` +
+      `the ${permission} permission is now refused before the rule is ` +
+      `asked. A code access rule only narrows the permission; if the rule ` +
+      `should let such callers ${action}, grant ${permission} to their roles.`
   );
 }
 

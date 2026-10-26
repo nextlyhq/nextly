@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -64,7 +65,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The denial left nothing written: the persisted row is still draft, not a
     // published row that merely returned an error after the write.
@@ -116,7 +118,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The code-defined publish denial also left the row draft.
     const [afterDenial] = await current.adapter.select<{ status: string }>(
@@ -141,6 +144,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "user-1", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -179,6 +185,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "user-1", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -252,7 +261,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The companion `_status` was not moved to published.
     const rows = (await adapter.executeQuery(
@@ -299,7 +309,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // Same owner, key scoped WITH `publish-posts` → allowed.
     const allowed = await handler.updateEntry(
@@ -399,7 +410,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
   });
 
   it("route-authorizes publish-all's update gate for a scoped key", async () => {
@@ -546,6 +558,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "editor", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -605,6 +620,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "editor", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(

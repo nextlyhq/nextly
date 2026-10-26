@@ -226,19 +226,14 @@ export function isSuperAdmin(actor: Actor): boolean {
  * the Public role grants decides whether the visitor holds the permission,
  * but a rule written against an anonymous caller is asked with none, as it
  * always has been, so the same rule answers the same way.
- *
- * `rule` is the rule being asked, so a deprecated permission spelling it
- * checks is warned about once for that rule.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
   operation: AccessAction,
-  target: { readonly kind: "collection" | "single"; readonly slug: string },
-  rule: object
+  target: { readonly kind: "collection" | "single"; readonly slug: string }
 ): AccessRuleContext {
   const staff = actor.kind === "user" || actor.kind === "key";
   return buildRuleContext(
-    rule,
     {
       user: staff ? { id: actor.userId } : null,
       roles: staff ? actor.roles : [],

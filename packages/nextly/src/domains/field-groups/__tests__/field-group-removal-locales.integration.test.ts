@@ -15,6 +15,11 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
@@ -187,6 +192,10 @@ describe.each(getConfiguredTestDialects())(
         process.env.NEXTLY_SECRET!
       );
       writerCookie = `nextly_session=${token}`;
+      // A code rule only narrows the permission, so the allowed person holds
+      // read and update on lwrap, and its rules decide what they may change.
+      await userWhoMay(t, "allowed-user", "update", ["lwrap"]);
+      await grantTo(t, "allowed-user", "read", ["lwrap"]);
     }, 180_000);
 
     afterAll(async () => {

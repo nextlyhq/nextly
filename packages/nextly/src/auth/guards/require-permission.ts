@@ -1,10 +1,4 @@
-import { permissionSlug } from "../../schemas/_zod/rbac";
-import {
-  INSTEAD_OF_AN_ACCESS_CHECK,
-  warnDeprecatedExport,
-} from "../deprecated-exports";
 import { createJsonErrorResponse as answerRefusal } from "../middleware/error-response";
-import type { AuthContext } from "../session/session-types";
 
 export interface ErrorResponse {
   success: false;
@@ -55,62 +49,4 @@ export function isErrorResponse(value: unknown): value is ErrorResponse {
     (value as ErrorResponse).success === false &&
     "statusCode" in value
   );
-}
-
-/**
- * Check a single permission against an AuthContext.
- * For session auth: delegates to RBAC service.
- * For API key auth: checks pre-resolved permissions map.
- *
- * @deprecated For a signed-in user, use
- * `nextly.access.check({ userId, resource, operation })`, which asks the one
- * access decision. For an API key, check the key's own permissions, which
- * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
- * judges the key's maker, not the key. Removed in the next release.
- */
-export async function checkPermission(
-  context: AuthContext,
-  action: string,
-  resource: string,
-  deps: {
-    checkUserPermission?: (
-      userId: string,
-      action: string,
-      resource: string
-    ) => Promise<boolean>;
-  }
-): Promise<boolean> {
-  warnDeprecatedExport("checkPermission", INSTEAD_OF_AN_ACCESS_CHECK);
-  return permissionHeld(context, action, resource, deps);
-}
-
-/**
- * The permission check itself, without the deprecation warning, for the
- * deprecated `checkCollectionAccess`, which warns under its own name.
- */
-export async function permissionHeld(
-  context: AuthContext,
-  action: string,
-  resource: string,
-  deps: {
-    checkUserPermission?: (
-      userId: string,
-      action: string,
-      resource: string
-    ) => Promise<boolean>;
-  }
-): Promise<boolean> {
-  if (context.authMethod === "api-key") {
-    // API keys have pre-resolved permissions
-    const permSlug = permissionSlug(action, resource);
-    return context.permissions.get(permSlug) === true;
-  }
-
-  // Session auth -- use RBAC service
-  if (deps.checkUserPermission) {
-    return deps.checkUserPermission(context.userId, action, resource);
-  }
-
-  // Fallback: no RBAC service available (shouldn't happen in production)
-  return false;
 }

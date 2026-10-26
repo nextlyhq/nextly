@@ -7,8 +7,11 @@
  *
  * Evaluation priority:
  * 1. **Super-admin bypass** — always returns `true`
- * 2. **Code-defined access** — function or boolean from collection/single config
- * 3. **Database permission** — checks RBAC tables via `hasPermission()`
+ * 2. **Database permission** — checks RBAC tables via `hasPermission()`; a
+ *    signed-in user without it is refused before any rule is asked
+ * 3. **Code-defined access** — function or boolean from collection/single
+ *    config, where it names the operation: it only narrows the permission,
+ *    and allows only by answering `true`
  *
  * Default behavior: **deny** (fail-secure). If no code access is defined and
  * the user has no database permission for the resource+action, access is denied.
@@ -44,7 +47,10 @@ import {
   clearDeclaredTargets,
   declareTarget,
 } from "../../../auth/access/declared-rules";
-import { noticeRuleNoLongerAllows } from "../../../auth/access/rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -68,8 +74,9 @@ import type {
  *
  * Orchestrates the three-tier access evaluation:
  * 1. Super-admin bypass
- * 2. Code-defined access functions/booleans (from in-memory registry or explicit param)
- * 3. Database role/permission checks
+ * 2. Database role/permission checks, which a signed-in user must pass first
+ * 3. Code-defined access functions/booleans (from in-memory registry or
+ *    explicit param), which only narrow the permission
  *
  * Holds an in-memory registry of code-defined access configs registered
  * at startup from `defineCollection({ access })` and `defineSingle({ access })`.
@@ -204,6 +211,16 @@ export class RBACAccessControlService {
       ];
 
     if (operationAccess !== undefined) {
+      // The permission first: a declared rule only narrows it, so a user who
+      // lacks it is refused before the rule is asked.
+      if (!(await hasPermission(userId, operation, resource, executor))) {
+        // A rule of `false` refused this caller before too, so its refusal
+        // is not named as new.
+        if (operationAccess !== false) {
+          noticePermissionNowComesFirst(resource, operation, "signed-in user");
+        }
+        return false;
+      }
       if (typeof operationAccess === "boolean") {
         return operationAccess;
       }
@@ -213,7 +230,6 @@ export class RBACAccessControlService {
           userId,
           operation,
           target,
-          operationAccess,
           executor
         );
         return this.userRuleAllows(operationAccess, ctx, operation, resource);
@@ -335,7 +351,6 @@ export class RBACAccessControlService {
     try {
       answer = await rule(
         buildRuleContext(
-          rule,
           { user: null, roles: [], permissions: [], principal },
           { operation, target: { kind: target.kind, slug: target.slug } }
         )
@@ -368,7 +383,6 @@ export class RBACAccessControlService {
     userId: string,
     operation: AccessOperation,
     target: AccessTarget,
-    rule: object,
     // Optional transaction-bound executor so the role/permission reads run on the
     // caller's transaction connection instead of the pool; see `checkAccess`.
     executor?: unknown
@@ -379,7 +393,6 @@ export class RBACAccessControlService {
     ]);
 
     return buildRuleContext(
-      rule,
       {
         user: { id: userId },
         roles: roleSlugs,

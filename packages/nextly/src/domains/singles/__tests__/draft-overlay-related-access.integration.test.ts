@@ -18,6 +18,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
   defineCollection,
   defineSingle,
   relationship,
@@ -68,6 +72,13 @@ async function boot(): Promise<{
       }),
     ],
   });
+  // Both readers below. A rule only narrows a permission, so each holds read
+  // and update on the Single and read on `pages`, and the rules alone decide:
+  // the pages rule admits `permitted` and refuses the editor.
+  for (const id of [EDITOR.id, "permitted"]) {
+    await userWhoMay(current, id, "read", [SLUG, "pages"]);
+    await grantTo(current, id, "update", [SLUG]);
+  }
 
   const handler = current.getService("collectionsHandler");
   const page = await handler.createEntry(

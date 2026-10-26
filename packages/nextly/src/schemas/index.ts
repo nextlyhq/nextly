@@ -57,6 +57,10 @@ import { emailQueueMysql } from "./email-queue/mysql";
 import { emailQueuePg } from "./email-queue/postgres";
 import { emailQueueSqlite } from "./email-queue/sqlite";
 import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
+import { emailQueueRecipientsMysql } from "./email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "./email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "./email-queue-recipients/sqlite";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { emailSendClaimsMysql } from "./email-send-claims/mysql";
 import { emailSendClaimsPg } from "./email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
@@ -79,7 +83,6 @@ import {
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
-import { userPermissionCache as storedPermissionAnswers } from "./rbac/postgres";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
@@ -315,7 +318,8 @@ export function getCoreSchema(
         emailTemplatesPg,
         emailDeliveriesPg,
         emailSendClaimsPg,
-        emailQueuePg
+        emailQueuePg,
+        emailQueueRecipientsPg
       );
       break;
     case "mysql":
@@ -329,7 +333,8 @@ export function getCoreSchema(
         emailTemplatesMysql,
         emailDeliveriesMysql,
         emailSendClaimsMysql,
-        emailQueueMysql
+        emailQueueMysql,
+        emailQueueRecipientsMysql
       );
       break;
     case "sqlite":
@@ -343,7 +348,8 @@ export function getCoreSchema(
         emailTemplatesSqlite,
         emailDeliveriesSqlite,
         emailSendClaimsSqlite,
-        emailQueueSqlite
+        emailQueueSqlite,
+        emailQueueRecipientsSqlite
       );
       break;
     default: {
@@ -378,7 +384,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
   "audit_log",
   "activity_log",
@@ -409,6 +414,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
   EMAIL_QUEUE_TABLE,
+  EMAIL_QUEUE_RECIPIENTS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
@@ -466,15 +472,6 @@ export {
   userRoles,
   roleInherits,
 } from "./rbac/postgres";
-
-/**
- * The table permission answers were once stored in between requests.
- *
- * @deprecated Nothing reads it any more: a user's roles and permissions are
- * kept in memory until a role or permission changes. Removed in a later
- * release, with the table.
- */
-export const userPermissionCache = storedPermissionAnswers;
 
 // Plan A Task 8 — media tables. PG re-exports for direct-query callers.
 export { media, mediaFolders, imageSizes } from "./media/postgres";
