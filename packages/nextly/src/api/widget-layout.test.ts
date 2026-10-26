@@ -2307,4 +2307,30 @@ describe("a card's note", () => {
     );
     expect(res.status).toBe(200);
   });
+
+  it("holds an id reused for a note to the note's bound, whatever the card under it held", async () => {
+    // A card of a widget with no bound held this text under the same id.
+    registerWidget(noteWidget());
+    registerWidget(widget({ id: "core/plain" }));
+    stored = {
+      version: 1,
+      layout: serializeLayout(
+        placed("longer than five").map(placement => ({
+          ...placement,
+          widgetId: "core/plain",
+        })) as WidgetPlacement[]
+      ),
+    };
+    // 🔴 Compared by value alone, the text is "unchanged" and the bound is
+    // skipped: the note is saved over its length.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placed("longer than five"),
+        version: 1,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
 });

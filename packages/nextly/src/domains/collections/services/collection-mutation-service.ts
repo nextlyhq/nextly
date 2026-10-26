@@ -219,6 +219,7 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  asIdSet,
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
@@ -9608,11 +9609,15 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
-              // What the caller sent that differs from the draft it promotes,
-              // the draft read as the same kind of document: an echo of the
-              // draft, or a system field the write ignores, is no edit.
-              promotionCarriesContent = editsOver(
-                this.deserializeJsonFieldsForSnapshot(
+              // Whether the caller's write moves the document off the draft it
+              // promotes: the merged document, before access is judged,
+              // against the draft alone assembled by the same pass, so a
+              // component patch counts merged and an echo of the draft, a
+              // junction's ids in another order, or a system field the write
+              // ignores, is no edit.
+              promotionCarriesContent = editsOver({
+                entity: "collection",
+                draft: this.deserializeJsonFieldsForSnapshot(
                   this.assemblePromotedDocument(
                     draftInput,
                     {},
@@ -9624,8 +9629,11 @@ export class CollectionMutationService extends BaseService {
                   ),
                   fields
                 ),
-                callerContribution
-              );
+                promoted: mergedPromoteData,
+                views: new Map(
+                  manyToManyFields.map(field => [field.name, asIdSet])
+                ),
+              });
             }
           }
 

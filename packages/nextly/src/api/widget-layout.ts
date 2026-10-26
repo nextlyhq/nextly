@@ -712,16 +712,22 @@ function overlongTextIn(
   return undefined;
 }
 
-/** The text `placement` holds for `name`, when it is text and changed from what `shown` held. */
+/**
+ * The text `placement` holds for `name`, when it is text and changed from what `shown` held.
+ *
+ * Unchanged only where the shown placement was a card of the SAME widget, as widths are judged:
+ * an id reused for another widget is a new card, so text carried over from a widget with no
+ * bound is held to this one's.
+ */
 function changedText(
   placement: WidgetPlacement,
   shown: WidgetPlacement | undefined,
   name: string
 ): string | undefined {
   const value = placement.config?.[name];
-  return typeof value === "string" && shown?.config?.[name] !== value
-    ? value
-    : undefined;
+  const unchanged =
+    shown?.widgetId === placement.widgetId && shown.config?.[name] === value;
+  return typeof value === "string" && !unchanged ? value : undefined;
 }
 
 /**

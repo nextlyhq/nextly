@@ -2411,28 +2411,22 @@ export class SingleMutationService extends BaseService {
                     });
                   }
                 }
-                // Read before the draft's components are written into the
-                // caller's below: the caller's own values alone, each compared
-                // with the draft's, its scalars against the draft document and
-                // its components tagged as the draft holds them. An echo of the
-                // draft, or a system field the write ignores, is no edit.
-                const callerCarriesContent =
-                  editsOver(
-                    snapshotRecord(pendingDraft.snapshot),
-                    currentData
-                  ) ||
-                  editsOver(
-                    draftComponentValues(
-                      pendingDraft.snapshot as Record<string, unknown>,
-                      fieldConfigs
-                    ),
-                    tagComponentTypes(
-                      attemptComponentFields,
-                      fieldConfigs,
-                      componentSlug =>
-                        singleComponentSchemas?.get(componentSlug)?.fields
-                    )
-                  );
+                // Whether the caller's write moves the document off the draft
+                // it promotes: the draft with the caller's scalars over it and
+                // the components as written, merged and tagged as the draft
+                // holds them, against the draft itself. A component patch
+                // counts merged, and an echo of the draft, or a system field
+                // the write ignores, is no edit.
+                const pendingDocument = snapshotRecord(pendingDraft.snapshot);
+                const callerCarriesContent = editsOver({
+                  entity: "single",
+                  draft: pendingDocument,
+                  promoted: {
+                    ...pendingDocument,
+                    ...currentData,
+                    ...promotedComponents,
+                  },
+                });
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
