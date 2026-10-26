@@ -133,27 +133,32 @@ export function usedVariables(sources: readonly string[]): VariableUse[] {
   return used;
 }
 
+/** The properties Liquid gives a list. */
+function listProperty(list: unknown[], step: string): unknown {
+  if (step === "size") return list.length;
+  if (step === "first") return list[0];
+  if (step === "last") return list[list.length - 1];
+  return undefined;
+}
+
+/** One step into `value`, as Liquid takes it; undefined when absent. */
+function stepInto(value: unknown, step: string | number): unknown {
+  if (value === null || typeof value !== "object") return undefined;
+  if (Array.isArray(value) && typeof step === "string") {
+    return listProperty(value, step);
+  }
+  return Object.prototype.hasOwnProperty.call(value, step)
+    ? (value as Record<string | number, unknown>)[step]
+    : undefined;
+}
+
 /** The value at `segments` in `data`, as Liquid reads it; undefined when absent. */
 export function valueAt(
   data: unknown,
   segments: ReadonlyArray<string | number>
 ): unknown {
   let value: unknown = data;
-  for (const step of segments) {
-    if (value === null || value === undefined) return undefined;
-    if (Array.isArray(value) && typeof step === "string") {
-      // The properties Liquid gives a list.
-      if (step === "size") value = value.length;
-      else if (step === "first") value = value[0];
-      else if (step === "last") value = value[value.length - 1];
-      else return undefined;
-      continue;
-    }
-    if (typeof value !== "object") return undefined;
-    value = Object.prototype.hasOwnProperty.call(value, step)
-      ? (value as Record<string | number, unknown>)[step]
-      : undefined;
-  }
+  for (const step of segments) value = stepInto(value, step);
   return value;
 }
 
