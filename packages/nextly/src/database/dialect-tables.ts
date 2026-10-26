@@ -21,6 +21,9 @@ import type * as PostgresTables from "../schemas/_dialect-bundles/postgres";
 import type * as PostgresRelations from "../schemas/_dialect-bundles/postgres.relations";
 import type * as SqliteTables from "../schemas/_dialect-bundles/sqlite";
 import type * as SqliteRelations from "../schemas/_dialect-bundles/sqlite.relations";
+import type { buildDynamicFieldGroupsMysql } from "../schemas/dynamic-field-groups/mysql";
+import type { buildDynamicFieldGroupsPg } from "../schemas/dynamic-field-groups/postgres";
+import type { buildDynamicFieldGroupsSqlite } from "../schemas/dynamic-field-groups/sqlite";
 
 /** The dialects whose tables are loaded here. */
 type LoadableDialect = "postgresql" | "mysql" | "sqlite";
@@ -31,22 +34,32 @@ export type DialectTables =
   | typeof MysqlTables
   | typeof SqliteTables;
 
-/** A dialect's tables and the relations defined over them. */
+/**
+ * A dialect's tables, the relations defined over them, and its builders for
+ * tables named at run time.
+ */
 export type LoadedDialect =
   | {
       dialect: "postgresql";
       tables: typeof PostgresTables;
       relations: typeof PostgresRelations;
+      builders: { buildDynamicFieldGroups: typeof buildDynamicFieldGroupsPg };
     }
   | {
       dialect: "mysql";
       tables: typeof MysqlTables;
       relations: typeof MysqlRelations;
+      builders: {
+        buildDynamicFieldGroups: typeof buildDynamicFieldGroupsMysql;
+      };
     }
   | {
       dialect: "sqlite";
       tables: typeof SqliteTables;
       relations: typeof SqliteRelations;
+      builders: {
+        buildDynamicFieldGroups: typeof buildDynamicFieldGroupsSqlite;
+      };
     };
 
 /**
@@ -81,25 +94,37 @@ function loadable(dialect: string | undefined): LoadableDialect | undefined {
 async function importDialect(dialect: LoadableDialect): Promise<LoadedDialect> {
   switch (dialect) {
     case "postgresql": {
-      const [tables, relations] = await Promise.all([
+      const [tables, relations, fieldGroups] = await Promise.all([
         import("../schemas/_dialect-bundles/postgres"),
         import("../schemas/_dialect-bundles/postgres.relations"),
+        import("../schemas/dynamic-field-groups/postgres"),
       ]);
-      return { dialect, tables, relations };
+      const builders = {
+        buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsPg,
+      };
+      return { dialect, tables, relations, builders };
     }
     case "mysql": {
-      const [tables, relations] = await Promise.all([
+      const [tables, relations, fieldGroups] = await Promise.all([
         import("../schemas/_dialect-bundles/mysql"),
         import("../schemas/_dialect-bundles/mysql.relations"),
+        import("../schemas/dynamic-field-groups/mysql"),
       ]);
-      return { dialect, tables, relations };
+      const builders = {
+        buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsMysql,
+      };
+      return { dialect, tables, relations, builders };
     }
     case "sqlite": {
-      const [tables, relations] = await Promise.all([
+      const [tables, relations, fieldGroups] = await Promise.all([
         import("../schemas/_dialect-bundles/sqlite"),
         import("../schemas/_dialect-bundles/sqlite.relations"),
+        import("../schemas/dynamic-field-groups/sqlite"),
       ]);
-      return { dialect, tables, relations };
+      const builders = {
+        buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsSqlite,
+      };
+      return { dialect, tables, relations, builders };
     }
   }
 }

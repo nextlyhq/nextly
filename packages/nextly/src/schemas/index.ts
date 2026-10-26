@@ -18,8 +18,8 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-// The core schema and table names live in `./core-schema`; re-exported here
-// unchanged, so `nextly/schemas` keeps every name it published.
+// The core schema and table names live in `./core-schema`; re-exported here,
+// so `nextly/schemas` keeps every name it published.
 export {
   CORE_TABLE_NAMES,
   CORE_TABLE_PREFIXES,
@@ -27,6 +27,10 @@ export {
   getCoreSchema,
   getCoreTableNames,
 } from "./core-schema";
+
+// `getCoreSchema` reads a loaded dialect's tables, which creating the adapter
+// loads; code that wants the schema without an adapter awaits this first.
+export { loadDialectTables } from "../database/dialect-tables";
 
 // =============================================================================
 // Transitional re-exports — kept so existing consumers keep building during

@@ -31,4 +31,11 @@
 
 nextly's table bundles, per-feature table helpers and core schema now load only the running database dialect's table definitions, where before importing nextly loaded all three dialects'.
 
-The `schema` export, which held all three dialects' tables, is removed from `nextly` and `nextly/database`. Read tables with `getDialectTables(dialect)` after creating the adapter. `getDialectTables` now throws, naming the cause, if called before an adapter for that dialect exists; code that reads a dialect's tables without creating an adapter first awaits the new `loadDialectTables(dialect)`. `nextly/schemas` is unchanged.
+The `schema` export, which held all three dialects' tables, is removed from `nextly` and `nextly/database`. Read tables with `getDialectTables(dialect)` after creating the adapter.
+
+Four functions now read a loaded dialect's tables, and throw, naming the fix, if called before that dialect is loaded:
+
+- `getCoreSchema`, from `nextly` and `nextly/schemas`;
+- `getStaticRelations`, `getDialectTables` and `getDialectTablesForPush`, from `nextly` and `nextly/database`.
+
+Creating the adapter loads its dialect, so code that runs after that is unaffected. Code that calls them without an adapter, such as schema tooling, first runs `await loadDialectTables(dialect)`, exported from `nextly`, `nextly/database` and `nextly/schemas`.

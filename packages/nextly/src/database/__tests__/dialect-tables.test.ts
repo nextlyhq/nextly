@@ -57,6 +57,30 @@ describe("reading a dialect's tables", () => {
     );
   });
 
+  it("through the published core schema, before it is loaded, names the fix", async () => {
+    const { getCoreSchema } = await import("../../schemas/index");
+
+    expect(() => getCoreSchema("mysql")).toThrow(
+      expect.objectContaining({
+        logContext: {
+          reason: expect.stringContaining(
+            'await loadDialectTables("mysql") first'
+          ),
+        },
+      })
+    );
+  });
+
+  it("through the published core schema answers once the entry's loader ran", async () => {
+    const { getCoreSchema, loadDialectTables } = await import(
+      "../../schemas/index"
+    );
+
+    await loadDialectTables("mysql");
+
+    expect(getCoreSchema("mysql").tables.length).toBeGreaterThan(0);
+  });
+
   it("after createAdapter answers with that dialect's tables", async () => {
     const { createAdapter } = await import("../factory");
     const { getDialectTables } = await import("../index");
