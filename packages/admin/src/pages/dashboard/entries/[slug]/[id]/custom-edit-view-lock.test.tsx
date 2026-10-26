@@ -301,6 +301,25 @@ describe("a custom collection edit view", () => {
     expect(claimRequest()).toMatchObject({ enabled: false });
   });
 
+  it("says an entry a reader may not read is not found, as the server answers it", () => {
+    // The server answers an entry the caller may not read exactly as a
+    // missing one, 404 "Not found.", so the page says so and claims nothing.
+    readOnlyForReader = true;
+    entryQuery = {
+      data: undefined,
+      isLoading: false,
+      error: new Error("Not found."),
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(
+      screen.getByText(/Failed to load entry:\s*Not found\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("document-lock-banner")).toBeNull();
+    expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+
   it("leaves the claim to the form when there is no custom view", () => {
     // 🔴 The page must not claim on this branch. `EntryForm` claims for the
     // default editor, and a second claim here would put two on one document
