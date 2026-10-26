@@ -8461,9 +8461,16 @@ export class CollectionMutationService extends BaseService {
             params.collectionName
           )) as { status?: boolean }
         ).status === true;
+      const gate = statusOnly ? statusGate(body.status) : "update";
+      // A write to every language that publishes is judged as publishing
+      // every language is, once in each language it puts live (asked below,
+      // before any hook runs), not once in all of them together: a rule
+      // answering by language would otherwise refuse over a language that does
+      // not go live.
+      const publishesEveryLanguage = sweepAllLocales && gate === "publish";
       const toUpdate = await this.entryToUpdate({
         ...params,
-        gate: statusOnly ? statusGate(body.status) : "update",
+        gate: publishesEveryLanguage ? null : gate,
       });
       if (toUpdate.answer) return toUpdate.answer;
       const { accessUser, schema, existingEntry } = toUpdate;
@@ -8507,6 +8514,36 @@ export class CollectionMutationService extends BaseService {
             `to move across its languages.`,
           data: null,
         };
+      }
+
+      // The languages a write to every language that publishes was asked
+      // about before any hook ran (see the gate above), read before the rule
+      // is asked: the row lock compares them with what goes live.
+      let askedBeforeHooks: string[] | undefined;
+      if (publishesEveryLanguage && !params.overrideAccess) {
+        askedBeforeHooks = await this.languagesToPublish({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          row: existingEntry as Record<string, unknown>,
+          fields,
+          promotesDraftOf: collection,
+        });
+        const refusal = await this.refusedInEachLanguage({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          languages: askedBeforeHooks,
+          ask: () =>
+            this.accessService.checkCollectionAccess({
+              collectionName: params.collectionName,
+              operation: "publish",
+              entryId: params.entryId,
+              user: accessUser,
+              overrideAccess: params.overrideAccess,
+              routeAuthorized: false,
+              authenticatedScope: params.authenticatedScope,
+            }),
+        });
+        if (refusal) return refusal;
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
@@ -8851,23 +8888,28 @@ export class CollectionMutationService extends BaseService {
           // answers by language answers for each, and any refusal refuses the
           // write. Asked here, off the transaction's connection; the row lock
           // (below) re-reads what goes live, so a translation drafted after
-          // this read cannot go live unasked.
-          const askedLanguages = await this.languagesToPublish({
-            collectionName: params.collectionName,
-            entryId: params.entryId,
-            row: existingEntry as Record<string, unknown>,
-            fields,
-            promotesDraftOf: collection,
-          });
+          // this read cannot go live unasked. Asked before any hook ran where
+          // the write was sent as one, else here, where a hook made it one.
+          const askedLanguages =
+            askedBeforeHooks ??
+            (await this.languagesToPublish({
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              row: existingEntry as Record<string, unknown>,
+              fields,
+              promotesDraftOf: collection,
+            }));
           transitionGuard = {
             op: transitionOp,
             permissionDenied:
-              (await this.refusedInEachLanguage({
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                languages: askedLanguages,
-                ask: transitionDenied,
-              })) ?? null,
+              askedBeforeHooks === undefined
+                ? ((await this.refusedInEachLanguage({
+                    collectionName: params.collectionName,
+                    entryId: params.entryId,
+                    languages: askedLanguages,
+                    ask: transitionDenied,
+                  })) ?? null)
+                : null,
             askedLanguages,
           };
         } else {

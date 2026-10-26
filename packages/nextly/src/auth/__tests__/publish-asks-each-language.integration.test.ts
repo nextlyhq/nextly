@@ -57,6 +57,8 @@ const SHARED_PENDING_BANNER = "sharedpendingbanner";
 const SHARED_NESTED = "sharednested";
 const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
+const FRENCH_INVOLVED_ARTICLES = "frenchinvolvedarticles";
+const FRENCH_INVOLVED_BANNER = "frenchinvolvedbanner";
 const USER = { id: "user-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
@@ -146,6 +148,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: changesWhatGoesLive,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: FRENCH_INVOLVED_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
         },
         fields: [text({ name: "heading" })],
       }),
@@ -280,6 +294,17 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineSingle({
         slug: SHARED_BANNER,
         // Not localized: one set of values, shown in every language.
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: frenchInvolvedRefused,
+        },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: FRENCH_INVOLVED_BANNER,
+        localized: true,
         status: true,
         access: {
           read: () => true,
@@ -550,6 +575,82 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publishEvery();
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("judges a write to every language that publishes an entry by the languages going live, as publishing every language does", async () => {
+      const t = await boot(dialect);
+      // English and German drafts, and no French: French does not go live, so
+      // a rule refusing anything that involves French allows the publish.
+      const created = await t.nextly.create({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      await t.nextly.update({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        id,
+        locale: "de",
+        data: { heading: "de" },
+      });
+      const publishEntry = () =>
+        t.nextly.update({
+          collection: FRENCH_INVOLVED_ARTICLES,
+          id,
+          locale: "*",
+          data: { status: "published" },
+          overrideAccess: false,
+          user: USER,
+        });
+
+      await publishEntry();
+      const entry = await handlerOf(t).getEntry({
+        collectionName: FRENCH_INVOLVED_ARTICLES,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect((entry.data as { status?: unknown } | null)?.status).toBe(
+        "published"
+      );
+
+      // The control: with a French draft, French goes live and it refuses.
+      await t.nextly.update({
+        collection: FRENCH_INVOLVED_ARTICLES,
+        id,
+        locale: "fr",
+        data: { heading: "fr" },
+      });
+      await expect(publishEntry()).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it("judges a write to every language that publishes a Single by the languages going live, as publishing every language does", async () => {
+      const t = await boot(dialect);
+      // English and German drafts, and no French, as for the entry above.
+      for (const locale of ["en", "de"]) {
+        await singlesOf(t).update(
+          FRENCH_INVOLVED_BANNER,
+          { headline: locale },
+          { overrideAccess: true, locale }
+        );
+      }
+      const publishSingle = () =>
+        singlesOf(t).update(
+          FRENCH_INVOLVED_BANNER,
+          { status: "published" },
+          { overrideAccess: false, user: USER, locale: "*" }
+        );
+
+      const allowed = await publishSingle();
+      expect(allowed.success, JSON.stringify(allowed)).toBe(true);
+
+      // The control: with a French draft, French goes live and it refuses.
+      await singlesOf(t).update(
+        FRENCH_INVOLVED_BANNER,
+        { headline: "fr" },
+        { overrideAccess: true, locale: "fr" }
+      );
+      expect((await publishSingle()).statusCode).toBe(403);
     });
 
     it("asks the default language when a Single's main row goes live, beside its translations", async () => {
