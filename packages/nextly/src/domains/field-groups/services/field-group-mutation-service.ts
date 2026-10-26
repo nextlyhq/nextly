@@ -37,9 +37,11 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  carryStoredPasswords,
   type FieldGroupReach,
   hashPasswordFieldValues,
   NO_FIELD_GROUPS,
+  reachesPasswordField,
   storedPasswordValues,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
@@ -2066,7 +2068,26 @@ export class FieldGroupMutationService extends BaseService {
         },
       });
     }
-    if (access.overrideAccess) return new Set();
+    const reach = reachOf(
+      await this.nestedComponentsOf(componentFields as FieldConfig[])
+    );
+    // A password the update leaves out of a container keeps its stored
+    // hash, whoever writes: the stored containers are read for it even where
+    // no rule judges the instance.
+    const reachesPassword = reachesPasswordField(componentFields, reach);
+    const storedFor = () =>
+      mode === "update" && storedId !== undefined
+        ? this.storedContainerValues(slug, storedId, componentFields)
+        : Promise.resolve(undefined);
+    if (access.overrideAccess) {
+      if (!reachesPassword) return new Set();
+      return carryStoredPasswords(
+        instance,
+        await storedFor(),
+        componentFields,
+        reach
+      );
+    }
     const judge = (data: Record<string, unknown>) =>
       applyFieldWriteAccess({
         kind: "fieldGroup",
@@ -2082,10 +2103,7 @@ export class FieldGroupMutationService extends BaseService {
         id: mode === "update" ? storedId : undefined,
         grants: access.grants,
       });
-    const stored =
-      mode === "update" && storedId !== undefined
-        ? await this.storedContainerValues(slug, storedId, componentFields)
-        : undefined;
+    const stored = await storedFor();
     if (!stored) {
       await judge(instance);
       return new Set();
@@ -2093,11 +2111,20 @@ export class FieldGroupMutationService extends BaseService {
     await keepContainersAtStored(instance, stored, judge);
     // The stored hashes the write may put back, so the hashing pass leaves
     // them as they are: at every depth, as the hashing pass reaches them.
-    return storedPasswordValues(
-      stored,
-      componentFields,
-      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
-    );
+    // Judged first, so a rule sees what the writer sent; then each password
+    // it left out keeps its stored hash.
+    const kept = storedPasswordValues(stored, componentFields, reach);
+    if (reachesPassword) {
+      for (const hash of carryStoredPasswords(
+        instance,
+        stored,
+        componentFields,
+        reach
+      )) {
+        kept.add(hash);
+      }
+    }
+    return kept;
   }
 
   /**

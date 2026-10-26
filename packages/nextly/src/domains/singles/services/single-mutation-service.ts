@@ -76,7 +76,10 @@ import {
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
 import {
+  carryStoredPasswords,
+  type FieldGroupReach,
   hashPasswordFieldValues,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -102,6 +105,7 @@ import { extractFieldGroupReferences } from "../../field-groups/storage/field-gr
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
+  COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
   COMPANION_STATUS_COLUMN,
 } from "../../i18n/companion-columns";
@@ -375,6 +379,53 @@ export class SingleMutationService extends BaseService {
    * The schema of a translated Single's translations table; null for a Single
    * without languages, which has no shared values apart from its languages'.
    */
+  /**
+   * Put back in an update's `data` the stored hash of each password it leaves
+   * out of a container written whole (`carryStoredPasswords`), and return
+   * those hashes for the hashing pass to keep. `stored` is the document as
+   * stored, hashes included; a translated container's stored value is the
+   * write language's row of the translations table.
+   */
+  private async storedPasswordsCarried(args: {
+    data: Record<string, unknown>;
+    stored: Record<string, unknown>;
+    fields: Parameters<typeof carryStoredPasswords>[2];
+    reach: FieldGroupReach;
+    companion: CompanionSchema | null;
+    writeLocale: string | undefined;
+    documentId: string;
+  }): Promise<Set<string>> {
+    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+    const [translated] =
+      args.companion && args.writeLocale !== undefined
+        ? await this.adapter.select<Record<string, unknown>>(
+            args.companion.companionTableName,
+            {
+              where: {
+                and: [
+                  {
+                    column: COMPANION_PARENT_COLUMN,
+                    op: "=",
+                    value: args.documentId,
+                  },
+                  {
+                    column: COMPANION_LOCALE_COLUMN,
+                    op: "=",
+                    value: args.writeLocale,
+                  },
+                ],
+              },
+            }
+          )
+        : [];
+    return carryStoredPasswords(
+      args.data,
+      { ...args.stored, ...translated },
+      args.fields,
+      args.reach
+    );
+  }
+
   private translationsOf(
     singleMeta: DynamicSingleRecord
   ): CompanionSchema | null {
@@ -1630,10 +1681,24 @@ export class SingleMutationService extends BaseService {
       // value — same guarantee as the collection write paths.
       // At every depth, through the field groups held inline in a container:
       // their passwords are stored in that container's value.
+      // A password the update leaves out of a container keeps its stored hash.
+      const passwordReach = await passwordReachOf(
+        fieldConfigs,
+        this.fieldGroupDataService
+      );
       await hashPasswordFieldValues(
         currentData,
         fieldConfigs,
-        await passwordReachOf(fieldConfigs, this.fieldGroupDataService)
+        passwordReach,
+        await this.storedPasswordsCarried({
+          data: currentData,
+          stored: existingDeserialized,
+          fields: fieldConfigs,
+          reach: passwordReach,
+          companion,
+          writeLocale,
+          documentId: String(documentId),
+        })
       );
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
