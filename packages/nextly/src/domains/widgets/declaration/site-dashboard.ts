@@ -69,6 +69,48 @@ function nearest(id: string, ids: readonly string[]): string | undefined {
   return best?.id;
 }
 
+/** The keys `admin.dashboard` takes. */
+const DASHBOARD_KEYS = [
+  "widgets",
+  "hide",
+  "overrides",
+  "defaultLayout",
+  "suggestions",
+  "replace",
+] as const;
+
+/** The keys an `overrides` entry takes. */
+const OVERRIDE_KEYS = [
+  "title",
+  "description",
+  "width",
+  "widths",
+  "settings",
+] as const;
+
+/** The keys a `defaultLayout` card takes. */
+const CARD_KEYS = ["widget", "width", "settings"] as const;
+
+/**
+ * Each key of `value` that `where` does not take, with the known key it most
+ * likely meant: a misspelt key would otherwise be accepted and do nothing.
+ */
+function unknownKeyProblems(
+  where: string,
+  value: Record<string, unknown>,
+  known: readonly string[]
+): string[] {
+  return Object.keys(value)
+    .filter(key => !known.includes(key))
+    .map(key => {
+      const meant =
+        known.find(
+          candidate => candidate.toLowerCase() === key.toLowerCase()
+        ) ?? nearest(key, known);
+      return `${where} has "${key}", which it does not take${meant === undefined ? "" : `; did you mean "${meant}"?`}`;
+    });
+}
+
 /** Levenshtein distance between two ids. */
 function editDistance(a: string, b: string): number {
   let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -204,6 +246,11 @@ function overrideProblems(
   facts: SiteWidgetFacts
 ): string[] {
   if (!isRecord(override)) return ["overrides entry must be an object"];
+  const unknownKeys = unknownKeyProblems(
+    "overrides entry",
+    override,
+    OVERRIDE_KEYS
+  );
   const title =
     override.title === undefined
       ? undefined
@@ -216,6 +263,7 @@ function overrideProblems(
           "overrides.description"
         );
   return [
+    ...unknownKeys,
     ...(title === undefined ? [] : [title]),
     ...(description === undefined ? [] : [description]),
     ...narrowingProblems(override.widths, facts),
@@ -262,11 +310,13 @@ function defaultCardProblems(
   ctx: SiteDashboardContext
 ): string[] {
   const id = card.widget;
+  const unknownKeys = unknownKeyProblems("defaultLayout card", card, CARD_KEYS);
   const unknown = unknownWidget("defaultLayout", id, ctx);
-  if (unknown !== undefined) return [unknown];
+  if (unknown !== undefined) return [...unknownKeys, unknown];
   const widget = id as string;
   const facts = ctx.factsOf(widget) as SiteWidgetFacts;
   return [
+    ...unknownKeys,
     ...(hiddenIds(site).has(widget)
       ? [`defaultLayout places "${widget}", which hide hides`]
       : []),
@@ -405,12 +455,18 @@ export function siteDashboardFaults(
   if (!isRecord(dashboard)) {
     return [fault("(admin.dashboard)", "admin.dashboard must be an object")];
   }
+  const unknownKeys = unknownKeyProblems(
+    "admin.dashboard",
+    dashboard,
+    DASHBOARD_KEYS
+  ).map(problem => fault("(admin.dashboard)", problem));
   const suggestions =
     dashboard.suggestions === undefined ||
     typeof dashboard.suggestions === "boolean"
       ? []
       : [fault("(suggestions)", "suggestions must be true or false")];
   return [
+    ...unknownKeys,
     ...hideFaults(dashboard, ctx),
     ...overridesFaults(dashboard, ctx),
     ...defaultLayoutFaults(dashboard, ctx),
@@ -421,6 +477,7 @@ export function siteDashboardFaults(
 
 /** The keys this version accepts and checks but does not yet apply. */
 const NOT_APPLIED_YET = [
+  "widgets",
   "hide",
   "overrides",
   "defaultLayout",
@@ -478,4 +535,13 @@ export function siteDashboardContext(
     alternatives,
     maxPlacements: MAX_PLACEMENTS,
   };
+}
+
+/**
+ * The site config's `admin.dashboard`, read once at startup into a copy every
+ * check reads, so a value that answers differently on each read is judged as
+ * one config.
+ */
+export function siteDashboardSnapshot(dashboard: unknown): unknown {
+  return isRecord(dashboard) ? { ...dashboard } : dashboard;
 }

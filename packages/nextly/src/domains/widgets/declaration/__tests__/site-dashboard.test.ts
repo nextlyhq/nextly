@@ -13,7 +13,10 @@ import { resetWidgetRegistries } from "../../../../di/registrations/register-wid
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import { definePlugin } from "../../../../plugins/plugin-context";
+import {
+  definePlugin,
+  type PluginDefinition,
+} from "../../../../plugins/plugin-context";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
 
 import { dashboard, revenue } from "./plugin/widgets";
@@ -95,18 +98,24 @@ describe("a site config that names what exists", () => {
     );
   });
 
-  it("keeps the site's own widgets with the plugins', which the rest may name", () => {
+  it("checks the site's own widgets with the plugins', which the rest may name, and registers none yet", () => {
     resetWidgetRegistries([shop], {
       widgets: [{ ...revenue, id: "site/revenue" }],
       defaultLayout: [{ widget: "site/revenue", width: "full" }],
     });
-    expect(declaredWidget("site/revenue")?.owner).toBe("the site config");
+    // Not kept until the admin's component map reads the site's widgets too,
+    // and said so at startup.
+    expect(declaredWidget("site/revenue")).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "site-dashboard-keys-not-applied",
+        keys: ["widgets", "defaultLayout"],
+      })
+    );
   });
 
-  it("says nothing when it sets only the keys it applies", () => {
-    resetWidgetRegistries([shop], {
-      widgets: [{ ...revenue, id: "site/revenue" }],
-    });
+  it("says nothing when it sets no key", () => {
+    resetWidgetRegistries([shop], {});
     expect(warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ kind: "site-dashboard-keys-not-applied" })
     );
@@ -193,6 +202,26 @@ describe("a site config with faults", () => {
     );
   });
 
+  it("refuses a key it does not take, at each level, naming the one it most likely meant", () => {
+    // 🔴 Accepted, a misspelt key does nothing, and nothing says so.
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultlayout: ["core/team"],
+        overrides: { "core/team": { widht: "half" } },
+        defaultLayout: [{ widget: "core/team", widths: ["half"] }],
+      })
+    );
+    expect(message).toContain(
+      'admin.dashboard has "defaultlayout", which it does not take; did you mean "defaultLayout"?'
+    );
+    expect(message).toContain(
+      'overrides entry has "widht", which it does not take; did you mean "width"?'
+    );
+    expect(message).toContain(
+      'defaultLayout card has "widths", which it does not take; did you mean "width"?'
+    );
+  });
+
   it("refuses a replacement keyed by a widget that is not built in", () => {
     expect(
       refusal(() =>
@@ -205,6 +234,53 @@ describe("a site config with faults", () => {
 });
 
 describe("a plugin's suggestions and alternatives", () => {
+  it("reads a plugin's contribution once, so what it suggests is judged against what it registered", () => {
+    // 🔴 A plain JavaScript plugin whose contribution answers differently on
+    // each read: read twice, the second read's widgets would make the
+    // suggestion look like its own.
+    let reads = 0;
+    const shifting = {
+      name: "@shifty/stats",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        get dashboard() {
+          reads += 1;
+          return reads === 1
+            ? {
+                widgets: [{ ...revenue, id: "shifty/a" }],
+                suggest: ["shifty/b"],
+              }
+            : {
+                widgets: [{ ...revenue, id: "shifty/b" }],
+                suggest: ["shifty/b"],
+              };
+        },
+      },
+    } as unknown as PluginDefinition;
+    const message = refusal(() => resetWidgetRegistries([shifting]));
+    expect(message).toContain(
+      'plugin "@shifty/stats", widget "shifty/b": suggests "shifty/b", which is not one of its own widgets'
+    );
+    expect(reads).toBe(1);
+  });
+
+  it("names an alternative's built-in it cannot print as JSON, with the other faults", () => {
+    // A value JSON cannot print is still named, not thrown on.
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/stats", {
+          widgets: [{ ...revenue, id: "other/revenue" }],
+          alternatives: { "other/revenue": 1n },
+        }),
+      ])
+    );
+    expect(message).toContain(
+      'plugin "@other/stats", widget "other/revenue": offers "other/revenue" in place of'
+    );
+    expect(message).toContain("which is not a built-in widget");
+  });
+
   it("refuses one that names a widget not its own, or a built-in that does not exist", () => {
     const message = refusal(() =>
       resetWidgetRegistries([

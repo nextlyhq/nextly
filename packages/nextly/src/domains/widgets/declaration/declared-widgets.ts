@@ -279,22 +279,28 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
  * `legacy` is the ids each plugin declares in today's shape. `references`
  * checks what names these widgets (the site config's dashboard, a plugin's
  * suggestions), handed each well-formed declaration as the definition it
- * becomes, so its faults are refused with the declarations' own, at once.
+ * becomes and the groups as they were snapshotted, so ownership is read from
+ * the same copy that is kept, and its faults are refused with the
+ * declarations' own, at once. `checkedOnly` are declarations checked with the
+ * rest, duplicates and references included, but not kept or published.
  */
 export function registerWidgetDeclarations(
   given: readonly DeclaredWidgetGroup[],
   legacy: readonly LegacyWidgetIds[] = [],
   references?: (
-    declared: ReadonlyMap<string, WidgetDefinition>
-  ) => readonly WidgetDeclarationFault[]
+    declared: ReadonlyMap<string, WidgetDefinition>,
+    groups: readonly DeclaredWidgetGroup[]
+  ) => readonly WidgetDeclarationFault[],
+  checkedOnly: readonly DeclaredWidgetGroup[] = []
 ): void {
   const groups = given.map(snapshot);
+  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
-    ...collectWidgetDeclarationFaults(groups),
-    ...sharedWithLegacy(groups, legacy),
+    ...collectWidgetDeclarationFaults(checked),
+    ...sharedWithLegacy(checked, legacy),
   ];
   if (references !== undefined) {
-    faults.push(...references(wellFormedDefinitions(groups, faults)));
+    faults.push(...references(wellFormedDefinitions(checked, faults), checked));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);

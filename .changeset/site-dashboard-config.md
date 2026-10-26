@@ -31,15 +31,14 @@
 
 The site config can shape the dashboard: `admin.dashboard`, checked at startup.
 
-- **`admin.dashboard.widgets`**: the site's own widgets, declared with `defineWidget()` as a plugin's are. They are checked with the plugins' widgets and offered in the add panel.
-- **`hide`, `overrides`, `defaultLayout`, `suggestions` and `replace`** are accepted and checked, but **not applied yet** in this version. Startup logs one warning naming each one a site sets.
-- **Startup refuses a site config that names a widget that does not exist** (with the nearest id), and also refuses:
+- **`widgets`, `hide`, `overrides`, `defaultLayout`, `suggestions` and `replace`** are accepted and checked, but **not applied yet** in this version. Startup logs one warning naming each one a site sets. The site's own widgets, declared with `defineWidget()` as a plugin's are, are checked together with the plugins' widgets, and other keys may name them.
+- **Startup refuses a site config that names a widget that does not exist** (with the nearest id), or that uses a key `admin.dashboard`, an `overrides` entry or a `defaultLayout` card does not take (with the key it most likely meant). It also refuses:
   - a width a widget does not allow, or widths that widen rather than narrow;
   - a setting a widget does not declare, or a value it does not accept;
   - a title or a description that breaks the declaration rules;
   - a default dashboard with more cards than a dashboard holds, or that lists a widget allowing one card more than once;
   - a default or a replacement naming a hidden widget, or a replacement no plugin offers for that built-in.
-- **A plugin's `suggest` and `alternatives`** may name only its own widgets, and an alternative only in place of a built-in that exists.
+- **A plugin's `suggest` and `alternatives`** may name only its own widgets, and an alternative only in place of a built-in that exists. A plugin's dashboard contribution is read once at startup, and every check reads that copy.
 - **All startup faults are reported together** with the widget declarations' own.
 - `AdminDashboardConfig`, `WidgetRef`, `DefaultLayoutCard` and `WidgetOverride` are exported from `nextly`.
 
