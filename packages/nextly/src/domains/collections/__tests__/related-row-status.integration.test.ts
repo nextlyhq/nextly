@@ -24,6 +24,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -69,6 +71,8 @@ async function boot(): Promise<Seeded> {
   });
 
   const handler = current.getService<CollectionsHandler>("collectionsHandler");
+  // The rules narrow the read permission, so the reader holds it.
+  await userWhoMay(current, "reader", "read", ["authors", "posts"]);
 
   const published = await handler.createEntry(
     { collectionName: "authors", overrideAccess: true },
@@ -260,6 +264,8 @@ describe("related rows honour Draft/Published (integration)", () => {
         }),
       ],
     });
+    // The rules narrow the read permission, so the reader holds it.
+    await userWhoMay(current, "reader", "read", ["tags", "posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const tag = await handler.createEntry(

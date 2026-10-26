@@ -210,7 +210,8 @@ export type AccessControlFunction = (
  * - A **boolean** for simple allow/deny
  * - **Omitted** to fall back to database role/permission checks
  *
- * Code-defined access always takes precedence over database permissions.
+ * A signed-in user or an API key needs the database permission first;
+ * code-defined access only narrows it, allowing only on `true`.
  * Super-admin always bypasses all access checks.
  *
  * @example
@@ -220,7 +221,7 @@ export type AccessControlFunction = (
  *   access: {
  *     // Only admins and editors can create
  *     create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
- *     // Any authenticated user can read
+ *     // Visitors can read, and signed-in callers holding read-posts
  *     read: true,
  *     // Only the user's own posts (checked via roles/permissions)
  *     update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),

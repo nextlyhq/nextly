@@ -65,6 +65,16 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
     viewer: { roles: ["viewer"], grants: [] },
     admin: { roles: ["super-admin"], grants: [] },
     owner: { roles: ["editor"], grants: [grant("read", POSTS)] },
+    // May update and publish posts.
+    publisher: {
+      roles: ["publisher"],
+      grants: [
+        grant("read", POSTS),
+        grant("update", POSTS),
+        grant("publish", POSTS),
+        grant("unpublish", POSTS),
+      ],
+    },
     // May publish posts, and holds no update to send the change through.
     "publisher-only": {
       roles: ["publisher"],
@@ -380,9 +390,10 @@ describe("routeGateCapabilities", () => {
     });
     expect(publishRule).not.toHaveBeenCalled();
 
-    // POPULATION CONTROL: for a caller who may update, the rule is asked.
+    // POPULATION CONTROL: for a caller who may update and publish, the rule
+    // is asked.
     await routeGateCapabilities(
-      { userId: "editor" },
+      { userId: "publisher" },
       ENTITIES,
       rbac,
       LANGUAGE_OF
@@ -391,17 +402,20 @@ describe("routeGateCapabilities", () => {
   });
 
   it("records each cell's deviation under that cell's own subject", async () => {
-    registered.rbac = serviceFor("service", RULES["returns-true"]);
+    // Posts declare a refusing rule, which a gate without the access-control
+    // service does not read: the editor reads posts today, where the
+    // decision, reading the declared rule, refuses.
+    serviceFor("service", RULES["returns-false"]);
+    registered.rbac = undefined;
     const { bySubject } = await recordingDeviations(() =>
       routeGateCapabilities(
-        { userId: "viewer" },
+        { userId: "editor" },
         ENTITIES,
         registered.rbac,
         LANGUAGE_OF
       )
     );
-    // The rule lets a person without the permission read posts today.
-    expect(bySubject.get(`read-${POSTS}`)).toContain("rule-alone-for-people");
+    expect(bySubject.get(`read-${POSTS}`)).toContain("no-service");
     // POPULATION CONTROL: only the entities' own cells are subjects.
     expect(bySubject.has("read-media")).toBe(false);
   });

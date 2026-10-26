@@ -51,7 +51,10 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { noticeRuleNoLongerAllows } from "./rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "./rule-answer-log";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
 export type GateVerdict =
@@ -508,11 +511,30 @@ async function plainRuleVerdict(
   if (await userIsSuperAdmin(userId, { executor: q.executor })) {
     return ALLOWED;
   }
+  // The permission first; a rule only narrows it. A rule of `false` refused
+  // this caller before too, so its refusal is not named as new.
+  const holds = await userHoldsPermission(userId, q.action, q.slug, {
+    executor: q.executor,
+  });
+  if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
+  if (!isLifecycle(q.action)) return verdictOf(plain);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", plain, () =>
+    await deviate("lifecycle-judged-alone", plain, () =>
       decided(looked(), q.action, target)
     )
   );
+}
+
+/**
+ * A signed-in user refused for want of the permission, where the target
+ * declares a rule for the action: named once, since that rule used to decide
+ * alone.
+ */
+function refusedWithoutPermission(q: GateQuestion): GateVerdict {
+  noticePermissionNowComesFirst(q.slug, q.action, "signed-in user");
+  return INSUFFICIENT;
 }
 
 /** A rule function, handed the caller's roles and permissions. */
@@ -529,11 +551,15 @@ async function ruleVerdict({
     return ALLOWED;
   }
   const actor = await looked();
+  // The permission first: a user without it is refused before the rule is
+  // asked, as the decision refuses.
+  if (!holdsPermission(actor, q.action, q.slug)) {
+    return refusedWithoutPermission(q);
+  }
   const outcome = await askRule(actor, q.action, target);
-  // The rule lets a signed-in user through only by answering `true`, as it
-  // has always done for a key.
-  const today = outcomeAllows(outcome);
-  if (!today) {
+  // The rule then lets the user through only by answering `true`.
+  const allowed = outcomeAllows(outcome);
+  if (!allowed) {
     noticeWhereRuleAllowedBefore(
       outcome,
       allowedUserBefore,
@@ -541,8 +567,11 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
+  if (!isLifecycle(q.action)) return verdictOf(allowed);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", today, () =>
+    await deviate("lifecycle-judged-alone", allowed, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );

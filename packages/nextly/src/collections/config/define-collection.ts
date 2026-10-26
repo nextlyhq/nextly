@@ -918,7 +918,8 @@ export interface CollectionConfig {
    * - A **boolean** for simple allow/deny
    * - **Omitted** to fall back to database role/permission checks
    *
-   * Code-defined access always takes precedence over database permissions.
+   * A signed-in user or an API key needs the database permission first;
+   * code-defined access only narrows it, allowing only on `true`.
    * Super-admin always bypasses all access checks.
    *
    * @example
