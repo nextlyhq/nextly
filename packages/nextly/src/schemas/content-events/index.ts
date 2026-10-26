@@ -13,13 +13,6 @@ import { loadedDialect } from "../../database/dialect-tables";
 
 export * from "./types";
 
-// The dialect files' namespaces, for types only: the repository names each
-// dialect's table type through them, and a value export would import every
-// dialect's tables.
-export type * as my from "./mysql";
-export type * as pg from "./postgres";
-export type * as sl from "./sqlite";
-
 /** Returns the Drizzle table objects for the content event record. */
 export function contentEventsTables(dialect: SupportedDialect) {
   // The loaded dialect's own tables, so only that dialect's files are
