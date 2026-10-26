@@ -686,6 +686,15 @@ async function handleSchemaRequest(
  * Exported so the route-parser suite can assert every entry route's method
  * against it rather than restating the list.
  */
+/**
+ * The collection entry methods whose dispatcher handler reads through the
+ * query service's filtered read: a list and a count.
+ */
+const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
+  "listEntries",
+  "countEntries",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -887,6 +896,10 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
+        // A list and a count read through the query service's filtered read,
+        // which applies a read rule's filter; every other entry route refuses
+        // a caller whose rule answers one.
+        appliesReadFilter: FILTERED_READ_METHODS.has(method),
       });
     }
     if (method === "getCollection") {

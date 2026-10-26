@@ -466,7 +466,10 @@ export async function authorizeCaller(
   action: string,
   resource: string,
   // Whether the request names one entry, so the refusal says "this post".
-  scope: RefusalScope = "all"
+  scope: RefusalScope = "all",
+  // Whether the route's handler applies a read rule's filter to what it
+  // reads, which lets a caller through whose rule answers one.
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
@@ -475,8 +478,14 @@ export async function authorizeCaller(
     authResult,
     action,
     resource,
-    getRBACService()
+    getRBACService(),
+    appliesFilter
   );
+  // The handler limits the read to the entries the filter matches, asking
+  // the rule again in the request, where it runs once.
+  if (!verdict.allowed && verdict.refusal === "only-matching-entries") {
+    return authResult;
+  }
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
@@ -786,6 +795,14 @@ export interface RouteOperation {
    * query may carry an `entryId` that names nothing.
    */
   namesOne?: boolean;
+  /**
+   * The route's handler reads through the query service's filtered read,
+   * which limits what it reads to the entries a read rule's filter matches,
+   * so a caller whose rule answers one is let through. Set only by a route
+   * that does: every other route refuses such a caller, as it cannot apply
+   * the filter to what it reads.
+   */
+  appliesReadFilter?: boolean;
 }
 
 /**
@@ -827,7 +844,8 @@ export async function requireCollectionAccess(
       collectionSlug,
       // A route naming one entry is refused about that entry. Named by the
       // route, never by a parameter: a query can carry an `entryId` too.
-      operation?.namesOne ? "one" : "all"
+      operation?.namesOne ? "one" : "all",
+      action === "read" && operation?.appliesReadFilter === true
     )
   );
 }

@@ -34,12 +34,42 @@ type KeptForUser = {
 const lookups = new AsyncLocalStorage<Map<string, KeptForUser>>();
 
 /**
+ * What a collection's read rule answered in this request, by the question it
+ * was asked: the target, who asked, and in which language. Kept only where a
+ * read that applies the rule's filter asks it, so a route's question and the
+ * service's re-ask of the same read run the rule once.
+ */
+const ruleOutcomes = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
+
+/**
  * Runs `operation` with a memo for the request. A memo already open is kept,
  * so a route reached inside another request's handling shares its lookups.
  */
 export function runWithAccessMemo<T>(operation: () => T): T {
   if (lookups.getStore()) return operation();
-  return lookups.run(new Map(), operation);
+  return lookups.run(new Map(), () => ruleOutcomes.run(new Map(), operation));
+}
+
+/**
+ * A read rule's outcome for `question`, asked once per request. Outside a
+ * request it is asked every time. An ask that fails is not kept, so the next
+ * one asks again. `question` must name everything the rule is told: the
+ * target, the caller and the language.
+ */
+export function rememberRuleOutcome<T>(
+  question: string,
+  ask: () => Promise<T>
+): Promise<T> {
+  const kept = ruleOutcomes.getStore();
+  if (!kept) return ask();
+  const known = kept.get(question) as Promise<T> | undefined;
+  if (known) return known;
+  const made = ask();
+  kept.set(question, made);
+  made.catch(() => {
+    if (kept.get(question) === made) kept.delete(question);
+  });
+  return made;
 }
 
 /**
@@ -114,4 +144,7 @@ function keptFor(
  */
 export function forgetRequestAccess(): void {
   lookups.getStore()?.clear();
+  // A rule is told the caller's roles and permissions, so what it answered
+  // goes with them.
+  ruleOutcomes.getStore()?.clear();
 }

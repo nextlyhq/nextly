@@ -20,6 +20,7 @@ import { runWithCallerScope } from "../caller-scope";
 
 import type { AccessTarget } from "./decide";
 import { recordingDeviations } from "./deviations";
+import { runWithAccessMemo } from "./request-memo";
 import { clearRuleAnswerNotices } from "./rule-answer-log";
 import {
   collectionGateVerdict,
@@ -337,6 +338,73 @@ describe("a super-admin named only by id", () => {
       executor: undefined,
     });
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(rule).not.toHaveBeenCalled();
+  });
+});
+
+describe("a read whose route already authorized it", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("asks the read rule again for an asker that applies its filter, and answers the filter", async () => {
+    const rule = filtering();
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: rule },
+        { user: { id: "u1" }, routeAuthorized: true, appliesFilter: true }
+      )
+    );
+    // Not `allowed`, which would read every entry: the route's allow did not
+    // say which entries the rule lets through.
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+    expect(rule).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks the rule once in a request, for the route's question and the service's", async () => {
+    const rule = filtering();
+    const [route, service] = await runWithAccessMemo(async () => [
+      await collectionGateVerdict(
+        asked({ read: rule }, { user: { id: "u1" }, appliesFilter: true })
+      ),
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, routeAuthorized: true, appliesFilter: true }
+        )
+      ),
+    ]);
+    expect(route).toEqual(service);
+    expect(rule).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a rule again for another caller in the same request", async () => {
+    const rule = filtering();
+    await runWithAccessMemo(async () => {
+      await collectionGateVerdict(
+        asked({ read: rule }, { user: { id: "u1" }, appliesFilter: true })
+      );
+      await collectionGateVerdict(
+        asked({ read: rule }, { user: { id: "u2" }, appliesFilter: true })
+      );
+    });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("is allowed as before, asking no rule, where the asker applies no filter", async () => {
+    // The control: only an asker that applies a filter has it asked again.
+    const rule = filtering();
+    const verdict = await collectionGateVerdict(
+      asked({ read: rule }, { user: { id: "u1" }, routeAuthorized: true })
+    );
+    expect(verdict.allowed).toBe(true);
     expect(rule).not.toHaveBeenCalled();
   });
 });
