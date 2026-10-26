@@ -35,6 +35,7 @@ import { NextlyError } from "../../../errors";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import {
   declaredFieldNames,
+  keepDeniedAtStored,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
 import {
@@ -321,7 +322,13 @@ export async function promotionIssues(
 
   for (const { locale, values } of logical) {
     const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
-    const promoted = promotedDocument(live, shared, values, perLanguage, ctx);
+    const promoted = await promotedDocument(
+      live,
+      shared,
+      values,
+      perLanguage,
+      ctx
+    );
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
     // as the one the promotion proposed, so the check and the row agree.
@@ -381,19 +388,35 @@ function sharedValues(
  * caller's payload. Spreading the whole snapshot instead would put back the
  * shared values a later language overwrote and refuse a publish whose
  * committed document is perfectly valid.
+ *
+ * The caller's payload is laid over the pending change with every denied
+ * child of a container it sends at the pending change's value. The update's
+ * field gate kept those children at the LIVE row's values, the only stored
+ * document it had, and a container the caller sends replaces the pending
+ * change's whole: laid over as it is, a pending edit to a child the caller may
+ * not write would read as unchanged and be lost rather than refused.
  */
-function promotedDocument(
+async function promotedDocument(
   live: Record<string, unknown>,
   shared: Record<string, unknown>,
   values: Record<string, unknown>,
   perLanguage: ReadonlySet<string>,
   ctx: PromoteGateContext
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const promoted: Record<string, unknown> = { ...live, ...shared };
   for (const [key, value] of Object.entries(values)) {
     if (perLanguage.has(key)) promoted[key] = value;
   }
-  Object.assign(promoted, ctx.callerData ?? {});
+  if (ctx.callerData) {
+    Object.assign(
+      promoted,
+      await keepDeniedAtStored({
+        update: ctx.callerData,
+        stored: promoted,
+        applyRules: promotionRules(ctx, live),
+      })
+    );
+  }
   // Written with the status it publishes, whatever its snapshot was saved
   // under. Set before the field rules run as well as before validation, so a
   // rule reading the document's status judges the one that goes live.
@@ -443,35 +466,45 @@ async function resolveForLocale(
     // Refusing is what this path already did, and it is safe: with nothing
     // denied allowed to change, the snapshot's own copy of a denied field
     // already equals live, so writing it changes nothing.
-    // The Single's own rules, then every field group's on the instances the
-    // document holds, with the schemas this promotion already resolved: a
-    // pending change can carry a field-group edit, refused here like any other.
-    applyRules: async document => {
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug: ctx.slug,
-        data: document,
-        operation: "update",
-        user: ctx.user,
-        authenticatedScope: ctx.authenticatedScope,
-        overrideAccess: ctx.overrideAccess,
-        grants: ctx.grants,
-        id: ctx.entryId,
-      });
-      await applyFieldGroupWriteAccessToDocument({
-        document,
-        fields: ctx.fields,
-        fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
-        access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
-        live,
-      });
-    },
+    applyRules: promotionRules(ctx, live),
     // What this Single declares, so a field named like one of the store's own
     // columns is judged as the content it is rather than skipped as metadata.
     authoredFieldNames: declaredFieldNames(ctx.fields),
     slug: ctx.slug,
     locale,
   });
+}
+
+/**
+ * The field rules a promotion is judged by, applied to the document given, in
+ * place: the Single's own rules, then every field group's on the instances
+ * the document holds, with the schemas this promotion already resolved. A
+ * pending change can carry a field-group edit, refused like any other.
+ */
+function promotionRules(
+  ctx: PromoteGateContext,
+  live: Record<string, unknown>
+): (document: Record<string, unknown>) => Promise<void> {
+  return async document => {
+    await applyFieldWriteAccess({
+      kind: "single",
+      slug: ctx.slug,
+      data: document,
+      operation: "update",
+      user: ctx.user,
+      authenticatedScope: ctx.authenticatedScope,
+      overrideAccess: ctx.overrideAccess,
+      grants: ctx.grants,
+      id: ctx.entryId,
+    });
+    await applyFieldGroupWriteAccessToDocument({
+      document,
+      fields: ctx.fields,
+      fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
+      access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
+      live,
+    });
+  };
 }
 
 /**
