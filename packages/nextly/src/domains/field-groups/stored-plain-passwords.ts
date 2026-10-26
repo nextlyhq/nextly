@@ -46,6 +46,7 @@ import { buildCompanionSchema } from "../i18n/runtime/companion-io";
 import { SingleRegistryService } from "../singles/services/single-registry-service";
 import { isOtherHasherFormat } from "../users/services/plaintext-password-cleanup";
 
+import { isMissingTable } from "./migration/session";
 import { passwordReachOf } from "./password-reach";
 import { FieldGroupRegistryService } from "./services/field-group-registry-service";
 import { registerComponentSchemas } from "./services/register-field-group-schemas";
@@ -140,7 +141,7 @@ async function visit(
   for (const entity of await entities(source)) {
     let count = 0;
     for (const stored of entity.tables) {
-      count += await visitTable(source, entity, stored, apply);
+      count += await visitPresentTable(source, entity, stored, apply);
     }
     if (count > 0) {
       counts.push({ kind: entity.kind, slug: entity.slug, count });
@@ -286,6 +287,27 @@ async function entities(
 }
 
 /** Count, or hash, the passwords stored as given in one table's rows. */
+/**
+ * {@link visitTable}, or 0 for a table the registry names but the database
+ * does not hold, so one missing table does not stop the count of the rest.
+ * Any other failure stops it.
+ */
+async function visitPresentTable(
+  source: StoredPasswordsSource,
+  entity: StoredEntity,
+  stored: StoredTable,
+  apply: boolean
+): Promise<number> {
+  try {
+    return await visitTable(source, entity, stored, apply);
+  } catch (error) {
+    if (isMissingTable(error, source.adapter.getCapabilities().dialect)) {
+      return 0;
+    }
+    throw error;
+  }
+}
+
 async function visitTable(
   source: StoredPasswordsSource,
   entity: StoredEntity,
