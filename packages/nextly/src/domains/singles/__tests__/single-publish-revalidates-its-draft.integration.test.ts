@@ -45,8 +45,11 @@ let dir: string;
 let dbPath: string;
 let current: TestNextly | undefined;
 let previousDialect: string | undefined;
+/** Whether this test's database already holds the two publishers. */
+let publishersSeeded = false;
 
 beforeEach(() => {
+  publishersSeeded = false;
   previousDialect = process.env.DB_DIALECT;
   dir = mkdtempSync(join(tmpdir(), "nextly-single-promote-"));
   dbPath = join(dir, "test.db");
@@ -150,7 +153,20 @@ async function boot(
       }),
     ],
   });
+  // A publish is asked of a write that names only the status, even where the
+  // Single is already published and the status does not move, so both
+  // publishers hold publish-prefs. Seeded once per test: a reboot reopens the
+  // same database.
+  if (!publishersSeeded) await seedPublishers(current);
   return current.getService("singleEntryService");
+}
+
+/** Gives both publishers publish-prefs, once per test's database. */
+async function seedPublishers(t: TestNextly): Promise<void> {
+  for (const publisher of [BOSS, CLERK]) {
+    await userWhoMay(t, publisher.id, "publish", [SLUG]);
+  }
+  publishersSeeded = true;
 }
 
 async function reboot(strict: boolean): Promise<SingleEntryService> {
@@ -546,6 +562,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    await seedPublishers(current);
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
@@ -668,6 +685,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    await seedPublishers(current);
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;

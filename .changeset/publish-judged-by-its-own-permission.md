@@ -29,6 +29,4 @@
 "nextly": patch
 ---
 
-A publish or an unpublish that changes only the entry's status is now judged by its own permission and code rule alone. Before, it also needed the update permission, and the update rule had to allow it, so a role that may publish but not edit could not publish at all. Now such a role can publish unchanged content, a pending draft included; that draft's fields are still judged by their own rules as it goes live.
-
-A publish that also changes fields still needs update for those changes. Without it, the whole request is refused and nothing is written, the status included. `publish-all` and `unpublish-all` need only their own permission, and the admin's capabilities answer publish the same way.
+A write that changes only an entry's status, a publish or an unpublish, is now judged by its own permission and code rule alone. Before, it also needed the update permission and update rule, so a role that may publish but not edit could not publish at all. A publish-only caller sends the status alone, `{ "status": "published" }`, and the pending draft, if there is one, goes live with its fields still judged by their own rules. A write that names any other field, even at its current value, needs update too, and without it nothing is written, the status included. This holds over REST, the Direct API, a plugin's services, batch and query updates and Singles; publishing or unpublishing every language needs only its own permission, and the admin's capabilities answer publish the same way.
