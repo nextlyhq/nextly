@@ -114,6 +114,31 @@ describe("a site config that names what exists", () => {
     );
   });
 
+  it("starts with a generated card's id it cannot see yet, still checking the config's own shape", () => {
+    // 🔴 Generated cards are derived when the dashboard is first read, after
+    // this check: refused as unknown, a valid config would not start.
+    expect(() =>
+      resetWidgetRegistries([shop], {
+        hide: ["single/home-card"],
+        overrides: { "collection/posts-count": { width: "half" } },
+        defaultLayout: ["collection/posts-count"],
+      })
+    ).not.toThrow();
+    // Its shape is still checked: a key the entry does not take is refused,
+    // and so is placing a hidden generated card.
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        hide: ["collection/pages-count"],
+        overrides: { "collection/posts-count": { widht: "half" } },
+        defaultLayout: ["collection/pages-count"],
+      })
+    );
+    expect(message).toContain('overrides entry has "widht"');
+    expect(message).toContain(
+      'defaultLayout places "collection/pages-count", which hide hides'
+    );
+  });
+
   it("says nothing when it sets no key", () => {
     resetWidgetRegistries([shop], {});
     expect(warn).not.toHaveBeenCalledWith(
@@ -222,6 +247,17 @@ describe("a site config with faults", () => {
     );
   });
 
+  it("names a hide entry it cannot print as text, with the other faults", () => {
+    // A value String() would throw on is still named, not thrown on.
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        hide: [Object.create(null), "core/teem"],
+      })
+    );
+    expect(message).toContain("hide must name a widget by its id");
+    expect(message).toContain('hide names "core/teem"');
+  });
+
   it("refuses a replacement keyed by a widget that is not built in", () => {
     expect(
       refusal(() =>
@@ -263,6 +299,22 @@ describe("a plugin's suggestions and alternatives", () => {
       'plugin "@shifty/stats", widget "shifty/b": suggests "shifty/b", which is not one of its own widgets'
     );
     expect(reads).toBe(1);
+  });
+
+  it("refuses a key a plugin's dashboard contribution does not take, naming the one it most likely meant", () => {
+    // 🔴 Dropped, a misspelt `suggest` would never place anything, and
+    // nothing would say so.
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/stats", {
+          widgets: [{ ...revenue, id: "other/revenue" }],
+          sugest: ["other/revenue"],
+        }),
+      ])
+    );
+    expect(message).toContain(
+      'plugin "@other/stats", widget "(contributes.dashboard)": contributes.dashboard has "sugest", which it does not take; did you mean "suggest"?'
+    );
   });
 
   it("names an alternative's built-in it cannot print as JSON, with the other faults", () => {

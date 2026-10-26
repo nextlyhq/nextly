@@ -16,6 +16,7 @@ import type {
   LegacyWidgetIds,
 } from "../domains/widgets/declaration/declared-widgets";
 import { quote } from "../domains/widgets/declaration/quote";
+import { unknownKeyProblems } from "../domains/widgets/declaration/site-dashboard";
 import type { WidgetDeclarationFault } from "../domains/widgets/declaration/validate";
 
 import type { PluginDefinition } from "./plugin-context";
@@ -47,7 +48,17 @@ export interface PluginDashboardSnapshot {
   readonly alternatives: unknown;
   /** Declared slug to the slug the site uses, for the plugin's collections. */
   readonly collections?: Readonly<Record<string, string>>;
+  /** Each key it carries that a contribution does not take, as a fault's words. */
+  readonly unknownKeys: readonly string[];
 }
+
+/** The keys `contributes.dashboard` takes. */
+const DASHBOARD_CONTRIBUTION_KEYS = [
+  "widgets",
+  "suggest",
+  "alternatives",
+  "attention",
+] as const;
 
 /**
  * Each enabled plugin with any dashboard contribution at all, read once: one
@@ -75,6 +86,13 @@ export function pluginDashboardSnapshots(
           ? Object.fromEntries(Object.entries(alternatives))
           : alternatives,
         collections: resolvePluginSelf(plugin).collections,
+        // A misspelt key would otherwise be dropped here, and what it asked for
+        // would silently never happen.
+        unknownKeys: unknownKeyProblems(
+          "contributes.dashboard",
+          fields,
+          DASHBOARD_CONTRIBUTION_KEYS
+        ),
       },
     ];
   });
@@ -205,6 +223,11 @@ export function pluginSuggestionFaults(
   return dashboards.flatMap(dashboard => {
     const own = ownIds(dashboard.owner, groups);
     return [
+      ...dashboard.unknownKeys.map(problem => ({
+        owner: dashboard.owner,
+        widget: "(contributes.dashboard)",
+        problem,
+      })),
       ...suggestFaults(dashboard, own),
       ...alternativeFaults(dashboard, own, coreIds),
     ];

@@ -16,7 +16,7 @@ import type { WidgetDefinition } from "../definition";
 import { MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
-import { isWidgetWidth, type WidgetWidth } from "../widths";
+import { isWidgetWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { quote } from "./quote";
 import {
@@ -95,7 +95,7 @@ const CARD_KEYS = ["widget", "width", "settings"] as const;
  * Each key of `value` that `where` does not take, with the known key it most
  * likely meant: a misspelt key would otherwise be accepted and do nothing.
  */
-function unknownKeyProblems(
+export function unknownKeyProblems(
   where: string,
   value: Record<string, unknown>,
   known: readonly string[]
@@ -130,6 +130,38 @@ function editDistance(a: string, b: string): number {
   return previous[b.length] ?? 0;
 }
 
+/**
+ * The namespaces of the cards core generates from the content itself, one per
+ * collection or Single. They are derived when the dashboard is first read, after
+ * startup checks the site config, so at startup an id in them may name a card
+ * that does not exist yet without being a mistake.
+ */
+const GENERATED_NAMESPACES = ["collection/", "single/"] as const;
+
+/**
+ * What the check assumes of a generated card it cannot see yet: every width
+ * and no settings it can judge, so only the config's own shape is checked.
+ */
+const NOT_YET_GENERATED: SiteWidgetFacts = {
+  allowedWidths: WIDGET_WIDTHS,
+  allowsSeveral: true,
+};
+
+/**
+ * What the check knows of `id`: the install's widget, or, for an id in a
+ * generated namespace not derived yet, `NOT_YET_GENERATED`.
+ */
+function factsFor(
+  id: string,
+  ctx: SiteDashboardContext
+): SiteWidgetFacts | undefined {
+  const facts = ctx.factsOf(id);
+  if (facts !== undefined) return facts;
+  return GENERATED_NAMESPACES.some(namespace => id.startsWith(namespace))
+    ? NOT_YET_GENERATED
+    : undefined;
+}
+
 /** Why `id` names no widget, with its nearest match, or `undefined`. */
 function unknownWidget(
   where: string,
@@ -139,7 +171,7 @@ function unknownWidget(
   if (typeof id !== "string") {
     return `${where} must name a widget by its id, got ${quote(id)}`;
   }
-  if (ctx.factsOf(id) !== undefined) return undefined;
+  if (factsFor(id, ctx) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
 }
@@ -218,7 +250,9 @@ function hideFaults(
   }
   return site.hide.flatMap(id => {
     const problem = unknownWidget("hide", id, ctx);
-    return problem === undefined ? [] : [fault(String(id), problem)];
+    return problem === undefined
+      ? []
+      : [fault(typeof id === "string" ? id : quote(id), problem)];
   });
 }
 
@@ -291,7 +325,7 @@ function overridesFaults(
   return Object.entries(site.overrides).flatMap(([id, override]) => {
     const unknown = unknownWidget("overrides", id, ctx);
     if (unknown !== undefined) return [fault(id, unknown)];
-    const facts = ctx.factsOf(id) as SiteWidgetFacts;
+    const facts = factsFor(id, ctx) as SiteWidgetFacts;
     return overrideProblems(id, override, site, facts).map(problem =>
       fault(id, problem)
     );
@@ -314,7 +348,7 @@ function defaultCardProblems(
   const unknown = unknownWidget("defaultLayout", id, ctx);
   if (unknown !== undefined) return [...unknownKeys, unknown];
   const widget = id as string;
-  const facts = ctx.factsOf(widget) as SiteWidgetFacts;
+  const facts = factsFor(widget, ctx) as SiteWidgetFacts;
   return [
     ...unknownKeys,
     ...(hiddenIds(site).has(widget)
