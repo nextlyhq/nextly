@@ -198,12 +198,10 @@ function formatToastSummary(summary: {
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
- * `routeAuthorized` to attest that the route middleware already ran the
- * RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while field-level write access still runs — never inferred from a
- * userId; and `authenticatedScope` so a scoped API key's own
- * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
- * only as an `update`.
+ * `routeAuthorized` false, since the route admitted this POST on the
+ * `publish-`/`unpublish-` grant alone and attests no gate the service could
+ * skip; and `authenticatedScope` so a scoped API key's own grant and the rule
+ * are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",
@@ -220,7 +218,7 @@ function allLocalesLifecycle(
         entryId,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        routeAuthorized: true,
+        routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
