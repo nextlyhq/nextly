@@ -36,6 +36,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 
 type PluginServices = PluginContext["services"];
 
@@ -47,7 +48,7 @@ const HOME = "home";
 const FILTERED = "filtered";
 /** May read, publish and unpublish, and not update. */
 const PUBLISHER = "publisher-1";
-/** May read and update, and not publish. */
+/** May read and update posts and notes, and not publish. */
 const EDITOR = "editor-1";
 
 /** A system column's value no hook should be handed from a status-only body. */
@@ -132,8 +133,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   await userWhoMay(current, PUBLISHER, "read", [POSTS, NOTES, HOME]);
   await grantTo(current, PUBLISHER, "publish", [POSTS, NOTES, HOME]);
   await grantTo(current, PUBLISHER, "unpublish", [POSTS, NOTES, HOME]);
-  await userWhoMay(current, EDITOR, "read", [POSTS]);
-  await grantTo(current, EDITOR, "update", [POSTS]);
+  await userWhoMay(current, EDITOR, "read", [POSTS, NOTES]);
+  await grantTo(current, EDITOR, "update", [POSTS, NOTES]);
   await userWhoMay(current, MAINTAINER, "read", [FILTERED]);
   for (const action of ["update", "publish"]) {
     await grantTo(current, MAINTAINER, action, [FILTERED]);
@@ -611,6 +612,50 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
       ).toBe(403);
+    });
+
+    it("admits publishing every language of a collection with no lifecycle over REST on update", async () => {
+      await boot(dialect);
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      const id = String((item as { id: unknown }).id);
+
+      // Nothing to publish, which a caller who may update is told, as before.
+      expect(
+        await rest(
+          EDITOR,
+          "POST",
+          ["collections", NOTES, "entries", id, "publish-all"],
+          {}
+        )
+      ).toBe(200);
+      expect((await stored(NOTES, id)).status).toBe("open");
+    });
+
+    it("tells only a caller who may update that a collection with no lifecycle has nothing to publish", async () => {
+      await boot(dialect);
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      const id = String((item as { id: unknown }).id);
+      const publishAll = (userId: string) =>
+        (
+          current!.getService("collectionsHandler") as CollectionsHandler
+        ).publishAllLocales({
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: false,
+          user: { id: userId } as never,
+        });
+
+      // A caller who may not update learns nothing, the publisher included.
+      expect((await publishAll(PUBLISHER)).success).toBe(false);
+      // The control: one who may update is told nothing moves.
+      expect((await publishAll(EDITOR)).success).toBe(true);
+      expect((await stored(NOTES, id)).status).toBe("open");
     });
   }
 );
