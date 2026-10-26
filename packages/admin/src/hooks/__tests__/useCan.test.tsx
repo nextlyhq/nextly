@@ -213,6 +213,15 @@ describe("useCan", () => {
     });
   });
 
+  it("takes that super-admin answer from the server, not from a super-admin flag in the slugs", async () => {
+    server.permissions = { permissions: [], isSuperAdmin: true, roles: [] };
+    server.capabilities = answering({ posts: { read: true } });
+
+    expect(await canEach(["read-seo-report"])).toEqual({
+      "read-seo-report": false,
+    });
+  });
+
   it("offers no action on a collection while the server's answer is missing, and keeps the slugs' answers", async () => {
     server.permissions = holding(
       "update-posts",
