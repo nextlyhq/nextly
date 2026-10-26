@@ -269,7 +269,10 @@ import {
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 import type { WebhookResource } from "../../webhooks/types";
-import type { FilterConditionSources } from "../query/filter-condition";
+import {
+  localizedFilterContext,
+  type FilterConditionSources,
+} from "../query/filter-condition";
 
 import {
   PUBLISH_ALL_LOCALES,
@@ -300,7 +303,6 @@ import {
 import { entryWriteContext } from "./stored-field-read";
 import {
   prepareWriteMatch,
-  writeLocalizedContext,
   writeMatchOf,
   type FilteredWriteMatch,
   type ReadReach,
@@ -11096,7 +11098,8 @@ export class CollectionMutationService extends BaseService {
     };
     const prepared = await prepareWriteMatch(
       { collectionName, action, filter: access.filter, read: access.read },
-      sources
+      sources,
+      this.logger
     );
     const companion = await this.fileManager.loadCompanionSchema(
       collectionName,
@@ -11118,10 +11121,11 @@ export class CollectionMutationService extends BaseService {
             ),
             localizedColumns: companion.localizedFields.map(f => f.column),
           });
-    const localizedCtx = writeLocalizedContext(
-      readiness === "ready" ? companion : null,
-      schema,
-      options.locale ?? this.localization?.defaultLocale
+    const locale = options.locale ?? this.localization?.defaultLocale;
+    const localizedCtx = localizedFilterContext(
+      readiness === "ready" ? (companion ?? null) : null,
+      locale ? [locale] : null,
+      schema
     );
     return { columns: prepared.columns(schema, localizedCtx) };
   }
