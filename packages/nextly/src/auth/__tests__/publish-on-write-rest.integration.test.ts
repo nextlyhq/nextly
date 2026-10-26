@@ -275,19 +275,21 @@ for (const dialect of getConfiguredTestDialects()) {
         ]);
       });
 
-      it("is refused an update to published, and the entry stays a draft", async () => {
+      it("is refused an update to published, and the entry is left as it was", async () => {
         const title = `${without} update`;
         const id = await draftOf(t, title);
         const res = await rest(
           "PATCH",
           `collections/${POSTS}/entries/${id}`,
           callers[without],
-          { status: "published" }
+          { title: `${title} changed`, status: "published" }
         );
         expect(res.status).toBe(403);
+        // Neither the title sent with the publish nor the status is stored.
         expect(await stored(t, POSTS, title)).toMatchObject([
           { status: "draft" },
         ]);
+        expect(await stored(t, POSTS, `${title} changed`)).toEqual([]);
       });
 
       it("is refused a create as published in another language", async () => {
