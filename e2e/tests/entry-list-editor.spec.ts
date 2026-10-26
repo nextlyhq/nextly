@@ -47,19 +47,27 @@ test.afterAll(async () => {
   await limited?.context.close();
 });
 
-const table = () => page.getByRole("table", { name: "Entries table" });
+/**
+ * The post this file changes, as the list's row for it. A row that opens its entry
+ * is a button; the phone-width card drawing the same entry stays hidden.
+ */
+const row = () =>
+  page
+    .getByRole("button", { name: /A post to change/ })
+    .filter({ visible: true });
 
 test('offers "New", row checkboxes and bulk delete', async () => {
   await gotoAdmin(page, "/collections/posts");
   await expect(page.getByRole("button", { name: /^new /i })).toBeVisible();
-  await table().getByRole("checkbox", { name: "Select row" }).first().check();
+  await row().getByRole("checkbox", { name: "Select row" }).check();
   await expect(
     page.getByRole("button", { name: /delete selected/i })
   ).toBeVisible();
 });
 
 test("offers Delete in a row's actions", async () => {
-  await table().getByRole("button", { name: "Row actions" }).first().click();
+  await gotoAdmin(page, "/collections/posts");
+  await row().getByRole("button", { name: "Row actions" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
   await page.keyboard.press("Escape");
 });

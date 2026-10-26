@@ -50,40 +50,55 @@ test.afterAll(async () => {
   await limited?.context.close();
 });
 
-const table = () => page.getByRole("table", { name: "Entries table" });
+/**
+ * The post this file reads, as the list's row for it. A row that opens its entry
+ * is a button; the phone-width card drawing the same entry stays hidden.
+ */
+const row = () =>
+  page
+    .getByRole("button", { name: /A post to read/ })
+    .filter({ visible: true });
 
-test("the Posts list opens, with its rows", async () => {
-  // The control within the file: a reader who could not open the list, or
-  // saw no rows, would pass every absence below.
+/**
+ * Opens the Posts list and waits for this file's post. Every case below opens
+ * it itself: an absence checked on a page that never drew the list would pass
+ * whatever the list offers.
+ */
+async function openPosts(): Promise<void> {
   await gotoAdmin(page, "/collections/posts");
-  await expect(table().getByRole("row").nth(1)).toBeVisible();
-});
+  await expect(row()).toBeVisible();
+}
 
 test('offers no "New"', async () => {
+  await openPosts();
   await expect(page.getByRole("button", { name: /^new /i })).toHaveCount(0);
 });
 
 test("offers no row checkboxes and no bulk delete", async () => {
-  await expect(table().getByRole("checkbox")).toHaveCount(0);
+  await openPosts();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: /delete selected/i })
   ).toHaveCount(0);
 });
 
 test("offers no Delete in a row's actions", async () => {
-  await table().getByRole("button", { name: "Row actions" }).first().click();
+  await openPosts();
+  await row().getByRole("button", { name: "Row actions" }).click();
   await expect(page.getByRole("menuitem", { name: "Edit" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
 
 test("does nothing on the select-all, delete and new shortcuts", async () => {
-  await table().click({ position: { x: 5, y: 5 } });
-  await page.keyboard.press("ControlOrMeta+a");
+  await openPosts();
+  await page.getByRole("heading", { name: "Posts", exact: true }).click();
+  // The list binds Control itself, not the platform's Command key.
+  await page.keyboard.press("Control+a");
   await page.keyboard.press("Delete");
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.keyboard.press("ControlOrMeta+n");
+  await page.keyboard.press("Control+n");
   await page.waitForTimeout(500);
   await expect(page).toHaveURL(/\/admin\/collections\/posts$/);
 });
