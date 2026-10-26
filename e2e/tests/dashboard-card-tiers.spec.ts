@@ -2,7 +2,7 @@
  * A dashboard card lays itself out by its OWN width: small below 340 px, medium to 699 px,
  * large from 700 px, whatever the window is.
  *
- * Drawn with the generated "Recent posts" list card at every width on a 1,200 px and a 900 px
+ * Drawn with a Recent entries card set to posts at every width on a 1,200 px and a 900 px
  * dashboard and in a 358 px phone column, and at the transitions the bands create: a half card
  * on 680 and 720 px dashboards, and the single column at 330 and 350 px. The dashboard's width
  * is the container's, not the window's, so the window is sized until the container measures
@@ -17,17 +17,19 @@ import { LOCK } from "./support/locks";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
 
-const RECENT_POSTS = "collection/posts-recent";
-type Width = "quarter" | "third" | "half" | "twoThirds" | "full";
+/**
+ * The Recent entries widget, set to posts. A saved generated list card (`collection/posts-recent`)
+ * is drawn as this widget now, so the spec places the widget a reader adds today.
+ */
+const RECENT_POSTS = "core/recent-entries";
+// Recent entries is a third to a full row wide, so no case places it at a quarter. The small tier
+// is still reached on both sides of its edge below: a half card at 680 px and a full one at 330 px.
+type Width = "third" | "half" | "twoThirds" | "full";
 
 interface Layout {
   version: number;
   scope: string;
-  /**
-   * Every widget this reader may see, by id. A generated collection card is never offered in
-   * `available` (the add panel retired them), but one placed is still drawn, so it is placed here
-   * through the layout write, which accepts any widget the reader may see.
-   */
+  /** Every widget this reader may see, by id. */
   widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
@@ -37,34 +39,27 @@ interface Layout {
   }>;
 }
 
-/** Put the Recent posts card at `width` in the saved layout. */
+/**
+ * Put one Recent entries card, set to posts, at `width` in the saved layout. Any other card of
+ * the widget is left out, so the grid draws exactly one cell under its id.
+ */
 async function placeRecentPosts(page: Page, width: Width): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
-  const placed = layout.placements.some(
-    placement => placement.widgetId === RECENT_POSTS
-  );
-  // A generated collection card is not on the default dashboard, so a fresh install places it
-  // here; one already placed is moved to the width.
-  if (!placed && !(RECENT_POSTS in layout.widgets))
-    throw new Error(
-      "the generated Recent posts card is not visible to this reader"
-    );
-  const placements = placed
-    ? layout.placements.map(placement =>
-        placement.widgetId === RECENT_POSTS
-          ? { ...placement, width, removed: false }
-          : placement
-      )
-    : [
-        ...layout.placements,
-        {
-          id: "e2e-recent-posts",
-          widgetId: RECENT_POSTS,
-          width,
-          removed: false,
-        },
-      ];
+  if (!(RECENT_POSTS in layout.widgets))
+    throw new Error("the Recent entries widget is not visible to this reader");
+  const placements = [
+    ...layout.placements.filter(
+      placement => placement.widgetId !== RECENT_POSTS
+    ),
+    {
+      id: "e2e-recent-posts",
+      widgetId: RECENT_POSTS,
+      width,
+      removed: false,
+      config: { collection: "posts" },
+    },
+  ];
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: { placements, version: layout.version, scope: layout.scope },
   });
@@ -115,17 +110,14 @@ test.afterEach(async ({ page }) => {
 });
 
 const CASES: Array<[number, Width, string]> = [
-  [1200, "quarter", "small"],
   [1200, "third", "medium"],
   [1200, "half", "medium"],
   [1200, "twoThirds", "large"],
   [1200, "full", "large"],
-  [900, "quarter", "medium"],
   [900, "third", "medium"],
   [900, "half", "medium"],
   [900, "twoThirds", "large"],
   [900, "full", "large"],
-  [358, "quarter", "medium"],
   [358, "half", "medium"],
   [358, "full", "medium"],
 ];
