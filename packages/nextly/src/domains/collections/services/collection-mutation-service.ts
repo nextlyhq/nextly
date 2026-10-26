@@ -274,7 +274,10 @@ import {
   type AllLocalesLifecycleParams,
   type LifecycleDirection,
 } from "./all-locales-lifecycle";
-import type { CollectionAccessService } from "./collection-access-service";
+import type {
+  CollectionAccessService,
+  FilteredWrite,
+} from "./collection-access-service";
 import type {
   CollectionHookService,
   QueryDatabaseParams,
@@ -10971,6 +10974,7 @@ export class CollectionMutationService extends BaseService {
    */
   private async prepareFilteredWrite(
     collectionName: string,
+    action: FilteredWrite,
     schema: Record<string, SQLWrapper | undefined>,
     access: { filter?: RuleFilter; read?: ReadReach },
     options: { locale?: string; executor?: unknown } = {}
@@ -11000,7 +11004,7 @@ export class CollectionMutationService extends BaseService {
         : {}),
     };
     const prepared = await prepareWriteMatch(
-      { collectionName, filter: access.filter, read: access.read },
+      { collectionName, action, filter: access.filter, read: access.read },
       sources
     );
     const companion = await this.fileManager.loadCompanionSchema(
@@ -11042,7 +11046,9 @@ export class CollectionMutationService extends BaseService {
     tableName: string,
     entryId: string,
     access: { filter?: RuleFilter; read?: ReadReach },
-    accessParams: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
+    accessParams: Parameters<
+      CollectionAccessService["refusalOutsideFilter"]
+    >[0] & { operation: FilteredWrite }
   ): Promise<CollectionServiceResult<T> | null> {
     const executor = tx.getDrizzle();
     const schema = await this.fileManager.loadDynamicSchema(
@@ -11051,6 +11057,7 @@ export class CollectionMutationService extends BaseService {
     );
     const filtered = await this.prepareFilteredWrite(
       accessParams.collectionName,
+      accessParams.operation,
       schema,
       access,
       { executor }
@@ -11180,6 +11187,7 @@ export class CollectionMutationService extends BaseService {
       // again under the row lock below, so the entry removed is the one judged.
       const filtered = await this.prepareFilteredWrite(
         params.collectionName,
+        "delete",
         schema,
         access
       );

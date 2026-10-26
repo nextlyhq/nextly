@@ -18,7 +18,11 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 
-import type { RuleFilter } from "../../../auth/access/rule-answer";
+import {
+  FILTER_NAMES_A_COMPONENT_FIELD,
+  reportRuleFilterMisuse,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
 import type { CompanionSchema } from "../../../domains/i18n/runtime/companion-io";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { LocalizedQueryContext } from "../../../services/collections/drizzle-condition";
@@ -68,7 +72,13 @@ export interface PreparedWriteMatch {
  * collection, before any transaction opens.
  */
 export async function prepareWriteMatch(
-  params: { collectionName: string; filter: RuleFilter; read: ReadReach },
+  params: {
+    collectionName: string;
+    /** The write the filter limits, named when its filter is misused. */
+    action: string;
+    filter: RuleFilter;
+    read: ReadReach;
+  },
   sources: FilterConditionSources
 ): Promise<PreparedWriteMatch> {
   const { collectionName } = params;
@@ -82,9 +92,19 @@ export async function prepareWriteMatch(
   return {
     columns(schema, localizedCtx) {
       return {
-        writes: matchColumn(collectionName, write, schema, localizedCtx),
+        writes: matchColumn(
+          { collectionName, action: params.action },
+          write,
+          schema,
+          localizedCtx
+        ),
         reads: read
-          ? matchColumn(collectionName, read, schema, localizedCtx)
+          ? matchColumn(
+              { collectionName, action: "read" },
+              read,
+              schema,
+              localizedCtx
+            )
           : readKind === "every"
             ? sql<number>`1`
             : sql<number>`0`,
@@ -118,12 +138,25 @@ async function preparedOrUnbuildable(
  * naming the field.
  */
 function matchColumn(
-  collectionName: string,
+  rule: { collectionName: string; action: string },
   prepared: PreparedFilterCondition | null,
   schema: DynamicSchema,
   localizedCtx: LocalizedQueryContext | null
 ): SQL<number> {
+  const { collectionName } = rule;
   if (!prepared) return sql<number>`0`;
+  // A rule's filter on a field inside a component is refused as one that is
+  // not well formed, reported once and raised in development, as a read
+  // refuses it: it matches no entry, and no query runs on its path.
+  if (prepared.namesComponentFields) {
+    reportRuleFilterMisuse(
+      collectionName,
+      rule.action,
+      "collection",
+      FILTER_NAMES_A_COMPONENT_FIELD
+    );
+    return sql<number>`0`;
+  }
   let condition: ReturnType<PreparedFilterCondition["condition"]>;
   try {
     condition = prepared.condition(schema, localizedCtx);

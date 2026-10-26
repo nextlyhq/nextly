@@ -620,13 +620,15 @@ describePg(
       }
     }, 30_000);
 
-    it("completes a delete its rule's filter limits by a field-group value, inside a caller-owned transaction", async () => {
+    it("completes, refused, a delete its rule's filter limits by a field-group value, inside a caller-owned transaction", async () => {
       const adapter = await connectSingleConnection();
       let handle: TestNextly | undefined;
       try {
-        // The rule's filter names a field-group path, so matching the entry
+        // The rule's filter names a field-group path, so preparing the match
         // resolves that group's table: on a pooled read it would wait here for
-        // the one connection the transaction holds.
+        // the one connection the transaction holds. Such a filter is then
+        // refused as one that is not well formed, so the delete answers, and
+        // refuses, rather than hanging.
         const metaTitleIsMine = () =>
           ({
             "seo.metaTitle": { equals: "mine" },
@@ -673,9 +675,10 @@ describePg(
           15_000
         );
 
-        expect((result.data as { deleted?: boolean } | null)?.deleted).toBe(
-          true
-        );
+        // Refused in words: the caller may read the entry, and the filter
+        // matches nothing.
+        expect(result.success).toBe(false);
+        expect(result.statusCode).toBe(403);
       } finally {
         await handle?.destroy();
         for (const stmt of [
