@@ -57,6 +57,11 @@ const GERMAN = "german";
 const OVERVIEW_REFUSED = "overview-refused";
 /** Its publish rule refuses German; nothing else about it is refused. */
 const NOT_IN_GERMAN = "not-in-german";
+/**
+ * Has a Draft/Published lifecycle, and the reader may read and create in it
+ * but not publish: a copy of a published entry is created published.
+ */
+const PUBLISHED_COPY = "published-copy";
 
 interface Capabilities {
   isSuperAdmin: boolean;
@@ -178,6 +183,11 @@ describe.each(getConfiguredTestDialects())(
             access: { publish: ({ locale }) => locale !== "de" },
             fields: [text({ name: "title" })],
           }),
+          defineCollection({
+            slug: PUBLISHED_COPY,
+            status: true,
+            fields: [text({ name: "title" })],
+          }),
         ],
         singles: [
           defineSingle({ slug: "home", fields: [text({ name: "h" })] }),
@@ -237,6 +247,8 @@ describe.each(getConfiguredTestDialects())(
               idOf(`read-${NOT_IN_GERMAN}`),
               idOf(`update-${NOT_IN_GERMAN}`),
               idOf(`publish-${NOT_IN_GERMAN}`),
+              idOf(`read-${PUBLISHED_COPY}`),
+              idOf(`create-${PUBLISHED_COPY}`),
             ],
           },
         })
@@ -251,6 +263,11 @@ describe.each(getConfiguredTestDialects())(
         });
         entryIn[slug] = (created.item as { id: string }).id;
       }
+      const published = await t.nextly.create({
+        collection: PUBLISHED_COPY,
+        data: { title: "live", status: "published" },
+      });
+      entryIn[PUBLISHED_COPY] = (published.item as { id: string }).id;
       // A German translation, so publishing every language puts German live
       // and the publish rule is asked about it.
       await t.nextly.update({
@@ -338,6 +355,7 @@ describe.each(getConfiguredTestDialects())(
           GERMAN,
           OVERVIEW_REFUSED,
           NOT_IN_GERMAN,
+          PUBLISHED_COPY,
           "home",
         ].sort()
       );
@@ -591,6 +609,13 @@ describe.each(getConfiguredTestDialects())(
           german[GERMAN]!.duplicate as boolean,
         ],
         [
+          "a duplicate of a published entry, without publish",
+          await allowed(
+            send(reader, "POST", `${at(PUBLISHED_COPY)}/duplicate`)
+          ),
+          english[PUBLISHED_COPY]!.duplicate as boolean,
+        ],
+        [
           "publishing every language",
           await allowed(
             send(reader, "POST", `${at(NOT_IN_GERMAN)}/publish-all`)
@@ -607,6 +632,11 @@ describe.each(getConfiguredTestDialects())(
           "a duplicate, by a super-admin",
           await allowed(send(admin, "POST", `${at(GERMAN)}/duplicate`)),
           adminCells[GERMAN]!.duplicate as boolean,
+        ],
+        [
+          "a duplicate of a published entry, by a super-admin",
+          await allowed(send(admin, "POST", `${at(PUBLISHED_COPY)}/duplicate`)),
+          adminCells[PUBLISHED_COPY]!.duplicate as boolean,
         ],
         [
           "publishing every language, by a super-admin",

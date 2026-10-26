@@ -198,6 +198,9 @@ const ENTITIES = new Map<string, "collection" | "single">([
 const LANGUAGE_OF = (operation: string, sent: SentLanguage) =>
   requestLanguage({ method: operation, params: sentParams(sent, "") });
 
+/** No collection here has a Draft/Published lifecycle unless a case says so. */
+const NO_LIFECYCLE = () => false;
+
 function serviceFor(
   setup: "service" | "no-service",
   rule: Rule | undefined
@@ -279,7 +282,8 @@ const REQUEST_OF_CELL: Readonly<Record<string, readonly string[]>> = {
   createInDefaultLanguage: ["create"],
   updateInDefaultLanguage: ["update"],
   publishEveryLanguage: ["update", "publish"],
-  duplicate: ["create"],
+  // Reading the source and creating the copy; with no lifecycle, nothing more.
+  duplicate: ["read", "create"],
 };
 
 /** Each setup and rule the comparison is made under, and its service. */
@@ -312,7 +316,8 @@ describe("routeGateCapabilities", () => {
           caller,
           ENTITIES,
           registered.rbac,
-          LANGUAGE_OF
+          LANGUAGE_OF,
+          NO_LIFECYCLE
         );
         for (const { resource, action, answer } of cellsOf(capabilities)) {
           const rest = await restAllows(
@@ -343,7 +348,8 @@ describe("routeGateCapabilities", () => {
       { userId: "editor" },
       ENTITIES,
       registered.rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(Object.keys(entities[POSTS] ?? {}).sort()).toEqual([
       "create",
@@ -382,6 +388,28 @@ describe("routeGateCapabilities", () => {
     });
   });
 
+  it("asks the publish check for a duplicate where the collection has a lifecycle", async () => {
+    // A copy of a published entry is created published, so a collection with
+    // a lifecycle asks publish of every duplicate. The editor may read and
+    // create posts, and holds no publish.
+    registered.rbac = new RBACAccessControlService();
+    const answer = (hasLifecycle: (slug: string) => boolean) =>
+      routeGateCapabilities(
+        { userId: "editor" },
+        ENTITIES,
+        registered.rbac,
+        LANGUAGE_OF,
+        hasLifecycle
+      );
+    expect(
+      (await answer(slug => slug === POSTS)).entities[POSTS]
+    ).toMatchObject({ duplicate: false, createInDefaultLanguage: true });
+    // POPULATION CONTROL: without a lifecycle the same caller may duplicate.
+    expect((await answer(NO_LIFECYCLE)).entities[POSTS]).toMatchObject({
+      duplicate: true,
+    });
+  });
+
   it("refuses a publish to a caller who may publish but not update", async () => {
     // A REST publish is a status change sent through the entry's update
     // route, which refuses this caller before the publish is checked.
@@ -390,7 +418,8 @@ describe("routeGateCapabilities", () => {
       { userId: "publisher-only" },
       ENTITIES,
       registered.rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(entities[POSTS]).toMatchObject({ publish: false, update: false });
     // POPULATION CONTROL: the publish gate alone allows this caller.
@@ -416,7 +445,8 @@ describe("routeGateCapabilities", () => {
       { userId: "viewer" },
       ENTITIES,
       rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(entities[POSTS]).toMatchObject({
       update: false,
@@ -431,7 +461,8 @@ describe("routeGateCapabilities", () => {
       { userId: "publisher" },
       ENTITIES,
       rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(publishRule).toHaveBeenCalled();
   });
@@ -447,7 +478,8 @@ describe("routeGateCapabilities", () => {
         { userId: "editor" },
         ENTITIES,
         registered.rbac,
-        LANGUAGE_OF
+        LANGUAGE_OF,
+        NO_LIFECYCLE
       )
     );
     expect(bySubject.get(`read-${POSTS}`)).toContain("no-service");
@@ -473,7 +505,8 @@ describe("routeGateCapabilities", () => {
         { userId: "grants-unreadable" },
         ENTITIES,
         registered.rbac,
-        LANGUAGE_OF
+        LANGUAGE_OF,
+        NO_LIFECYCLE
       )
     ).rejects.toThrow("grants unreadable");
   });
@@ -490,7 +523,8 @@ describe("routeGateCapabilities", () => {
         { userId: "grants-unreadable" },
         ENTITIES,
         registered.rbac,
-        LANGUAGE_OF
+        LANGUAGE_OF,
+        NO_LIFECYCLE
       )
     ).rejects.toThrow("grants unreadable");
     expect(hasPermission).not.toHaveBeenCalled();
@@ -502,7 +536,8 @@ describe("routeGateCapabilities", () => {
       { userId: "admin" },
       ENTITIES,
       registered.rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(admin.isSuperAdmin).toBe(true);
     expect(admin.entities[POSTS]).toMatchObject({ read: true, delete: true });
@@ -512,7 +547,8 @@ describe("routeGateCapabilities", () => {
       REQUESTS["key-with"].caller,
       ENTITIES,
       registered.rbac,
-      LANGUAGE_OF
+      LANGUAGE_OF,
+      NO_LIFECYCLE
     );
     expect(keyed.isSuperAdmin).toBe(false);
 
@@ -524,7 +560,8 @@ describe("routeGateCapabilities", () => {
         { userId: "roles-unreadable" },
         ENTITIES,
         registered.rbac,
-        LANGUAGE_OF
+        LANGUAGE_OF,
+        NO_LIFECYCLE
       )
     ).rejects.toThrow("roles unreadable");
   });

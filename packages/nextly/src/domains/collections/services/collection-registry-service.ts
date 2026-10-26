@@ -178,6 +178,18 @@ export class CollectionRegistryService extends BaseRegistryService<
     return records.map(({ slug, labels }) => ({ slug, labels }));
   }
 
+  /**
+   * The slugs of every collection with a Draft/Published lifecycle, read
+   * without the rest of their records: what a decision about publishing
+   * across collections needs.
+   */
+  async getSlugsWithStatus(): Promise<Set<string>> {
+    const records = await this.getAllRecordsWithColumns(["status"]);
+    return new Set(
+      records.filter(({ status }) => status === true).map(({ slug }) => slug)
+    );
+  }
+
   async getAllCollections(
     options?: ListCollectionsOptions
   ): Promise<DynamicCollectionRecord[]> {

@@ -201,6 +201,14 @@ const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
  *   update sent with no language, which writes the default one;
  * - `duplicate`: a copy of an entry, written in the default language from
  *   what a read of the source shows there, its fallbacks included.
+ *
+ * A cell answers for every document of its collection, while two of these
+ * requests depend on the document: publishing every language asks the
+ * publish rule only for the languages going live, and a copy of a published
+ * entry is created published. Both cells take the strict side, so the answer
+ * never offers what the route might refuse for some document:
+ * `publishEveryLanguage` asks every configured language, and `duplicate` asks
+ * publish as well wherever the collection has a Draft/Published lifecycle.
  */
 type CollectionOperationCell =
   | "readTranslations"
@@ -299,7 +307,7 @@ interface OperationCell {
 const OPERATION_CELLS: {
   readonly collection: Readonly<
     Record<
-      Exclude<CollectionOperationCell, "publishEveryLanguage">,
+      Exclude<CollectionOperationCell, "publishEveryLanguage" | "duplicate">,
       OperationCell
     >
   >;
@@ -326,11 +334,6 @@ const OPERATION_CELLS: {
     updateInDefaultLanguage: {
       action: "update",
       operation: "updateEntry",
-      sent: "none",
-    },
-    duplicate: {
-      action: "create",
-      operation: "duplicateEntry",
       sent: "none",
     },
   },
@@ -378,9 +381,12 @@ export async function routeGateCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
-  languageOf: LanguageOf
+  languageOf: LanguageOf,
+  /** Whether a collection has a Draft/Published lifecycle. */
+  hasLifecycle: (slug: string) => boolean
 ): Promise<RouteCapabilities> {
-  const answer = () => entityCapabilities(caller, entities, rules, languageOf);
+  const answer = () =>
+    entityCapabilities(caller, entities, rules, languageOf, hasLifecycle);
   // A key never carries super-admin authority through the gates.
   if (caller.key) return { isSuperAdmin: false, entities: await answer() };
   return withHeldPermissions(caller.userId, async held => ({
@@ -399,7 +405,8 @@ async function entityCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
-  languageOf: LanguageOf
+  languageOf: LanguageOf,
+  hasLifecycle: (slug: string) => boolean
 ): Promise<RouteCapabilities["entities"]> {
   const byEntity: Record<string, EntityCapabilities> = {};
   for (const [slug, kind] of entities) {
@@ -432,9 +439,40 @@ async function entityCapabilities(
       rules,
       languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none")
     );
+    if (kind === "collection") {
+      answered.duplicate = await duplicates(
+        caller,
+        slug,
+        rules,
+        languageOf("duplicateEntry", "none"),
+        hasLifecycle(slug)
+      );
+    }
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
   return byEntity;
+}
+
+/**
+ * Whether `caller` may copy an entry of `resource`, as that request is
+ * judged: a read of the source and a create, both in the default language and
+ * its fallbacks. A copy of a published entry is created published, so where
+ * the collection has a lifecycle the publish check is asked too, for every
+ * document, whatever the one being copied is.
+ */
+async function duplicates(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  language: RuleLanguage,
+  hasLifecycle: boolean
+): Promise<boolean> {
+  return withRuleLanguage(language, async () => {
+    for (const action of ["read", "create"] as const) {
+      if (!(await capability(caller, action, resource, rules))) return false;
+    }
+    return !hasLifecycle || capability(caller, "publish", resource, rules);
+  });
 }
 
 /**
