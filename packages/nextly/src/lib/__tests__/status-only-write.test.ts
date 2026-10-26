@@ -48,6 +48,15 @@ describe("isStatusOnlyWrite", () => {
     );
   });
 
+  it("fails for a body whose status only its prototype supplies", () => {
+    // Not a key the body names: the write reads only its own keys.
+    const inherited = Object.create({ status: "published" }) as Record<
+      string,
+      unknown
+    >;
+    expect(isStatusOnlyWrite(inherited, "collection")).toBe(false);
+  });
+
   it("fails for a body that names no status", () => {
     expect(isStatusOnlyWrite({}, "collection")).toBe(false);
     expect(isStatusOnlyWrite({ id: "e1" }, "collection")).toBe(false);

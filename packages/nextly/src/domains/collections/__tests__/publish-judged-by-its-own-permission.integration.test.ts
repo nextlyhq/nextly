@@ -58,6 +58,8 @@ let current: TestNextly | undefined;
 let services: PluginServices | undefined;
 /** The data each update's hooks were handed, in order. */
 let handedToHooks: unknown[] = [];
+/** How often each counted rule was asked. */
+let ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
 
 afterEach(async () => {
   resetSessionStandingForTests();
@@ -65,6 +67,7 @@ afterEach(async () => {
   current = undefined;
   services = undefined;
   handedToHooks = [];
+  ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
   // Single hooks register into the global registry.
   resetHookRegistry();
 });
@@ -106,7 +109,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         // An update rule answering a filter, which no write applies: an edit
         // is refused, whoever asks.
         access: {
-          update: (() => ({ title: { equals: "never" } })) as never,
+          update: (() => {
+            ruleAsks.filteredUpdate += 1;
+            return { title: { equals: "never" } };
+          }) as never,
+          publish: () => {
+            ruleAsks.filteredPublish += 1;
+            return true;
+          },
         },
         fields: [text({ name: "title" })],
       }),
@@ -115,6 +125,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineSingle({
         slug: HOME,
         status: true,
+        // Allows, and counts how often it is asked.
+        access: {
+          publish: () => {
+            ruleAsks.homePublish += 1;
+            return true;
+          },
+        },
         hooks: {
           beforeChange: [
             context => {
@@ -656,6 +673,65 @@ describe.each(getConfiguredTestDialects())(
       // The control: one who may update is told nothing moves.
       expect((await publishAll(EDITOR)).success).toBe(true);
       expect((await stored(NOTES, id)).status).toBe("open");
+    });
+
+    it("asks no update rule of a batch whose rows change only the status", async () => {
+      await boot(dialect);
+      const a = await draft(FILTERED, "a");
+      const b = await draft(FILTERED, "b");
+
+      // Each row is judged by the gate its status names; the update rule,
+      // which judges none of them, is not asked.
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [
+          { id: a, data: { status: "published" } },
+          { id: b, data: { status: "published" } },
+        ],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(2);
+      expect(ruleAsks.filteredUpdate).toBe(0);
+    });
+
+    it("asks an entry's publish rule once of a status-only write, its hooks run between", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+
+      await as(MAINTAINER).update({
+        collection: FILTERED,
+        id,
+        data: { status: "published" },
+      } as never);
+
+      expect((await stored(FILTERED, id)).status).toBe("published");
+      expect(ruleAsks.filteredPublish).toBe(1);
+    });
+
+    it("asks a Single's publish rule once of a status-only write, its hooks run between", async () => {
+      await boot(dialect);
+      await trusted().updateSingle({
+        slug: HOME,
+        data: { headline: "h", status: "draft" },
+      } as never);
+      ruleAsks.homePublish = 0;
+      const singles = current!.getService("singleEntryService") as unknown as {
+        update: (
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ) => Promise<{ success: boolean }>;
+      };
+
+      const published = await singles.update(
+        HOME,
+        { status: "published" },
+        { user: { id: PUBLISHER }, overrideAccess: false }
+      );
+
+      expect(published.success).toBe(true);
+      expect(ruleAsks.homePublish).toBe(1);
     });
   }
 );

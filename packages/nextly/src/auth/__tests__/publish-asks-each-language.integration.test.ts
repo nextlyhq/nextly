@@ -1315,6 +1315,23 @@ describe.each(getConfiguredTestDialects())(
       expect(spy).toHaveBeenCalled();
     });
 
+    it("refuses a caller with no user before the languages going live are read", async () => {
+      // No one unsigned ever publishes, so the grant fails closed for them.
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+      });
+
+      expect(refused.success).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
     it("asks the publish grant of a Single's every-language write before the languages going live are read", async () => {
       const { t, spy } = await beforePublishWork(dialect, [
         SingleMutationService.prototype,
