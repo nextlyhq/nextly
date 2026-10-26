@@ -67,6 +67,7 @@ import {
   QUEUED_EMAIL_PRUNE_JOB,
 } from "./queued-email-job";
 import type { EmailService } from "./services/email-service";
+import type { QueuedErasureDb } from "./queued-erasure";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
@@ -158,19 +159,8 @@ function emailQueueRecipientsTableFor(
 }
 
 /** The Drizzle surface the queue needs. */
-interface QueueDb {
-  select(fields?: Record<string, unknown>): {
-    from(table: unknown): {
-      where(condition: unknown): {
-        limit(rows: number): PromiseLike<unknown[]>;
-      };
-    };
-  };
+interface QueueDb extends QueuedErasureDb {
   insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };
-  update(table: unknown): {
-    set(values: unknown): { where(condition: unknown): PromiseLike<unknown> };
-  };
-  delete(table: unknown): { where(condition: unknown): PromiseLike<unknown> };
 }
 
 // ============================================================
@@ -890,23 +880,36 @@ export async function resealQueuedMessages(
       .limit(RESEAL_BATCH)) as Array<{ id: string; message: string }>;
     if (rows.length === 0) return result;
     for (const row of rows) {
-      const next = resealedForm(row.message, row.id, secrets);
-      // Parsed before anything is written: a message that opens but does not
-      // parse is damaged, counted as unreadable, and the scan goes on to the
-      // rest, which would otherwise stay sealed under the retired secret.
-      const parsed = next === undefined ? undefined : parsedMessage(next.text);
-      if (next !== undefined && parsed === undefined) {
-        result.unreadable += 1;
-      } else if (next !== undefined && parsed !== undefined) {
-        if (await resealOne(adapter, row, next, parsed)) result.resealed += 1;
-      } else if (
-        openQueuedMessage(row.message, row.id, secrets) === undefined
-      ) {
-        result.unreadable += 1;
-      }
+      const outcome = await resealRow(adapter, row, secrets);
+      if (outcome !== "unchanged") result[outcome] += 1;
     }
     after = rows[rows.length - 1].id;
   }
+}
+
+/**
+ * What re-sealing does to one held message: seals it again when a retired
+ * secret sealed it, or reports it unreadable when no configured secret opens
+ * it or it opens but does not parse. Parsed before anything is written, so a
+ * damaged message is counted and the scan goes on to the rest, which would
+ * otherwise stay sealed under the retired secret.
+ */
+async function resealRow(
+  adapter: DrizzleAdapter,
+  row: { id: string; message: string },
+  secrets: readonly string[]
+): Promise<"resealed" | "unreadable" | "unchanged"> {
+  const next = resealedForm(row.message, row.id, secrets);
+  if (next === undefined) {
+    return openQueuedMessage(row.message, row.id, secrets) === undefined
+      ? "unreadable"
+      : "unchanged";
+  }
+  const parsed = parsedMessage(next.text);
+  if (parsed === undefined) return "unreadable";
+  return (await resealOne(adapter, row, next, parsed))
+    ? "resealed"
+    : "unchanged";
 }
 
 /**

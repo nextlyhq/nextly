@@ -173,6 +173,19 @@ export async function eraseRecipientDeliveries(
   address: string
 ): Promise<void> {
   const erased = inArray(deliveries.recipientHash, recipientDigests(address));
+  await eraseSelected(db, deliveries, erased, address);
+}
+
+/**
+ * Erase the delivery rows `erased` selects, as every erasure by address does,
+ * and cancel and clear the queued email to `address` that names nobody.
+ */
+async function eraseSelected(
+  db: RecipientErasureCapableDb,
+  deliveries: ErasableDeliveriesTable,
+  erased: SQL | undefined,
+  address: string
+): Promise<void> {
   await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
@@ -217,12 +230,7 @@ export async function eraseUnnamedRecipientDeliveries(
     inArray(deliveries.recipientHash, recipientDigests(address)),
     isNull(deliveries.principalKind)
   );
-  await clearSendKeyDigests(db, deliveries, erased);
-  await db
-    .update(deliveries)
-    .set({ recipientHash: ERASED_RECIPIENT_HASH })
-    .where(erased);
-  await cancelQueuedEmailsToAddress(db, deliveries, address);
+  await eraseSelected(db, deliveries, erased, address);
 }
 
 /**

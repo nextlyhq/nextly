@@ -22,6 +22,8 @@
 import type { Column, SQL, Table } from "drizzle-orm";
 import { and, eq, inArray, isNull, ne, or } from "drizzle-orm";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { NextlyError } from "../../errors";
 import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
@@ -32,11 +34,16 @@ import { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
 import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
 import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
 import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
+import {
+  type RowLockStrength,
+  rowLockStrength,
+} from "../../shared/lib/row-lock";
 
 import { recipientDigests } from "./delivery-record";
 
-/** The queue's two tables, as one dialect defines them. */
+/** The queue's two tables, as one dialect defines them, and that dialect. */
 export interface EmailQueueTables {
+  dialect: SupportedDialect;
   queue: Table & {
     id: Column;
     state: Column;
@@ -58,7 +65,7 @@ export interface QueuedErasureDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): PromiseLike<unknown[]>;
+        limit(count: number): MaybeLockableRead<unknown[]>;
       };
       /** Every Drizzle handle has it; optional so a narrower one can be passed. */
       innerJoin?(
@@ -66,7 +73,7 @@ export interface QueuedErasureDb {
         on: unknown
       ): {
         where(condition: unknown): {
-          limit(count: number): PromiseLike<unknown[]>;
+          limit(count: number): MaybeLockableRead<unknown[]>;
         };
       };
     };
@@ -76,6 +83,33 @@ export interface QueuedErasureDb {
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
+
+/**
+ * `query` under the lock a deletion takes: an erasure reads the queued emails
+ * it cancels as they are committed, not as an older snapshot had them. On
+ * MySQL a plain read inside a transaction answers from the snapshot its first
+ * read took, which can predate a queued email the deletion's lock just waited
+ * for. SQLite's writer holds the database, and takes none.
+ */
+function locked<R>(
+  tables: EmailQueueTables,
+  query: MaybeLockableRead<R>
+): PromiseLike<R> {
+  const strength = rowLockStrength({ dialect: tables.dialect }, "exclusive");
+  if (strength === null) return query;
+  if (!query.for) {
+    // A handle that cannot lock would read the snapshot this guards against.
+    throw NextlyError.internal({
+      logContext: { reason: "queued-email erasure needs a locking read" },
+    });
+  }
+  return query.for(strength);
+}
+
+/** A read that can take a row lock where the dialect has one (not SQLite's). */
+type MaybeLockableRead<R> = PromiseLike<R> & {
+  for?(strength: RowLockStrength): Promise<R>;
+};
 
 /** Queued emails read per statement, inside SQLite's bind-parameter limit. */
 const BATCH = 500;
@@ -88,13 +122,25 @@ export function queueTablesBeside(
   deliveries: unknown
 ): EmailQueueTables | undefined {
   if (deliveries === emailDeliveriesPg) {
-    return { queue: emailQueuePg, recipients: emailQueueRecipientsPg };
+    return {
+      dialect: "postgresql",
+      queue: emailQueuePg,
+      recipients: emailQueueRecipientsPg,
+    };
   }
   if (deliveries === emailDeliveriesMysql) {
-    return { queue: emailQueueMysql, recipients: emailQueueRecipientsMysql };
+    return {
+      dialect: "mysql",
+      queue: emailQueueMysql,
+      recipients: emailQueueRecipientsMysql,
+    };
   }
   if (deliveries === emailDeliveriesSqlite) {
-    return { queue: emailQueueSqlite, recipients: emailQueueRecipientsSqlite };
+    return {
+      dialect: "sqlite",
+      queue: emailQueueSqlite,
+      recipients: emailQueueRecipientsSqlite,
+    };
   }
   return undefined;
 }
@@ -140,11 +186,10 @@ export async function cancelQueuedEmailsOf(
   );
   // Each batch renames what it read, so the next reads the rest.
   for (;;) {
-    const rows = (await db
-      .select({ id: queue.id })
-      .from(queue)
-      .where(naming)
-      .limit(BATCH)) as Array<{ id: string }>;
+    const rows = (await locked(
+      tables,
+      db.select({ id: queue.id }).from(queue).where(naming).limit(BATCH)
+    )) as Array<{ id: string }>;
     if (rows.length === 0) return;
     await cancelAndClear(
       db,
@@ -181,10 +226,13 @@ export async function cancelQueuedEmailsTo(
         logContext: { reason: "queued-email erasure needs a joining handle" },
       });
     }
-    const rows = (await from
-      .innerJoin(queue, eq(queue.id, recipients.queuedId))
-      .where(reaches)
-      .limit(BATCH)) as Array<{ queuedId: string }>;
+    const rows = (await locked(
+      tables,
+      from
+        .innerJoin(queue, eq(queue.id, recipients.queuedId))
+        .where(reaches)
+        .limit(BATCH)
+    )) as Array<{ queuedId: string }>;
     if (rows.length === 0) return;
     await cancelAndClear(
       db,
