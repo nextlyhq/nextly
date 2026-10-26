@@ -41,6 +41,13 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  countPasswordsStoredAsGiven,
+  hashPasswordsStoredAsGiven,
+} from "../../../domains/field-groups/stored-plain-passwords";
+import { describeError } from "../../../errors";
+import { consoleLogger } from "../../../services/shared";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runUpgrade, type UpgradeAdapter } from "../upgrade";
 
 type Doc = Record<string, unknown>;
@@ -353,6 +360,150 @@ describe.each(getConfiguredTestDialects())(
 
       expect(lines.join("\n")).toContain("Already upgraded. Nothing to do.");
       expect(await t.adapter.select<Doc>("dc_upentries", {})).toEqual(before);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the upgrade's password step, on the rows it rewrites (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let trusted: Nextly;
+    const ids: string[] = [];
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        collections: [
+          defineCollection({
+            slug: "upbulk",
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "own",
+                fields: [text({ name: "a" }), password({ name: "pin" })],
+              }),
+            ],
+          }),
+        ],
+      } as never);
+      trusted = new Nextly();
+      for (let i = 0; i < 5; i++) {
+        const { item } = await trusted.create({
+          collection: "upbulk",
+          data: { title: `b${String(i)}` },
+        } as never);
+        ids.push(String(item.id));
+      }
+    }, 180_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    /** Each row's `own`, stored as an earlier release left it. */
+    async function seedPlain(tag: string): Promise<void> {
+      for (const [i, id] of ids.entries()) {
+        const value = { a: String(i), pin: `${tag}-${String(i)}` };
+        await t.adapter.update(
+          "dc_upbulk",
+          { own: dialect === "sqlite" ? JSON.stringify(value) : value },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+      }
+    }
+
+    const source = (pageSize?: number) => ({
+      adapter: t.adapter,
+      registry: installRegistryResolver(t.adapter),
+      logger: consoleLogger,
+      pageSize,
+    });
+
+    it("pages through a table by its key, and rewrites every row", async () => {
+      await seedPlain("page");
+      const offsets: unknown[] = [];
+      const select = t.adapter.select.bind(t.adapter);
+      t.adapter.select = ((table: string, options?: { offset?: unknown }) => {
+        if (table === "dc_upbulk") offsets.push(options?.offset);
+        return select(table, options as never);
+      }) as typeof t.adapter.select;
+      try {
+        const counted = await countPasswordsStoredAsGiven(source(2));
+        expect(counted).toEqual([
+          { kind: "collection", slug: "upbulk", count: 5 },
+        ]);
+        // Paged by key, so a later page never walks past the earlier ones.
+        expect(offsets.length).toBeGreaterThan(2);
+        expect(offsets.every(offset => offset === undefined)).toBe(true);
+
+        await hashPasswordsStoredAsGiven(source(2));
+      } finally {
+        t.adapter.select = select;
+      }
+      for (const [i, id] of ids.entries()) {
+        const [row] = await t.adapter.select<Doc>("dc_upbulk", {
+          where: { and: [{ column: "id", op: "=", value: id }] },
+        });
+        const pin = (parsed(row?.own) as Doc).pin;
+        expect(await verifyPassword(`page-${String(i)}`, pin as string)).toBe(
+          true
+        );
+      }
+    });
+
+    it("locks each row while it rewrites it", async () => {
+      await seedPlain("lock");
+      const reads: unknown[] = [];
+      const transaction = t.adapter.transaction.bind(t.adapter);
+      t.adapter.transaction = ((
+        work: (tx: never) => Promise<unknown>,
+        options?: unknown
+      ) =>
+        transaction(tx => {
+          const select = tx.select.bind(tx);
+          tx.select = ((table: string, opts?: { forUpdate?: unknown }) => {
+            reads.push(opts?.forUpdate);
+            return select(table, opts as never);
+          }) as typeof tx.select;
+          return work(tx as never);
+        }, options as never)) as typeof t.adapter.transaction;
+      try {
+        await hashPasswordsStoredAsGiven(source());
+      } finally {
+        t.adapter.transaction = transaction;
+      }
+      expect(reads.length).toBe(ids.length);
+      expect(reads.every(lock => lock === true)).toBe(true);
+    });
+
+    it("reports a write it could not make without any password in it", async () => {
+      await seedPlain("fail");
+      const transaction = t.adapter.transaction.bind(t.adapter);
+      // A driver's error can quote the statement's parameters.
+      t.adapter.transaction = ((
+        work: (tx: never) => Promise<unknown>,
+        options?: unknown
+      ) =>
+        transaction(tx => {
+          tx.update = ((_table: string, data: unknown) =>
+            Promise.reject(
+              new Error(`update failed with params ${JSON.stringify(data)}`)
+            )) as typeof tx.update;
+          return work(tx as never);
+        }, options as never)) as typeof t.adapter.transaction;
+      let failure: unknown;
+      try {
+        await hashPasswordsStoredAsGiven(source());
+      } catch (error) {
+        failure = error;
+      } finally {
+        t.adapter.transaction = transaction;
+      }
+      expect(failure).toBeDefined();
+      const reported = `${describeError(failure)} ${JSON.stringify(failure)}`;
+      expect(reported).not.toContain("fail-0");
+      expect(reported).not.toMatch(/\$2[aby]\$/);
     });
   }
 );
