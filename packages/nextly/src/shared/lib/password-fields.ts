@@ -529,22 +529,42 @@ function detachForReading(
  */
 export function reachesPasswordField(
   fields: readonly NamedField[],
+  reach: FieldGroupReach
+): boolean {
+  return reachesFrom(fields, reach, new Set(), true);
+}
+
+/**
+ * {@link reachesPasswordField} at one level, following field groups where the
+ * walk does: one placed directly on the entry is left to its own read, as the
+ * walk leaves it, and one held inline that `reach` has no fields for counts,
+ * since the strip withholds it and so has to run.
+ */
+function reachesFrom(
+  fields: readonly NamedField[],
   reach: FieldGroupReach,
-  seen: ReadonlySet<string> = new Set()
+  seen: ReadonlySet<string>,
+  atEntry: boolean
 ): boolean {
   return fields.some(field => {
     if (field.type === "password") return true;
-    if (field.fields && reachesPasswordField(field.fields, reach, seen)) {
+    // A layout container keeps its fields on this level; a group or
+    // repeater holds a level of its own.
+    if (
+      field.fields &&
+      reachesFrom(field.fields, reach, seen, atEntry && !field.name)
+    ) {
       return true;
     }
     const { single, many } = extractFieldGroupReferences(field);
+    if (atEntry && reach.direct !== true) return false;
     const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
     return slugs.some(slug => {
       if (seen.has(slug)) return false;
       const inner = reach.fieldsOf(slug);
       return (
-        inner !== undefined &&
-        reachesPasswordField(inner, reach, new Set([...seen, slug]))
+        inner === undefined ||
+        reachesFrom(inner, reach, new Set([...seen, slug]), false)
       );
     });
   });
