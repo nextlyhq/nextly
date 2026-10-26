@@ -178,7 +178,7 @@ describe.each(getConfiguredTestDialects())(
           and: Object.entries(where).map(([column, value]) => ({
             column,
             op: "=" as const,
-            value,
+            value: value as string,
           })),
         },
       });
@@ -202,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
           and: Object.entries(where).map(([name, v]) => ({
             column: name,
             op: "=" as const,
-            value: v,
+            value: v as string,
           })),
         }
       );
