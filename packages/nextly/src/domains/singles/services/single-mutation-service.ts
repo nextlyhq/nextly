@@ -1236,21 +1236,25 @@ export class SingleMutationService extends BaseService {
       // The Single's row alone carries no field-group instance, so what an
       // update removes is read here or judged against nothing: in the write's
       // own language, and in each other one, since a removal removes all.
-      const storedFieldGroupsIn = (locale?: string) =>
+      // Read on `executor` when one is given: inside the write's transaction,
+      // a pooled read would wait on the connection it holds.
+      const storedFieldGroupsIn = (locale?: string, executor?: unknown) =>
         withStoredFieldGroups({
           stored: existingDeserialized,
           parentTable: singleMeta.tableName,
           fields: fieldConfigs,
           source: this.fieldGroupDataService,
           access: singleWriteAccess,
+          executor,
           locale,
         });
+      const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
       await keepDeniedAtStoredOnUpdate({
         data: currentData,
         stored: await storedFieldGroupsIn(options.locale),
         storedIn: {
-          locales: this.localization?.locales.map(l => l.code) ?? [],
-          read: storedFieldGroupsIn,
+          locales: storedLocales,
+          read: locale => storedFieldGroupsIn(locale),
         },
         fields: fieldConfigs,
         source: this.fieldGroupDataService,
@@ -3100,6 +3104,13 @@ export class SingleMutationService extends BaseService {
                     options.authenticatedScope,
                     tx.getDrizzle()
                   ),
+                },
+                // What a stored instance holds in each language: a held draft
+                // writes no translation, so another language's values are the
+                // live rows'.
+                storedIn: {
+                  locales: storedLocales,
+                  read: locale => storedFieldGroupsIn(locale, tx.getDrizzle()),
                 },
               });
               // The held component values are judged as the publish would
