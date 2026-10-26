@@ -34,14 +34,14 @@
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "drizzle-orm": "1.0.0-rc.4",
-    "mysql2": "^3.23.1"
+    "mysql2": "^3.24.6"
   },
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
-    "mysql2": "^3.23.1",
-    "tsdown": "^0.23.1",
+    "mysql2": "^3.24.6",
+    "tsdown": "^0.23.2",
     "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
