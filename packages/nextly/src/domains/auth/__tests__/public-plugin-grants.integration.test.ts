@@ -169,11 +169,13 @@ describe.each(getConfiguredTestDialects())(
         resource: "tickets",
       });
       const meta = nextly.getService("metaService");
-      const recorded = (await meta.get<string[]>("public-role-granted")) ?? [];
-      await meta.set(
-        "public-role-granted",
-        recorded.filter(id => id !== String(permission.id))
+      const recorded = await meta.get<{ role: string; granted: string[] }>(
+        "public-role-granted"
       );
+      await meta.set("public-role-granted", {
+        role: recorded!.role,
+        granted: recorded!.granted.filter(id => id !== String(permission.id)),
+      });
 
       await seedPermissionsAndRolePresets();
       expect(await publicHolds(nextly)).toContain("create-tickets");
