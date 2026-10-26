@@ -58,8 +58,9 @@ const OVERVIEW_REFUSED = "overview-refused";
 /** Its publish rule refuses German; nothing else about it is refused. */
 const NOT_IN_GERMAN = "not-in-german";
 /**
- * Has a Draft/Published lifecycle, and the reader may read and create in it
- * but not publish: a copy of a published entry is created published.
+ * Has a Draft/Published lifecycle, and the reader may read and create in it.
+ * A copy reads its source published only, so a draft never published is not
+ * found, whoever asks.
  */
 const PUBLISHED_COPY = "published-copy";
 
@@ -263,11 +264,11 @@ describe.each(getConfiguredTestDialects())(
         });
         entryIn[slug] = (created.item as { id: string }).id;
       }
-      const published = await t.nextly.create({
+      const draft = await t.nextly.create({
         collection: PUBLISHED_COPY,
-        data: { title: "live", status: "published" },
+        data: { title: "never published", status: "draft" },
       });
-      entryIn[PUBLISHED_COPY] = (published.item as { id: string }).id;
+      entryIn[PUBLISHED_COPY] = (draft.item as { id: string }).id;
       // A German translation, so publishing every language puts German live
       // and the publish rule is asked about it.
       await t.nextly.update({
@@ -609,7 +610,7 @@ describe.each(getConfiguredTestDialects())(
           german[GERMAN]!.duplicate as boolean,
         ],
         [
-          "a duplicate of a published entry, without publish",
+          "a duplicate of a draft never published",
           await allowed(
             send(reader, "POST", `${at(PUBLISHED_COPY)}/duplicate`)
           ),
@@ -634,7 +635,7 @@ describe.each(getConfiguredTestDialects())(
           adminCells[GERMAN]!.duplicate as boolean,
         ],
         [
-          "a duplicate of a published entry, by a super-admin",
+          "a duplicate of a draft never published, by a super-admin",
           await allowed(send(admin, "POST", `${at(PUBLISHED_COPY)}/duplicate`)),
           adminCells[PUBLISHED_COPY]!.duplicate as boolean,
         ],

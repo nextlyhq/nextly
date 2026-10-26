@@ -204,11 +204,12 @@ const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
  *
  * A cell answers for every document of its collection, while two of these
  * requests depend on the document: publishing every language asks the
- * publish rule only for the languages going live, and a copy of a published
- * entry is created published. Both cells take the strict side, so the answer
- * never offers what the route might refuse for some document:
- * `publishEveryLanguage` asks every configured language, and `duplicate` asks
- * publish as well wherever the collection has a Draft/Published lifecycle.
+ * publish rule only for the languages going live, and a copy reads its source
+ * as a visitor would see it, so a draft that was never published is not found.
+ * Both cells take the strict side, so the answer never offers what the route
+ * might refuse for some document: `publishEveryLanguage` asks every
+ * configured language, and `duplicate` is never offered where the collection
+ * has a Draft/Published lifecycle.
  */
 type CollectionOperationCell =
   | "readTranslations"
@@ -454,11 +455,11 @@ async function entityCapabilities(
 }
 
 /**
- * Whether `caller` may copy an entry of `resource`, as that request is
+ * Whether `caller` may copy any entry of `resource`, as that request is
  * judged: a read of the source and a create, both in the default language and
- * its fallbacks. A copy of a published entry is created published, so where
- * the collection has a lifecycle the publish check is asked too, for every
- * document, whatever the one being copied is.
+ * its fallbacks. Where the collection has a lifecycle the route reads the
+ * source published only, so a draft never published is not found whoever
+ * asks: no answer for every document can be yes there.
  */
 async function duplicates(
   caller: GateCaller,
@@ -467,11 +468,12 @@ async function duplicates(
   language: RuleLanguage,
   hasLifecycle: boolean
 ): Promise<boolean> {
+  if (hasLifecycle) return false;
   return withRuleLanguage(language, async () => {
     for (const action of ["read", "create"] as const) {
       if (!(await capability(caller, action, resource, rules))) return false;
     }
-    return !hasLifecycle || capability(caller, "publish", resource, rules);
+    return true;
   });
 }
 

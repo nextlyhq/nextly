@@ -388,14 +388,14 @@ describe("routeGateCapabilities", () => {
     });
   });
 
-  it("asks the publish check for a duplicate where the collection has a lifecycle", async () => {
-    // A copy of a published entry is created published, so a collection with
-    // a lifecycle asks publish of every duplicate. The editor may read and
-    // create posts, and holds no publish.
+  it("never offers a duplicate where the collection has a lifecycle", async () => {
+    // The route reads a copy's source published only, so a draft never
+    // published is not found whoever asks: even a super-admin, who passes
+    // every check, cannot be told yes for every document.
     registered.rbac = new RBACAccessControlService();
     const answer = (hasLifecycle: (slug: string) => boolean) =>
       routeGateCapabilities(
-        { userId: "editor" },
+        { userId: "admin" },
         ENTITIES,
         registered.rbac,
         LANGUAGE_OF,
