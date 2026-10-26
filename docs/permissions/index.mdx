@@ -115,9 +115,10 @@ public default, and the rule's filter is added to whatever the caller asked for.
 This is not finished. In this release a list, its total, a count, and the group and
 timeseries reads made through the Direct API or a plugin service apply the filter, as do a
 REST list and count of a collection's entries, and a page the website resolves by its slug.
-Every other read refuses a caller whose rule answers with a filter, as it did before: a read
-by id, every other REST route, and relationship population. The rule's type still says it
-returns a boolean.
+A read by id, through the Direct API, a plugin service or REST, reads an entry the filter
+matches and answers one it does not match exactly as an entry that does not exist. Every
+other read refuses a caller whose rule answers with a filter, as it did before: every other
+REST route, and relationship population. The rule's type still says it returns a boolean.
 
 A rule's filter can't use `near` or `within` yet, nor the keys a list's `where` reserves
 for a request's own view: `_translated`, `_pendingChange` and `_inRelease`. A rule whose
