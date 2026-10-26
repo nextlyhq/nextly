@@ -28,8 +28,10 @@ import { recordingDeviations } from "./access/deviations";
 import {
   routeGateCapabilities,
   routeGateVerdict,
+  sentParams,
   type GateCaller,
   type RouteCapabilities,
+  type SentLanguage,
 } from "./access/route-gate-adapters";
 import {
   apiKeyScopeFrom,
@@ -193,8 +195,8 @@ const ENTITIES = new Map<string, "collection" | "single">([
  * configures none, so every cell is judged in the same frame the gate
  * comparison below is asked in.
  */
-const LANGUAGE_OF = (operation: string) =>
-  requestLanguage({ method: operation, params: {} });
+const LANGUAGE_OF = (operation: string, sent: SentLanguage) =>
+  requestLanguage({ method: operation, params: sentParams(sent, "") });
 
 function serviceFor(
   setup: "service" | "no-service",
@@ -252,11 +254,32 @@ async function restAllows(
   resource: string,
   rbac: RBACAccessControlService | undefined
 ): Promise<boolean> {
+  const asked = REQUEST_OF_CELL[action];
+  if (asked !== undefined) {
+    const verdicts = await Promise.all(
+      asked.map(a => routeGateVerdict(auth, a, resource, rbac))
+    );
+    return verdicts.every(verdict => verdict.allowed);
+  }
   const own = await routeGateVerdict(auth, action, resource, rbac);
   if (action !== "publish" && action !== "unpublish") return own.allowed;
   const update = await routeGateVerdict(auth, "update", resource, rbac);
   return update.allowed && own.allowed;
 }
+
+/**
+ * The gates the request behind each operation-level cell asks: its route's
+ * action, and for publishing every language the update route and then the
+ * publish check. The site here configures no language, so each is judged in
+ * the frame its action's own cell is.
+ */
+const REQUEST_OF_CELL: Readonly<Record<string, readonly string[]>> = {
+  readTranslations: ["read"],
+  readHistory: ["read"],
+  createInDefaultLanguage: ["create"],
+  updateInDefaultLanguage: ["update"],
+  publishEveryLanguage: ["update", "publish"],
+};
 
 /** Each setup and rule the comparison is made under, and its service. */
 function setups(): {
@@ -313,7 +336,7 @@ describe("routeGateCapabilities", () => {
     expect(refused).toBeGreaterThan(0);
   });
 
-  it("gives a collection six actions and a Single four", async () => {
+  it("gives a collection six actions and a Single four, each with its requests judged across languages", async () => {
     registered.rbac = new RBACAccessControlService();
     const { entities } = await routeGateCapabilities(
       { userId: "editor" },
@@ -323,19 +346,29 @@ describe("routeGateCapabilities", () => {
     );
     expect(Object.keys(entities[POSTS] ?? {}).sort()).toEqual([
       "create",
+      "createInDefaultLanguage",
       "delete",
       "kind",
       "publish",
+      "publishEveryLanguage",
       "read",
+      "readHistory",
+      "readTranslations",
       "unpublish",
       "update",
+      "updateInDefaultLanguage",
     ]);
+    // A Single is never created, so it has no create in any language.
     expect(Object.keys(entities[HOME] ?? {}).sort()).toEqual([
       "kind",
       "publish",
+      "publishEveryLanguage",
       "read",
+      "readHistory",
+      "readTranslations",
       "unpublish",
       "update",
+      "updateInDefaultLanguage",
     ]);
     // The editor reads and edits posts but holds no delete or publish.
     expect(entities[POSTS]).toMatchObject({

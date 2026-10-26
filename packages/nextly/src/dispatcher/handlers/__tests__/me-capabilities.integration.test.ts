@@ -48,6 +48,15 @@ const REFUSED = "secrets";
  * and so named, in every language.
  */
 const GERMAN = "german";
+/**
+ * Its read rule refuses German, and refuses one language read together with
+ * others' translation states, while every language at once, unfiltered, may
+ * be read. Readable in every language, so it is named, and each read the
+ * admin sends answers by the languages that read is in.
+ */
+const OVERVIEW_REFUSED = "overview-refused";
+/** Its publish rule refuses German; nothing else about it is refused. */
+const NOT_IN_GERMAN = "not-in-german";
 
 interface Capabilities {
   isSuperAdmin: boolean;
@@ -144,7 +153,26 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: GERMAN,
             localized: true,
-            access: { update: ({ locale }) => locale === "de" },
+            access: {
+              update: ({ locale }) => locale === "de",
+              create: ({ locale }) => locale === "de",
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: OVERVIEW_REFUSED,
+            localized: true,
+            access: {
+              read: ({ locale, locales }) =>
+                locale !== "de" &&
+                (locale === undefined || locales.length === 1),
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: NOT_IN_GERMAN,
+            localized: true,
+            access: { publish: ({ locale }) => locale !== "de" },
             fields: [text({ name: "title" })],
           }),
         ],
@@ -201,6 +229,11 @@ describe.each(getConfiguredTestDialects())(
               idOf(`read-${REFUSED}`),
               idOf(`read-${GERMAN}`),
               idOf(`update-${GERMAN}`),
+              idOf(`create-${GERMAN}`),
+              idOf(`read-${OVERVIEW_REFUSED}`),
+              idOf(`read-${NOT_IN_GERMAN}`),
+              idOf(`update-${NOT_IN_GERMAN}`),
+              idOf(`publish-${NOT_IN_GERMAN}`),
             ],
           },
         })
@@ -278,25 +311,41 @@ describe.each(getConfiguredTestDialects())(
       const { entities } = await ask(await session(superAdminId, []));
 
       expect(Object.keys(entities).sort()).toEqual(
-        [...PLAIN, REFUSED, GERMAN, "home"].sort()
+        [
+          ...PLAIN,
+          REFUSED,
+          GERMAN,
+          OVERVIEW_REFUSED,
+          NOT_IN_GERMAN,
+          "home",
+        ].sort()
       );
       expect(Object.keys(entities.posts!).sort()).toEqual([
         "create",
+        "createInDefaultLanguage",
         "delete",
         "kind",
         "publish",
+        "publishEveryLanguage",
         "read",
+        "readHistory",
+        "readTranslations",
         "unpublish",
         "update",
+        "updateInDefaultLanguage",
       ]);
       // A Single is one document: it is never created and never deleted, so
       // it carries neither answer rather than carrying `false`.
       expect(Object.keys(entities.home!).sort()).toEqual([
         "kind",
         "publish",
+        "publishEveryLanguage",
         "read",
+        "readHistory",
+        "readTranslations",
         "unpublish",
         "update",
+        "updateInDefaultLanguage",
       ]);
       expect(entities.posts!.kind).toBe("collection");
       expect(entities.home!.kind).toBe("single");
@@ -381,6 +430,128 @@ describe.each(getConfiguredTestDialects())(
       expect(english.entities.posts!.read).toBe(true);
     });
 
+    it("judges a read of every language's states, and the unfiltered history, in the languages those requests read", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      const english = (await ask(headers, "?locale=en")).entities[
+        OVERVIEW_REFUSED
+      ];
+      const german = (await ask(headers, "?locale=de")).entities[
+        OVERVIEW_REFUSED
+      ];
+      // English alone may be read, but not English with every language's
+      // translation state, which is what the localized list and the editor's
+      // overview ask for.
+      expect(english).toMatchObject({ read: true, readTranslations: false });
+      // The unfiltered history reads every language at once, with none read
+      // alone: the rule allows that, in whichever language the answer was
+      // asked, though German alone is refused.
+      expect(german).toMatchObject({ read: false, readHistory: true });
+      expect(english!.readHistory).toBe(true);
+      // POPULATION CONTROL: a collection whose read rule reads no language
+      // allows all three, so the refusals above are the rule reading the
+      // languages each request is in.
+      expect((await ask(headers, "?locale=en")).entities.posts).toMatchObject({
+        read: true,
+        readTranslations: true,
+        readHistory: true,
+      });
+    });
+
+    it("judges a create and an update sent with no language in the default language", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      // Asked in German, the rule admits the create and the update. The
+      // quick-create and quick-edit modals send no language, so the server
+      // writes English, which the rule refuses.
+      const { entities } = await ask(headers, "?locale=de");
+      expect(entities[GERMAN]).toMatchObject({
+        create: true,
+        update: true,
+        createInDefaultLanguage: false,
+        updateInDefaultLanguage: false,
+      });
+      // POPULATION CONTROL: a super-admin passes the rule, so the default
+      // language cells can say yes and the refusals are the rule's.
+      expect(
+        (await ask(await session(superAdminId, []), "?locale=de")).entities[
+          GERMAN
+        ]
+      ).toMatchObject({
+        createInDefaultLanguage: true,
+        updateInDefaultLanguage: true,
+      });
+    });
+
+    it("agrees with the list of translation states and the create the admin sends", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+      const handlers = createDynamicHandlers();
+      const send = (method: "GET" | "POST", path: string, body?: unknown) => {
+        const [route, search = ""] = path.split("?");
+        const segments = route!.split("/");
+        return handlers[method](
+          new Request(`${ORIGIN}/api/${route}${search ? `?${search}` : ""}`, {
+            method,
+            headers: {
+              origin: ORIGIN,
+              ...headers,
+              ...(body ? { "content-type": "application/json" } : {}),
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          }),
+          { params: Promise.resolve({ params: segments }) }
+        );
+      };
+      const { entities } = await ask(headers, "?locale=en");
+      const de = (await ask(headers, "?locale=de")).entities;
+
+      // Each cell is the answer the request behind it gets, for a refusal
+      // and for an allow alike.
+      const overview = await send(
+        "GET",
+        `collections/${OVERVIEW_REFUSED}/entries?locale=en&translation-status=1`
+      );
+      expect(overview.status === 200).toBe(
+        entities[OVERVIEW_REFUSED]!.readTranslations
+      );
+      const postsOverview = await send(
+        "GET",
+        "collections/posts/entries?locale=en&translation-status=1"
+      );
+      expect(postsOverview.status === 200).toBe(
+        entities.posts!.readTranslations
+      );
+      const created = await send("POST", `collections/${GERMAN}/entries`, {
+        title: "sent with no language",
+      });
+      expect(created.status < 300).toBe(de[GERMAN]!.createInDefaultLanguage);
+      // POPULATION CONTROL: both verdicts were compared.
+      expect([
+        entities[OVERVIEW_REFUSED]!.readTranslations,
+        entities.posts!.readTranslations,
+      ]).toEqual([false, true]);
+    });
+
+    it("refuses publishing every language where the publish rule refuses one of them", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      // Publishing English is allowed; publishing every language asks the
+      // rule about German too, which it refuses.
+      const { entities } = await ask(headers, "?locale=en");
+      expect(entities[NOT_IN_GERMAN]).toMatchObject({
+        update: true,
+        publish: true,
+        publishEveryLanguage: false,
+      });
+      // POPULATION CONTROL: the same answer for a super-admin, whom no rule
+      // refuses, allows it, so the cell can say yes.
+      expect(
+        (await ask(await session(superAdminId, []), "?locale=en")).entities[
+          NOT_IN_GERMAN
+        ]!.publishEveryLanguage
+      ).toBe(true);
+    });
+
     it("passes a super-admin through every entity rule", async () => {
       const { isSuperAdmin, entities } = await ask(
         await session(superAdminId, [])
@@ -425,6 +596,39 @@ describe.each(getConfiguredTestDialects())(
       expect(Math.abs((validUntil ?? 0) - visitEnds.getTime())).toBeLessThan(
         1000
       );
+    });
+
+    it("says the permission list ends when the role assignment it was read under ends", async () => {
+      const permissionsOf = async (headers: Record<string, string>) => {
+        const segments = ["me", "permissions"];
+        const res = await createDynamicHandlers().GET(
+          new Request(`${ORIGIN}/api/${segments.join("/")}`, {
+            headers: { origin: ORIGIN, ...headers },
+          }),
+          { params: Promise.resolve({ params: segments }) }
+        );
+        expect(res.status).toBe(200);
+        return (await res.json()) as {
+          permissions: string[];
+          validUntil: number | null;
+        };
+      };
+
+      const visiting = await permissionsOf(
+        await session(visitingId, [readerRoleId])
+      );
+      // POPULATION CONTROL: the assignment is live, so its permissions are
+      // listed.
+      expect(visiting.permissions).toContain("read-posts");
+      expect(visiting.validUntil).toEqual(expect.any(Number));
+      expect(
+        Math.abs((visiting.validUntil ?? 0) - visitEnds.getTime())
+      ).toBeLessThan(1000);
+      // A role held with no end leaves the list unbounded.
+      expect(
+        (await permissionsOf(await session(readerId, [readerRoleId])))
+          .validUntil
+      ).toBeNull();
     });
 
     it("ends a key's answer with the key, and with its owner's role only where the key follows it", async () => {

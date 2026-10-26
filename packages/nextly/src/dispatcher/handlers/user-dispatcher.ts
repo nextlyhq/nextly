@@ -21,6 +21,7 @@ import {
 import { aboutSubject } from "../../auth/access/deviations";
 import {
   routeGateCapabilities,
+  sentParams,
   type GateCaller,
 } from "../../auth/access/route-gate-adapters";
 import {
@@ -262,11 +263,17 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   getCurrentUserPermissions: {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
-      const [permissionPairs, superAdmin, roleSlugs] = await Promise.all([
-        listEffectivePermissions(userId),
-        isSuperAdmin(userId),
-        listRoleSlugsForUser(userId),
-      ]);
+      // The soonest end of the role assignments comes from the same
+      // request-scoped read of the user's roles the permissions do, so the
+      // list and its end describe one moment.
+      const [permissionPairs, superAdmin, roleSlugs, roles] = await Promise.all(
+        [
+          listEffectivePermissions(userId),
+          isSuperAdmin(userId),
+          listRoleSlugsForUser(userId),
+          resolveUserRoles(userId),
+        ]
+      );
       // Convert "resource:action" → "action-resource" slug format
       // (e.g. "users:read" → "read-users").
       const permissions = permissionPairs.map(pair => {
@@ -277,6 +284,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         permissions,
         isSuperAdmin: superAdmin,
         roles: roleSlugs,
+        // When this list stops holding, in epoch ms, or null: the soonest
+        // end of a role assignment it was read under.
+        validUntil: roles.validUntil ?? null,
       });
     },
   },
@@ -312,8 +322,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // Only `locale` is read from the query: the other language controls
       // belong to operations that carry an entry, and reading them would let
       // a caller widen the framing through a parameter this route does not
-      // offer.
-      const asked = { locale: p.locale ?? "" };
+      // offer. A cell whose request sends more, or no language, is framed by
+      // what that request sends (`sentParams`), never by the query.
+      const locale = p.locale ?? "";
       const capabilities = await routeGateCapabilities(
         caller,
         // Only the entities the caller may read are named: the answer is
@@ -321,7 +332,11 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         // each one every collection and Single the install has.
         await readableEntityKinds(kinds),
         getRBACService(),
-        operation => requestLanguage({ method: operation, params: asked })
+        (operation, sent) =>
+          requestLanguage({
+            method: operation,
+            params: sentParams(sent, locale),
+          })
       );
       return respondData(
         {
