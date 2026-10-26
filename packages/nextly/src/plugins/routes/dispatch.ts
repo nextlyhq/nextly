@@ -292,14 +292,23 @@ function requiredPermissionOrRefusal(
     // A 403 told the caller their grant fell short when no grant could have
     // been enough. The resolver's own error, or the empty slug's, goes to the
     // log.
+    // A resolver's own NextlyError, such as an empty slug's, already says what
+    // went wrong; its message and reason are kept, since the log would
+    // otherwise reduce it to the generic public message it carries.
+    const explained = NextlyError.is(cause) ? cause : undefined;
     return {
       error: new NextlyError({
         code: "INTERNAL_ERROR",
         publicMessage: "An unexpected error occurred.",
-        logMessage: "a plugin route's requiredPermission could not be resolved",
+        logMessage:
+          explained?.logMessage ??
+          "a plugin route's requiredPermission could not be resolved",
         ...(cause instanceof Error ? { cause } : {}),
         logContext: {
           reason: "plugin-route-permission-unresolved",
+          ...(explained?.logContext?.reason !== undefined
+            ? { causeReason: explained.logContext.reason }
+            : {}),
           plugin: self.name,
           path: route.path,
         },
@@ -866,12 +875,17 @@ export async function runPluginRoute(
     // the plugin's to fix, so it is logged with what caused it. A refusal of
     // the caller is not: it is the gate working.
     if (auth.error.statusCode >= 500) {
-      getNextlyLogger().error({
-        kind: "plugin-route-error",
-        ...auth.error.toLogJSON(requestId),
-        plugin: matched.pluginName,
-        path: matched.route.path,
-      });
+      try {
+        getNextlyLogger().error({
+          kind: "plugin-route-error",
+          ...auth.error.toLogJSON(requestId),
+          plugin: matched.pluginName,
+          path: matched.route.path,
+        });
+      } catch {
+        // A logger that fails must not cost the caller the answer below, as
+        // the dispatcher and `withErrorHandler` hold for theirs.
+      }
     }
     return markPluginResponse(
       buildErrorResponse(auth.error, {

@@ -278,7 +278,38 @@ describe("a route gated by a computed permission", () => {
     ).not.toBe(true);
     expect(res.status).toBe(500);
     expect(body.error?.code).toBe("INTERNAL_ERROR");
-    expect(routeFaults(errors)).toHaveLength(1);
+    // Logged as what it is, an empty permission, not as any failure to
+    // resolve one: the reason the resolver's own error gave is kept.
+    expect(routeFaults(errors)).toEqual([
+      expect.objectContaining({
+        plugin: PLUGIN,
+        logMessage:
+          "a route's requiredPermission resolved to an empty permission slug",
+        logContext: expect.objectContaining({
+          reason: "plugin-route-permission-unresolved",
+          causeReason: "plugin-route-permission-empty",
+        }),
+      }),
+    ]);
+  });
+
+  it("still answers the server fault when the logger itself fails", async () => {
+    const key = await readOnlyKey();
+    const ignore = () => {};
+    setNextlyLogger({
+      error: () => {
+        throw new Error("the log is unreachable");
+      },
+      warn: ignore,
+      info: ignore,
+      debug: ignore,
+    });
+
+    const res = await post("broken", { authorization: `Bearer ${key}` });
+    const body = (await res.json()) as { error?: { code?: string } };
+
+    expect(res.status).toBe(500);
+    expect(body.error?.code).toBe("INTERNAL_ERROR");
   });
 
   it("still refuses an unauthenticated caller", async () => {
