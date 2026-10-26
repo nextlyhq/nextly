@@ -78,4 +78,14 @@ describe("a signed-in user's check where the target declares a rule", () => {
     });
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it("names nothing where the rule is a plain false, which refused before too", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    access.holds = false;
+    await expect(read(serviceWith(false))).resolves.toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    // The control: a rule of `true` let this caller in before, and is named.
+    await read(serviceWith(true));
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });

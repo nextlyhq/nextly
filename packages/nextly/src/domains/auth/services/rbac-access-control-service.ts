@@ -214,7 +214,11 @@ export class RBACAccessControlService {
       // The permission first: a declared rule only narrows it, so a user who
       // lacks it is refused before the rule is asked.
       if (!(await hasPermission(userId, operation, resource, executor))) {
-        noticePermissionNowComesFirst(resource, operation, "signed-in user");
+        // A rule of `false` refused this caller before too, so its refusal
+        // is not named as new.
+        if (operationAccess !== false) {
+          noticePermissionNowComesFirst(resource, operation, "signed-in user");
+        }
         return false;
       }
       if (typeof operationAccess === "boolean") {

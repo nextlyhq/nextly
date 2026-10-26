@@ -504,19 +504,27 @@ async function ruleLessVerdict({
  * A user named by no id holds nothing.
  */
 async function plainRuleVerdict(
-  { q, userId }: UserAsk,
+  { q, target, userId, looked }: UserAsk,
   plain: boolean
 ): Promise<GateVerdict> {
   if (!userId) return INSUFFICIENT;
   if (await userIsSuperAdmin(userId, { executor: q.executor })) {
     return ALLOWED;
   }
-  // The permission first; a rule only narrows it.
+  // The permission first; a rule only narrows it. A rule of `false` refused
+  // this caller before too, so its refusal is not named as new.
   const holds = await userHoldsPermission(userId, q.action, q.slug, {
     executor: q.executor,
   });
-  if (!holds) return refusedWithoutPermission(q);
-  return verdictOf(plain);
+  if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
+  if (!isLifecycle(q.action)) return verdictOf(plain);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
+  return verdictOf(
+    await deviate("lifecycle-judged-alone", plain, () =>
+      decided(looked(), q.action, target)
+    )
+  );
 }
 
 /**
@@ -559,5 +567,12 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
-  return verdictOf(allowed);
+  if (!isLifecycle(q.action)) return verdictOf(allowed);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
+  return verdictOf(
+    await deviate("lifecycle-judged-alone", allowed, () =>
+      decidedFrom(actor, q.action, target, outcome)
+    )
+  );
 }
