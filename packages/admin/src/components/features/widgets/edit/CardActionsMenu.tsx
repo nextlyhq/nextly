@@ -14,8 +14,15 @@
  *
  * A row of seven icon buttons per card was seven Tab stops per card and a
  * header too crowded for a narrow card. One named button opens every action,
- * and the card's width is shown beside it as a fraction so the reader can see
- * what the Width submenu will change without opening it.
+ * and the card's size is shown beside it in columns by rows, so the reader can
+ * see what the Width and Height submenus will change without opening them.
+ *
+ * ## Sizes within the widget's bounds, and only those
+ *
+ * The widths offered are the common steps (3, 4, 6, 8 and 12 columns) that lie
+ * within the widget's bounds, and the bounds' own ends; the heights are every
+ * one the bounds allow. A card can never be resized past its bounds from here,
+ * and the editor refuses one that is (`setPlacementSize`).
  *
  * @module components/features/widgets/edit/CardActionsMenu
  */
@@ -40,35 +47,42 @@ import {
   ArrowUp,
   ArrowUpToLine,
   MoveHorizontal,
+  MoveVertical,
   Settings,
   Trash2,
 } from "lucide-react";
+import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import { useRef, type ComponentType, type JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
-import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
 import type { MoveDirection } from "../layout-editor";
-import { WIDTH_NAMES, isWidgetWidth } from "../sizes";
+import {
+  columnsName,
+  heightChoices,
+  rowsName,
+  sizeName,
+  widthChoices,
+} from "../sizes";
 
 export interface CardActionsMenuProps {
   /** What the reader calls this card, which the button's name says. */
   title: string;
-  /** The width the card is DRAWN at, which the Width submenu checks. */
-  width: WidgetWidth;
-  /** The widths its widget allows, narrowest first; none known offers none. */
-  allowedWidths: readonly WidgetWidth[] | undefined;
+  /** The size the card is DRAWN at, which the Width and Height choices check. */
+  size: GridSize;
+  /** Its widget's bounds, which the choices are taken from. */
+  bounds: WidgetSizeBounds;
   /** Which moves would move the card; the rest are disabled. */
   can: Record<MoveDirection, boolean>;
   /** Whether a layout write is in flight, which every action waits for. */
   disabled: boolean;
   /** Registers the menu button, so focus can be sent back to it. */
   triggerRef: (element: HTMLElement | null) => void;
-  /** Lists the widths in the menu itself rather than in a submenu: where it draws one column. */
-  widthsInPlace?: boolean;
+  /** Lists the sizes in the menu itself rather than in submenus: where it draws one column. */
+  sizesInPlace?: boolean;
   on: {
     move: (direction: MoveDirection) => void;
-    setWidth: (width: WidgetWidth) => void;
+    setSize: (size: GridSize) => void;
     remove: () => void;
     /** ABSENT when the widget declares no settings: no item is drawn. */
     openSettings?: () => void;
@@ -88,60 +102,60 @@ const MOVES: ReadonlyArray<{
 ];
 
 /**
- * The card's width as a short fraction, with its full name for a screen
- * reader. Shown beside the menu button while customising.
+ * The card's size as columns by rows, with its full name for a screen reader.
+ * Shown beside the menu button while customising.
  */
-export function CardWidthLabel({ width }: { width: WidgetWidth }): JSX.Element {
-  const { name, fraction } = WIDTH_NAMES[width];
+export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
   return (
     <span
-      className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-border px-1 text-xs text-muted-foreground"
-      data-testid="card-width-label"
+      className="inline-flex h-6 min-w-6 items-center justify-center rounded border border-border px-1 text-xs tabular-nums text-muted-foreground"
+      data-testid="card-size-label"
     >
-      {/* The glyph is for sight; the name is what is read, so "½" is not
-          announced as "one half" beside a menu that says "Half width". */}
-      <span aria-hidden>{fraction}</span>
-      <span className="sr-only">{name}</span>
+      {/* The glyphs are for sight; the name is what is read, so "6×4" is not
+          announced as "six times four" beside a menu that says "6 columns". */}
+      <span aria-hidden>
+        {size.w}×{size.h}
+      </span>
+      <span className="sr-only">{sizeName(size)}</span>
     </span>
   );
 }
 
-interface WidthChoicesProps {
-  width: WidgetWidth;
-  allowedWidths: readonly WidgetWidth[];
-  onChoose: (width: WidgetWidth) => void;
+/** One direction of the card's size: what it is called, its choices and how each reads. */
+interface SizeAxis {
+  kind: "width" | "height";
+  label: string;
+  icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
+  /** The value the card is drawn at in this direction. */
+  value: number;
+  choices: number[];
+  name: (value: number) => string;
+  choose: (value: number) => void;
 }
 
-/** The widget's allowed widths under a Width label, the drawn one checked. */
-function WidthChoices({ width, allowedWidths, onChoose }: WidthChoicesProps) {
+/** One direction's choices under its label, the drawn one checked. */
+function AxisChoices({ axis }: { axis: SizeAxis }) {
   return (
     <>
       <DropdownMenuLabel className="text-xs text-muted-foreground">
-        Width
+        {axis.label}
       </DropdownMenuLabel>
       <DropdownMenuRadioGroup
-        value={width}
-        // Narrowed rather than asserted: the value comes back from the DOM.
+        value={String(axis.value)}
+        // Narrowed rather than asserted: the value comes back from the DOM, and
+        // only a value this menu offered is chosen.
         onValueChange={value => {
-          if (isWidgetWidth(value)) onChoose(value);
+          const chosen = Number(value);
+          if (axis.choices.includes(chosen)) axis.choose(chosen);
         }}
       >
-        {allowedWidths.map(option => (
+        {axis.choices.map(option => (
           <DropdownMenuRadioItem
             key={option}
-            value={option}
-            data-testid={`card-width-${option}`}
+            value={String(option)}
+            data-testid={`card-${axis.kind}-${option}`}
           >
-            {WIDTH_NAMES[option].name}
-            {/* Full needs no fraction: its name already says it. */}
-            {option === "full" ? null : (
-              <span
-                aria-hidden
-                className="ml-auto pl-4 text-xs text-muted-foreground"
-              >
-                {WIDTH_NAMES[option].fraction}
-              </span>
-            )}
+            {axis.name(option)}
           </DropdownMenuRadioItem>
         ))}
       </DropdownMenuRadioGroup>
@@ -150,41 +164,72 @@ function WidthChoices({ width, allowedWidths, onChoose }: WidthChoicesProps) {
 }
 
 /**
- * The widths, as a Width submenu, or in place in the card menu itself.
+ * One direction's choices, as a submenu, or in place in the card menu itself.
  *
  * In place where the dashboard draws one column: on a phone the card menu sits mid-screen, and
  * a submenu beside it has room on neither side, so it was drawn partly off the screen. In place,
- * the widths share the menu's own box, which already fits.
+ * the choices share the menu's own box, which already fits.
  */
-function WidthSection({
-  inPlace,
-  ...choices
-}: WidthChoicesProps & { inPlace: boolean }) {
-  if (inPlace) return <WidthChoices {...choices} />;
+function AxisSection({ axis, inPlace }: { axis: SizeAxis; inPlace: boolean }) {
+  if (inPlace) return <AxisChoices axis={axis} />;
+  const Icon = axis.icon;
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger data-testid="card-width-menu">
-        <MoveHorizontal aria-hidden />
-        Width
+      <DropdownMenuSubTrigger data-testid={`card-${axis.kind}-menu`}>
+        <Icon aria-hidden />
+        {axis.label}
         <span aria-hidden className="ml-auto text-xs text-muted-foreground">
-          {WIDTH_NAMES[choices.width].fraction}
+          {axis.value}
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
-        <WidthChoices {...choices} />
+        <AxisChoices axis={axis} />
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
 }
 
+/**
+ * The directions a card may be resized in: each whose bounds offer more than the one size it
+ * has, so a widget of one fixed height offers no Height at all.
+ */
+function sizeAxes(
+  size: GridSize,
+  bounds: WidgetSizeBounds,
+  setSize: (size: GridSize) => void
+): SizeAxis[] {
+  const axes: SizeAxis[] = [
+    {
+      kind: "width",
+      label: "Width",
+      icon: MoveHorizontal,
+      value: size.w,
+      choices: widthChoices(bounds),
+      name: columnsName,
+      // The other direction kept as drawn, which already lies within the bounds.
+      choose: w => setSize({ w, h: size.h }),
+    },
+    {
+      kind: "height",
+      label: "Height",
+      icon: MoveVertical,
+      value: size.h,
+      choices: heightChoices(bounds),
+      name: rowsName,
+      choose: h => setSize({ w: size.w, h }),
+    },
+  ];
+  return axes.filter(axis => axis.choices.length > 1);
+}
+
 export function CardActionsMenu({
   title,
-  width,
-  allowedWidths,
+  size,
+  bounds,
   can,
   disabled,
   triggerRef,
-  widthsInPlace = false,
+  sizesInPlace = false,
   on,
 }: CardActionsMenuProps): JSX.Element {
   // 🔴 Set by the actions that send focus somewhere themselves -- a move back
@@ -241,14 +286,9 @@ export function CardActionsMenu({
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        {allowedWidths && allowedWidths.length > 0 ? (
-          <WidthSection
-            inPlace={widthsInPlace}
-            width={width}
-            allowedWidths={allowedWidths}
-            onChoose={on.setWidth}
-          />
-        ) : null}
+        {sizeAxes(size, bounds, on.setSize).map(axis => (
+          <AxisSection key={axis.kind} axis={axis} inPlace={sizesInPlace} />
+        ))}
         {on.openSettings ? (
           <DropdownMenuItem
             onSelect={handled(on.openSettings)}

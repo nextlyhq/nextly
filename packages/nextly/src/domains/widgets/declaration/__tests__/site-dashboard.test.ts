@@ -73,16 +73,18 @@ describe("a site config that names what exists", () => {
           "core/recently-edited": {
             title: "Latest edits",
             description: "What changed most recently",
-            width: "half",
-            widths: ["half", "full"],
           },
-          "acme/orders-by-state": { settings: { top: 8 } },
+          "acme/orders-by-state": {
+            size: { default: { w: 4, h: 4 }, max: { w: 6, h: 5 } },
+            settings: { top: 8 },
+          },
         },
         defaultLayout: [
           "core/recently-edited",
           {
             widget: "acme/orders-by-state",
-            width: "third",
+            w: 4,
+            h: 3,
             settings: { top: 3 },
           },
         ],
@@ -101,7 +103,7 @@ describe("a site config that names what exists", () => {
   it("checks the site's own widgets with the plugins', which the rest may name, and registers none yet", () => {
     resetWidgetRegistries([shop], {
       widgets: [{ ...revenue, id: "site/revenue" }],
-      defaultLayout: [{ widget: "site/revenue", width: "full" }],
+      defaultLayout: [{ widget: "site/revenue", w: 12 }],
     });
     // Not kept until the admin's component map reads the site's widgets too,
     // and said so at startup.
@@ -120,22 +122,39 @@ describe("a site config that names what exists", () => {
     expect(() =>
       resetWidgetRegistries([shop], {
         hide: ["single/home-card"],
-        overrides: { "collection/posts-count": { width: "half" } },
-        defaultLayout: ["collection/posts-count"],
+        overrides: {
+          "collection/posts-count": { size: { default: { w: 6, h: 4 } } },
+        },
+        defaultLayout: [{ widget: "collection/posts-count", w: 6, h: 3 }],
       })
     ).not.toThrow();
     // Its shape is still checked: a key the entry does not take is refused,
-    // and so is placing a hidden generated card.
+    // so is a size the grid cannot draw, and so is placing a hidden
+    // generated card.
     const message = refusal(() =>
       resetWidgetRegistries([shop], {
         hide: ["collection/pages-count"],
-        overrides: { "collection/posts-count": { widht: "half" } },
-        defaultLayout: ["collection/pages-count"],
+        overrides: {
+          "collection/posts-count": {
+            widht: "half",
+            size: { default: { w: 13, h: 4 } },
+          },
+        },
+        defaultLayout: [
+          "collection/pages-count",
+          { widget: "collection/posts-count", w: 0 },
+        ],
       })
     );
     expect(message).toContain('overrides entry has "widht"');
     expect(message).toContain(
+      'overrides.size.default must be { w, h } with w a whole number from 1 to 12 and h a whole number of 2 or more, got {"w":13,"h":4}'
+    );
+    expect(message).toContain(
       'defaultLayout places "collection/pages-count", which hide hides'
+    );
+    expect(message).toContain(
+      "defaultLayout w must be a whole number from 1 to 12, got 0"
     );
   });
 
@@ -154,24 +173,24 @@ describe("a site config with faults", () => {
         widgets: [{ ...revenue, id: "site/revenue", title: "" }],
         hide: ["core/teem"],
         overrides: {
-          "core/recently-edited": { widths: ["quarter", "half"] },
           "acme/orders-by-state": {
             description: "x".repeat(81),
+            size: { min: { w: 3, h: 3 } },
             settings: { top: "many", colour: "red" },
           },
         },
-        defaultLayout: [{ widget: "acme/orders-by-state", width: "full" }],
+        defaultLayout: [{ widget: "acme/orders-by-state", w: 12 }],
         replace: { "core/recently-edited": "acme/revenue" },
       })
     );
     for (const expected of [
       'the site config, widget "site/revenue": title must be a non-empty string',
       'the site config, widget "core/teem": hide names "core/teem", which no widget declares; did you mean "core/team"?',
-      'the site config, widget "core/recently-edited": overrides.widths adds "quarter", which the widget does not allow; widths may only be narrowed',
       'the site config, widget "acme/orders-by-state": overrides.description must be at most 80 characters, has 81',
+      'the site config, widget "acme/orders-by-state": overrides.size.min { w: 3, h: 3 } widens the smallest size; the widget allows from { w: 4, h: 3 } to { w: 8, h: 6 }, and an override may only narrow that',
       'the site config, widget "acme/orders-by-state": overrides.settings sets "colour", which the widget does not declare',
       'the site config, widget "acme/orders-by-state": overrides.settings: setting "top"',
-      'the site config, widget "acme/orders-by-state": defaultLayout width is "full", which the widget does not allow',
+      'the site config, widget "acme/orders-by-state": defaultLayout w is 12, which the widget does not allow (from 4 to 8)',
       'the site config, widget "core/recently-edited": replace puts "acme/revenue" in place of "core/recently-edited", and no plugin offers it as an alternative to "core/recently-edited"',
     ]) {
       expect(message).toContain(expected);
@@ -232,18 +251,23 @@ describe("a site config with faults", () => {
     const message = refusal(() =>
       resetWidgetRegistries([shop], {
         defaultlayout: ["core/team"],
-        overrides: { "core/team": { widht: "half" } },
-        defaultLayout: [{ widget: "core/team", widths: ["half"] }],
+        overrides: {
+          "core/team": { sise: {}, size: { Max: { w: 6, h: 4 } } },
+        },
+        defaultLayout: [{ widget: "core/team", W: 6 }],
       })
     );
     expect(message).toContain(
       'admin.dashboard has "defaultlayout", which it does not take; did you mean "defaultLayout"?'
     );
     expect(message).toContain(
-      'overrides entry has "widht", which it does not take; did you mean "width"?'
+      'overrides entry has "sise", which it does not take; did you mean "size"?'
     );
     expect(message).toContain(
-      'defaultLayout card has "widths", which it does not take; did you mean "width"?'
+      'overrides.size has "Max", which it does not take; did you mean "max"?'
+    );
+    expect(message).toContain(
+      'defaultLayout card has "W", which it does not take; did you mean "w"?'
     );
   });
 
@@ -266,6 +290,81 @@ describe("a site config with faults", () => {
         })
       )
     ).toContain('replace names "acme/revenue", which is not a built-in widget');
+  });
+});
+
+describe("a site config's sizes, in grid units", () => {
+  // acme/orders-by-state allows from { w: 4, h: 3 } to { w: 8, h: 6 }.
+  const site = (overrides: unknown, defaultLayout?: unknown) => () =>
+    resetWidgetRegistries([shop], {
+      overrides: { "acme/orders-by-state": overrides },
+      ...(defaultLayout === undefined ? {} : { defaultLayout }),
+    });
+
+  it("checks a default card against the bounds the site's override narrows", () => {
+    // 🔴 The override is applied where the card is judged: w 8 is one the
+    // widget allows, and not one the site's narrowed bounds do.
+    const card = { widget: "acme/orders-by-state", w: 8 };
+    expect(site({ size: { default: { w: 6, h: 4 } } }, [card])).not.toThrow();
+    expect(refusal(site({ size: { max: { w: 6, h: 6 } } }, [card]))).toContain(
+      'widget "acme/orders-by-state": defaultLayout w is 8, which the widget does not allow (from 4 to 6)'
+    );
+  });
+
+  it("checks each direction a default card states, against the grid and the widget", () => {
+    const message = refusal(
+      site({ title: "Orders" }, [
+        { widget: "acme/orders-by-state", h: 7 },
+        { widget: "acme/recent-orders", w: "half", h: 0 },
+      ])
+    );
+    expect(message).toContain(
+      'widget "acme/orders-by-state": defaultLayout h is 7, which the widget does not allow (from 3 to 6)'
+    );
+    // A named width is not a size: the grid's own units are the only ones.
+    expect(message).toContain(
+      'widget "acme/recent-orders": defaultLayout w must be a whole number from 1 to 12, got "half"'
+    );
+    expect(message).toContain(
+      'widget "acme/recent-orders": defaultLayout h must be a whole number of 2 or more, got 0'
+    );
+  });
+
+  it("refuses an override that widens the widget's bounds at either end", () => {
+    const message = refusal(
+      site({ size: { min: { w: 4, h: 2 }, max: { w: 9, h: 6 } } })
+    );
+    expect(message).toContain(
+      "overrides.size.min { w: 4, h: 2 } widens the smallest size; the widget allows from { w: 4, h: 3 } to { w: 8, h: 6 }"
+    );
+    expect(message).toContain(
+      "overrides.size.max { w: 9, h: 6 } widens the largest size"
+    );
+  });
+
+  it("refuses an override that leaves no size between its ends, or starts outside them", () => {
+    expect(
+      refusal(site({ size: { min: { w: 6, h: 4 }, max: { w: 5, h: 6 } } }))
+    ).toContain(
+      "overrides.size leaves no size between its smallest { w: 6, h: 4 } and its largest { w: 5, h: 6 }"
+    );
+    // Within the widget's bounds, and outside the site's own.
+    expect(
+      refusal(site({ size: { default: { w: 8, h: 4 }, max: { w: 6, h: 6 } } }))
+    ).toContain(
+      "overrides.size.default { w: 8, h: 4 } is not between the smallest size { w: 4, h: 3 } and the largest { w: 6, h: 6 }"
+    );
+  });
+
+  it("refuses an override's size that is not one, and the named widths it once took", () => {
+    const message = refusal(
+      site({ width: "half", widths: ["half"], size: "half" })
+    );
+    expect(message).toContain('overrides entry has "width"');
+    expect(message).toContain('overrides entry has "widths"');
+    expect(message).toContain(
+      "overrides.size must be { default?, min?, max? }, each { w, h }"
+    );
   });
 });
 

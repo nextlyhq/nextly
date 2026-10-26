@@ -37,7 +37,7 @@ it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
   id: "acme/release-notes",
   title: "Before you release",
   archetype: "text",
-  defaultSize: "md",
+  size: { default: { w: 4, h: 3 } },
   content: [
     "## Checklist",
     "",
@@ -55,14 +55,16 @@ content is bounded — it travels inside every dashboard load for every reader w
 the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
 external link opens in a new tab.
 
-Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`. On the dashboard,
-cards sit in one ordered list, filling rows left to right and wrapping, and each card is one of
-five widths: `sm` is a quarter of the row, `md` a third, `lg` a half, `xl` two thirds and `full`
-the whole row. A card starts at the widget's `defaultSize`, and a reader can change its width from
-the card's menu to any size between the widget's `minSize` and `maxSize` (every size, when the
-widget declares neither). Widths follow the dashboard's own width rather than the window's: below
-1,024 pixels a quarter, third or half card is drawn at half width and a wider one at full width,
-and below 640 pixels every card is full width. A reader can arrange the dashboard at every width.
+A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
+from 1 to 12 columns and `h` from 2 rows up. It declares the size a card starts at and, if it
+likes, the smallest and largest a reader may resize it to:
+`size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
+defaults to the default, and the maximum to the full width at the default's height. On the
+dashboard, cards sit in one ordered list, filling rows left to right and wrapping, each spanning
+its `w` columns and `h` rows, and a reader can change a card's width and height from its menu
+within the widget's bounds. Columns follow the dashboard's own width rather than the window's:
+from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at 12, and
+below 640 pixels every card is drawn at the full width. A card keeps its height at every width. A reader can arrange the dashboard at every width.
 Where it shows more than one column, a card is dragged by its handle, with the pointer or the
 keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
 cards are moved, resized and removed from their menu instead. The arrangement applies at every

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Which cards the grid draws, in what order and at what width, and everything
+ * Which cards the grid draws, in what order and at what size, and everything
  * customising them needs.
  *
  * The grid keeps the jobs that belong to drawing and fetching -- batching
@@ -12,13 +12,13 @@
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
+import type { GridSize } from "nextly/config";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type {
   DashboardWidget,
   WidgetPlacement,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import {
@@ -28,7 +28,7 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
-import { WIDTH_NAMES, widthFromDeclaredSize } from "../sizes";
+import { sizeName } from "../sizes";
 
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
 import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
@@ -36,20 +36,18 @@ import type { DashboardFocus } from "./useDashboardFocus";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
 
-/** One card to draw: which placement put it there, and how wide it is. */
+/** One card to draw: which placement put it there, and how big it is. */
 export interface ArrangedWidget {
   placementId: string;
   widget: DashboardWidget;
   /**
-   * The width the reader's arrangement STORED, as stored.
+   * The size the reader's arrangement STORED, as stored.
    *
-   * A `string` for the reason the placement's is: it may name a width from a
-   * newer core. The cell draws it through `cardSpanClass`, which also applies
-   * the widget's allowed widths, so nothing here decides a drawn width.
+   * Possibly outside the widget's current bounds. The cell draws it through
+   * `drawnSize`, which holds it to `widget.size`, so nothing here decides a
+   * drawn size.
    */
-  width: string;
-  /** The widths the widget allows, when the read described it. */
-  allowedWidths?: readonly WidgetWidth[];
+  size: GridSize;
   /**
    * The settings this reader stored for this card, as stored.
    *
@@ -97,8 +95,8 @@ export interface DashboardArrangement {
    * back on its handle. The menu's sentence, so a drag and a menu move are heard alike.
    */
   dropCard: (placementId: string, final: number) => void;
-  /** Set one card's width from its menu, saying so. */
-  setCardWidth: (placementId: string, width: WidgetWidth) => void;
+  /** Set one card's size from its menu, saying so. */
+  setCardSize: (placementId: string, size: GridSize) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
   stageReset: () => void;
   /** Open customise mode, with focus on its bar, saying what it means. */
@@ -115,21 +113,20 @@ export interface DashboardArrangement {
 
 /**
  * The cards drawn when the arrangement could not be read: the declarations, in
- * their declared order, each at the width of its declared size.
+ * their declared order, each at its declared default size.
  */
 function declaredRows(declared: readonly DashboardWidget[]): ArrangedWidget[] {
   return declared.map(widget => ({
     placementId: widget.id,
     widget,
-    width: widthFromDeclaredSize(widget.size),
+    size: { ...widget.size.default },
   }));
 }
 
 /** The arrangement's list resolved into the cards the grid draws. */
 function arrangedRows(
   placements: readonly WidgetPlacement[],
-  byId: ReadonlyMap<string, DashboardWidget>,
-  factsFor: LayoutEditor["factsFor"]
+  byId: ReadonlyMap<string, DashboardWidget>
 ): ArrangedWidget[] {
   const rows: ArrangedWidget[] = [];
   for (const placement of placements) {
@@ -139,12 +136,10 @@ function arrangedRows(
     // a titled card with nothing under it reads as a product bug. A removed
     // card is not drawn either; the add panel lists it to put back.
     if (!widget || placement.removed) continue;
-    const allowed = factsFor(placement.widgetId)?.allowedWidths;
     rows.push({
       placementId: placement.id,
       widget,
-      width: placement.width,
-      ...(allowed === undefined ? {} : { allowedWidths: allowed }),
+      size: { w: placement.w, h: placement.h },
       ...(placement.config === undefined ? {} : { config: placement.config }),
     });
   }
@@ -220,24 +215,24 @@ export function useDashboardArrangement(
     [byId]
   );
 
-  const editor = useLayoutEditor(layout, isDrawn);
+  // Each widget's bounds, from its declaration: what a new card starts at and
+  // what a resize is held to.
+  const boundsFor = useCallback(
+    (widgetId: string) => byId.get(widgetId)?.size,
+    [byId]
+  );
+
+  const editor = useLayoutEditor(layout, isDrawn, boundsFor);
   const ring = useCardHighlight(editor.isEditing);
   const hasArrangement = layout.layout !== undefined;
   const awaitingArrangement = !hasArrangement && !layout.isUnavailable;
 
   const visible = useMemo(() => {
     if (hasArrangement) {
-      return arrangedRows(editor.placements, byId, editor.factsFor);
+      return arrangedRows(editor.placements, byId);
     }
     return awaitingArrangement ? [] : declaredRows(declared);
-  }, [
-    hasArrangement,
-    awaitingArrangement,
-    declared,
-    editor.placements,
-    editor.factsFor,
-    byId,
-  ]);
+  }, [hasArrangement, awaitingArrangement, declared, editor.placements, byId]);
 
   const titleOf = useCallback(
     (placementId: string) =>
@@ -295,12 +290,12 @@ export function useDashboardArrangement(
     [announceMove, editor, isDrawn, focus, ring]
   );
 
-  const setCardWidth = useCallback(
-    (placementId: string, width: WidgetWidth) => {
+  const setCardSize = useCallback(
+    (placementId: string, size: GridSize) => {
       const title = titleOf(placementId);
-      editor.setWidth(placementId, width);
+      editor.setSize(placementId, size);
       ring.highlight(placementId);
-      if (title !== undefined) announce.width(title, WIDTH_NAMES[width].name);
+      if (title !== undefined) announce.size(title, sizeName(size));
     },
     [titleOf, editor, announce, ring]
   );
@@ -328,7 +323,7 @@ export function useDashboardArrangement(
     ring,
     moveCard,
     dropCard,
-    setCardWidth,
+    setCardSize,
     stageReset,
     begin,
     cancel,

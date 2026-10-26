@@ -9,6 +9,7 @@ import type { DragMoveEvent, DragStartEvent } from "@dnd-kit/core";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { gridBounds } from "../../../__tests__/grid-bounds";
 import { drawnSpan } from "../../../sizes";
 import type { ArrangedWidget } from "../../useDashboardArrangement";
 import { finalPositionAt, type DrawnCard } from "../drop-geometry";
@@ -47,15 +48,14 @@ function stubGrid(position: { scrolled: number }): HTMLElement {
 
 const rows = IDS.map(placementId => ({
   placementId,
-  width: "full",
-  allowedWidths: ["full"],
-  widget: { title: placementId },
+  size: { w: 12, h: 2 },
+  widget: { title: placementId, size: gridBounds(12, 2) },
 })) as unknown as ArrangedWidget[];
 
 /** The cards as the drag measures them at pick-up: relative to the grid. */
 const cards: DrawnCard[] = IDS.map((id, index) => ({
   id,
-  span: drawnSpan("full", "wide"),
+  span: drawnSpan(12, WIDTH),
   rect: {
     left: 0,
     top: index * HEIGHT,
@@ -71,7 +71,6 @@ describe("a pointer drag over a page that scrolls", () => {
     const { result } = renderHook(() =>
       useCardDrag({
         rows,
-        band: "wide",
         width: WIDTH,
         gridRef: { current: grid },
         say: () => undefined,

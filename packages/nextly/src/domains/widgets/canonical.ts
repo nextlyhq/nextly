@@ -19,7 +19,7 @@
  * ## Why this is a SUMMARY and not a `WidgetDefinition`
  *
  * The two channels do not carry the same shape and cannot be made to. A
- * registration is a resolved widget and requires `title` and `defaultSize`; a
+ * registration is a resolved widget and requires `title` and `size`; a
  * contribution may omit both, and resolution fills them in downstream. Forcing
  * a contribution into `WidgetDefinition` here would mean inventing the missing
  * fields server-side and then disagreeing with whatever the admin invented.
@@ -38,22 +38,20 @@ import {
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import type { WidgetPermissionGate } from "./gate";
+import {
+  sizeBounds,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+} from "./grid-size";
 import { publishableWidgets } from "./publish";
 import {
   textBoundsOf,
   type AnyWidgetSetting,
   type TextBound,
 } from "./settings";
-import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
+import { UNSTATED_WIDGET_SIZE } from "./unstated-size";
 
-/**
- * The part of a widget that layout resolution needs, from either channel.
- *
- * `defaultSize` and `defaultHeight` are `string`, not the enums, for the reason
- * every other layout type is: a contribution may come from a plugin built
- * against a newer core, and a value outside this core's vocabulary is a shape
- * to survive rather than one to refuse.
- */
+/** The part of a widget that layout resolution needs, from either channel. */
 export interface CanonicalWidget {
   id: string;
   /**
@@ -101,25 +99,18 @@ export interface CanonicalWidget {
    */
   serverData?: true;
   requiredPermission?: WidgetPermissionGate;
-  defaultSize?: string;
   /**
-   * The smallest and largest size the declaration allows, carried so the
-   * widths a card may take come from the declaration rather than a guess.
-   * Strings, as `defaultSize` is: a newer plugin's value is one this core
-   * reads as "no bound" rather than refuses.
+   * The size the declaration states, in grid units, as stated: a registration
+   * always states one, and a contribution may not. Read through
+   * {@link sizeFacts}, the one place an unstated end or an unstated size is
+   * filled in.
    */
-  minSize?: string;
-  maxSize?: string;
-  defaultHeight?: string;
+  size?: WidgetSizeDeclaration;
   defaultOrder?: number;
   /**
-   * The widths a card of this widget may take, the width a new one starts at,
-   * and whether a dashboard may hold more than one, when the declaration
-   * states them in those terms. Absent, each is derived from the sizes above
-   * by {@link widthFacts}, which is the one place they are read.
+   * Whether a dashboard may hold more than one card of this widget, when the
+   * declaration says. Absent, {@link sizeFacts} decides from `offered`.
    */
-  allowedWidths?: readonly WidgetWidth[];
-  defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
    * Where the add panel offers this widget, as its definition states it: per
@@ -208,13 +199,8 @@ const REGISTRATION_FIELDS = [
   "category",
   "archetype",
   "requiredPermission",
-  "defaultSize",
-  "minSize",
-  "maxSize",
-  "defaultHeight",
+  "size",
   "defaultOrder",
-  "allowedWidths",
-  "defaultWidth",
   "allowsSeveral",
   "sketch",
   "serverData",
@@ -314,9 +300,10 @@ export function collectionSettingField(
  * admin renders ungated: the reader would see it and the server would refuse
  * every write naming it, which is the same disagreement in the other direction.
  *
- * `defaultSize` needs no fallback either, for a duller reason: `WidgetDefinition`
+ * `size` needs no fallback either, for a duller reason: `WidgetDefinition`
  * requires it and `validateWidgetDefinition` enforces it, so a registration
- * always states one.
+ * always states one, whole: its minimum and maximum come with its default, and
+ * a contributed bound is never mixed into a registered size.
  *
  * What is left is the fields a registration may legally omit and a contribution
  * may legally state, and for those the contribution is read.
@@ -431,18 +418,17 @@ function mergeCanonical(
   registration: CanonicalWidget
 ): CanonicalWidget {
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
-  const defaultHeight =
-    registration.defaultHeight ?? contribution.defaultHeight;
   return {
-    // The contribution's explicit width terms, field by field, wherever the
-    // registration states none: spread first, so any the registration states
-    // replace them below, as `dismissible` falls back.
-    ...widthTermsOf(contribution),
-    // The registration wholesale first: id, `requiredPermission` and
-    // `defaultSize` are its to state, including by stating nothing.
+    // The contribution's `allowsSeveral` wherever the registration states
+    // none: spread first, so one the registration states replaces it below,
+    // as `dismissible` falls back.
+    ...(contribution.allowsSeveral === undefined
+      ? {}
+      : { allowsSeveral: contribution.allowsSeveral }),
+    // The registration wholesale first: id, `requiredPermission` and `size`
+    // are its to state, including by stating nothing.
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
-    ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...flagFallback(contribution, registration),
     ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
@@ -593,29 +579,10 @@ export function declaredWidgets(): CanonicalWidget[] {
   return allWidgets().filter(widget => widget.generated !== true);
 }
 
-/** A summary's explicit width terms, and nothing else. */
-function widthTermsOf(
-  widget: CanonicalWidget
-): Pick<CanonicalWidget, "allowedWidths" | "defaultWidth" | "allowsSeveral"> {
-  return {
-    ...(widget.allowedWidths === undefined
-      ? {}
-      : { allowedWidths: widget.allowedWidths }),
-    ...(widget.defaultWidth === undefined
-      ? {}
-      : { defaultWidth: widget.defaultWidth }),
-    ...(widget.allowsSeveral === undefined
-      ? {}
-      : { allowsSeveral: widget.allowsSeveral }),
-  };
-}
-
-/** What the dashboard needs to know about a widget's widths. */
-export interface WidgetWidthFacts {
-  /** The widths a card may be set to, narrowest first. Never empty. */
-  allowedWidths: readonly WidgetWidth[];
-  /** The width a new card starts at. */
-  defaultWidth: WidgetWidth;
+/** What the dashboard needs to know about a widget's size. */
+export interface WidgetSizeFacts {
+  /** The size a new card starts at and the bounds it is kept within. */
+  size: WidgetSizeBounds;
   /** Whether one dashboard may hold more than one card of this widget. */
   allowsSeveral: boolean;
 }
@@ -639,26 +606,17 @@ export function placedByDefault(widget: CanonicalWidget): boolean {
 }
 
 /**
- * The ONE reading of a widget's widths, for the default arrangement, the
- * layout read and the check on a write alike.
+ * The ONE reading of a widget's size, for the default arrangement, the layout
+ * read and the check on a write alike.
  *
- * Explicit width terms win where a declaration states them. Otherwise the
- * allowed widths are the declared size range and the default width is the
- * declared default size, each through `widths.ts`'s one mapping. A widget
- * allows one card unless it says otherwise.
- *
- * The default width is NOT forced into the allowed list here: the registry
- * already refuses a default outside the range, and a width the widget does not
- * allow is drawn at the nearest one it does, as any stored width is.
+ * The declared size with every end filled in, through the grid size module's
+ * `sizeBounds`; a contribution that states no size is read as
+ * {@link UNSTATED_WIDGET_SIZE}, as the admin reads it. A widget allows one
+ * card unless it says otherwise.
  */
-export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
-  const allowed =
-    widget.allowedWidths !== undefined && widget.allowedWidths.length > 0
-      ? widget.allowedWidths
-      : allowedWidths(widget.minSize, widget.maxSize);
+export function sizeFacts(widget: CanonicalWidget): WidgetSizeFacts {
   return {
-    allowedWidths: allowed,
-    defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
+    size: sizeBounds(widget.size ?? UNSTATED_WIDGET_SIZE),
     // An offered widget is added on request: once for each collection, or a
     // note for each thing a reader wants to keep, so a dashboard holds several
     // of it by design.

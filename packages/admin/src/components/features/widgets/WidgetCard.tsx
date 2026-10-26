@@ -141,8 +141,6 @@ export interface WidgetCardProps {
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
-  /** Marked on the root as `data-width` for styling and tests. */
-  width?: string;
   /** The tier the answer drawn in the body was fetched at; provided as `AnswerTierContext`. */
   answerTier?: "small" | "medium" | "large";
   /**
@@ -247,7 +245,6 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
           role="region"
           aria-labelledby={labelledBy}
           data-card-id={cardId}
-          data-width={props.width}
           data-tier={tier}
           data-state={stateName(state)}
           // Read by the grid cell, which takes a card whose widget hides when empty out of the
