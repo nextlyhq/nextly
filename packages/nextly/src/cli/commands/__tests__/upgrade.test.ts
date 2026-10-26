@@ -164,3 +164,41 @@ describe("nextly upgrade runs a list of steps", () => {
     expect(lines).toContain("Already upgraded. Nothing to do.");
   });
 });
+
+describe("nextly upgrade runs its steps in order", () => {
+  it("brings each step up to date before asking the next what it has to do", async () => {
+    const testDb = await createTestDb();
+    const adapter = makeAdapter(testDb);
+    let firstRan = false;
+    const first = {
+      title: "repair the bookkeeping",
+      pending: () => Promise.resolve(firstRan ? 0 : 1),
+      run: () => {
+        firstRan = true;
+        return Promise.resolve(1);
+      },
+    };
+    // Reads what the first step repairs, so it can only count after it.
+    const second = {
+      title: "read what the bookkeeping holds",
+      pending: () =>
+        firstRan
+          ? Promise.resolve(1)
+          : Promise.reject(new Error("read before the repair")),
+      run: () => Promise.resolve(1),
+    };
+    const lines: string[] = [];
+
+    await runUpgrade(
+      { confirmBackedUp: true },
+      {
+        adapter,
+        logger: { info: msg => lines.push(msg) },
+        steps: [first, second],
+      }
+    );
+
+    expect(lines).toContain("repair the bookkeeping: 1");
+    expect(lines).toContain("read what the bookkeeping holds: 1");
+  });
+});
