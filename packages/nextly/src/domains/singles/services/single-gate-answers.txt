@@ -884,20 +884,20 @@ service permission-spelling visitor
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service permission-spelling user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling user-without
   read:404 Single "home" not found
   update:404 Single "home" not found
   publish:404 Single "home" not found
   unpublish:404 Single "home" not found
 service permission-spelling user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling super-admin
   read:A
   update:A
@@ -914,50 +914,50 @@ service permission-spelling super-admin-claimed
   publish:A
   unpublish:A
 service permission-spelling super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-without
   read:404 Single "home" not found
   update:404 Single "home" not found
   publish:404 Single "home" not found
   unpublish:404 Single "home" not found
 service permission-spelling key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-slugs-only
   read:404 Single "home" not found
   update:404 Single "home" not found
   publish:404 Single "home" not found
   unpublish:404 Single "home" not found
 service permission-spelling key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in visitor
   read:403 You can't see home.
   update:403 You can't edit home.
