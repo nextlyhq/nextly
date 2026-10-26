@@ -366,6 +366,9 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     expect(response.status).toBe(200);
     // `text` is the field the deleted browser-side render could only guess at.
     expect(await response.json()).toEqual(rendered);
+    // A render, not stored data: preview text that reads as a date is shown
+    // as the email renders it, not rewritten to the installation's timezone.
+    expect(response.headers.get("x-nextly-skip-date-formatting")).toBe("1");
     // Addressed by FIELDS, never by a row id — an unsaved draft has none.
     expect(previewDraft.mock.calls[0][0]).toMatchObject({
       subject: "Welcome, {{name}}",
