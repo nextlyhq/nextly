@@ -38,6 +38,15 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, callerHoldsPermission };
 });
 
+// The Get started steps, as the case states them; the rest of that module
+// (skips) stays real, since the endpoint applies them.
+const { getStartedSteps } = vi.hoisted(() => ({ getStartedSteps: vi.fn() }));
+vi.mock("../domains/widgets/get-started", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../domains/widgets/get-started")>();
+  return { ...actual, getStartedSteps };
+});
+
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
@@ -54,6 +63,8 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import type { PluginDefinition } from "../plugins/plugin-context";
+import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
 
 import {
   deleteWidgetLayout,
@@ -1231,6 +1242,11 @@ describe("PUT /api/dashboard/layout", () => {
     );
 
     expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: {
+        message: "Only a signed-in person can change a dashboard layout.",
+      },
+    });
     expect(saved).toBeUndefined();
   });
 
@@ -1984,6 +2000,309 @@ describe("a widget that allows one card", () => {
         placements: two("forms/many"),
         version: 0,
         scope: scopeFor(["forms/many"]),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("the Get started card in the layout read and write", () => {
+  const STARTED = "core/get-started";
+  const open = {
+    unknown: false,
+    steps: [{ key: "invite", kind: "invite", status: "open" }],
+    done: 0,
+    total: 1,
+  };
+  const finished = {
+    unknown: false,
+    steps: [{ key: "invite", kind: "invite", status: "done" }],
+    done: 1,
+    total: 1,
+  };
+  const startedCard = (
+    patch: Partial<WidgetPlacement> = {}
+  ): WidgetPlacement => ({
+    id: "started",
+    widgetId: STARTED,
+    width: "full",
+    removed: false,
+    ...patch,
+  });
+  const teamCard: WidgetPlacement = {
+    id: "team",
+    widgetId: "core/team",
+    width: "full",
+    removed: false,
+  };
+  const getStartedReq = () =>
+    new Request("http://localhost/api/dashboard/layout?getStarted=1");
+
+  beforeEach(() => {
+    registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
+    registerWidget(widget({ id: "core/team", defaultOrder: 10 }));
+  });
+
+  type WithStarted = LayoutPayload & {
+    getStarted?: { drawn: boolean; answer: unknown };
+  };
+
+  it("draws the card first in the default while a step is waiting, with the steps that decided it", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.getStarted).toEqual({ drawn: true, answer: open });
+  });
+
+  it("leaves a finished card dormant for a reader who never acted on it, and never offers it in the add panel", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(body.available).not.toContain(STARTED);
+    expect(body.getStarted?.drawn).toBe(false);
+  });
+
+  it("keeps a finished card drawn, as all set, for a reader who acted on it", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    stored = {
+      layout: serializeLayout([
+        startedCard({ config: { acted: true } }),
+        teamCard,
+      ]),
+      version: 3,
+    };
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    expect(body.getStarted?.drawn).toBe(true);
+  });
+
+  it("works out no steps for a removed card, lists it for Removed, and answers them when asked", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    stored = {
+      layout: serializeLayout([startedCard({ removed: true }), teamCard]),
+      version: 3,
+    };
+    const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
+    expect(body.placements?.find(p => p.widgetId === STARTED)?.removed).toBe(
+      true
+    );
+    expect(body.getStarted).toEqual({ drawn: false, answer: null });
+    expect(getStartedSteps).not.toHaveBeenCalled();
+
+    const asked = (await bodyOf(
+      await getWidgetLayout(getStartedReq())
+    )) as WithStarted;
+    expect(asked.getStarted).toEqual({ drawn: false, answer: open });
+  });
+
+  it("keeps the visibility token whatever the steps say, so a skip or a dismissal is never refused as stale", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    const before = await bodyOf(await getWidgetLayout(getReq()));
+    getStartedSteps.mockResolvedValue(finished);
+    const after = await bodyOf(await getWidgetLayout(getReq()));
+    expect(after.scope).toBe(before.scope);
+  });
+
+  it("carries a dormant card, with its settings, in place through a save that never held it", async () => {
+    getStartedSteps.mockResolvedValue(finished);
+    // Dormant: finished, never acted on, nothing skipped; its settings still
+    // belong to the reader.
+    const kept = startedCard({ config: { note: "kept" } });
+    stored = { layout: serializeLayout([kept, teamCard]), version: 3 };
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    await putWidgetLayout(
+      putReq({
+        placements: read.placements,
+        version: 3,
+        scope: read.scope,
+      })
+    );
+    // 🔴 Replaced as a visible card, it was deleted with its skips, because
+    // the reader's snapshot could not hold a card they were never handed.
+    expect(saved?.placements).toEqual([kept, teamCard]);
+  });
+
+  it("replaces the card as usual when the save holds it", async () => {
+    getStartedSteps.mockResolvedValue(open);
+    stored = { layout: serializeLayout([startedCard(), teamCard]), version: 3 };
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    const acted = startedCard({ config: { acted: true } });
+    await putWidgetLayout(
+      putReq({ placements: [acted, teamCard], version: 3, scope: read.scope })
+    );
+    expect(saved?.placements).toEqual([acted, teamCard]);
+  });
+});
+
+describe("a card's note", () => {
+  const noteWidget = () =>
+    widget({
+      id: "core/notes",
+      settings: [
+        { name: "text", label: "Note", type: "textarea", maxLength: 5 },
+      ],
+    });
+  const placed = (text: string) => [
+    {
+      id: "n",
+      widgetId: "core/notes",
+      width: "full",
+      removed: false,
+      config: { text },
+    },
+  ];
+
+  it("is refused over the length its widget declares, and nothing is saved", async () => {
+    registerWidget(noteWidget());
+    const res = await putWidgetLayout(
+      putReq({ placements: placed("hello!"), version: 0, scope: scopeFor() })
+    );
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Note\\" is at most 5 characters'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("is counted in characters, so five that take ten UTF-16 units fit", async () => {
+    // 🔴 The must-differ case: a bound counted by `length` refuses this.
+    registerWidget(noteWidget());
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placed("😀😀😀😀😀"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  /** A plugin contributing `acme/notes`, a card with a five-character note, through its manifest alone. */
+  const contributedNotes = () =>
+    contributedWidgetSummaries([
+      {
+        name: "@acme/notes",
+        contributes: {
+          admin: {
+            widgets: [
+              {
+                id: "acme/notes",
+                title: "Notes",
+                archetype: "metric",
+                defaultSize: "full",
+                query: { source: "collection:posts", op: "count" },
+                settings: [
+                  {
+                    name: "text",
+                    label: "Note",
+                    type: "textarea",
+                    maxLength: 5,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      } as unknown as PluginDefinition,
+    ]);
+  const placedOn = (widgetId: string, text: string) =>
+    placed(text).map(placement => ({ ...placement, widgetId }));
+
+  it("is refused on a widget a plugin contributes, which no registry holds", async () => {
+    const summaries = contributedNotes();
+    // The control: the summary reached the canonical set with its bound, so
+    // a refusal below is the bound's, not an unknown widget's.
+    expect(summaries.map(summary => summary.textBounds)).toEqual([
+      [{ name: "text", label: "Note", maxLength: 5 }],
+    ]);
+    setContributedWidgets(summaries);
+    // The reader sees the contributed widget beside the registry's.
+    const scope = scopeFor([...listWidgets().map(w => w.id), "acme/notes"]);
+
+    // 🔴 Bounded by the registry alone, this was saved: a contribution's
+    // settings never reach it.
+    const refused = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
+        version: 0,
+        scope,
+      })
+    );
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(await refused.json())).toContain(
+      '\\"Note\\" is at most 5 characters'
+    );
+    expect(saved).toBeUndefined();
+
+    // The must-differ half: within the bound, it saves.
+    const accepted = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello"),
+        version: 0,
+        scope,
+      })
+    );
+    expect(accepted.status).toBe(200);
+  });
+
+  it("keeps a contribution's bound when a registration of the same id states no settings", async () => {
+    // The admin's rule: the registration's settings wherever it states any,
+    // else the contribution's, so the sheet still bounds this note.
+    setContributedWidgets(contributedNotes());
+    registerWidget(widget({ id: "acme/notes" }));
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("takes a registration's bound over a contribution's when it states settings", async () => {
+    setContributedWidgets(contributedNotes());
+    registerWidget(
+      widget({
+        id: "acme/notes",
+        settings: [
+          { name: "text", label: "Note", type: "textarea", maxLength: 10 },
+        ],
+      })
+    );
+    // Over the contribution's five, within the registration's ten.
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placedOn("acme/notes", "hello!"),
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("still saves a note it already held, written before the bound was lowered", async () => {
+    registerWidget(noteWidget());
+    stored = {
+      version: 1,
+      layout: serializeLayout(placed("longer than five") as WidgetPlacement[]),
+    };
+    const res = await putWidgetLayout(
+      putReq({
+        placements: placed("longer than five"),
+        version: 1,
+        scope: scopeFor(),
       })
     );
     expect(res.status).toBe(200);

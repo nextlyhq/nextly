@@ -1,6 +1,14 @@
 "use client";
 
-import { Badge, Button, Textarea } from "@nextlyhq/ui";
+import { Badge, Button } from "@nextlyhq/ui";
+import { Suspense, lazy, useId, type JSX } from "react";
+
+// The admin's code editor, which reads and checks JSON; loaded with the panel.
+const CodeMirrorEditor = lazy(() =>
+  import(
+    "@admin/components/features/entries/fields/text/CodeMirrorEditor"
+  ).then(module => ({ default: module.CodeMirrorEditor }))
+);
 
 // ============================================================
 // Rail: Data tab (sample data + variable check)
@@ -18,7 +26,8 @@ export function DataRail({
   onReset: () => void;
   sampleError: string | null;
   unknownVariables: string[];
-}) {
+}): JSX.Element {
+  const errorId = useId();
   return (
     <div className="space-y-5">
       <div>
@@ -39,15 +48,36 @@ export function DataRail({
         <p className="mb-2 text-xs text-muted-foreground">
           JSON that fills the live preview. Not saved with the template.
         </p>
-        <Textarea
-          value={sampleText}
-          onChange={e => onSampleChange(e.target.value)}
-          spellCheck={false}
-          className="min-h-[220px] font-mono text-xs"
-          aria-invalid={Boolean(sampleError)}
-        />
+        <div className="rounded-md border border-input">
+          <Suspense
+            fallback={
+              <div
+                aria-hidden
+                className="h-55 animate-pulse rounded-md bg-muted/30"
+              />
+            }
+          >
+            <CodeMirrorEditor
+              label="Sample data"
+              invalid={Boolean(sampleError)}
+              describedBy={sampleError ? errorId : undefined}
+              language="json"
+              value={sampleText}
+              onChange={onSampleChange}
+              disabled={false}
+              readOnly={false}
+              minHeight={220}
+              maxHeight={480}
+              editorOptions={{
+                fontSize: 12,
+                lineNumbers: false,
+                folding: true,
+              }}
+            />
+          </Suspense>
+        </div>
         {sampleError ? (
-          <p className="mt-1.5 text-xs text-destructive">
+          <p id={errorId} className="mt-1.5 text-xs text-destructive">
             Invalid JSON: {sampleError}
           </p>
         ) : null}

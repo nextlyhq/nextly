@@ -6,6 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   Shield,
@@ -143,7 +144,7 @@ export function BulkActionBar({
   canDelete = true,
   deleteDisabledReason,
   className,
-}: BulkActionBarProps) {
+}: BulkActionBarProps): JSX.Element {
   // Computed disabled states (extracted for clarity)
   const isAnyActionLoading = isAssigningRole || isDeleting || isTogglingStatus;
   const isDeleteDisabled = !canDelete || isDeleting || isAnyActionLoading;

@@ -202,6 +202,30 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
   canManageEmailTemplates: false,
 };
 
+/** What {@link useCurrentUserPermissions} returns. */
+type CurrentUserPermissions = {
+  capabilities: AdminCapabilities;
+  permissions: string[];
+  roles: string[];
+  isSuperAdmin: boolean;
+  isLoading: boolean;
+  error: Error | null;
+  /**
+   * Whether any answer has arrived. A failed first request leaves the
+   * capabilities empty, which reads exactly like a user who holds nothing,
+   * so a guard must ask this before treating "no permission" as a refusal.
+   * A failed refresh keeps the last answer, which still counts.
+   */
+  hasAnswer: boolean;
+  /** Ask for the permissions again, after a failure. */
+  retry: () => void;
+  hasPermission: (slug: string) => boolean;
+  canAccessCollection: (
+    collectionSlug: string,
+    action: "read" | "create" | "update" | "delete"
+  ) => boolean;
+};
+
 /**
  * Hook to fetch and cache the current user's resolved permissions.
  *
@@ -225,7 +249,7 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
  * }
  * ```
  */
-export function useCurrentUserPermissions() {
+export function useCurrentUserPermissions(): CurrentUserPermissions {
   // Gate the protected fetch on the current route being private. During a
   // navigation transition from /admin to a public route (or before the
   // router has hydrated), Suspense can keep this hook mounted briefly --
@@ -293,7 +317,7 @@ export function useCurrentUserPermissions() {
      */
     hasAnswer: data !== undefined,
     /** Ask for the permissions again, after a failure. */
-    retry: () => {
+    retry: (): void => {
       void refetch();
     },
     hasPermission,

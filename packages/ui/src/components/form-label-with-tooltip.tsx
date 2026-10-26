@@ -22,10 +22,10 @@ export interface FormLabelWithTooltipProps
 }
 
 /** @public */
-export const FormLabelWithTooltip = React.forwardRef<
-  React.ElementRef<typeof Label>,
-  FormLabelWithTooltipProps
->(
+export const FormLabelWithTooltip: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<FormLabelWithTooltipProps> &
+    React.RefAttributes<React.ElementRef<typeof Label>>
+> = React.forwardRef<React.ElementRef<typeof Label>, FormLabelWithTooltipProps>(
   (
     {
       className,

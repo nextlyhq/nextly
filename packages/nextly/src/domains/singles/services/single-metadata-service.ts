@@ -57,6 +57,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
+import { appLocalization } from "../../i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import {
   applyMigrationStatements,
@@ -497,7 +498,9 @@ export class SingleMetadataService {
     // against the caller's table name so a half-finished delete can be completed.
     const current = await this.registry.getSingleBySlug(slug);
     if (current?.locked === true) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "delete",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug,
@@ -722,12 +725,8 @@ export class SingleMetadataService {
         },
       });
     }
-    // Imported when needed, as this service does for its other runtime collaborators, to keep the
-    // dispatcher's module graph out of this one. The same default locale the Single's companion
-    // reconcile reads.
-    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
-    const defaultLocale =
-      getConfigFromDI()?.localization?.defaultLocale ?? "en";
+    // The site's default language as it is now, the same one the Single's companion reconcile reads.
+    const defaultLocale = appLocalization()?.defaultLocale ?? "en";
     await archiveFieldsLeavingTranslation({
       // Singles are built by the collection schema service.
       builtBy: "collection",
@@ -757,7 +756,9 @@ export class SingleMetadataService {
       });
     }
     if (current.locked) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug: input.slug,
@@ -1334,13 +1335,12 @@ export class SingleMetadataService {
     const { moveValuesOfFieldsJoiningTranslation } = await import(
       "../../i18n/runtime/move-joining-values"
     );
-    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
     return moveValuesOfFieldsJoiningTranslation(adapter, {
       slug: input.slug,
       tableName: input.existing.tableName,
       // A single's table comes from the same builder as a collection's.
       builtBy: "collection",
-      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
       oldFields: plan.previousFields,
       newFields: plan.fields,
       wasLocalized: input.wasLocalized,

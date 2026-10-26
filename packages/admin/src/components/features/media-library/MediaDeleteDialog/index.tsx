@@ -44,6 +44,7 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useRef } from "react";
+import type { JSX } from "react";
 
 import { Loader2, AlertTriangle } from "@admin/components/icons";
 import type { Media } from "@admin/types/media";
@@ -94,7 +95,7 @@ export function MediaDeleteDialog({
   onOpenChange,
   onConfirm,
   isLoading = false,
-}: MediaDeleteDialogProps) {
+}: MediaDeleteDialogProps): JSX.Element | null {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

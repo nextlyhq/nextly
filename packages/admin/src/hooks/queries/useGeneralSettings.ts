@@ -11,7 +11,13 @@
  * @since 1.0.0
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   getGeneralSettings,
@@ -42,7 +48,10 @@ export const generalSettingsKeys = {
  *
  * This prevents stale data from showing when navigating away/back.
  */
-export function useGeneralSettings() {
+export function useGeneralSettings(): UseQueryResult<
+  GeneralSettingsRecord,
+  Error
+> {
   return useQuery<GeneralSettingsRecord, Error>({
     queryKey: generalSettingsKeys.all(),
     queryFn: getGeneralSettings,
@@ -59,7 +68,12 @@ export function useGeneralSettings() {
  * Immediately updates the query cache with the response data, ensuring
  * the UI reflects changes without waiting for a refetch.
  */
-export function useUpdateGeneralSettings() {
+export function useUpdateGeneralSettings(): UseMutationResult<
+  GeneralSettingsRecord,
+  Error,
+  UpdateGeneralSettingsPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<

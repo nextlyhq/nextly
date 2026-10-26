@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode, type JSX } from "react";
 
 type PortalContextValue = {
   container: HTMLElement | null;
@@ -15,7 +15,10 @@ interface PortalProviderProps {
 }
 
 /** @public */
-function PortalProvider({ container, children }: PortalProviderProps) {
+function PortalProvider({
+  container,
+  children,
+}: PortalProviderProps): JSX.Element {
   return (
     <PortalContext.Provider value={{ container }}>
       {children}

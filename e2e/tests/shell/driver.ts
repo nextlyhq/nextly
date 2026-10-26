@@ -187,12 +187,20 @@ export function isUnpainted(measurement: ShellRenderMeasurement): boolean {
  * page it controls. Without that, the diagnostic path runs only during a real
  * outage — the one moment nobody is placed to discover the diagnostic is itself
  * wrong.
+ *
+ * `timeout` is how long the shell is waited for. A real page gets the full
+ * allowance; a test driving the diagnostic against a page that can never
+ * become ready passes a short one, since waiting out the full allowance there
+ * proves nothing a second does not.
  */
-export async function assertShellReady(page: Page): Promise<void> {
+export async function assertShellReady(
+  page: Page,
+  { timeout = SHELL_READY_TIMEOUT_MS }: { timeout?: number } = {}
+): Promise<void> {
   try {
     await page
       .getByRole("navigation", { name: REGION_NAMES.rail })
-      .waitFor({ state: "visible", timeout: SHELL_READY_TIMEOUT_MS });
+      .waitFor({ state: "visible", timeout });
   } catch (error) {
     // Only an ABSENCE is evidence that the page did not render the shell. A
     // strict-mode violation (two matching rails), a rail hidden by CSS, and a

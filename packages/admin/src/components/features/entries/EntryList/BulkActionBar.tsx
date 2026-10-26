@@ -9,6 +9,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { EyeOff, Send, Trash2, X } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
@@ -85,7 +86,7 @@ export function BulkActionBar({
   isPublishing = false,
   onClear,
   itemLabel = "entry",
-}: BulkActionBarProps) {
+}: BulkActionBarProps): JSX.Element {
   // Publishing is its own permission, distinct from editing, and gated per
   // button rather than together: a user may hold one without the other. The
   // slug is empty when there is no collection, which no permission matches, so

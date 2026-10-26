@@ -45,11 +45,25 @@
  *
  * @module type-surface.test
  */
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  clauseName,
+  declarationFor,
+  exportStatements,
+  exportedNames,
+} from "@nextlyhq/module-specifiers/declaration-exports";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 // Imported for two reasons, and the second is the load-bearing one.
@@ -152,43 +166,11 @@ function declarationGraph(entry: string): string[] {
 
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(/from\s*['"](\.[^'"]*)['"]/g)) {
-      const resolved = resolveDeclaration(dirname(file), match[1]!);
-      if (resolved !== undefined) queue.push(resolved);
+      queue.push(declarationFor(match[1]!, file));
     }
   }
 
   return [...seen];
-}
-
-/**
- * A relative specifier as written in the emitted declarations.
- *
- * The bundler emits runtime specifiers (`./chunk-ABC.js`) inside declaration
- * files, so the extension on the page is never the extension on disk.
- */
-function resolveDeclaration(
-  from: string,
-  specifier: string
-): string | undefined {
-  const base = resolve(from, specifier).replace(/\.(m|c)?js$/, "");
-  for (const candidate of [
-    `${base}.d.ts`,
-    `${base}.d.mts`,
-    `${base}.d.cts`,
-    join(base, "index.d.ts"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  // A relative specifier inside an emitted declaration names another emitted
-  // declaration. Finding none means the artifact is INCOMPLETE — a build stopped
-  // after writing the entries and before their chunks — and returning
-  // `undefined` would walk a smaller graph, derive fewer required types, and
-  // read as a clean pass. Under-reporting the obligation is the one answer this
-  // suite must never give, so an unresolvable reference stops the run.
-  throw new Error(
-    `${specifier} is referenced by ${from} and no declaration for it exists. ` +
-      `These declarations are incomplete; rebuild before asserting against them.`
-  );
 }
 
 /**
@@ -246,17 +228,94 @@ function engineTypesIn(source: string): Set<string> {
 }
 
 /**
- * The names a declaration file actually exports.
- *
- * **The alias form is the whole difficulty, and it is why this parser exists
- * rather than a grep.** A bundled declaration re-exports as
- * `export { a as BlockRenderArgs }`, so the exported NAME is on the right of
- * `as` while the local name on the left is a generated letter; reading the
- * left-hand side concludes the type is missing when it is not. `export type
- * { ... }`, inline `{ type X }` and direct `export interface X` all have to be
- * read for the same reason — any form missed reports an absence that is not
- * there.
+ * How long the cases that read every entry's declaration graph get, which on a
+ * slow runner can exceed Vitest's default of five seconds.
  */
+const PROGRAM_TIMEOUT_MS = 60_000;
+
+/** The engine package, as the declarations import it: the root or a subpath. */
+function namesEngine(specifier: string): boolean {
+  return (
+    specifier === "@nextlyhq/blocks-engine" ||
+    specifier.startsWith("@nextlyhq/blocks-engine/")
+  );
+}
+
+const originsByFile = new Map<string, Map<string, string | undefined>>();
+
+type Statements = ReturnType<typeof parseSource>["program"]["body"];
+
+/** Each local name a file imports, with the module and the name it comes from. */
+function importedBindings(
+  body: Statements
+): Map<string, { from: string; name: string }> {
+  const bindings = new Map<string, { from: string; name: string }>();
+  for (const statement of body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type !== "ImportSpecifier") continue;
+      bindings.set(specifier.local.name, {
+        from: statement.source.value,
+        name: clauseName(specifier.imported),
+      });
+    }
+  }
+  return bindings;
+}
+
+/** The engine's name for `name` as `file` reaches it from `from`, or undefined. */
+function originThrough(
+  file: string,
+  from: string,
+  name: string
+): string | undefined {
+  if (namesEngine(from)) return name;
+  if (!from.startsWith(".")) return undefined;
+  return exportOrigins(declarationFor(from, file)).get(name);
+}
+
+/**
+ * What each name a declaration file exports is, by where it comes from: the
+ * engine type's own name when the export is the engine's, undefined when it is
+ * declared in this package.
+ *
+ * Read from the declarations' import and export clauses, which decide it: an
+ * export names a binding, a binding imported from the engine is the engine's,
+ * and one imported from a chunk is whatever that chunk exports under the name.
+ * The bundler is free to route an engine type through a chunk of its own,
+ * import it there, export it under a generated letter and re-export that from
+ * the entry, so the chain is followed rather than the entry's own imports read.
+ * An `export *` names no binding to follow and is refused rather than read as
+ * exporting nothing.
+ */
+function exportOrigins(file: string): Map<string, string | undefined> {
+  const known = originsByFile.get(file);
+  if (known !== undefined) return known;
+  const origins = new Map<string, string | undefined>();
+  // A chunk that reaches back to a file still being read has no answer yet.
+  originsByFile.set(file, origins);
+
+  const { body } = parseSource(readFileSync(file, "utf8"), file).program;
+  const imports = importedBindings(body);
+  const { named, stars } = exportStatements(file);
+  const star = stars[0];
+  if (star !== undefined) {
+    throw new Error(
+      `${file} re-exports everything from ${star.from}, which names nothing to follow`
+    );
+  }
+  for (const { exported, local, from } of named) {
+    const imported = imports.get(local);
+    origins.set(
+      exported,
+      from !== undefined
+        ? originThrough(file, from, local)
+        : imported && originThrough(file, imported.from, imported.name)
+    );
+  }
+  return origins;
+}
+
 /**
  * The engine types a declaration RE-EXPORTS, keyed by their name in the engine.
  *
@@ -272,46 +331,12 @@ function engineTypesIn(source: string): Set<string> {
  * in: a re-export may rename freely, and `BlockRenderArgs as EngineBlockRenderArgs`
  * still supplies the engine type a consumer needs.
  */
-function engineReExports(declaration: string): Set<string> {
-  const names = new Set<string>();
-
-  for (const block of declaration.matchAll(
-    /export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]@nextlyhq\/blocks-engine['"]/g
-  )) {
-    for (const clause of block[1]!.split(",")) {
-      const trimmed = clause.trim().replace(/^type\s+/, "");
-      if (trimmed === "") continue;
-      const original = trimmed.split(/\s+as\s+/)[0]?.trim();
-      if (original !== undefined && original !== "") names.add(original);
-    }
-  }
-
-  return names;
-}
-
-function exportedNames(declaration: string): Set<string> {
-  const names = new Set<string>();
-
-  for (const block of declaration.matchAll(
-    /export\s+(?:type\s+)?\{([^}]*)\}/g
-  )) {
-    for (const clause of block[1]!.split(",")) {
-      const trimmed = clause.trim().replace(/^type\s+/, "");
-      if (trimmed === "") continue;
-      // `a as BlockRenderArgs` exports the RIGHT-hand name.
-      const parts = trimmed.split(/\s+as\s+/);
-      const exported = (parts[parts.length - 1] ?? "").trim();
-      if (exported !== "") names.add(exported);
-    }
-  }
-
-  for (const declared of declaration.matchAll(
-    /export\s+(?:declare\s+)?(?:type|interface|const|function|class)\s+([A-Za-z0-9_$]+)/g
-  )) {
-    names.add(declared[1]!);
-  }
-
-  return names;
+function engineReExports(declarationFile: string): Set<string> {
+  return new Set(
+    [...exportOrigins(declarationFile).values()].filter(
+      (name): name is string => name !== undefined
+    )
+  );
 }
 
 /** The nearest `package.json` at or above a resolved module file. */
@@ -400,7 +425,7 @@ function engineSurface(): EngineSurface {
   // Exports come from the ENTRY alone. A chunk exports for the entry to
   // re-export, so reading the graph here would report a private declaration as
   // published purely because the bundler had to move it.
-  return { declarations, exported: exportedNames(readFileSync(entry, "utf8")) };
+  return { declarations, exported: exportedNames(entry) };
 }
 
 /** A `type X = ...` runs to its terminating `;` at nesting depth zero. */
@@ -503,23 +528,39 @@ describe("the published type surface", () => {
       []
     );
 
-    expect([
-      ...exportedNames(
-        `export { a as BlockRenderArgs, type b as NodeStyles };\n` +
-          `export type { PageStyles } from './styles.js';\n` +
-          `export interface DerivedPageSeo {}\n` +
-          `export declare function createBlocksPage(): void;`
-      ),
-    ]).toEqual([
-      "BlockRenderArgs",
-      "NodeStyles",
-      "PageStyles",
-      "DerivedPageSeo",
-      "createBlocksPage",
-    ]);
+    // The export forms the bundler emits are pinned where they are read, in
+    // module-specifiers' declaration-exports.test.ts.
+  });
 
-    // A name only MENTIONED is the case the whole test exists to separate.
-    expect([...exportedNames(`interface BlockDocument {}`)]).toEqual([]);
+  it("follows an engine type the bundler routes through a chunk under a generated name", () => {
+    // Today's entries import the engine directly, so the build does not
+    // exercise this route; the fixture does. The local `Own` shares nothing
+    // with the engine and must not count, and a re-export of everything names
+    // no binding to follow, so it is refused rather than read as exporting none.
+    const dir = mkdtempSync(join(tmpdir(), "type-surface-"));
+    try {
+      writeFileSync(
+        join(dir, "chunk-a1.d.ts"),
+        'import { BlockDefinition } from "@nextlyhq/blocks-engine";\nexport { BlockDefinition as t };\n'
+      );
+      writeFileSync(
+        join(dir, "index.d.ts"),
+        'import { t as BlockDefinition$1 } from "./chunk-a1.js";\ninterface Own {}\nexport { BlockDefinition$1 as BlockDefinition, type Own };\n'
+      );
+      expect([...engineReExports(join(dir, "index.d.ts"))]).toEqual([
+        "BlockDefinition",
+      ]);
+
+      writeFileSync(
+        join(dir, "star.d.ts"),
+        'export * from "@nextlyhq/blocks-engine";\n'
+      );
+      expect(() => engineReExports(join(dir, "star.d.ts"))).toThrow(
+        /names nothing to follow/
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("declares a sentinel for every entry the manifest exports", () => {
@@ -530,92 +571,97 @@ describe("the published type surface", () => {
     ).toEqual(Object.keys(SENTINELS).sort());
   });
 
-  it("exports every engine type its declarations name, per entry", () => {
-    const entries = entryPoints();
+  it(
+    "exports every engine type its declarations name, per entry",
+    () => {
+      const entries = entryPoints();
 
-    for (const entry of entries) {
-      expect(
-        existsSync(entry.declaration),
-        `${entry.declaration} is missing — run \`pnpm build --filter @nextlyhq/blocks-react\``
-      ).toBe(true);
-    }
+      for (const entry of entries) {
+        expect(
+          existsSync(entry.declaration),
+          `${entry.declaration} is missing — run \`pnpm build --filter @nextlyhq/blocks-react\``
+        ).toBe(true);
+      }
 
-    const exportsBySubpath = new Map<string, Set<string>>(
-      entries.map(entry => [
-        entry.subpath,
-        exportedNames(readFileSync(entry.declaration, "utf8")),
-      ])
-    );
+      const exportsBySubpath = new Map<string, Set<string>>(
+        entries.map(entry => [entry.subpath, exportedNames(entry.declaration)])
+      );
 
-    // The positive control, and it is load-bearing. A parser that found NOTHING
-    // would assert nothing at all and read as a clean pass.
-    for (const [subpath, sentinel] of Object.entries(SENTINELS)) {
-      expect(
-        exportsBySubpath.get(subpath)?.has(sentinel),
-        `parser found no \`${sentinel}\` in the "${subpath}" entry`
-      ).toBe(true);
-      expect(
-        ENTRY_MODULES[subpath]?.[sentinel],
-        `the "${subpath}" module does not export \`${sentinel}\` at runtime`
-      ).toBeDefined();
-    }
+      // The positive control, and it is load-bearing. A parser that found NOTHING
+      // would assert nothing at all and read as a clean pass.
+      for (const [subpath, sentinel] of Object.entries(SENTINELS)) {
+        expect(
+          exportsBySubpath.get(subpath)?.has(sentinel),
+          `parser found no \`${sentinel}\` in the "${subpath}" entry`
+        ).toBe(true);
+        expect(
+          ENTRY_MODULES[subpath]?.[sentinel],
+          `the "${subpath}" module does not export \`${sentinel}\` at runtime`
+        ).toBeDefined();
+      }
 
-    // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
-    // whole export list: a local declaration sharing a name discharges nothing.
-    const engineBySubpath = new Map<string, Set<string>>(
-      entries.map(entry => [
-        entry.subpath,
-        engineReExports(readFileSync(entry.declaration, "utf8")),
-      ])
-    );
+      // Satisfaction is judged on RE-EXPORTS of the engine, not on the entry's
+      // whole export list: a local declaration sharing a name discharges nothing.
+      const engineBySubpath = new Map<string, Set<string>>(
+        entries.map(entry => [
+          entry.subpath,
+          engineReExports(entry.declaration),
+        ])
+      );
 
-    const rootExports = engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
-    const missing: Record<string, string[]> = {};
+      const rootExports =
+        engineBySubpath.get(ROOT_SUBPATH) ?? new Set<string>();
+      const missing: Record<string, string[]> = {};
 
-    for (const entry of entries) {
-      const required = engineTypesNamed(declarationGraph(entry.declaration));
-      // A graph walk that reached no chunk, or a scan that matched no import
-      // form, requires nothing and reads as a clean pass.
-      expect(
-        required.size,
-        `no engine types derived for the "${entry.subpath}" entry`
-      ).toBeGreaterThan(0);
+      for (const entry of entries) {
+        const required = engineTypesNamed(declarationGraph(entry.declaration));
+        // A graph walk that reached no chunk, or a scan that matched no import
+        // form, requires nothing and reads as a clean pass.
+        expect(
+          required.size,
+          `no engine types derived for the "${entry.subpath}" entry`
+        ).toBeGreaterThan(0);
 
-      const reachable = engineBySubpath.get(entry.subpath) ?? new Set<string>();
-      const unreachable = [...required]
-        .filter(name => !reachable.has(name) && !rootExports.has(name))
+        const reachable =
+          engineBySubpath.get(entry.subpath) ?? new Set<string>();
+        const unreachable = [...required]
+          .filter(name => !reachable.has(name) && !rootExports.has(name))
+          .sort();
+        if (unreachable.length > 0) missing[entry.subpath] = unreachable;
+      }
+
+      expect(missing).toEqual({});
+    },
+    PROGRAM_TIMEOUT_MS
+  );
+
+  it(
+    "exports every engine type reachable from the ones it re-exports",
+    () => {
+      const { declarations, exported } = engineSurface();
+      // A parse that produced nothing would make every closure empty and every
+      // obligation vacuous.
+      expect(declarations.size).toBeGreaterThan(50);
+      expect(declarations.get("BlockDefinition")?.kind).toBe("interface");
+      // Traversal must reach declarations the engine keeps private, or the
+      // exported types composed through them go unexamined.
+      expect(declarations.has("BindingBase")).toBe(true);
+      expect(exported.has("BindingBase")).toBe(false);
+
+      const rootExports = engineReExports(
+        entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!.declaration
+      );
+      const reExported = [...rootExports].filter(name =>
+        declarations.has(name)
+      );
+      expect(reExported.length).toBeGreaterThan(4);
+
+      const unwritable = [...reachableTypes(reExported, declarations)]
+        .filter(name => exported.has(name) && !rootExports.has(name))
         .sort();
-      if (unreachable.length > 0) missing[entry.subpath] = unreachable;
-    }
 
-    expect(missing).toEqual({});
-  });
-
-  it("exports every engine type reachable from the ones it re-exports", () => {
-    const { declarations, exported } = engineSurface();
-    // A parse that produced nothing would make every closure empty and every
-    // obligation vacuous.
-    expect(declarations.size).toBeGreaterThan(50);
-    expect(declarations.get("BlockDefinition")?.kind).toBe("interface");
-    // Traversal must reach declarations the engine keeps private, or the
-    // exported types composed through them go unexamined.
-    expect(declarations.has("BindingBase")).toBe(true);
-    expect(exported.has("BindingBase")).toBe(false);
-
-    const rootExports = engineReExports(
-      readFileSync(
-        entryPoints().find(entry => entry.subpath === ROOT_SUBPATH)!
-          .declaration,
-        "utf8"
-      )
-    );
-    const reExported = [...rootExports].filter(name => declarations.has(name));
-    expect(reExported.length).toBeGreaterThan(4);
-
-    const unwritable = [...reachableTypes(reExported, declarations)]
-      .filter(name => exported.has(name) && !rootExports.has(name))
-      .sort();
-
-    expect(unwritable).toEqual([]);
-  });
+      expect(unwritable).toEqual([]);
+    },
+    PROGRAM_TIMEOUT_MS
+  );
 });

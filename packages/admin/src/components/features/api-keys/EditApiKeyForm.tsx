@@ -12,7 +12,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, FieldShell, FormActions, Input, Textarea } from "@nextlyhq/ui";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type JSX } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -27,7 +27,10 @@ import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 // Schema
 // ============================================================
 
-const editApiKeySchema = z.object({
+const editApiKeySchema: z.ZodObject<{
+  name: z.ZodString;
+  description: z.ZodOptional<z.ZodString>;
+}> = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name is too long"),
   description: z.string().max(500, "Description is too long").optional(),
 });
@@ -105,7 +108,7 @@ export function EditApiKeyForm({
   apiKey,
   isPending,
   onSubmit,
-}: EditApiKeyFormProps) {
+}: EditApiKeyFormProps): JSX.Element {
   const form = useForm<EditApiKeyFormValues>({
     resolver: zodResolver(editApiKeySchema),
     defaultValues: {

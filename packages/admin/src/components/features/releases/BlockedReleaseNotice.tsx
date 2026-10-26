@@ -15,6 +15,8 @@
  * @module components/features/releases/BlockedReleaseNotice
  */
 
+import type { JSX } from "react";
+
 import { Card } from "@admin/components/ui";
 import type {
   HiddenReleaseMembers,
@@ -43,7 +45,7 @@ export function BlockedReleaseNotice({
   blockers: ReleaseBlocker[];
   /** Blocked documents the reader may not read, counted by collection. */
   hidden?: HiddenReleaseMembers[];
-}) {
+}): JSX.Element {
   const hiddenCount = hiddenTotal(hidden);
   // A blocked release with nothing to report means the cause has been fixed
   // since it stopped — which is the point of deriving this rather than storing

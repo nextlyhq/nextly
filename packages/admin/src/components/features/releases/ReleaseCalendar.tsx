@@ -41,6 +41,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import { ChevronLeft, ChevronRight } from "@admin/components/icons";
@@ -281,7 +282,7 @@ function CalendarReadFailures({
   );
 }
 
-export function ReleaseCalendar() {
+export function ReleaseCalendar(): JSX.Element {
   const reader = useMemo(() => readerZone(), []);
   const [zone, setZone] = useState(reader);
   const now = useMinuteClock();

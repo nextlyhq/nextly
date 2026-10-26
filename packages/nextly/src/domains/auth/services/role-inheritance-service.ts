@@ -10,7 +10,10 @@ import type {
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
-import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+import {
+  refuseRemovingLastSuperAdmin,
+  type LastSuperAdminTx,
+} from "../../users/services/last-super-admin";
 
 import {
   listDescendantRoleIds,
@@ -127,14 +130,25 @@ export class RoleInheritanceService extends BaseService {
     parentRoleId: string
   ): Promise<void> {
     await this.refuseEditingSystemRole(parentRoleId);
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.roleInherits)
-      .where(
-        and(
-          eq(this.tables.roleInherits.childRoleId, childRoleId),
-          eq(this.tables.roleInherits.parentRoleId, parentRoleId)
-        )
+    // In a transaction of its own, under the lock every change to who is a
+    // super-admin takes: the role's holders may be super-admins only through
+    // this inheritance, and the last of them is kept.
+    await this.withTransaction(async tx => {
+      await refuseRemovingLastSuperAdmin(
+        tx as LastSuperAdminTx,
+        this.tables,
+        this.dialect,
+        { kind: "removeInheritance", parentRoleId, childRoleId }
       );
+      await (tx as RBACDatabaseInstance)
+        .delete(this.tables.roleInherits)
+        .where(
+          and(
+            eq(this.tables.roleInherits.childRoleId, childRoleId),
+            eq(this.tables.roleInherits.parentRoleId, parentRoleId)
+          )
+        );
+    });
 
     await afterRoleGrantsChanged(childRoleId);
   }
@@ -156,7 +170,9 @@ export class RoleInheritanceService extends BaseService {
       .where(eq(roles.id, roleId))
       .limit(1)) as Array<{ isSystem: unknown }>;
     if (role && Boolean(role.isSystem)) {
-      throw NextlyError.forbidden({
+      throw NextlyError.builtIn({
+        thing: "role",
+        change: "change",
         logContext: { reason: "system-role-immutable", roleId },
       });
     }

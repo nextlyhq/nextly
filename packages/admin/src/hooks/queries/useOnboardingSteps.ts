@@ -43,6 +43,8 @@ export interface OnboardingStepState {
 
 interface OnboardingResponse {
   steps: unknown;
+  /** Whether the host could not check setup at all; absent from an older host. */
+  unknown?: unknown;
 }
 
 /** The one query key this feature owns. */
@@ -143,7 +145,13 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
   const totalCount = steps.length;
   // A rejected row means the checklist this build can see is not the checklist
   // the host has, so completeness cannot be concluded from what is left.
-  const finished = !rejected && totalCount > 0 && completedCount === totalCount;
+  // 🔴 A host that could not check setup still sends the rows it could answer,
+  // all of them possibly done. It goes on offering the card for exactly that
+  // reason, so those rows must not read as a finished checklist, and must not
+  // ask for a layout that will only offer the card again.
+  const notKnown = query.data?.unknown === true;
+  const finished =
+    !rejected && !notKnown && totalCount > 0 && completedCount === totalCount;
 
   // Finishing the last step is the moment the card stops being offered, and
   // the layout query neither polls nor refetches except on focus -- so without
@@ -193,7 +201,8 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
     isPending: query.isPending,
     // A row this build could not read leaves the card unable to describe the
     // reader's progress, which is the same position a failed request leaves it
-    // in -- and both are better said than guessed at.
-    isUnavailable: query.isError || rejected,
+    // in -- and both are better said than guessed at. So does a host that
+    // could not check setup.
+    isUnavailable: query.isError || rejected || notKnown,
   };
 }

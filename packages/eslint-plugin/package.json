@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/eslint-plugin",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "ESLint rules that keep Nextly admin UI on the design-token system — for first-party packages and for plugins built by anyone else.",
   "license": "MIT",
   "repository": {
@@ -23,21 +23,18 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "eslint ."
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "eslint": ">=9.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.34.0",
-    "@typescript-eslint/parser": "^8.59.0",
     "eslint": "^9.39.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "oxlint": "1.89.0",
+    "vitest": "^5.0.5"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "publishConfig": {
     "access": "public",

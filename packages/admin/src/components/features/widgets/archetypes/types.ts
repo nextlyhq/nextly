@@ -57,9 +57,14 @@ export type ArchetypeBody = (
 export interface DeclaredWidget {
   archetype?: string;
   title?: string;
+  /** Set when core builds the card's data on the server: it has no query to judge. */
+  serverData?: true;
   query?: { select?: string[]; op?: string };
-  /** What a `stats` card draws. Judged before any request, like `query`. */
-  cells?: ReadonlyArray<{ key: string; label: string }>;
+  /**
+   * What a `stats` card draws. Judged before any request, like `query`. A
+   * custom card's keyed reads carry no label, and no archetype draws them.
+   */
+  cells?: ReadonlyArray<{ key: string; label?: string }>;
 }
 
 /**

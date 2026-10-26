@@ -34,7 +34,7 @@ import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
 import type { EditorState, SerializedEditorState } from "lexical";
 import { $createParagraphNode, $getRoot, CLEAR_HISTORY_COMMAND } from "lexical";
 import type { RichTextFieldConfig } from "nextly/config";
-import type { RefObject } from "react";
+import type { JSX, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useController,
@@ -177,7 +177,7 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: RichTextInputProps<TFieldValues>) {
+}: RichTextInputProps<TFieldValues>): JSX.Element {
   const {
     field: { value, onChange },
   } = useController({

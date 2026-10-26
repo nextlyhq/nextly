@@ -34,7 +34,7 @@
  */
 
 /**
- * The extensions TypeScript and tsup follow.
+ * The extensions TypeScript and the bundler follow.
  *
  * `.mts` and `.cts` are here because both tools resolve them. A module written
  * with either extension is a module the bundler follows, so a list omitting
@@ -54,7 +54,7 @@ export const MODULE_EXTENSIONS = [
 const ANY_EXTENSION = MODULE_EXTENSIONS.join("|");
 
 /** A file the bundler will follow, and therefore one a guard must read. */
-export const BUNDLED_MODULE = new RegExp(`\\.(?:${ANY_EXTENSION})$`);
+export const BUNDLED_MODULE: RegExp = new RegExp(`\\.(?:${ANY_EXTENSION})$`);
 
 /**
  * A file that runs as a test, and may therefore import test-only tooling.
@@ -63,10 +63,14 @@ export const BUNDLED_MODULE = new RegExp(`\\.(?:${ANY_EXTENSION})$`);
  * derived from one list is what stops the guard trusting a file the runner
  * ignores.
  */
-export const TEST_MODULE = new RegExp(`\\.test\\.(?:${ANY_EXTENSION})$`);
+export const TEST_MODULE: RegExp = new RegExp(
+  `\\.test\\.(?:${ANY_EXTENSION})$`
+);
 
 /** The same set as {@link TEST_MODULE}, in the form `vitest.config.ts` takes. */
-export const TEST_GLOBS = MODULE_EXTENSIONS.map(ext => `src/**/*.test.${ext}`);
+export const TEST_GLOBS: string[] = MODULE_EXTENSIONS.map(
+  ext => `src/**/*.test.${ext}`
+);
 
 /**
  * Every module beneath a directory, found by one rule.

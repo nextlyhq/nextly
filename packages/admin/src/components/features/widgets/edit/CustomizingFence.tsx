@@ -13,7 +13,7 @@
  * @module components/features/widgets/edit/CustomizingFence
  */
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -23,9 +23,10 @@ import { cn } from "@admin/lib/utils";
  * Through the DOM rather than as a prop, because the admin runs on React 18
  * and 19 and they disagree about the attribute: React 18 drops a boolean
  * `inert`, and React 19 reads the string form `""` as false. Attached only
- * while customising, since the fence itself exists only then.
+ * while customising, since the fence itself exists only then; the settings
+ * sheet's preview uses it too, for a card that is shown and not used.
  */
-function fenceOff(element: HTMLElement | null): void {
+export function fenceOff(element: HTMLElement | null): void {
   element?.setAttribute("inert", "");
 }
 
@@ -41,7 +42,7 @@ export function CustomizingFence({
    */
   framed: boolean;
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <div
       ref={fenceOff}
@@ -66,7 +67,7 @@ export function CustomizingFence({
  * fence, so the header reserves their space and its title truncates before
  * them rather than running underneath. Sized for the widest label, "Full".
  */
-export function CardControlsSpace() {
+export function CardControlsSpace(): JSX.Element {
   return <span aria-hidden className="block h-7 w-16" />;
 }
 
@@ -77,7 +78,11 @@ export function CardControlsSpace() {
  * lands exactly where the header's own padding puts its last item. The outer
  * layer lets the pointer through to the card everywhere but the controls.
  */
-export function CardControlsOverlay({ children }: { children: ReactNode }) {
+export function CardControlsOverlay({
+  children,
+}: {
+  children: ReactNode;
+}): JSX.Element {
   return (
     <div className="pointer-events-none absolute inset-px z-10">
       <div className="pointer-events-auto absolute right-5 top-5">

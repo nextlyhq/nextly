@@ -62,6 +62,7 @@ export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-fiel
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
+export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
@@ -120,3 +121,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksSqlite as nextlyPreviewLinks } from "../preview-links/sqlite";
+export { nextlyLanguagesSqlite as nextlyLanguages } from "../languages/sqlite";

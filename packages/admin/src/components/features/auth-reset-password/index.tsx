@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -25,7 +26,9 @@ interface ResetPasswordProps {
   searchParams?: Record<string, string | string[] | undefined>;
 }
 
-export function ResetPassword({ searchParams }: ResetPasswordProps) {
+export function ResetPassword({
+  searchParams,
+}: ResetPasswordProps): JSX.Element {
   const token =
     typeof searchParams?.token === "string" ? searchParams.token : null;
 

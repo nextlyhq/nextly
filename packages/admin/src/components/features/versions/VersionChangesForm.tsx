@@ -15,6 +15,7 @@
 
 import type { FieldConfig } from "nextly/config";
 import { Fragment } from "react";
+import type { JSX } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
 import { cn } from "@admin/lib/utils";
@@ -115,7 +116,7 @@ export function VersionChangesForm({
   current,
   showUnchanged,
   onToggleUnchanged,
-}: VersionChangesFormProps) {
+}: VersionChangesFormProps): JSX.Element {
   const inLayout = new Set(
     fields.flatMap(field =>
       "name" in field && typeof field.name === "string" ? [field.name] : []

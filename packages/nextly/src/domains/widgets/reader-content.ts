@@ -35,9 +35,11 @@ import {
 } from "../../auth/entity-read-access";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
+import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 
+import { createDisabledCollections } from "./collection-sources";
 import { isKeptOffDashboard } from "./kept-off-dashboard";
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -78,11 +80,32 @@ function readArgs(caller: ReadCaller) {
 export async function readableCollectionSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const readable =
-    (await readableSlugAllowlist(readAccessCaller(caller), "collection")) ?? [];
-  // A collection kept off the dashboard does not make a content card worth offering: the card
-  // would leave it out and draw empty.
-  return readable.filter(slug => !isKeptOffDashboard("collection", slug));
+  return (await readableOfKind(caller, "collection")).slugs;
+}
+
+/**
+ * The reader's slugs of one kind as the dashboard counts them, and whether the
+ * registry could be read.
+ *
+ * 🔴 `reachable` is kept rather than folded into an empty list. An unreadable
+ * registry reads as "nothing here" to anything that sees only the slugs, and
+ * "nothing here" is the answer that offers the empty-install cards and ticks
+ * no setup step: a registry outage would tell an established site that it had
+ * no content. Whoever decides what to tell the reader reads `reachable`.
+ *
+ * Less what the dashboard keeps off: a collection or Single kept off it does
+ * not make a card worth offering, since the card would leave it out and draw
+ * empty.
+ */
+export async function readableOfKind(
+  caller: ReadCaller,
+  kind: "collection" | "single"
+): Promise<{ slugs: string[]; reachable: boolean }> {
+  const read = await readableSlugsOfKind(readAccessCaller(caller), kind);
+  return {
+    slugs: read.slugs.filter(slug => !isKeptOffDashboard(kind, slug)),
+    reachable: read.reachable,
+  };
 }
 
 /**
@@ -95,10 +118,7 @@ export async function readableCollectionSlugs(
 export async function readableSingleSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const readable =
-    (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? [];
-  // Kept off the dashboard, for the reason the collections' are.
-  return readable.filter(slug => !isKeptOffDashboard("single", slug));
+  return (await readableOfKind(caller, "single")).slugs;
 }
 
 /**
@@ -123,19 +143,23 @@ export async function readableSingleSlugs(
  * Short-circuits on the first grant, and walks in {@link authorizationGroups}
  * order otherwise: one decision, then bounded groups, so a cold per-user cache
  * is populated once rather than missed by every member of the first fan-out.
+ *
+ * `mayCreateIn` decides one collection, {@link createVerdict} by default. A
+ * caller asking this over two sets for one request passes one memoised across
+ * both, so no collection's rules are evaluated twice and the two answers cannot
+ * disagree about it.
  */
 export async function readerMayCreateEntry(
   caller: ReadCaller,
-  readable: readonly string[]
+  readable: readonly string[],
+  mayCreateIn: (slug: string) => Promise<boolean> = createVerdict(caller)
 ): Promise<boolean> {
   for (const group of authorizationGroups(readable)) {
     // `allSettled`, as the read decision beside it: a lookup that threw has
     // told us nothing, and nothing must not read as a grant. The slug counts
     // as refused and the rest of the set still answers.
     const settled = await Promise.allSettled(
-      group.map(slug =>
-        callerMayPerform(caller.authenticatedScope, "create", slug, caller.user)
-      )
+      group.map(slug => mayCreateIn(slug))
     );
     if (settled.some(result => result.status === "fulfilled" && result.value)) {
       return true;
@@ -145,23 +169,67 @@ export async function readerMayCreateEntry(
 }
 
 /**
- * Of the reader's collections, the ones a widget may QUERY.
- *
- * A published `collection:` source is what says a collection's stored shape is
- * not known to be ahead of its table: the source builder withholds one whose
- * DDL a reload refused, and one whose migration label declines to claim the
- * table. A count over a collection outside this set may throw -- the table
- * can be absent -- and a condition that throws goes unanswered, which HIDES
- * its widget; so the walk below stays inside it, and a fresh install whose one
- * collection is mid-migration keeps its onboarding card.
+ * Whether this reader may create an entry in one collection: the decision a
+ * real write makes, through {@link callerMayPerform}.
  */
-function queryableCollectionSlugs(readable: readonly string[]): string[] {
+export function createVerdict(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  return slug =>
+    callerMayPerform(caller.authenticatedScope, "create", slug, caller.user);
+}
+
+/**
+ * Of the reader's collections or Singles, the ones a widget may QUERY.
+ *
+ * A published source is what says an entity's stored shape is not known to be
+ * ahead of its table: the source builder withholds one whose DDL a reload
+ * refused, and one whose migration label declines to claim the table. A read
+ * of an entity outside this set may throw -- the table can be absent -- and a
+ * condition that throws goes unanswered, which HIDES its widget; so the walks
+ * here stay inside it, and a fresh install whose one collection is
+ * mid-migration keeps its onboarding card.
+ */
+export function queryableSlugs(
+  kind: "collection" | "single",
+  readable: readonly string[]
+): string[] {
   const published = new Set(
     listSources()
-      .filter(source => sourceKindFromId(source.id) === "collection")
+      .filter(source => sourceKindFromId(source.id) === kind)
       .map(source => sourceTarget(source.id))
   );
   return readable.filter(slug => published.has(slug));
+}
+
+/**
+ * The collections whose definition turns creating entries off in the admin
+ * (`admin.disableCreate`, as a form's submissions do). The Create card offers
+ * none of them, so neither may the condition that offers the card.
+ *
+ * Read from the record the source refresh keeps (`createDisabledCollections`),
+ * which every dashboard request makes before it asks a condition: one read of
+ * every collection's definition per request, not a second one here.
+ *
+ * THROWS while the registry has never been read. "Unknown" must not read as
+ * "none turn creating off", which would offer Create on a collection the card
+ * then leaves out; a condition that throws goes unanswered, and the optional
+ * card it decides is withheld.
+ */
+export function createDisabledSlugs(): Promise<ReadonlySet<string>> {
+  const recorded = createDisabledCollections();
+  // A rejection rather than a throw: the probe asks this inside `Promise.all`,
+  // and the refusal belongs to the one condition that asked.
+  if (recorded === undefined) {
+    return Promise.reject(
+      NextlyError.internal({
+        logContext: {
+          reason: "the collection registry has not been read this process",
+        },
+      })
+    );
+  }
+  return Promise.resolve(recorded);
 }
 
 /**
@@ -214,7 +282,8 @@ export async function readerHasContent(
    */
   resolved?: readonly string[]
 ): Promise<ContentAnswer> {
-  const slugs = queryableCollectionSlugs(
+  const slugs = queryableSlugs(
+    "collection",
     resolved ?? (await readableCollectionSlugs(caller))
   );
   return anyHoldsEntry(slugs, async slug => {

@@ -200,6 +200,10 @@ describe("createWebhook", () => {
     );
 
     expect(res.status).toBe(403);
+    // Told why: what kind of caller asked, not a permission it lacks.
+    expect(await res.json()).toMatchObject({
+      error: { message: "Only a signed-in person can manage webhooks." },
+    });
     expect(createEndpoint).not.toHaveBeenCalled();
   });
 

@@ -27,6 +27,7 @@ import {
   isErrorResponse,
   type AuthContext,
   type ErrorResponse,
+  type RefusalTarget,
 } from "@nextly/auth/middleware";
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
@@ -53,6 +54,7 @@ import {
   releaseLock,
   renewLock,
 } from "./api/document-lock";
+import { buildErrorResponse } from "./api/error-response";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -66,6 +68,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import {
   listPreviewLinks,
@@ -84,6 +87,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
+import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -126,7 +130,11 @@ import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "./domains/auth/services/super-admin-grant";
+} from "./domains/auth/services/role-change-caller";
+import {
+  appLocalization,
+  withCurrentLanguages,
+} from "./domains/i18n/configured-locales";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -137,6 +145,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
 import {
@@ -364,6 +373,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "notices",
   "jobs",
   "generalSettings",
+  "languages",
   "previewLinks",
   "previewUrl",
   "imageSizes",
@@ -372,6 +382,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
@@ -419,6 +430,41 @@ async function handleWebhookRequest(
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
+}
+
+/** Delegate a languages request to its handler, which manages its own auth and body. */
+async function handleLanguagesRequest(
+  req: Request,
+  httpMethod: string
+): Promise<Response> {
+  switch (httpMethod) {
+    case "GET":
+      return getLanguages(req);
+    case "POST":
+      return changeLanguages(req);
+    default:
+      return methodNotAllowed(req, ["GET", "POST"]);
+  }
+}
+
+/**
+ * The canonical refusal for a verb a route does not serve, with the `Allow` header HTTP requires.
+ *
+ * Built and RETURNED rather than thrown, for the reason the builder gate is: this runs outside
+ * the dispatcher's NextlyError-to-response mapping, so a throw would surface as a 500. Serialized
+ * by the same `buildErrorResponse` every error boundary uses, so the body carries the code, the
+ * sentence and the request id Nextly's own error parser reads.
+ */
+function methodNotAllowed(req: Request, allowed: readonly string[]): Response {
+  const response = buildErrorResponse(
+    new NextlyError({
+      code: "METHOD_NOT_ALLOWED",
+      publicMessage: genericPublicMessage("METHOD_NOT_ALLOWED"),
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+  response.headers.set("allow", allowed.join(", "));
+  return response;
 }
 
 /**
@@ -805,6 +851,15 @@ export const _needsResolvedRolesForTest = needsResolvedRoles;
 export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
 
 /**
+ * What a refused read of permissions names, whichever of the grants it
+ * accepts the caller lacked.
+ */
+const READING_PERMISSIONS: RefusalTarget = {
+  action: "read",
+  resource: "permissions",
+};
+
+/**
  * Centralized permission resolver for all API service endpoints.
  *
  * Determines the correct permission check for each service/method combination
@@ -1016,15 +1071,23 @@ async function resolveAuthorization(
     // listRolePermissions: allow read-roles or read-permissions
     // (role edit form needs this to populate the PermissionMatrix)
     if (method === "listRolePermissions") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // listPermissions: allow users with read-roles (for role form's permission matrix)
     if (method === "listPermissions") {
-      return requireAnyPermission(req, [{ action: "read", resource: "roles" }]);
+      return requireAnyPermission(
+        req,
+        [{ action: "read", resource: "roles" }],
+        READING_PERMISSIONS
+      );
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1051,10 +1114,14 @@ async function resolveAuthorization(
     // getPermissionById: allow read-roles or read-permissions
     // (reading a single permission is needed for display and role editing)
     if (method === "getPermissionById") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // ensurePermission, updatePermission, deletePermissionById → manage-permissions (or CRUD)
@@ -1223,7 +1290,18 @@ async function withinBuiltInLimit(
   return refused ?? serve();
 }
 
-async function handleServiceRequest(
+/** Serves one REST request with one language list from start to end (`withCurrentLanguages`). */
+function handleServiceRequest(
+  req: Request,
+  params: string[],
+  httpMethod: string
+): Promise<Response> {
+  return withCurrentLanguages(() =>
+    serveServiceRequest(req, params, httpMethod)
+  );
+}
+
+async function serveServiceRequest(
   req: Request,
   params: string[],
   httpMethod: string
@@ -1418,6 +1496,11 @@ async function handleServiceRequest(
     return resolveEntryPreviewUrl(req);
   }
 
+  // ==================== LANGUAGES DIRECT DISPATCH ====================
+  if (service === "languages") {
+    return handleLanguagesRequest(req, httpMethod);
+  }
+
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
   if (service === "generalSettings") {
     return handleGeneralSettingsRequest(req, httpMethod);
@@ -1484,6 +1567,13 @@ async function handleServiceRequest(
     return handleSchemaRequest(req, method);
   }
 
+  // ==================== ROLES SCREEN DIRECT DISPATCH ====================
+  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
+  // GET, so there is no body to consume.
+  if (service === "rolesScreen") {
+    return getRolesScreen(req);
+  }
+
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
   // Check if endpoint is public
   const isPublic = isPublicEndpoint(service, method);
@@ -1495,7 +1585,7 @@ async function handleServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1507,7 +1597,7 @@ async function handleServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1522,7 +1612,7 @@ async function handleServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1737,19 +1827,45 @@ const NO_WIDGETS: WidgetAudience = {
  * An `actions` widget's shortcuts each carry a gate of their own, and a
  * shortcut is a label and an href: shipped whole and hidden by the browser
  * afterwards, the protected ones are readable from the payload regardless.
- * Filtered on the same reading the card's own gate gets. A declaration
- * without actions passes through untouched.
+ * A declared widget's empty-state action is the same kind of thing, and is
+ * withheld the same way. Filtered on the same reading the card's own gate
+ * gets. A declaration with neither passes through untouched.
  */
 function actionsForAudience<
-  W extends { id: string; actions?: readonly WidgetAction[] },
+  W extends {
+    id: string;
+    actions?: readonly WidgetAction[];
+    empty?: { message?: string; action?: { requiredPermission?: string } };
+  },
 >(widget: W, audience: WidgetAudience): W {
-  if (widget.actions === undefined) return widget;
+  const withheldEmpty = emptyForAudience(widget.empty, audience);
+  if (widget.actions === undefined && withheldEmpty === widget.empty) {
+    return widget;
+  }
   return {
     ...widget,
-    actions: widget.actions.filter(action =>
-      audience.holds(action.requiredPermission)
-    ),
+    ...(widget.actions === undefined
+      ? {}
+      : {
+          actions: widget.actions.filter(action =>
+            audience.holds(action.requiredPermission)
+          ),
+        }),
+    ...(withheldEmpty === undefined ? {} : { empty: withheldEmpty }),
   };
+}
+
+/**
+ * A declared widget's empty state with its action withheld from a reader who
+ * may not take it; the same object when there is nothing to withhold.
+ */
+function emptyForAudience<
+  E extends { message?: string; action?: { requiredPermission?: string } },
+>(empty: E | undefined, audience: WidgetAudience): E | undefined {
+  if (empty?.action === undefined) return empty;
+  if (audience.holds(empty.action.requiredPermission)) return empty;
+  const { action: _withheld, ...rest } = empty;
+  return rest as E;
 }
 
 /**
@@ -1881,8 +1997,9 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Content-localization config for the admin (present only when i18n is enabled).
-  const localization = config?.localization;
+  // The site's languages for the admin (present only when i18n is enabled): the language list as
+  // it is now, so a language added in Settings shows without a restart.
+  const localization = appLocalization() ?? config?.localization;
   if (localization) {
     workspace.locales = {
       defaultLocale: localization.defaultLocale,
@@ -2021,10 +2138,12 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * person's 401 or 403 to another hides from them what they may read.
  */
 function refuseRequest(
+  req: Request,
   method: string,
   refusal: Parameters<typeof createJsonErrorResponse>[0]
 ): Response {
-  const response = createJsonErrorResponse(refusal);
+  // Answered with the request's own id, as every other error is.
+  const response = createJsonErrorResponse(refusal, req);
   return SESSION_PRIVATE_METHODS.has(method)
     ? withSessionCacheHeaders(response)
     : response;
@@ -2109,7 +2228,7 @@ async function handleAdminMetaWorkspaceRequest(
 ): Promise<Response> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) {
-    return withSessionCacheHeaders(createJsonErrorResponse(auth));
+    return withSessionCacheHeaders(createJsonErrorResponse(auth, req));
   }
 
   // After the authentication precondition, never before it. Service
@@ -2138,7 +2257,12 @@ async function handleAdminMetaWorkspaceRequest(
   const caller = readAccessCaller(await readCaller(auth));
   const audience = await widgetAudience(caller);
 
-  const { workspace } = await buildAdminMeta(audience);
+  // Dispatched outside the content requests that bring the language list up to date, so it does
+  // so itself: a language added on another server reaches the admin within the registry's
+  // interval rather than whenever unrelated content traffic next arrives here.
+  const { workspace } = await withCurrentLanguages(() =>
+    buildAdminMeta(audience)
+  );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 
@@ -2153,7 +2277,9 @@ async function handleAdminMetaWorkspaceRequest(
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
     const authResult = await requirePermission(req, "manage", "settings");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) {
+      return createJsonErrorResponse(authResult, req);
+    }
 
     const text = await req.text();
     const body = text ? JSON.parse(text) : {};

@@ -26,11 +26,11 @@ import {
 } from "../database/test-database-ddl";
 import {
   clearServices,
-  getService,
   type NextlyServiceConfig,
   registerServices,
   shutdownServices,
 } from "../di/register";
+import { getService } from "../di/service-access";
 import { requireNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";

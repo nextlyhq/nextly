@@ -63,6 +63,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   runFieldHooks,
   resolvedCallerGrants,
   type CallerGrants,
@@ -79,13 +80,21 @@ import {
 } from "../../../shared/lib/password-fields";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
+import { editsOver } from "../../audit/lifecycle-fields";
+import { willRecordSingleActivity } from "../../audit/record-activity";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
+import {
+  keepDeniedAtStoredOnUpdate,
+  keepDeniedFieldGroupsInDraft,
+  withStoredFieldGroups,
+} from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -102,6 +111,10 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -278,6 +291,11 @@ export class SingleMutationService extends BaseService {
    */
   private readonly versionCapture = new VersionCaptureService();
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   /**
    * The Single as it stands live in this transaction, and the fields every
    * language shares in it; see `liveSharedSingle`. Read under the row lock
@@ -318,7 +336,7 @@ export class SingleMutationService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, writes route translatable field
     // values to the companion `single_<slug>_locales` row for the write's locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
     this.queryService = new SingleQueryService(
@@ -328,7 +346,7 @@ export class SingleMutationService extends BaseService {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization
+      localizationSource
     );
   }
 
@@ -1200,14 +1218,55 @@ export class SingleMutationService extends BaseService {
       // via the field-level registry; serialized field defs drop them).
       // Runs BEFORE component extraction so component fields cannot bypass
       // write access, hooks, or validation.
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug,
+      // With the field groups this Single stores inline, by their own rules,
+      // and every denied value inside a container kept as the row holds it: a
+      // group is written whole, so a denied child of one would otherwise clear.
+      const documentId = existingDoc.id;
+      // One resolver for the Single's own rules and its field groups', with
+      // the key's scope: a scoped key is judged by its own grants on both,
+      // never by its owner's.
+      const writeGrants = callerAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
+      const singleWriteAccess = {
+        ...fieldGroupWriteAccessOf(options),
+        grants: writeGrants,
+      };
+      // The Single's row alone carries no field-group instance, so what an
+      // update removes is read here or judged against nothing: in the write's
+      // own language, and in each other one, since a removal removes all.
+      const storedFieldGroupsIn = (locale?: string) =>
+        withStoredFieldGroups({
+          stored: existingDeserialized,
+          parentTable: singleMeta.tableName,
+          fields: fieldConfigs,
+          source: this.fieldGroupDataService,
+          access: singleWriteAccess,
+          locale,
+        });
+      await keepDeniedAtStoredOnUpdate({
         data: currentData,
-        operation: "update",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        id: existingDoc.id,
+        stored: await storedFieldGroupsIn(options.locale),
+        storedIn: {
+          locales: this.localization?.locales.map(l => l.code) ?? [],
+          read: storedFieldGroupsIn,
+        },
+        fields: fieldConfigs,
+        source: this.fieldGroupDataService,
+        access: singleWriteAccess,
+        ownRules: document =>
+          applyFieldWriteAccess({
+            kind: "single",
+            slug,
+            data: document,
+            operation: "update",
+            user: options.user,
+            authenticatedScope: options.authenticatedScope,
+            overrideAccess: options.overrideAccess,
+            id: documentId,
+            grants: writeGrants,
+          }),
       });
       await runFieldHooks({
         kind: "single",
@@ -2055,6 +2114,10 @@ export class SingleMutationService extends BaseService {
               enforceLocalizedRequired,
             };
             let promotedDraft = false;
+            // Whether the request that promoted also carried content of its
+            // own, which no earlier save recorded: the trail reads that
+            // publish as a save too.
+            let promotionCarriesContent = false;
             if (
               !holdEdit &&
               // Lifecycle and drafts versioning included. A draft stored before
@@ -2154,6 +2217,28 @@ export class SingleMutationService extends BaseService {
                     });
                   }
                 }
+                // Read before the draft's components are written into the
+                // caller's below: the caller's own values alone, each compared
+                // with the draft's, its scalars against the draft document and
+                // its components tagged as the draft holds them. An echo of the
+                // draft, or a system field the write ignores, is no edit.
+                const callerCarriesContent =
+                  editsOver(
+                    snapshotRecord(pendingDraft.snapshot),
+                    currentData
+                  ) ||
+                  editsOver(
+                    draftComponentValues(
+                      pendingDraft.snapshot as Record<string, unknown>,
+                      fieldConfigs
+                    ),
+                    tagComponentTypes(
+                      attemptComponentFields,
+                      fieldConfigs,
+                      componentSlug =>
+                        singleComponentSchemas?.get(componentSlug)?.fields
+                    )
+                  );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
@@ -2193,6 +2278,7 @@ export class SingleMutationService extends BaseService {
                   delete mainPayload.status;
                 }
                 promotedDraft = true;
+                promotionCarriesContent = callerCarriesContent;
               }
             }
             // A publish with nothing pending puts the live row itself live: a
@@ -2531,9 +2617,21 @@ export class SingleMutationService extends BaseService {
             // endpoint and audit off, this assembly is pure waste and must not be
             // able to fail a scalar content write.
             const recordingEnabled = isOutboxRecordingActive("single", slug);
+            // The documents are assembled for the activity trail too, whenever
+            // it will record this save: it names the fields a save changed by
+            // comparing them, as it does an entry's, and it records every save
+            // by a person on every install. Assembled for webhooks alone, an
+            // install with neither webhooks nor audit would compare a raw row
+            // with nothing, and a component-only edit would read as no change.
+            // The webhook payload below stays gated on `recordingEnabled`.
+            const assembleDocuments =
+              recordingEnabled ||
+              willRecordSingleActivity(
+                actorForWrite(options.actor ?? null, options.user)
+              );
 
             const previousDoc =
-              recordingEnabled && preRow
+              assembleDocuments && preRow
                 ? await buildSingleWebhookDoc(
                     this.fieldGroupDataService,
                     tx,
@@ -2647,6 +2745,9 @@ export class SingleMutationService extends BaseService {
               // field rule nested in a field group to see the same `user` a
               // top-level field rule sees.
               req: options.user ? { user: options.user } : {},
+              // Who the write is made as, for each instance's own field rules:
+              // the caller and trust the Single's own fields are judged with.
+              access: fieldGroupWriteAccessOf(options),
             });
             if (
               !holdEdit &&
@@ -2975,6 +3076,32 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas
                 );
               }
+              // The held field-group values, judged by their own rules before
+              // anything is recorded, each denied one kept at what this draft
+              // replaces: no save judges a held instance, and a later
+              // publisher allowed to write a value would otherwise promote one
+              // its author was not.
+              await keepDeniedFieldGroupsInDraft({
+                draft: pending,
+                replaces,
+                // The field groups the save wrote, and the containers it
+                // wrote whole, which can hold field groups inline.
+                names: [
+                  ...Object.keys(attemptComponentFields),
+                  ...suppliedFieldNames,
+                ],
+                fields: fieldConfigs,
+                fieldGroupFields: { get: componentResolver },
+                access: {
+                  ...fieldGroupWriteAccessOf(options),
+                  // Inside the write's transaction.
+                  grants: callerAccessGrants(
+                    options.user,
+                    options.authenticatedScope,
+                    tx.getDrizzle()
+                  ),
+                },
+              });
               // The held component values are judged as the publish would
               // judge them: merged into the draft, since a save carries only the
               // sub-fields it changed, and without the type tags the draft
@@ -3438,7 +3565,7 @@ export class SingleMutationService extends BaseService {
             // Assemble the event document only when recording — this is the
             // populateComponentData(strict) read the opt-out must skip. When off,
             // recordMutationEvent ignores `data`, so the raw written row stands in.
-            const dataDoc = recordingEnabled
+            const dataDoc = assembleDocuments
               ? await buildSingleWebhookDoc(
                   this.fieldGroupDataService,
                   tx,
@@ -3546,6 +3673,21 @@ export class SingleMutationService extends BaseService {
               label: singleMeta.label,
               locale: holdEdit ? (singleDraftLocale ?? null) : eventLocale,
               actor,
+              // Compared for the fields the save changed only when both were
+              // assembled; the raw row stands in otherwise, and names none.
+              ...(assembleDocuments
+                ? { data: dataDoc, previous: previousDoc }
+                : {}),
+              // This language's own statuses, as the transitions above read
+              // them, and whether the save promoted the pending edits, which
+              // leaves the status published and so is not a transition.
+              publication: {
+                statusAfter: singleHasStatus ? dataLocaleStatus : undefined,
+                statusBefore: previousLocaleStatus,
+                promotedPendingEdits: promotedDraft,
+                requestEdits: promotionCarriesContent,
+                restores: options.sourceVersionNo != null,
+              },
             });
             // Record only when the same opt-out decision that gated the payload
             // assembly still holds. `recordMutationEvent` re-derives the policy

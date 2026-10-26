@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
-import { Activity } from "@admin/types/dashboard/activity";
+import type { Activity } from "@admin/types/dashboard/activity";
 
 import { RecentActivity } from "./RecentActivity";
 
@@ -48,6 +48,8 @@ const mockActivities: Activity[] = [
     target: "new user account",
     category: "success",
     timestamp: hoursBefore(READ_AT, 2),
+    count: 1,
+    countAtLeast: false,
   },
   {
     id: "2",
@@ -65,12 +67,101 @@ const mockActivities: Activity[] = [
     target: "role permissions",
     category: "info",
     timestamp: hoursBefore(READ_AT, 3),
+    count: 1,
+    countAtLeast: false,
   },
 ];
 
 describe("RecentActivity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("says how many saves a row stands for, in its text and in what a screen reader hears", () => {
+    const repeated: Activity = {
+      ...mockActivities[1]!,
+      id: "3",
+      target: "Site style",
+      entryTitle: "Site style",
+      count: 12,
+    };
+    const floor: Activity = {
+      ...repeated,
+      id: "4",
+      count: 1000,
+      countAtLeast: true,
+    };
+    mockUseRecentActivity.mockReturnValue({
+      data: {
+        activities: [repeated, floor, mockActivities[0]!],
+        hasMore: false,
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    const rows = screen
+      .getAllByText(/Jane Smith|John Doe/)
+      .map(name => name.closest("p"));
+    /** The row's text without what `hidden` matches, spaced as it reads. */
+    const without = (row: Element | null | undefined, hidden: string) => {
+      const copy = row?.cloneNode(true) as Element | undefined;
+      copy?.querySelectorAll(hidden).forEach(node => node.remove());
+      return (copy?.textContent ?? "").replace(/\s+/g, " ").replace(/ ,/g, ",");
+    };
+    // Seen: the dot and the count. Heard: a comma and the count, no dot.
+    expect(without(rows[0], ".sr-only")).toContain("Site style · 12 times");
+    expect(without(rows[0], '[aria-hidden="true"]')).toContain(
+      "Site style, 12 times"
+    );
+    expect(without(rows[1], '[aria-hidden="true"]')).toContain(
+      "Site style, 1000+ times"
+    );
+    // A single save says nothing about a count.
+    expect(rows[2]?.textContent).not.toMatch(/times/);
+  });
+
+  it("draws a floor even at one save, and nothing for an activity built without a count", () => {
+    // The walk can stop inside a run it has read one save of: "1+", not "1".
+    const floorOfOne: Activity = {
+      ...mockActivities[1]!,
+      id: "5",
+      target: "Site style",
+      entryTitle: "Site style",
+      count: 1,
+      countAtLeast: true,
+    };
+    // Built elsewhere, a sign-in say, with neither count field.
+    const built: Activity = {
+      id: "6",
+      user: mockActivities[0]!.user,
+      type: "login",
+      action: "signed in",
+      target: "the admin",
+      category: "info",
+      timestamp: hoursBefore(READ_AT, 4),
+    };
+    mockUseRecentActivity.mockReturnValue({
+      data: { activities: [floorOfOne, built], hasMore: false },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    const rows = screen
+      .getAllByText(/Jane Smith|John Doe/)
+      .map(name => name.closest("p"));
+    expect(rows[0]?.textContent).toContain("1+ times");
+    expect(rows[1]?.textContent).not.toMatch(/times/);
   });
 
   it("renders loading state", () => {
@@ -108,7 +199,7 @@ describe("RecentActivity", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders empty state when no activities", async () => {
+  it("says it has nothing to show with the dashboard's standard empty state", async () => {
     mockUseRecentActivity.mockReturnValue({
       data: { activities: [] },
       isLoading: false,
@@ -120,11 +211,14 @@ describe("RecentActivity", () => {
 
     render(<RecentActivity />);
 
+    // The one empty state every card draws, in this card's words, not a
+    // shape of its own.
     await waitFor(() => {
-      expect(
-        screen.getByText(/activity log is currently silent/i)
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("card-empty")).toHaveTextContent(
+        "No activity yet"
+      );
     });
+    expect(screen.queryByText(/currently silent/i)).not.toBeInTheDocument();
   });
 
   it("renders activities successfully", async () => {

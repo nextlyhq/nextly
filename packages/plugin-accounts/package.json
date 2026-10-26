@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-accounts",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "private": true,
   "description": "Site accounts for Nextly: visitors who sign up, sign in and keep their own account, never staff",
   "license": "MIT",
@@ -35,23 +35,21 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "zod": "^4.6.2"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.68",
+    "@nextlyhq/admin": "0.0.2-alpha.71",
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.68",
+    "next": "^15.5.28 || ^16.4.1",
+    "nextly": "0.0.2-alpha.71",
     "react": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -67,23 +65,23 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
-    "@types/node": "^20.19.17",
-    "@types/react": "19.2.0",
-    "@types/react-dom": "19.2.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "jsdom": "^27.1.0",
     "nextly": "workspace:*",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tsdown": "^0.23.1",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.5"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "keywords": [
     "nextly",

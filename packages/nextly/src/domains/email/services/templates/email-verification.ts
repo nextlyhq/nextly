@@ -40,8 +40,8 @@ export const emailVerificationTemplate: OwnerTemplate = {
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%">
   <tr>
     <td style="padding: 16px 0 0; border-top: 1px solid #e4e4e7;">
-      <p style="margin: 0; font-size: 12px; color: #a1a1aa; line-height: 18px;">If the button above doesn't work, copy and paste the following URL into your browser:</p>
-      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #a1a1aa; line-height: 18px; word-break: break-all;">{{verifyLink}}</p>
+      <p style="margin: 0; font-size: 12px; color: #71717a; line-height: 18px;">If the button above doesn't work, copy and paste the following URL into your browser:</p>
+      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #71717a; line-height: 18px; word-break: break-all;">{{verifyLink}}</p>
     </td>
   </tr>
 </table>`,

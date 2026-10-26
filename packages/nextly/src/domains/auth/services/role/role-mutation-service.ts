@@ -18,7 +18,10 @@ import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
-import type { LastSuperAdminTx } from "../../../users/services/last-super-admin";
+import {
+  refuseRemovingLastSuperAdmin,
+  type LastSuperAdminTx,
+} from "../../../users/services/last-super-admin";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
@@ -511,10 +514,13 @@ export class RoleMutationService extends BaseService {
       const currentRole = roleResult[0];
       const isSystemRole = Boolean(currentRole.isSystem);
 
-      // Prevent modifying system roles. Per §13.8 the public message stays
-      // generic; the policy reason ("system-role-protected") goes to logContext.
+      // Prevent modifying system roles. The caller is told the role is built
+      // in, a fact about the role and not about their permissions (which
+      // §13.8 keeps generic); the reason goes to logContext.
       if (isSystemRole) {
-        throw NextlyError.forbidden({
+        throw NextlyError.builtIn({
+          thing: "role",
+          change: "change",
           logContext: {
             reason: "system-role-immutable",
             roleId,
@@ -619,14 +625,27 @@ export class RoleMutationService extends BaseService {
         await this.adapter.transaction(async tx => {
           // First, in the same transaction: inheriting a role that confers
           // super-admin gives super-admin to everyone who holds this one.
+          // And what this one stops inheriting may be how the last
+          // super-admin is one: kept, under the same lock.
           if (changes.childRoleIds !== undefined) {
+            const guardTx = tx.drizzleWithRelations<LastSuperAdminTx>(
+              resolveRelations(this.dialect)
+            );
             await refuseGrantingSuperAdmin(
-              tx.drizzleWithRelations<LastSuperAdminTx>(
-                resolveRelations(this.dialect)
-              ),
+              guardTx,
               this.dialect,
               uniqueChildRoleIds,
               { roleId }
+            );
+            await refuseRemovingLastSuperAdmin(
+              guardTx,
+              this.tables,
+              this.dialect,
+              {
+                kind: "replaceChildren",
+                roleId,
+                childRoleIds: uniqueChildRoleIds,
+              }
             );
           }
           // Update role basic fields if any provided
@@ -742,10 +761,12 @@ export class RoleMutationService extends BaseService {
       const role = roleResult[0];
       const isSystemRole = Boolean(role.isSystem);
 
-      // Prevent deleting system roles. Generic forbidden message; reason in
-      // logContext only.
+      // Prevent deleting system roles, telling the caller the role is built
+      // in; the reason goes to logContext.
       if (isSystemRole) {
-        throw NextlyError.forbidden({
+        throw NextlyError.builtIn({
+          thing: "role",
+          change: "delete",
           logContext: { reason: "system-role-undeletable", roleId },
         });
       }
@@ -761,6 +782,17 @@ export class RoleMutationService extends BaseService {
       // the adapter resolves a where clause against the table object, whose
       // keys are the JS property names.
       await this.adapter.transaction(async tx => {
+        // First, under the lock every change to who is a super-admin takes:
+        // the role's holders may be super-admins only through it, and the
+        // last of them is kept.
+        await refuseRemovingLastSuperAdmin(
+          tx.drizzleWithRelations<LastSuperAdminTx>(
+            resolveRelations(this.dialect)
+          ),
+          this.tables,
+          this.dialect,
+          { kind: "deleteRole", roleId }
+        );
         // Cascade first, then the role, so nothing references a row that is
         // already gone if the database is enforcing keys.
         await tx.delete("role_permissions", this.whereEq("roleId", roleId));

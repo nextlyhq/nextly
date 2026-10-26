@@ -17,7 +17,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, relationship, text } from "../../../config";
-import { clearServices, type getService } from "../../../di/register";
+import { clearServices } from "../../../di/register";
+import type { getService } from "../../../di/service-access";
 import {
   createTestNextly,
   type TestNextly,

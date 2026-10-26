@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 export type EyebrowState =
@@ -56,7 +58,7 @@ export function Eyebrow({
 }: {
   state: EyebrowState;
   warningCount?: number;
-}) {
+}): JSX.Element {
   const c = COPY[state];
   let sub = c.sub;
   if (state === "success-partial") {

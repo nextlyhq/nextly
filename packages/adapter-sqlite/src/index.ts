@@ -1020,10 +1020,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         statement: SQL
       ): Promise<T[]> => Promise.resolve(txDb().all(statement)),
 
-      // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(
         sql: string,
         params: SqlParam[] = []
+        // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejection
       ): Promise<T[]> => {
         const convertedSql = this.convertPlaceholders(sql);
         const trimmedSql = convertedSql.trim().toUpperCase();
@@ -1050,11 +1050,11 @@ export class SqliteAdapter extends DrizzleAdapter {
       // their date values. `sanitizeSqliteValue` below binds a `Date` as unix
       // seconds, and an instant carries no zone -- so what SQLite stores does
       // not depend on the server's timezone and there is nothing to correct.
-      // eslint-disable-next-line @typescript-eslint/require-await
       insert: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         options?: InsertOptions
+        // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejection
       ): Promise<T> => {
         const mapped = this.mapKeysToSqlColumns(
           this.getTableObject(table),
@@ -1092,11 +1092,11 @@ export class SqliteAdapter extends DrizzleAdapter {
         return this.mapRowFromRawSql(this.getTableObject(table), rows[0]);
       },
 
-      // eslint-disable-next-line @typescript-eslint/require-await
       insertMany: async <T = unknown>(
         table: string,
         data: Record<string, unknown>[],
         options?: InsertOptions
+        // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejection
       ): Promise<T[]> => {
         if (data.length === 0) return [];
 

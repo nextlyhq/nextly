@@ -195,6 +195,8 @@ const RESULT_FIELD = z.looseObject({
 const LIST_DATA = z.looseObject({
   items: z.array(ROW),
   fields: z.array(RESULT_FIELD).optional(),
+  // The span the source looked at, in whole days; absent when unbounded.
+  window: z.looseObject({ days: z.number().int().positive() }).optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
@@ -212,6 +214,8 @@ const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
       })
     ),
     truncated: z.boolean().optional(),
+    // The instant the answer was computed at, for buckets that depend on it.
+    asOf: z.string().optional(),
     // The grouped field, whose choices name each bucket's value.
     field: RESULT_FIELD.optional(),
     // The bucket counts are floors, as a count's `atLeast` says its total is.

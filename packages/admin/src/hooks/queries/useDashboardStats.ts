@@ -7,6 +7,7 @@
  * @module hooks/queries/useDashboardStats
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -26,7 +27,7 @@ import type { DashboardStats } from "@admin/types/dashboard/stats";
  *
  * @returns TanStack Query result with dashboard stats
  */
-export function useDashboardStats() {
+export function useDashboardStats(): UseQueryResult<DashboardStats, Error> {
   return useQuery<DashboardStats, Error>({
     queryKey: ["dashboard", "stats"],
     queryFn: () => protectedApi.get<DashboardStats>("/dashboard/stats"),

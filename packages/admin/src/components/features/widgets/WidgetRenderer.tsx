@@ -24,7 +24,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
@@ -36,6 +36,7 @@ import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
 import type { SkeletonShape } from "./frame/states";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { sourcedQuery } from "./widget-as-asked";
 import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
 
 /**
@@ -72,7 +73,9 @@ function awaitsFreshnessFor(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined
 ): boolean {
-  return definition.query !== undefined && slot?.ok !== false;
+  // A card core answers on the server asks for its data as surely as one with a query does.
+  const asks = definition.query !== undefined || definition.serverData === true;
+  return asks && slot?.ok !== false;
 }
 
 function skeletonFor(archetype: string): SkeletonShape {
@@ -244,8 +247,80 @@ function sharedCardProps(
     skeletonItems: skeletonItemsFor(definition),
     skeletonFields: skeletonFieldsFor(definition),
     awaitsFreshness: awaitsFreshnessFor(definition, slot),
-    skeletonCells: definition.cells?.map(cell => cell.label),
+    // A stats card's labels; a custom card's cells draw no skeleton of their own.
+    skeletonCells: definition.cells?.flatMap(cell =>
+      "label" in cell ? [cell.label] : []
+    ),
   };
+}
+
+/**
+ * The props a self-drawn widget's component receives.
+ *
+ * 🔴 RETURNS the published type rather than an inferred one. `PluginSlot`
+ * forwards `Record<string, unknown>`, so nothing downstream would object to a
+ * renamed, dropped or retyped prop here -- and plugin authors compile against
+ * `WidgetComponentProps`, which would go on describing the old shape. That is
+ * the same parallel-definition drift this contract exists to end, so the
+ * producer is held to it here, where a mismatch fails to compile.
+ */
+function componentPropsFor(
+  definition: WidgetRendererProps["definition"],
+  slot: WidgetRendererProps["slot"],
+  placement: WidgetRendererProps["placement"],
+  live: {
+    isFetching: boolean;
+    onRetry?: () => void;
+    cells?: Record<string, WidgetSlot>;
+  }
+): WidgetComponentProps {
+  return {
+    widgetId: definition.id,
+    placementId: placement?.id ?? definition.id,
+    settings: placement?.settings ?? {},
+    slot,
+    // Each declared read's answer by key, for a custom card that declares
+    // several; absent for every other card.
+    ...(live.cells === undefined ? {} : { cells: live.cells }),
+    isFetching: live.isFetching,
+    // The Retry a framed card's error offers: a self-drawn card draws its own error, so it is
+    // handed the same callback rather than left with nothing to offer.
+    ...(live.onRetry ? { onRetry: live.onRetry } : {}),
+    // The query as asked, which `definition` already is: the grid draws each card
+    // from the same declaration the batch sent. One with no source yet was not
+    // asked, so it is not handed on.
+    ...(sourcedQuery(definition.query) ? { query: definition.query } : {}),
+  };
+}
+
+/**
+ * A custom card's answers by cell key, for a card that declares several reads;
+ * `undefined` for any other card, which is handed `slot` alone.
+ */
+function customCellAnswers(
+  definition: WidgetRendererProps["definition"],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> | undefined {
+  if (definition.archetype !== "custom" || !definition.cells?.length) {
+    return undefined;
+  }
+  return cellAnswersOf(
+    definition.cells.map(cell => cell.key),
+    slotFor
+  );
+}
+
+/** Each cell's answer by key, leaving out the keys with none yet. */
+function cellAnswersOf(
+  keys: readonly string[],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> {
+  const answers: Record<string, WidgetSlot> = Object.create(null);
+  for (const key of keys) {
+    const answer = slotFor?.(key);
+    if (answer !== undefined) answers[key] = answer;
+  }
+  return answers;
 }
 
 export function WidgetRenderer({
@@ -261,7 +336,7 @@ export function WidgetRenderer({
   updatedAt = null,
   isFetching = false,
   answerTier,
-}: WidgetRendererProps) {
+}: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, slot, placement, {
     headerAction,
     quick,
@@ -271,25 +346,17 @@ export function WidgetRenderer({
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
+  // A custom card that declares several reads is handed each answer by key; a
+  // key with no answer yet is left out, as `slot` is.
+  const cellAnswers = customCellAnswers(definition, slotFor);
 
-  /*
-   * Built once, so the two `chrome` branches below cannot drift into handing a
-   * component different props depending on whether its card is framed.
-   *
-   * 🔴 ANNOTATED with the published type rather than inferred. `PluginSlot`
-   * forwards `Record<string, unknown>`, so nothing downstream would object to a
-   * renamed, dropped or retyped prop here -- and plugin authors compile against
-   * `WidgetComponentProps`, which would go on describing the old shape. That is
-   * the same parallel-definition drift this contract exists to end, so the
-   * producer is held to it here, where a mismatch fails to compile.
-   */
-  const componentProps: WidgetComponentProps = {
-    widgetId: definition.id,
-    placementId: placement?.id ?? definition.id,
-    settings: placement?.settings ?? {},
-    slot,
+  // Built once, so the two `chrome` branches below cannot drift into handing a
+  // component different props depending on whether its card is framed.
+  const componentProps = componentPropsFor(definition, slot, placement, {
+    ...(cellAnswers === undefined ? {} : { cells: cellAnswers }),
     isFetching,
-  };
+    onRetry,
+  });
 
   // The escape hatch. A plugin component draws its own body, so the card
   // asserts nothing about its loading or empty states -- the component knows

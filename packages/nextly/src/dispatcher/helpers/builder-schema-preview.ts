@@ -9,6 +9,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -18,8 +19,6 @@ import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-cand
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-
-import { getConfigFromDI } from "./di";
 
 export async function builderSchemaPreviewBody(args: {
   desired: DesiredSchema;
@@ -44,7 +43,7 @@ export async function builderSchemaPreviewBody(args: {
     desired: args.desired,
     db,
     dialect,
-    defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+    defaultLocale: appLocalization()?.defaultLocale ?? "en",
   });
   const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
     tableName,
@@ -72,7 +71,7 @@ export async function builderSchemaPreviewBody(args: {
       slug: args.slug,
       tableName,
       builtBy: args.builtBy,
-      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
       oldFields: currentFields,
       newFields,
       entity: args.entity,

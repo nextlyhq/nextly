@@ -48,7 +48,7 @@ export function VersionLabelDialog({
   currentLabel,
   saving = false,
   onSubmit,
-}: VersionLabelDialogProps) {
+}: VersionLabelDialogProps): React.JSX.Element {
   // Seeded once, from the name the version had when this dialog was opened.
   //
   // Deliberately NOT resynced afterwards. The history list refetches — a rename

@@ -194,6 +194,22 @@ describe("a widget declaration as startup receives it", () => {
     }
   });
 
+  it("refuses an example holding NaN or an infinity, as it refuses a card's data", () => {
+    // JSON writes NaN and both infinities as `null`, so the preview would draw a number the
+    // example does not hold. The same rule a card's data is held to says so, in the same words.
+    for (const [value, said] of [
+      [NaN, "NaN"],
+      [Infinity, "Infinity"],
+      [-Infinity, "-Infinity"],
+    ] as const) {
+      expect(
+        problemsOf(valid({ display: "metric", example: { total: value } }))
+      ).toEqual([
+        `example cannot be sent to the browser as it is: example.total is ${said}`,
+      ]);
+    }
+  });
+
   it("refuses an example with a symbol-keyed property, which JSON drops", () => {
     const tag = Symbol("tag");
     // The value is safe; the KEY is what JSON throws away, so this is a
@@ -351,6 +367,22 @@ describe("a widget declaration as startup receives it", () => {
       ["without a label", { link: "collections/products/create" }],
       ["with an absolute link", { label: "Add", link: "https://x.test/a" }],
       ["with a link from the root", { label: "Add", link: "/admin/a" }],
+      // A browser resolves these before it navigates, so each would leave the
+      // admin from under its prefix.
+      ["with a parent segment", { label: "Add", link: "../logout" }],
+      [
+        "with a parent segment further in",
+        { label: "Add", link: "collections/../../account" },
+      ],
+      ["with an encoded parent segment", { label: "Add", link: "%2E%2e/x" }],
+      [
+        "with an encoded slash",
+        { label: "Add", link: "collections%2f..%2f..%2fx" },
+      ],
+      [
+        "with a segment that cannot be decoded",
+        { label: "Add", link: "collections/%e0%a4" },
+      ],
       [
         "with a permission that is not a permission name",
         { label: "Add", link: "collections/a", permission: "Add things" },

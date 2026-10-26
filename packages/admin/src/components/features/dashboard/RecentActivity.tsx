@@ -35,10 +35,17 @@ import {
   Spinner,
 } from "@nextlyhq/ui";
 import { Clock } from "lucide-react";
+import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
+import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
+import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { CardEmpty } from "@admin/components/features/widgets/frame/states";
 import { AlertCircle } from "@admin/components/icons";
-import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
+import {
+  activityFromRow,
+  useRecentActivity,
+} from "@admin/hooks/queries/useRecentActivity";
 import { useNowTick } from "@admin/hooks/useNowTick";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import { cn } from "@admin/lib/utils";
@@ -51,6 +58,20 @@ export interface RecentActivityProps {
   /** Maximum number of activities to display (default: 5) */
   limit?: number;
 }
+
+/**
+ * How many saves one row stands for: "· 12 times", or "· 1000+ times" when the
+ * server stopped reading inside the run. The dot is drawn and not read; a
+ * screen reader hears "updated Site style, 12 times".
+ */
+const RepeatCount: React.FC<{ activity: Activity }> = ({ activity }) => (
+  <span className="text-muted-foreground font-medium">
+    <span aria-hidden="true"> · </span>
+    <span className="sr-only">, </span>
+    {activity.count ?? 1}
+    {activity.countAtLeast === true ? "+" : ""} times
+  </span>
+);
 
 /**
  * Single Activity Item Component
@@ -124,6 +145,10 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
               {activity.target}
             </span>
           )}
+          {/* A floor is drawn even at one: "1+" says the server stopped reading inside it. */}
+          {((activity.count ?? 1) > 1 || activity.countAtLeast === true) && (
+            <RepeatCount activity={activity} />
+          )}
         </p>
 
         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
@@ -154,22 +179,69 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
   );
 };
 
+/**
+ * Nothing to show: the dashboard's one empty state, in this card's words, as
+ * every other card says it.
+ */
 const EmptyState: React.FC = () => (
-  <div className="py-20 text-center space-y-4">
-    <div className="inline-flex p-6 rounded-lg bg-primary/5  border border-border">
-      <Clock className="h-10 w-10 text-muted-foreground" />
-    </div>
-    <div className="space-y-1">
-      <p className="text-sm font-bold text-foreground tracking-tight">
-        Activity log is currently silent
-      </p>
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-        Actions will appear here as you work
-      </p>
-    </div>
+  <CardEmpty
+    title="No activity yet"
+    detail="Changes people make to your content show here."
+  />
+);
+
+/** The rows of the feed, and nothing around them: one list, whichever card draws it. */
+const ActivityRows: React.FC<{
+  activities: readonly Activity[];
+  now: number;
+}> = ({ activities, now }) => (
+  <div className="space-y-1">
+    {activities.map(activity => (
+      <ActivityItem key={activity.id} activity={activity} now={now} />
+    ))}
   </div>
 );
 
+/**
+ * The dashboard's Recent activity card, answered by `system:activity` in the
+ * dashboard's batch: framed, so the heading and the size are the card's.
+ *
+ * It draws the rows its tier draws, at most the "Number of items" its reader
+ * chose, from the query it asked, and says more exist when the answer holds
+ * the one row more the batch asked for: the rule core's own lists follow. A
+ * run of one person's saves is one row.
+ *
+ * A custom card owns its states, so each is drawn here with the frame's own:
+ * the loading rows, "not available", an error, and the empty state.
+ */
+export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
+  // See `RecentActivity` below: a relative time is read again as time passes.
+  const { drawn, now, read } = useListCard(props, "Recent activity");
+  const { query } = props;
+  if ("node" in read) return read.node;
+  // A row this build cannot read is left out rather than drawn from guesses.
+  const activities = read.list.items.flatMap(row => {
+    const activity = activityFromRow(row);
+    return activity ? [activity] : [];
+  });
+  if (activities.length === 0) return <EmptyState />;
+  return (
+    <div className="space-y-2">
+      <ActivityRows activities={activities.slice(0, drawn)} now={now} />
+      {read.list.items.length > drawn && <MoreExist query={query} />}
+    </div>
+  );
+};
+
+RecentActivityCard.displayName = "RecentActivityCard";
+
+/**
+ * Recent activity as a section of its own, reading `GET /api/dashboard/activity`.
+ *
+ * @deprecated The dashboard draws {@link RecentActivityCard}, answered by the
+ * `system:activity` widget source. This stays for code that renders the section
+ * itself, and draws the same rows and the same empty state.
+ */
 export const RecentActivity: React.FC<RecentActivityProps> = ({
   limit = 5,
 }) => {
@@ -221,9 +293,7 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
           {data.activities.length === 0 ? (
             <EmptyState />
           ) : (
-            data.activities.map(activity => (
-              <ActivityItem key={activity.id} activity={activity} now={now} />
-            ))
+            <ActivityRows activities={data.activities} now={now} />
           )}
         </div>
       )}

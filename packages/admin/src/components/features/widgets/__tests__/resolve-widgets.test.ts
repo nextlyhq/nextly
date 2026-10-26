@@ -56,6 +56,29 @@ describe("resolveDashboardWidgets", () => {
     });
   });
 
+  it("carries the filters core published for a registered widget, alone and beside a contribution", () => {
+    // The knobs build a card's query from these, so a widget reading across
+    // collections that lost them would have its Collection setting replace its
+    // source instead of narrowing it.
+    const edits = {
+      ...REGISTERED_SHARED,
+      id: "edits",
+      archetype: "list",
+      query: { source: "system:edits", op: "list" },
+      sourceFilters: ["collection", "onlyMine"],
+    } as unknown as RegisteredWidgetMeta;
+    const alone = resolveDashboardWidgets([], [edits], allow);
+    expect(alone[0]?.sourceFilters).toEqual(["collection", "onlyMine"]);
+    const merged = resolveDashboardWidgets(
+      contributing([
+        { id: "edits", title: "Also contributed", archetype: "list" },
+      ]),
+      [edits],
+      allow
+    );
+    expect(merged[0]?.sourceFilters).toEqual(["collection", "onlyMine"]);
+  });
+
   it("keeps the contribution's POSITION while taking the registry's definition", () => {
     const widgets = resolveDashboardWidgets(
       contributing([

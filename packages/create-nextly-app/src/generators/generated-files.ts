@@ -11,4 +11,6 @@ export interface GeneratedFiles {
   changed: { path: string; added: string[] }[];
   /** Files that existed and were left exactly as they were; `toAdd` holds text to add by hand, when there is some. */
   skipped: { path: string; why: string; toAdd?: string }[];
+  /** What the developer should know about a change that was not theirs to expect, such as a setting turned off. */
+  notices?: string[];
 }

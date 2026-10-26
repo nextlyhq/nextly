@@ -30,7 +30,7 @@ export function enableDevReload(): void {
   es.addEventListener("schema-reload", () => window.location.reload());
 }
 
-export const BASE_URL =
+export const BASE_URL: string =
   typeof window !== "undefined"
     ? `${window.location.origin}/admin/api`
     : "http://localhost:3000/admin/api"; // SSR fallback
@@ -45,7 +45,7 @@ export const BASE_URL =
  * else: the generated app mounts the handler at `/admin/api/[[...params]]`,
  * so a plausible `/api/...` is a URL nothing serves.
  */
-export const API_PATH_PREFIX = new URL(BASE_URL).pathname;
+export const API_PATH_PREFIX: string = new URL(BASE_URL).pathname;
 
 type ApiSuccess<T> = {
   success: true;

@@ -16,8 +16,20 @@ export const PLUGIN_NAME = "@nextlyhq/plugin-accounts";
  */
 export const ADMIN_SLUG = "nextlyhq-plugin-accounts";
 
+/** The type of {@link ADMIN_PAGES}. */
+type AdminPages = {
+  readonly list: {
+    readonly path: "accounts";
+    readonly component: `${typeof PLUGIN_NAME}/admin#AccountsListPage`;
+  };
+  readonly account: {
+    readonly path: "account";
+    readonly component: `${typeof PLUGIN_NAME}/admin#AccountPage`;
+  };
+};
+
 /** The admin's pages: each one's path under the plugin, and the component it renders. */
-export const ADMIN_PAGES = {
+export const ADMIN_PAGES: AdminPages = {
   list: {
     path: "accounts",
     component: `${PLUGIN_NAME}/admin#AccountsListPage`,
@@ -26,7 +38,7 @@ export const ADMIN_PAGES = {
     path: "account",
     component: `${PLUGIN_NAME}/admin#AccountPage`,
   },
-} as const;
+};
 
 /** Where an admin page is, for a link: the account's page names it by `id`. */
 export function adminPageHref(

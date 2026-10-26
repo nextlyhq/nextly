@@ -162,13 +162,13 @@ Nextly has a plugin SDK, in alpha: pin exact versions. The Visual Page Builder i
 
 ## Requirements
 
-| Tool       | Minimum                                                 |
-| ---------- | ------------------------------------------------------- |
-| Node.js    | 20.19+, 22.12+ or 24+ (not 23; Node 24 LTS recommended) |
-| pnpm       | 9+ recommended; npm, yarn, and bun also supported       |
-| Next.js    | 16+ (App Router required)                               |
-| React      | 19+                                                     |
-| TypeScript | 5+                                                      |
+| Tool       | Minimum                                           |
+| ---------- | ------------------------------------------------- |
+| Node.js    | 22.12+ or 24+ (not 23; Node 24 LTS recommended)   |
+| pnpm       | 9+ recommended; npm, yarn, and bun also supported |
+| Next.js    | 16.4.1+ (App Router required)                     |
+| React      | 19+                                               |
+| TypeScript | 5+                                                |
 
 ### Database support
 
@@ -183,7 +183,8 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 ## Documentation
 
 - [**Installation**](https://nextlyhq.com/docs/getting-started/installation): add Nextly to a new or existing project
-- [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start): build a blog, step by step
+- [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start): create a project, start it and create the first admin
+- [**Tutorial: build a blog**](https://nextlyhq.com/docs/getting-started/build-a-blog): posts and categories, step by step
 - [**Configuration**](https://nextlyhq.com/docs/configuration): collections, singles, fields, hooks
 - [**Visual Schema Builder**](https://nextlyhq.com/docs/schema-builder): define schema in the admin UI
 - [**Authentication & permissions**](https://nextlyhq.com/docs/guides/authentication): RBAC, API keys, JWT

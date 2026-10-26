@@ -37,7 +37,13 @@ import {
   generatedWidgets,
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
+import type { WidgetPermissionGate } from "./gate";
 import { publishableWidgets } from "./publish";
+import {
+  textBoundsOf,
+  type AnyWidgetSetting,
+  type TextBound,
+} from "./settings";
 import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
 
 /**
@@ -87,7 +93,14 @@ export interface CanonicalWidget {
   category?: string;
   /** The declaration's archetype, which picks the add panel's sketch. */
   archetype?: string;
-  requiredPermission?: string | readonly string[];
+  /** The sketch the declaration names in place of its archetype's, when it names one. */
+  sketch?: string;
+  /**
+   * Set when core builds this widget's data on the server from its declaration,
+   * so the admin asks for its cards by card rather than by query.
+   */
+  serverData?: true;
+  requiredPermission?: WidgetPermissionGate;
   defaultSize?: string;
   /**
    * The smallest and largest size the declaration allows, carried so the
@@ -109,6 +122,14 @@ export interface CanonicalWidget {
   defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
+   * Where the add panel offers this widget, as its definition states it: per
+   * collection, or on request (a card a reader asks for, such as a note).
+   * Either keeps it off the default dashboard and allows any number of cards.
+   *
+   * @experimental
+   */
+  offered?: "per-collection" | "on-request";
+  /**
    * How long the widget stays, and the condition it stays under.
    *
    * Carried through because the LAYOUT endpoint is where a transient card is
@@ -122,8 +143,15 @@ export interface CanonicalWidget {
   /** Whether the reader may send this card away; see `WidgetDefinition`. */
   dismissible?: boolean;
   /**
+   * The bounds the declaration's textarea settings state, from either channel,
+   * so the layout write holds a placement's text to them whichever channel
+   * declared the widget. Absent when the declaration states no settings.
+   */
+  textBounds?: readonly TextBound[];
+  /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
-   * verbatim, `undefined` where the action declares none.
+   * verbatim, `undefined` where the action declares none, and a declared
+   * widget's empty-state action's, when it has one.
    *
    * Carried so the workspace payload can withhold an action from a reader
    * who lacks its grant before the declaration ships -- an action is a label
@@ -168,9 +196,15 @@ const REGISTRATION_FIELDS = [
   "maxSize",
   "defaultHeight",
   "defaultOrder",
+  "allowedWidths",
+  "defaultWidth",
+  "allowsSeveral",
+  "sketch",
+  "serverData",
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
@@ -182,9 +216,29 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
   ).map(field => [field, definition[field]]);
   return {
     id: definition.id,
-    actionGates: actionGatesOf(definition.actions),
+    // A declared widget's empty-state action is gated like a shortcut, so its
+    // gate is resolved with them, before the payload decides what to withhold.
+    actionGates: [
+      ...actionGatesOf(definition.actions),
+      ...(definition.empty?.action?.requiredPermission === undefined
+        ? []
+        : [definition.empty.action.requiredPermission]),
+    ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
+    ...textBoundsField(definition.settings),
   };
+}
+
+/**
+ * A declaration's textarea bounds as a summary field: absent when it states no
+ * settings, so a merge reads the other channel's, as the admin reads its
+ * settings.
+ */
+export function textBoundsField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "textBounds"> {
+  const textBounds = textBoundsOf(settings);
+  return textBounds === undefined ? {} : { textBounds };
 }
 
 /**
@@ -284,6 +338,10 @@ function mergeCanonical(
   // declaration says nothing about it, which is exactly the two-implementations
   // divergence this function exists to prevent.
   const dismissible = registration.dismissible ?? contribution.dismissible;
+  // The admin's own rule for settings: the registration's wherever it states
+  // any, else the contribution's. Dropped by the spread below, a merged
+  // widget's sheet would bound a note its layout write let through.
+  const textBounds = registration.textBounds ?? contribution.textBounds;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -295,6 +353,7 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...(dismissible === undefined ? {} : { dismissible }),
+    ...(textBounds === undefined ? {} : { textBounds }),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
     // Both copies' action gates, because both copies ship: the payload carries
@@ -467,6 +526,24 @@ export interface WidgetWidthFacts {
 }
 
 /**
+ * Whether a widget enters the default arrangement: the ONE answer, for every
+ * reader that follows the default.
+ *
+ * A plugin's declared widget is offered, never placed by default: where a
+ * plugin may put one is its suggestion, which the site may decline, and an
+ * unsuggested one stays in the add panel. Until suggestions are placed, no
+ * declared widget enters it at all.
+ *
+ * Nor does a widget that is offered (`offered`): one offered per collection
+ * reads the collection a card is set to, and the default arrangement places a
+ * widget once, set to nothing; one offered on request, a note, has nothing to
+ * show until its reader writes it.
+ */
+export function placedByDefault(widget: CanonicalWidget): boolean {
+  return widget.serverData !== true && widget.offered === undefined;
+}
+
+/**
  * The ONE reading of a widget's widths, for the default arrangement, the
  * layout read and the check on a write alike.
  *
@@ -487,6 +564,9 @@ export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
   return {
     allowedWidths: allowed,
     defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
-    allowsSeveral: widget.allowsSeveral ?? false,
+    // An offered widget is added on request: once for each collection, or a
+    // note for each thing a reader wants to keep, so a dashboard holds several
+    // of it by design.
+    allowsSeveral: widget.allowsSeveral ?? widget.offered !== undefined,
   };
 }

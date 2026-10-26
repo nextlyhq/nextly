@@ -23,7 +23,12 @@
  * @see services/entryApi.ts - Entry API client
  */
 
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import type {
+  UseQueryOptions,
+  NoInfer,
+  UseQueryResult,
+} from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
@@ -166,7 +171,7 @@ export function useEntry<T = Entry>({
   draft,
   translationStatus,
   queryOptions,
-}: UseEntryOptions<T>) {
+}: UseEntryOptions<T>): UseQueryResult<NoInfer<T>, Error> {
   return useQuery<T, Error>({
     // Locale is part of the cache identity — switching languages must refetch the
     // entry (the localized field values differ per locale), not serve the previous language.

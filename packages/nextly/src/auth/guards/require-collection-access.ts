@@ -1,6 +1,10 @@
+import {
+  INSTEAD_OF_AN_ACCESS_CHECK,
+  warnDeprecatedExport,
+} from "../deprecated-exports";
 import type { AuthContext } from "../session/session-types";
 
-import { checkPermission } from "./require-permission";
+import { permissionHeld } from "./require-permission";
 
 export type CollectionOperation =
   | "create"
@@ -28,6 +32,14 @@ export interface CollectionAccessDeps {
 /**
  * Check if the auth context has access to a collection operation.
  * Priority: super-admin bypass > code-defined access > database RBAC.
+ *
+ * @deprecated For a signed-in user, use
+ * `nextly.access.check({ userId, resource, operation })`, which asks the one
+ * access decision. For an API key, check the key's own permissions, which
+ * `nextly.access.checkApiKey({ rawKey })` returns: `nextly.access.check`
+ * judges the key's maker, not the key. Keep running the collection rule your
+ * `evaluateCodeAccess` ran: this guard runs no rule of its own, and neither
+ * does `checkApiKey`. Removed in the next release.
  */
 export async function checkCollectionAccess(
   context: AuthContext,
@@ -35,6 +47,7 @@ export async function checkCollectionAccess(
   operation: CollectionOperation,
   deps: CollectionAccessDeps
 ): Promise<boolean> {
+  warnDeprecatedExport("checkCollectionAccess", INSTEAD_OF_AN_ACCESS_CHECK);
   // Super-admin bypass: check for "super-admin" role
   if (context.roles.includes("super-admin")) {
     return true;
@@ -53,5 +66,5 @@ export async function checkCollectionAccess(
   }
 
   // Fall through to database RBAC
-  return checkPermission(context, operation, collectionSlug, deps);
+  return permissionHeld(context, operation, collectionSlug, deps);
 }

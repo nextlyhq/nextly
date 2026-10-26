@@ -47,14 +47,23 @@ export function isMoney(value: unknown): value is Money {
   return moneySchema.safeParse(value).success;
 }
 
+/** The fields {@link moneySchema} reads, before it builds the `Money`. */
+type MoneyShape = {
+  amount: z.ZodNumber;
+  currency: typeof currencyCodeSchema;
+};
+
 /**
  * The schema of an amount arriving from outside (a provider's answer, a stored
  * row, a request body), for parsing at the boundary.
  *
  * @experimental
  */
-export const moneySchema = z
-  .strictObject({
+export const moneySchema: z.ZodPipe<
+  z.ZodObject<MoneyShape, z.core.$strict>,
+  z.ZodTransform<Money, z.output<z.ZodObject<MoneyShape, z.core.$strict>>>
+> = z
+  .strictObject<MoneyShape>({
     amount: z.number().refine(Number.isSafeInteger, {
       message: "an amount is a safe whole number of minor units",
     }),

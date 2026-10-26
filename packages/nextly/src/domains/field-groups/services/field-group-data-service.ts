@@ -5,7 +5,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
-import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import type { LocalizationSource } from "../../i18n/localization-source";
 
 import {
   FieldGroupMutationService,
@@ -36,7 +36,7 @@ export class FieldGroupDataService {
     relationshipService?: CollectionRelationshipService,
     // i18n: threaded to the query/mutation services so a localized embedded component
     // resolves/writes its translatable fields via `comp_<slug>_locales` per language.
-    localization?: SanitizedLocalizationConfig
+    localization?: LocalizationSource
   ) {
     this.queryService = new FieldGroupQueryService(
       adapter,

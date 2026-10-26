@@ -138,4 +138,5 @@ export function NotificationDropdown(): ReactElement {
 // Test seam: page size used by both the React-Query call and the
 // "load more" call. Exported so tests can construct cursor scenarios
 // without hard-coding the constant.
-export const NOTIFICATION_DROPDOWN_PAGE_SIZE = PAGE_SIZE;
+export const NOTIFICATION_DROPDOWN_PAGE_SIZE: typeof JOURNAL_PAGE_SIZE =
+  PAGE_SIZE;

@@ -18,7 +18,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import * as Icons from "@admin/components/icons";
 
@@ -154,7 +154,7 @@ export function DashboardEditBar({
   barRef,
   customizeRef,
   children,
-}: DashboardEditBarProps) {
+}: DashboardEditBarProps): JSX.Element {
   if (!isEditing) {
     return (
       <>

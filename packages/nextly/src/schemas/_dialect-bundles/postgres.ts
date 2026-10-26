@@ -87,6 +87,7 @@ export { userFieldDefinitionsPg as userFieldDefinitions } from "../user-field-de
 export { emailProvidersPg as emailProviders } from "../email-providers/postgres";
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
 export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
+export { emailQueuePg as emailQueue } from "../email-queue/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";
@@ -146,3 +147,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksPg as nextlyPreviewLinks } from "../preview-links/postgres";
+export { nextlyLanguagesPg as nextlyLanguages } from "../languages/postgres";

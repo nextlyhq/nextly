@@ -47,6 +47,7 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { CONTENT_WIDTHS, NEEDS_ATTENTION_WIDTHS } from "./core-widget-widths";
 import { MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 import {
@@ -60,6 +61,7 @@ import {
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
 // what fits. Re-exported, so this module's importers are unchanged.
 export {
+  DASHBOARD_FULL_MESSAGE,
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
@@ -169,13 +171,124 @@ export interface WidgetRetirement {
    * function of the stored text and this map. Absent, every width.
    */
   allowedWidths?: readonly WidgetWidth[];
+  /**
+   * When a merged card starts removed: `"all"` (the default) only if every card
+   * merged into it was removed; `"any"` if any one was. `"any"` is for cards
+   * whose removal was a reader's explicit dismissal of what the successor now
+   * does, so merging must not undo it; the card stays recoverable from Removed.
+   */
+  removed?: "all" | "any";
 }
 
-/** Retired widget ids, each with what its cards become. */
-export type WidgetRetirements = ReadonlyMap<string, WidgetRetirement>;
+/**
+ * Retired widgets, each with what its cards become. A `ReadonlyMap` of exact
+ * ids is one; {@link widgetRetirements} adds the families of ids minted per
+ * collection or Single, which no list of exact ids can name.
+ */
+export interface WidgetRetirements {
+  /** What a card of this widget becomes, or `undefined` when it is not retired. */
+  get(widgetId: string): WidgetRetirement | undefined;
+  /** Every retirement, for the successors they name. */
+  values(): Iterable<WidgetRetirement>;
+}
 
-/** The widgets this release has retired. None yet. */
-export const RETIRED_WIDGETS: WidgetRetirements = new Map();
+/** A family of retired ids, matched by their shape rather than spelled out. */
+export interface WidgetRetirementPattern {
+  matches: (widgetId: string) => boolean;
+  retirement: WidgetRetirement;
+}
+
+/**
+ * The retirements over exact ids, then over the families `patterns` match.
+ * An exact id wins over a pattern, so one id is never answered two ways.
+ */
+export function widgetRetirements(
+  exact: ReadonlyMap<string, WidgetRetirement>,
+  patterns: readonly WidgetRetirementPattern[] = []
+): WidgetRetirements {
+  return {
+    get: widgetId =>
+      exact.get(widgetId) ??
+      patterns.find(pattern => pattern.matches(widgetId))?.retirement,
+    values: () => [
+      ...exact.values(),
+      ...patterns.map(pattern => pattern.retirement),
+    ],
+  };
+}
+
+/** What a Collections, Singles or per-Single card becomes: the one Content card. */
+const INTO_CONTENT: WidgetRetirement = {
+  successor: "core/content",
+  allowedWidths: CONTENT_WIDTHS.allowedWidths,
+};
+
+/**
+ * A per-Single card's id: `single/<slug>-status`, as the generated set mints
+ * it. Matched by shape, since there is one per Single the install ever had.
+ */
+const PER_SINGLE_CARD = /^single\/[a-z0-9-]+-status$/;
+
+/**
+ * The widgets this release has retired.
+ *
+ * - "Unpublished changes" became one kind of Needs attention. It had no
+ *   settings and one card per dashboard, so its card becomes the Needs
+ *   attention card, merging into one the layout already holds. Needs attention
+ *   draws from a third to the full width, so a quarter-width card is drawn at a
+ *   third.
+ * - Collections, Singles and the per-Single cards became Content, and the
+ *   setup checklist and the sample-content offer became Get started (below).
+ */
+export const RETIRED_WIDGETS: WidgetRetirements = widgetRetirements(
+  new Map<string, WidgetRetirement>([
+    [
+      "core/pending-edits",
+      {
+        successor: "core/needs-attention",
+        allowedWidths: NEEDS_ATTENTION_WIDTHS.allowedWidths,
+      },
+    ],
+    // - Collections and Singles became one Content card, which lists both.
+    //   Every saved layout holds the two (a save carries the cards a condition
+    //   hid), so they merge: the first one's id and position, the larger width
+    //   Content allows, removed only if both were.
+    ["core/collections", INTO_CONTENT],
+    ["core/singles", INTO_CONTENT],
+    // - The setup checklist and the sample-content offer became the one Get
+    //   started card, at full width only. A layout holding both (every saved
+    //   row does, since a save carries the cards a condition hid) gets one
+    //   card, with the first one's id and position. Removed if EITHER was:
+    //   removing either one was a reader turning that help away, and Get
+    //   started is both, so merging must not bring it back. It stays
+    //   recoverable from Removed.
+    [
+      "core/onboarding-checklist",
+      {
+        successor: "core/get-started",
+        allowedWidths: ["full"],
+        removed: "any",
+      },
+    ],
+    [
+      "core/seed-demo-content",
+      {
+        successor: "core/get-started",
+        allowedWidths: ["full"],
+        removed: "any",
+      },
+    ],
+  ]),
+  [
+    // - A per-Single card became Content, merging into the Content card a
+    //   layout already holds. Its settings were about one Single, which
+    //   Content does not take, so they are not carried.
+    {
+      matches: widgetId => PER_SINGLE_CARD.test(widgetId),
+      retirement: { ...INTO_CONTENT, settings: () => undefined },
+    },
+  ]
+);
 
 function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -509,6 +622,8 @@ interface RetiringCard {
   retired: boolean;
   /** The successor's allowed widths, for a retired card. */
   allowedWidths?: readonly WidgetWidth[];
+  /** Its retirement's removed rule, for a retired card. */
+  removedRule?: "all" | "any";
 }
 
 /** A card's merge key: its successor and which card of it. */
@@ -580,6 +695,7 @@ function retiringCards(
         key: mergeKey(last.successor, last.identity, converted),
         retired: true,
         ...(last.allowedWidths ? { allowedWidths: last.allowedWidths } : {}),
+        ...(last.removed ? { removedRule: last.removed } : {}),
       };
     }
     if (identityOf.has(placement.widgetId)) {
@@ -627,16 +743,19 @@ function widestAllowed(
  * settings, and the retired cards merge into it. Otherwise the first card in
  * the order keeps its id, position and settings, and takes the largest of the
  * group's widths that the successor allows. Either way the card is removed only
- * if every card in the group was.
+ * if every card in the group was, unless a retired card's retirement says any
+ * one removal carries over (`removed: "any"`).
  */
 function mergedCard(group: readonly RetiringCard[]): RetiringCard {
   const kept = group.find(card => !card.retired) ?? group[0];
   // Over the cards IN the merge: the kept one and the retired ones. Another
   // successor card the layout already held stays as it was, so its state is
   // no part of this card's.
-  const removed = group
-    .filter(card => card === kept || card.retired)
-    .every(card => card.placement.removed);
+  const merged = group.filter(card => card === kept || card.retired);
+  const wasRemoved = (card: RetiringCard) => card.placement.removed === true;
+  const removed = merged.some(card => card.removedRule === "any")
+    ? merged.some(wasRemoved)
+    : merged.every(wasRemoved);
   if (!kept.retired) {
     return { ...kept, placement: { ...kept.placement, removed } };
   }
@@ -667,7 +786,11 @@ export function applyRetirements(
   placements: WidgetPlacement[],
   retirements: WidgetRetirements
 ): WidgetPlacement[] {
-  if (!placements.some(placement => retirements.has(placement.widgetId))) {
+  if (
+    !placements.some(
+      placement => retirements.get(placement.widgetId) !== undefined
+    )
+  ) {
     return placements;
   }
   const cards = retiringCards(placements, retirements);

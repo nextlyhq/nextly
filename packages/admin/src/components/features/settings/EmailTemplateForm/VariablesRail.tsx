@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { useForm } from "react-hook-form";
 import { useFieldArray } from "react-hook-form";
 
@@ -14,7 +15,7 @@ import {
 } from "@admin/components/ui/form";
 
 import { BUILT_IN_VARIABLES } from "./sample-data";
-import { type TemplateFormValues, type TemplateFormVariable } from "./schema";
+import type { TemplateFormValues, TemplateFormVariable } from "./schema";
 
 // ============================================================
 // Rail: Variables tab
@@ -55,7 +56,7 @@ export function VariableChips({
 }: {
   declared: TemplateFormVariable[];
   onInsert: (name: string) => void;
-}) {
+}): JSX.Element {
   const builtInNames = new Set(BUILT_IN_VARIABLES.map(v => v.name));
   const declaredNames = declared
     .map(v => v.name)
@@ -87,7 +88,7 @@ export function VariablesRail({
    * not changed, and nothing is inserted into a body the site can't edit.
    */
   locked: boolean;
-}) {
+}): JSX.Element {
   const { fields, append, remove } = useFieldArray({
     control,
     name: "variables",

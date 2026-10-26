@@ -6,7 +6,7 @@
  * EventSource reconnects against it forever, a request loop on the hosting
  * bill of every deployed admin.
  *
- * It shipped enabled in production anyway: tsup substitutes
+ * It shipped enabled in production anyway: the bundler substitutes
  * `process.env.NODE_ENV` with the ambient value at build time, so the guard
  * answered where the LIBRARY was built, never where the host is running.
  * That check no longer lives here at all. The RUNNING server answers through
@@ -19,7 +19,7 @@
  * - `enableDevReload` opens exactly one stream and refuses duplicates,
  *   because it may be invoked on every workspace refetch.
  *
- * The build config pin stays: the tsup define still governs the OTHER
+ * The build config pin stays: the tsdown define still governs the OTHER
  * `NODE_ENV` sites in this package (dev-only diagnostics), and defaulting an
  * unset ambient value to production keeps them quiet in release dists.
  */
@@ -128,12 +128,12 @@ describe("enableDevReload subscription", () => {
   });
 });
 
-describe("tsup NODE_ENV define", () => {
+describe("tsdown NODE_ENV define", () => {
   // Read as text rather than imported: the vitest module graph won't resolve
   // a config file outside src/. The path is package-relative because
   // import.meta.url is not a file: URL under the jsdom environment; vitest
   // runs with the package root as cwd, and a wrong cwd fails the read loudly.
-  const configSource = readFileSync(join("tsup.config.ts"), "utf8");
+  const configSource = readFileSync(join("tsdown.config.ts"), "utf8");
 
   it("pins process.env.NODE_ENV for the published browser bundle", () => {
     expect(configSource).toContain('"process.env.NODE_ENV"');
@@ -141,7 +141,7 @@ describe("tsup NODE_ENV define", () => {
 
   it("defaults an unset ambient NODE_ENV to production", () => {
     // The release pipeline never sets NODE_ENV; the define must not inherit
-    // tsup's own "development" fallback for that case. This governs the
+    // tsup's old "development" fallback for that case. This governs the
     // package's remaining NODE_ENV sites — dev-only diagnostics — and is
     // deliberately no longer what keeps dev-reload quiet (the server's
     // runtime `devReload` answer is).

@@ -62,7 +62,7 @@ export function SortableRow({
   onEditField,
   onDeleteField,
   onDuplicateField,
-}: Props) {
+}: Props): React.JSX.Element {
   // Why: previously only setNodeRef + transform/transition were extracted,
   // so useSortable's pointer/keyboard listeners were never attached to the
   // drag handle -- making the row visually styled but undraggable. Spread

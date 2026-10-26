@@ -1,5 +1,7 @@
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
+import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
+import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
@@ -516,6 +518,19 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_preview_links" ("revoked_by")`,
     `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_idx"
       ON "nextly_preview_links" ("revoked_at")`,
+    // The site's stored content languages. Columns match schemas/languages/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${LANGUAGES_TABLE}" (
+      "code" TEXT PRIMARY KEY NOT NULL,
+      "label" TEXT NOT NULL,
+      "direction" TEXT NOT NULL DEFAULT 'ltr',
+      "fallback" TEXT NOT NULL DEFAULT '[]',
+      "position" INTEGER NOT NULL,
+      "is_default" INTEGER NOT NULL DEFAULT 0,
+      "active" INTEGER NOT NULL DEFAULT 1,
+      "revision" INTEGER NOT NULL DEFAULT 1,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -812,6 +827,19 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_SEND_CLAIMS_TABLE}" ("state", "settled_at")`,
     `CREATE INDEX IF NOT EXISTS "email_send_claims_lease_idx"
       ON "${EMAIL_SEND_CLAIMS_TABLE}" ("lease_expires_at")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_TABLE}" (
+      "id" TEXT PRIMARY KEY,
+      "scope" TEXT NOT NULL,
+      "state" TEXT NOT NULL,
+      "job_id" TEXT NOT NULL,
+      "message" TEXT,
+      "failure" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL,
+      "settled_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_state_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
   ];
 }
 

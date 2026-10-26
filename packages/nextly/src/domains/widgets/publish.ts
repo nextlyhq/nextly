@@ -24,8 +24,10 @@ import { getNextlyLogger } from "../../observability/logger";
 import { jsonOnly, unserializableKeys } from "../../plugins/json-round-trip";
 
 import type { WidgetDefinition } from "./definition";
+import type { PublishedContentSource } from "./published-content-source";
 import { listWidgets } from "./registry";
-import { getSource, type WidgetSourceField } from "./sources";
+import { knobSourceFor } from "./settings";
+import { getSource, type WidgetSource } from "./sources";
 
 /**
  * Every registered widget that survives the trip to the browser unchanged, in
@@ -48,26 +50,50 @@ export function publishableWidgets(): WidgetDefinition[] {
       });
       continue;
     }
-    publishable.push(serializable as unknown as WidgetDefinition);
+    publishable.push(
+      withSourceFilters(serializable as unknown as WidgetDefinition)
+    );
   }
 
   return publishable;
 }
 
 /**
- * A collection a card's content settings may name, with the fields they may
- * offer to filter, sort or group by.
- *
- * @experimental The shape may still change while the settings sheet's
- * content controls are built on it.
+ * `definition` with the filters its source takes, read from the source
+ * registry now that every source is registered, in place of any it stated.
+ * Absent when its source takes none, as on every widget not reading one.
  */
-export interface PublishedContentSource {
-  collection: string;
-  label: string;
-  fields: Pick<
-    WidgetSourceField,
-    "name" | "label" | "type" | "choices" | "groupable"
-  >[];
+function withSourceFilters(definition: WidgetDefinition): WidgetDefinition {
+  const rest: WidgetDefinition = { ...definition };
+  delete rest.sourceFilters;
+  const source = definition.query?.source;
+  const filters =
+    typeof source === "string" ? knobSourceFor(source).filters : undefined;
+  return filters === undefined ? rest : { ...rest, sourceFilters: filters };
+}
+
+// The collection a card's content settings may name has a module of its own, holding the type
+// alone, so the knobs that read it reach nothing of this one.
+export type { PublishedContentSource } from "./published-content-source";
+
+/**
+ * The collections this reader may read, as the cards they may see show them:
+ * each collection whose own generated card is visible to them.
+ *
+ * ONE derivation for what a card's content settings may name and for which
+ * collection a saved count card resolves to (`countCardConversion`), so the
+ * two never disagree about what this reader may read.
+ */
+export function readableCollectionsOf(
+  visible: readonly { generated?: boolean; collection?: string }[]
+): Set<string> {
+  const slugs = new Set<string>();
+  for (const card of visible) {
+    if (card.generated === true && card.collection !== undefined) {
+      slugs.add(card.collection);
+    }
+  }
+  return slugs;
 }
 
 /**
@@ -89,30 +115,37 @@ export interface PublishedContentSource {
 export function publishableContentSources(
   visible: readonly { generated?: boolean; collection?: string }[]
 ): PublishedContentSource[] {
-  const slugs = new Set<string>();
-  for (const card of visible) {
-    if (card.generated === true && card.collection !== undefined) {
-      slugs.add(card.collection);
-    }
-  }
   const published: PublishedContentSource[] = [];
-  for (const slug of slugs) {
+  for (const slug of readableCollectionsOf(visible)) {
     const source = getSource(`collection:${slug}`);
-    if (source === undefined) continue;
-    published.push({
-      collection: slug,
-      label: source.label,
-      fields: source.fields
-        .filter(field => field.offered !== false)
-        .map(({ name, label, type, choices, groupable }) => ({
-          name,
-          type,
-          ...(label === undefined ? {} : { label }),
-          ...(choices === undefined ? {} : { choices }),
-          // Carried so a Group by setting offers only keys the read accepts.
-          ...(groupable === undefined ? {} : { groupable }),
-        })),
-    });
+    if (source !== undefined) published.push(publishedSourceOf(slug, source));
   }
   return published;
+}
+
+/** One collection's source as a reader's content settings see it. */
+function publishedSourceOf(
+  slug: string,
+  source: WidgetSource
+): PublishedContentSource {
+  const offered = source.fields.filter(field => field.offered !== false);
+  // Published only where the reader is offered the field itself: a title a
+  // read rule could refuse is no row label to ask for.
+  const titleField = offered.some(field => field.name === source.titleField)
+    ? source.titleField
+    : undefined;
+  return {
+    collection: slug,
+    label: source.label,
+    lifecycle: source.lifecycleStatus === true,
+    ...(titleField === undefined ? {} : { titleField }),
+    fields: offered.map(({ name, label, type, choices, groupable }) => ({
+      name,
+      type,
+      ...(label === undefined ? {} : { label }),
+      ...(choices === undefined ? {} : { choices }),
+      // Carried so a Group by setting offers only keys the read accepts.
+      ...(groupable === undefined ? {} : { groupable }),
+    })),
+  };
 }

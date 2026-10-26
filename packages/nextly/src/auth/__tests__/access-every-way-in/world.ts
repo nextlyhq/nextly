@@ -35,6 +35,7 @@ import type { AuthenticatedScope } from "../../authenticated-scope";
 import { apiKeyScopeFrom } from "../../authenticated-scope";
 import { requireAuthentication } from "../../middleware/index";
 
+import { refusalFromError } from "./refusals";
 import {
   ENTRY_ACTIONS,
   CALLERS,
@@ -101,6 +102,7 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "returns-false": () => false,
   "returns-null": () => null,
   "returns-undefined": () => undefined,
+  "returns-string": () => "yes",
   throws: () => {
     throw new Error("the rule failed");
   },
@@ -244,11 +246,9 @@ async function outcome(work: () => Promise<unknown>): Promise<Response> {
       typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
     );
   } catch (error) {
-    const status = (error as { statusCode?: unknown }).statusCode;
-    return Response.json({
-      ok: false,
-      status: typeof status === "number" ? status : null,
-    });
+    // What the call threw, read the one way every door reads a thrown
+    // refusal, and handed back whole.
+    return Response.json({ ok: false, refusal: refusalFromError(error) });
   }
 }
 

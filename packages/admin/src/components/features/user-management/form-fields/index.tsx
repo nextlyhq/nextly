@@ -8,6 +8,7 @@ import {
   RadioGroup,
   RadioGroupItem,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import type { Control, FieldErrors, UseFormRegister } from "react-hook-form";
 import { Controller, useWatch } from "react-hook-form";
@@ -126,7 +127,7 @@ export function UserFormFields({
   rolesError = null,
   onRetryRoles,
   showActiveAccount = false,
-}: UserFormFieldsProps) {
+}: UserFormFieldsProps): JSX.Element {
   const isCreateMode = mode === "create";
   const [showPassword, setShowPassword] = useState(false);
 

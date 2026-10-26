@@ -21,6 +21,10 @@ import {
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
 import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
+import {
   resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -210,6 +214,11 @@ export class FieldGroupQueryService extends BaseService {
   private readonly registryService: FieldGroupRegistryService;
   private relationshipService?: CollectionRelationshipService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -217,7 +226,7 @@ export class FieldGroupQueryService extends BaseService {
     relationshipService?: CollectionRelationshipService,
     // i18n: when set and an embedded component is localized, its translatable fields
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
     this.registryService = registryService;

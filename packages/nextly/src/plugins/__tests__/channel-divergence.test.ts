@@ -230,6 +230,23 @@ const MUST_AGREE: Array<{
   expect?: RegExp;
 }> = [
   {
+    // 🔴 Accepted as a contribution, the admin takes the cells and ignores the
+    // query, while the identical registered definition is refused.
+    case: "a custom card asking through both a query and cells",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: { source: "collection:posts", op: "count" },
+      cells: [
+        { key: "total", query: { source: "collection:posts", op: "count" } },
+      ],
+    },
+    expect: /asks through its query or its cells, not both/,
+  },
+  {
     case: "minSize above defaultSize",
     widget: {
       id: "acme/thing",
@@ -549,6 +566,49 @@ const MUST_AGREE: Array<{
       defaultSize: "sm",
       component: "p#X",
       dismissible: "false",
+    },
+  },
+  {
+    // It decides whether the batch asks a custom card one row more than it
+    // draws, so a truthy non-boolean would send its component a row it then
+    // draws as an ordinary one.
+    case: "a sizedQuery that is not a boolean",
+    expect: /sizedQuery, when given, must be a boolean/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: { source: "collection:posts", op: "list" },
+      sizedQuery: "true",
+    },
+  },
+  {
+    // Core already sizes the lists it draws, so on any other archetype the
+    // option would be validated and change nothing.
+    case: "a sizedQuery on an archetype core draws",
+    expect: /sizedQuery is only valid for archetype "custom"/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "list",
+      defaultSize: "sm",
+      query: { source: "collection:posts", op: "list" },
+      sizedQuery: true,
+    },
+  },
+  {
+    case: "a sizedQuery on a query with no rows to size",
+    expect: /sizedQuery needs a list query/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: { source: "collection:posts", op: "count" },
+      sizedQuery: true,
     },
   },
   {

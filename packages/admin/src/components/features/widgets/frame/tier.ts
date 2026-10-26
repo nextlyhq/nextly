@@ -15,7 +15,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { effectiveWidgetLimit, MAX_WIDGET_ROWS } from "nextly/config";
-import { createContext, useContext, type RefObject } from "react";
+import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
@@ -112,7 +112,9 @@ export function rowsLayout(tier: SizeTier, columns: number): RowsLayout {
 }
 
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */
-export const CardTierContext = createContext<SizeTier | undefined>(undefined);
+export const CardTierContext: Context<SizeTier | undefined> = createContext<
+  SizeTier | undefined
+>(undefined);
 
 /** The tier of the card this is drawn in. */
 export function useCardTier(): SizeTier | undefined {
@@ -124,13 +126,20 @@ export function useCardTier(): SizeTier | undefined {
  * grew keeps its smaller answer on screen until a larger one lands, and that answer holds only
  * the rows its own tier asked for, and the one more that says more exist.
  */
-export const AnswerTierContext = createContext<SizeTier | undefined>(undefined);
+export const AnswerTierContext: Context<SizeTier | undefined> = createContext<
+  SizeTier | undefined
+>(undefined);
 
 const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
   small: 0,
   medium: 1,
   large: 2,
 };
+
+/** Whether a card drawn at `tier` draws what is drawn from `from` up. */
+export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
+  return TIER_ORDER[tier] >= TIER_ORDER[from];
+}
 
 /**
  * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at

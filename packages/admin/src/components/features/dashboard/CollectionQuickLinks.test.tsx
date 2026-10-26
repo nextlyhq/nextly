@@ -12,7 +12,7 @@ import { render, screen, within } from "@admin/__tests__/utils";
 import {
   NAV_COLLECTIONS_PARAMS,
   useCollections,
-  useDashboardStats,
+  useSingles,
 } from "@admin/hooks/queries";
 
 import { CollectionQuickLinks } from "./CollectionQuickLinks";
@@ -20,7 +20,7 @@ import { CollectionQuickLinks } from "./CollectionQuickLinks";
 vi.mock("@admin/hooks/queries", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
   useCollections: vi.fn(),
-  useDashboardStats: vi.fn(),
+  useSingles: vi.fn(),
 }));
 
 const LIST = ["authors", "posts", "tags"].map(name => ({
@@ -28,26 +28,47 @@ const LIST = ["authors", "posts", "tags"].map(name => ({
   label: name[0].toUpperCase() + name.slice(1),
 }));
 
+/** The list the sidebar shares, and the card's `system:content` answer, as the batch hands it. */
 function given({
   list,
   counts,
-  statsError = null,
+  failed,
+  onRetry,
 }: {
   list?: typeof LIST;
-  counts?: { slug: string; label: string; group: null; count: number }[];
-  statsError?: Error | null;
+  counts?: {
+    kind?: "collection" | "single";
+    slug: string;
+    label: string;
+    group: null;
+    count?: number;
+    draft?: number;
+  }[];
+  failed?: { error: string; code?: "unavailable" };
+  onRetry?: () => void;
 }) {
+  vi.mocked(useSingles).mockReturnValue({
+    data: { items: [] },
+  } as unknown as ReturnType<typeof useSingles>);
   vi.mocked(useCollections).mockReturnValue({
     data: list ? { items: list } : undefined,
     isLoading: list === undefined,
   } as unknown as ReturnType<typeof useCollections>);
-  vi.mocked(useDashboardStats).mockReturnValue({
-    data: counts ? { collectionCounts: counts } : undefined,
-    isLoading: counts === undefined && statsError === null,
-    error: statsError,
-    refetch: vi.fn(),
-  } as unknown as ReturnType<typeof useDashboardStats>);
-  render(<CollectionQuickLinks />);
+  const slot = failed
+    ? { ok: false as const, ...failed }
+    : counts
+      ? { ok: true as const, result: { op: "list" as const, items: counts } }
+      : undefined;
+  render(
+    <CollectionQuickLinks
+      widgetId="core/content"
+      placementId="core/content"
+      settings={{}}
+      slot={slot}
+      isFetching={slot === undefined}
+      {...(onRetry ? { onRetry } : {})}
+    />
+  );
 }
 
 /** The tiles' labels, in the order drawn. */
@@ -129,9 +150,127 @@ describe("the Collections card's tiles", () => {
     expect(useCollections).toHaveBeenCalledWith(NAV_COLLECTIONS_PARAMS);
   });
 
-  it("still says the counts failed, rather than holding their places forever", () => {
-    given({ list: LIST, statsError: new Error("boom") });
+  it("still says the counts failed, rather than holding their places forever, and offers Retry", () => {
+    const onRetry = vi.fn();
+    given({ list: LIST, failed: { error: "boom" }, onRetry });
     expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    screen.getByRole("button", { name: /retry/i }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("says it is not available when its source refused this reader", () => {
+    given({
+      list: LIST,
+      failed: { error: "Not available", code: "unavailable" },
+    });
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
+  });
+
+  it("draws every collection past the default five", () => {
+    const names = ["a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+    given({
+      list: names.map(name => ({ name, label: name.toUpperCase() })),
+      counts: names.map(name => ({
+        slug: name,
+        label: name.toUpperCase(),
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(7);
+    expect(screen.queryByText(/more exist/i)).toBeNull();
+  });
+
+  it("says more exist past the most it draws, from the one row more", () => {
+    const names = Array.from({ length: 50 }, (_, i) => `c${i}`);
+    given({
+      list: names.map(name => ({ name, label: name })),
+      counts: names.map(name => ({
+        slug: name,
+        label: name,
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(49);
+    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
+  it("draws a counted collection the list lacks, after the listed ones", () => {
+    // 🔴 Joined on the list, a count for a collection outside the list's page was dropped.
+    given({
+      list: LIST,
+      counts: [
+        { slug: "posts", label: "Posts", group: null, count: 13 },
+        { slug: "zines", label: "Zines", group: null, count: 2 },
+        { slug: "tags", label: "Tags", group: null, count: 3 },
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts", "Tags", "Zines"]);
+  });
+
+  it("draws the most it draws when the list's page and the counts' page differ", () => {
+    // Past a hundred collections the list is its first hundred and the counts are their own
+    // fifty: here thirty of the fifty are listed and twenty are not.
+    const names = Array.from(
+      { length: 120 },
+      (_, i) => `n${String(i).padStart(3, "0")}`
+    );
+    given({
+      list: names.slice(0, 100).map(name => ({ name, label: name })),
+      counts: names.slice(70).map(name => ({
+        slug: name,
+        label: name,
+        group: null,
+        count: 1,
+      })),
+    });
+    expect(screen.getAllByRole("link")).toHaveLength(49);
+    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+  });
+
+  it("draws each Single after the collections, linking to it, a Single sharing a collection's slug included", () => {
+    // 🔴 Read as collections, Singles were dropped (no count), and one sharing a
+    // collection's slug was taken for that collection.
+    given({
+      list: LIST,
+      counts: [
+        {
+          kind: "collection",
+          slug: "posts",
+          label: "Posts",
+          group: null,
+          count: 13,
+        },
+        { kind: "single", slug: "home", label: "Home page", group: null },
+        { kind: "single", slug: "posts", label: "Posts page", group: null },
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts", "Home page", "Posts page"]);
+    expect(screen.getByRole("link", { name: /Home page/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/admin/singles/home")
+    );
+    // Two groups now, so each is named.
+    expect(
+      screen.getByRole("heading", { name: /Singles/ })
+    ).toBeInTheDocument();
+  });
+
+  it("names a collection's drafts beside its entries, and says nothing of none", () => {
+    given({
+      list: LIST,
+      counts: [
+        { slug: "authors", label: "Authors", group: null, count: 4, draft: 0 },
+        { slug: "posts", label: "Posts", group: null, count: 13, draft: 2 },
+      ],
+    });
+    expect(screen.getByRole("link", { name: /Posts/ })).toHaveTextContent(
+      "2 drafts"
+    );
+    expect(screen.getByRole("link", { name: /Authors/ })).not.toHaveTextContent(
+      /draft/
+    );
   });
 
   it("draws the frame's placeholder only while neither answer is known", () => {

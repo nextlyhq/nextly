@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@nextlyhq/ui";
 import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
-import { useState } from "react";
+import { type JSX, useState } from "react";
 
 import type { FormFieldTypeId } from "../../../types";
 
@@ -44,7 +44,7 @@ export function AddFieldDialog({
   onOpenChange,
   entries,
   onAdd,
-}: AddFieldDialogProps) {
+}: AddFieldDialogProps): JSX.Element {
   const [selected, setSelected] = useState<FormFieldTypeId>("text");
 
   const selectable = entries?.some(entry => entry.type === selected)

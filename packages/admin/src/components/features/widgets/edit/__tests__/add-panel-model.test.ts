@@ -160,7 +160,7 @@ describe("the add panel's rows", () => {
     ]);
   });
 
-  it("leaves out a widget this admin cannot draw, and the Content group", () => {
+  it("leaves out a widget this admin cannot draw, and the Content group while it is hidden", () => {
     const rows = addPanelRows({
       placements: [],
       offered: ["ghost/widget", "content/posts"],
@@ -173,6 +173,7 @@ describe("the add panel's rows", () => {
         }),
       },
       byId: new Map([["content/posts", declared("content/posts", "Posts")]]),
+      showContent: false,
     });
     expect(rows).toEqual([]);
   });
@@ -268,5 +269,101 @@ describe("the add panel's groups", () => {
     expect(plugins?.subgroups.map(sub => [sub.name, sub.rows.length])).toEqual([
       ["@acme/forms", 1],
     ]);
+  });
+});
+
+describe("a widget offered per collection", () => {
+  const count = {
+    id: "core/count",
+    title: "Count",
+    archetype: "metric",
+    settings: [{ name: "collection", type: "collection" }],
+  } as unknown as DashboardWidget;
+  const rowsFor = (placements: WidgetPlacement[]) =>
+    addPanelRows({
+      placements,
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          allowsSeveral: true,
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      // No showContent: these rows are what the panel lists as it ships.
+      collections: [
+        { collection: "posts", label: "Posts" },
+        { collection: "pages", label: "Pages" },
+      ],
+    });
+
+  it("is one row per collection the reader may read, each adding a card set to it", () => {
+    const rows = rowsFor([]);
+    expect(rows.map(row => [row.key, row.subgroup, row.action])).toEqual([
+      [
+        "core/count:posts",
+        "Posts",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "posts" },
+        },
+      ],
+      [
+        "core/count:pages",
+        "Pages",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "pages" },
+        },
+      ],
+    ]);
+  });
+
+  it("counts only that collection's cards, offering another beside them", () => {
+    const rows = rowsFor([
+      { ...placement("a", "core/count"), config: { collection: "posts" } },
+    ]);
+    expect(rows.map(row => [row.key, row.placed, row.action.kind])).toEqual([
+      ["core/count:posts", 1, "add-another"],
+      ["core/count:pages", 0, "add"],
+    ]);
+  });
+
+  it("carries the widget's category, so a search by it finds each collection's row", () => {
+    const rows = addPanelRows({
+      placements: [],
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          category: "Totals",
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      collections: [{ collection: "posts", label: "Posts" }],
+    });
+    expect(rows[0]?.category).toBe("Totals");
+    expect(searchAddPanel(rows, "totals").map(row => row.key)).toEqual([
+      "core/count:posts",
+    ]);
+  });
+
+  it("stays out of the panel while the Content group is not shown", () => {
+    expect(
+      addPanelRows({
+        placements: [],
+        offered: ["core/count"],
+        widgets: {
+          "core/count": facts({ group: "content", perCollection: true }),
+        },
+        byId: new Map([["core/count", count]]),
+        collections: [{ collection: "posts", label: "Posts" }],
+        showContent: false,
+      })
+    ).toEqual([]);
   });
 });

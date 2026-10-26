@@ -24,6 +24,8 @@ import {
   useEffect,
   useImperativeHandle,
   forwardRef,
+  type RefAttributes,
+  type ForwardRefExoticComponent,
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
@@ -40,7 +42,7 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
-import { type TranslationListFilter } from "./entryFilters";
+import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
   getEntryTitleField,
@@ -170,389 +172,383 @@ export interface EntryTableRef {
 /**
  * Entry data table with server-side pagination, sorting, and bulk operations.
  */
-export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
-  function EntryTable(
-    {
-      collection,
-      entries,
-      pagination,
-      isLoading = false,
-      currentSort,
-      onPageChange,
-      onLimitChange,
-      onSortChange,
-      onSearchChange,
-      onEdit,
-      onDelete,
-      onBulkDelete,
-      onBulkUpdate,
-      onBulkPublish,
-      onBulkUnpublish,
-      isBulkPublishing = false,
-      columnsControl,
-      onSelectionChange,
-      status = "all",
-      onStatusChange,
-      translationFilter = null,
-      onTranslationFilterChange,
-      createdFrom = "",
-      createdTo = "",
-      updatedFrom = "",
-      updatedTo = "",
-      onCreatedFromChange,
-      onCreatedToChange,
-      onUpdatedFromChange,
-      onUpdatedToChange,
-    },
-    ref
-  ) {
-    // -------------------------------------------------------------------------
-    // State
-    // -------------------------------------------------------------------------
+export const EntryTable: ForwardRefExoticComponent<
+  EntryTableProps & RefAttributes<EntryTableRef>
+> = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
+  {
+    collection,
+    entries,
+    pagination,
+    isLoading = false,
+    currentSort,
+    onPageChange,
+    onLimitChange,
+    onSortChange,
+    onSearchChange,
+    onEdit,
+    onDelete,
+    onBulkDelete,
+    onBulkUpdate,
+    onBulkPublish,
+    onBulkUnpublish,
+    isBulkPublishing = false,
+    columnsControl,
+    onSelectionChange,
+    status = "all",
+    onStatusChange,
+    translationFilter = null,
+    onTranslationFilterChange,
+    createdFrom = "",
+    createdTo = "",
+    updatedFrom = "",
+    updatedTo = "",
+    onCreatedFromChange,
+    onCreatedToChange,
+    onUpdatedFromChange,
+    onUpdatedToChange,
+  },
+  ref
+) {
+  // -------------------------------------------------------------------------
+  // State
+  // -------------------------------------------------------------------------
 
-    const [globalFilter, setGlobalFilter] = useState("");
-    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-    // -------------------------------------------------------------------------
-    // Columns
-    // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Columns
+  // -------------------------------------------------------------------------
 
-    const columns = useMemo(
-      () =>
-        buildEntryColumns(collection, columnsControl?.isColumnVisible, {
-          openInLocale: (entryId, locale) => onEdit(entryId, locale),
-        }),
-      [collection, columnsControl, onEdit]
-    );
-
-    const titleField = useMemo(
-      () => getEntryTitleField(collection),
-      [collection]
-    );
-
-    // -------------------------------------------------------------------------
-    // Sorting
-    // -------------------------------------------------------------------------
-
-    const sort = useMemo(():
-      | { field: string; order: "asc" | "desc" }
-      | undefined => {
-      if (!currentSort) return undefined;
-      const desc = currentSort.startsWith("-");
-      return {
-        field: desc ? currentSort.slice(1) : currentSort,
-        order: desc ? "desc" : "asc",
-      };
-    }, [currentSort]);
-
-    // -------------------------------------------------------------------------
-    // Selection
-    // -------------------------------------------------------------------------
-
-    const selection = useMemo<DataTableSelection<EntryRow>>(
-      () => ({
-        selectedIds,
-        onToggle: row => {
-          const id = rowId(row);
-          setSelectedIds(prev =>
-            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-          );
-        },
-        onToggleAll: (rows, allSelected) => {
-          const ids = rows.map(rowId);
-          setSelectedIds(prev =>
-            allSelected
-              ? prev.filter(id => !ids.includes(id))
-              : Array.from(new Set([...prev, ...ids]))
-          );
-        },
+  const columns = useMemo(
+    () =>
+      buildEntryColumns(collection, columnsControl?.isColumnVisible, {
+        openInLocale: (entryId, locale) => onEdit(entryId, locale),
       }),
-      [selectedIds]
-    );
+    [collection, columnsControl, onEdit]
+  );
 
-    // Notify parent when selection changes.
-    useEffect(() => {
-      onSelectionChange?.(selectedIds);
-    }, [selectedIds, onSelectionChange]);
+  const titleField = useMemo(
+    () => getEntryTitleField(collection),
+    [collection]
+  );
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        selectAll: () => setSelectedIds(entries.map(rowId)),
-        clearSelection: () => setSelectedIds([]),
-        getSelectedIds: () => selectedIds,
-      }),
-      [entries, selectedIds]
-    );
+  // -------------------------------------------------------------------------
+  // Sorting
+  // -------------------------------------------------------------------------
 
-    // -------------------------------------------------------------------------
-    // Row navigation + actions
-    // -------------------------------------------------------------------------
-
-    const rowActions = useMemo(
-      () =>
-        (row: EntryRow): RowAction<EntryRow>[] => {
-          const id = rowId(row);
-          return [
-            {
-              id: "edit",
-              label: "Edit",
-              icon: <Pencil className="h-4 w-4" />,
-              onSelect: () => onEdit(id),
-            },
-            {
-              id: "delete",
-              label: "Delete",
-              icon: <Trash2 className="h-4 w-4" />,
-              destructive: true,
-              onSelect: () => onDelete(id),
-            },
-          ];
-        },
-      [onEdit, onDelete]
-    );
-
-    // -------------------------------------------------------------------------
-    // Search + column visibility helpers
-    // -------------------------------------------------------------------------
-
-    const handleGlobalFilterChange = (value: string) => {
-      setGlobalFilter(value);
-      onSearchChange(value);
+  const sort = useMemo(():
+    | { field: string; order: "asc" | "desc" }
+    | undefined => {
+    if (!currentSort) return undefined;
+    const desc = currentSort.startsWith("-");
+    return {
+      field: desc ? currentSort.slice(1) : currentSort,
+      order: desc ? "desc" : "asc",
     };
+  }, [currentSort]);
 
-    // -------------------------------------------------------------------------
-    // Filters (status + date range) rendered into the toolbar dropdown
-    // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Selection
+  // -------------------------------------------------------------------------
 
-    const hasStatusField = useMemo(() => {
-      const allFields = collection.fields || [];
-      return allFields.some(f => "name" in f && f.name === "status");
-    }, [collection]);
+  const selection = useMemo<DataTableSelection<EntryRow>>(
+    () => ({
+      selectedIds,
+      onToggle: row => {
+        const id = rowId(row);
+        setSelectedIds(prev =>
+          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+      },
+      onToggleAll: (rows, allSelected) => {
+        const ids = rows.map(rowId);
+        setSelectedIds(prev =>
+          allSelected
+            ? prev.filter(id => !ids.includes(id))
+            : Array.from(new Set([...prev, ...ids]))
+        );
+      },
+    }),
+    [selectedIds]
+  );
 
-    const hasDateFilters =
-      !!onCreatedFromChange ||
-      !!onCreatedToChange ||
-      !!onUpdatedFromChange ||
-      !!onUpdatedToChange;
+  // Notify parent when selection changes.
+  useEffect(() => {
+    onSelectionChange?.(selectedIds);
+  }, [selectedIds, onSelectionChange]);
 
-    // The language filter is available on a localized collection when the app has
-    // localization configured (more than one language).
-    const {
-      enabled: localizationEnabled,
-      locales,
-      defaultLocale,
-    } = useLocalization();
-    const hasLanguageFilter =
-      localizationEnabled &&
-      collection.localized === true &&
-      !!onTranslationFilterChange &&
-      locales.length > 1;
+  useImperativeHandle(
+    ref,
+    () => ({
+      selectAll: () => setSelectedIds(entries.map(rowId)),
+      clearSelection: () => setSelectedIds([]),
+      getSelectedIds: () => selectedIds,
+    }),
+    [entries, selectedIds]
+  );
 
-    const hasAnyActiveFilters =
-      status !== "all" ||
-      !!createdFrom ||
-      !!createdTo ||
-      !!updatedFrom ||
-      !!updatedTo ||
-      !!translationFilter;
+  // -------------------------------------------------------------------------
+  // Row navigation + actions
+  // -------------------------------------------------------------------------
 
-    const showFilterDropdown =
-      hasStatusField || hasDateFilters || hasLanguageFilter;
+  const rowActions = useMemo(
+    () =>
+      (row: EntryRow): RowAction<EntryRow>[] => {
+        const id = rowId(row);
+        return [
+          {
+            id: "edit",
+            label: "Edit",
+            icon: <Pencil className="h-4 w-4" />,
+            onSelect: () => onEdit(id),
+          },
+          {
+            id: "delete",
+            label: "Delete",
+            icon: <Trash2 className="h-4 w-4" />,
+            destructive: true,
+            onSelect: () => onDelete(id),
+          },
+        ];
+      },
+    [onEdit, onDelete]
+  );
 
-    const clearDateFilters = () => {
-      onCreatedFromChange?.("");
-      onCreatedToChange?.("");
-      onUpdatedFromChange?.("");
-      onUpdatedToChange?.("");
-    };
+  // -------------------------------------------------------------------------
+  // Search + column visibility helpers
+  // -------------------------------------------------------------------------
 
-    // -------------------------------------------------------------------------
-    // Render
-    // -------------------------------------------------------------------------
+  const handleGlobalFilterChange = (value: string) => {
+    setGlobalFilter(value);
+    onSearchChange(value);
+  };
 
-    return (
-      <ListView<EntryRow>
-        search={{
-          value: globalFilter,
-          onChange: handleGlobalFilterChange,
-          placeholder: `Search ${collection.label}...`,
-          inputProps: { "data-entry-search-input": true },
-        }}
-        columnsControl={columnsControl && { ...columnsControl, columns }}
-        hasActiveFilters={hasAnyActiveFilters}
-        filters={
-          showFilterDropdown ? (
-            <>
-              {hasStatusField && onStatusChange && (
-                <>
-                  <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={status === "all"}
-                    onCheckedChange={() => onStatusChange("all")}
-                  >
-                    All Status
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={status === "published"}
-                    onCheckedChange={() => onStatusChange("published")}
-                  >
-                    Published
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={status === "draft"}
-                    onCheckedChange={() => onStatusChange("draft")}
-                  >
-                    Draft
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={status === "archived"}
-                    onCheckedChange={() => onStatusChange("archived")}
-                  >
-                    Archived
-                  </DropdownMenuCheckboxItem>
-                </>
-              )}
+  // -------------------------------------------------------------------------
+  // Filters (status + date range) rendered into the toolbar dropdown
+  // -------------------------------------------------------------------------
 
-              {hasLanguageFilter && (
-                <>
-                  {hasStatusField && onStatusChange && (
-                    <DropdownMenuSeparator />
+  const hasStatusField = useMemo(() => {
+    const allFields = collection.fields || [];
+    return allFields.some(f => "name" in f && f.name === "status");
+  }, [collection]);
+
+  const hasDateFilters =
+    !!onCreatedFromChange ||
+    !!onCreatedToChange ||
+    !!onUpdatedFromChange ||
+    !!onUpdatedToChange;
+
+  // The language filter is available on a localized collection when the app has
+  // localization configured (more than one language).
+  const {
+    enabled: localizationEnabled,
+    locales,
+    defaultLocale,
+  } = useLocalization();
+  const hasLanguageFilter =
+    localizationEnabled &&
+    collection.localized === true &&
+    !!onTranslationFilterChange &&
+    locales.length > 1;
+
+  const hasAnyActiveFilters =
+    status !== "all" ||
+    !!createdFrom ||
+    !!createdTo ||
+    !!updatedFrom ||
+    !!updatedTo ||
+    !!translationFilter;
+
+  const showFilterDropdown =
+    hasStatusField || hasDateFilters || hasLanguageFilter;
+
+  const clearDateFilters = () => {
+    onCreatedFromChange?.("");
+    onCreatedToChange?.("");
+    onUpdatedFromChange?.("");
+    onUpdatedToChange?.("");
+  };
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+
+  return (
+    <ListView<EntryRow>
+      search={{
+        value: globalFilter,
+        onChange: handleGlobalFilterChange,
+        placeholder: `Search ${collection.label}...`,
+        inputProps: { "data-entry-search-input": true },
+      }}
+      columnsControl={columnsControl && { ...columnsControl, columns }}
+      hasActiveFilters={hasAnyActiveFilters}
+      filters={
+        showFilterDropdown ? (
+          <>
+            {hasStatusField && onStatusChange && (
+              <>
+                <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={status === "all"}
+                  onCheckedChange={() => onStatusChange("all")}
+                >
+                  All Status
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={status === "published"}
+                  onCheckedChange={() => onStatusChange("published")}
+                >
+                  Published
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={status === "draft"}
+                  onCheckedChange={() => onStatusChange("draft")}
+                >
+                  Draft
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={status === "archived"}
+                  onCheckedChange={() => onStatusChange("archived")}
+                >
+                  Archived
+                </DropdownMenuCheckboxItem>
+              </>
+            )}
+
+            {hasLanguageFilter && (
+              <>
+                {hasStatusField && onStatusChange && <DropdownMenuSeparator />}
+                <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {locales
+                  .filter(l => l.code !== defaultLocale)
+                  .flatMap(l =>
+                    (["missing", "translated"] as const).map(state => {
+                      const active =
+                        translationFilter?.locale === l.code &&
+                        translationFilter?.state === state;
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={`${l.code}-${state}`}
+                          checked={active}
+                          onCheckedChange={() =>
+                            onTranslationFilterChange?.(
+                              active ? null : { locale: l.code, state }
+                            )
+                          }
+                        >
+                          {state === "missing" ? "Missing in" : "Translated in"}{" "}
+                          {l.label}
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })
                   )}
-                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {locales
-                    .filter(l => l.code !== defaultLocale)
-                    .flatMap(l =>
-                      (["missing", "translated"] as const).map(state => {
-                        const active =
-                          translationFilter?.locale === l.code &&
-                          translationFilter?.state === state;
-                        return (
-                          <DropdownMenuCheckboxItem
-                            key={`${l.code}-${state}`}
-                            checked={active}
-                            onCheckedChange={() =>
-                              onTranslationFilterChange?.(
-                                active ? null : { locale: l.code, state }
-                              )
-                            }
-                          >
-                            {state === "missing"
-                              ? "Missing in"
-                              : "Translated in"}{" "}
-                            {l.label}
-                          </DropdownMenuCheckboxItem>
-                        );
-                      })
-                    )}
-                </>
-              )}
+              </>
+            )}
 
-              {hasDateFilters && (
-                <>
-                  <DropdownMenuSeparator />
-                  <div className="space-y-3 px-2 py-1.5">
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Created Date
-                    </p>
-                    <RangeField
-                      label="Created date"
-                      type="date"
-                      orientation="column"
-                      from={createdFrom}
-                      to={createdTo}
-                      onFromChange={value => onCreatedFromChange?.(value)}
-                      onToChange={value => onCreatedToChange?.(value)}
-                    />
+            {hasDateFilters && (
+              <>
+                <DropdownMenuSeparator />
+                <div className="space-y-3 px-2 py-1.5">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Created Date
+                  </p>
+                  <RangeField
+                    label="Created date"
+                    type="date"
+                    orientation="column"
+                    from={createdFrom}
+                    to={createdTo}
+                    onFromChange={value => onCreatedFromChange?.(value)}
+                    onToChange={value => onCreatedToChange?.(value)}
+                  />
 
-                    <p className="pt-1 text-xs font-medium text-muted-foreground">
-                      Updated Date
-                    </p>
-                    <RangeField
-                      label="Updated date"
-                      type="date"
-                      orientation="column"
-                      from={updatedFrom}
-                      to={updatedTo}
-                      onFromChange={value => onUpdatedFromChange?.(value)}
-                      onToChange={value => onUpdatedToChange?.(value)}
-                    />
+                  <p className="pt-1 text-xs font-medium text-muted-foreground">
+                    Updated Date
+                  </p>
+                  <RangeField
+                    label="Updated date"
+                    type="date"
+                    orientation="column"
+                    from={updatedFrom}
+                    to={updatedTo}
+                    onFromChange={value => onUpdatedFromChange?.(value)}
+                    onToChange={value => onUpdatedToChange?.(value)}
+                  />
 
-                    <button
-                      type="button"
-                      className="w-full text-left text-xs text-primary hover:underline"
-                      onClick={clearDateFilters}
-                    >
-                      Clear date filters
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          ) : null
-        }
-        bulkBar={
-          selectedIds.length > 0 ? (
-            <BulkActionBar
-              selectedCount={selectedIds.length}
-              collection={collection}
-              onDelete={() => onBulkDelete(selectedIds)}
-              onUpdate={
-                onBulkUpdate
-                  ? data => onBulkUpdate(selectedIds, data)
-                  : undefined
-              }
-              onPublish={
-                onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
-              }
-              onUnpublish={
-                onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
-              }
-              isPublishing={isBulkPublishing}
-              onClear={() => setSelectedIds([])}
-            />
-          ) : undefined
-        }
-        skeleton={<EntryTableSkeleton />}
-        loading={isLoading}
-        columns={columns}
-        rows={entries}
-        getRowId={rowId}
-        selection={selection}
-        rowActions={rowActions}
-        sort={sort}
-        onSortChange={onSortChange}
-        rowHref={row =>
-          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-            slug: collection.slug,
-            id: rowId(row),
-          })
-        }
-        primaryColumn={titleField}
-        registryKey={collection.slug}
-        ariaLabel="Entries table"
-        emptyMessage={
-          globalFilter
-            ? "No entries found. Try adjusting your search or filters."
-            : "No entries found."
-        }
-        // Inside the table rather than beside it, so the component that knows
-        // whether the row table or the mobile card view is showing is the one
-        // that places the pager.
-        pagination={{
-          currentPage: pagination.page,
-          totalPages: pagination.totalPages,
-          totalItems: pagination.total,
-          pageSize: pagination.limit,
-          onPageChange,
-          onPageSizeChange: onLimitChange,
-          isLoading,
-          itemLabel: "entries",
-          ariaLabel: "Entry table pagination",
-        }}
-      />
-    );
-  }
-);
+                  <button
+                    type="button"
+                    className="w-full text-left text-xs text-primary hover:underline"
+                    onClick={clearDateFilters}
+                  >
+                    Clear date filters
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        ) : null
+      }
+      bulkBar={
+        selectedIds.length > 0 ? (
+          <BulkActionBar
+            selectedCount={selectedIds.length}
+            collection={collection}
+            onDelete={() => onBulkDelete(selectedIds)}
+            onUpdate={
+              onBulkUpdate ? data => onBulkUpdate(selectedIds, data) : undefined
+            }
+            onPublish={
+              onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
+            }
+            onUnpublish={
+              onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
+            }
+            isPublishing={isBulkPublishing}
+            onClear={() => setSelectedIds([])}
+          />
+        ) : undefined
+      }
+      skeleton={<EntryTableSkeleton />}
+      loading={isLoading}
+      columns={columns}
+      rows={entries}
+      getRowId={rowId}
+      selection={selection}
+      rowActions={rowActions}
+      sort={sort}
+      onSortChange={onSortChange}
+      rowHref={row =>
+        buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+          slug: collection.slug,
+          id: rowId(row),
+        })
+      }
+      primaryColumn={titleField}
+      registryKey={collection.slug}
+      ariaLabel="Entries table"
+      emptyMessage={
+        globalFilter
+          ? "No entries found. Try adjusting your search or filters."
+          : "No entries found."
+      }
+      // Inside the table rather than beside it, so the component that knows
+      // whether the row table or the mobile card view is showing is the one
+      // that places the pager.
+      pagination={{
+        currentPage: pagination.page,
+        totalPages: pagination.totalPages,
+        totalItems: pagination.total,
+        pageSize: pagination.limit,
+        onPageChange,
+        onPageSizeChange: onLimitChange,
+        isLoading,
+        itemLabel: "entries",
+        ariaLabel: "Entry table pagination",
+      }}
+    />
+  );
+});

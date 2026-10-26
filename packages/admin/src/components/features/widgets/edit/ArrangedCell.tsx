@@ -11,9 +11,15 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { resolveWidgetSettings } from "nextly/config";
-import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type JSX,
+} from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 import type {
   DashboardWidget,
@@ -24,7 +30,11 @@ import type {
 import type { CellSlotLookup } from "../archetypes/types";
 import type { MoveDirection } from "../layout-editor";
 import { cardSpanClass, drawnWidth } from "../sizes";
-import { widgetAsAsked } from "../widget-as-asked";
+import {
+  settingsAsAsked,
+  titleAsAsked,
+  widgetAsAsked,
+} from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
@@ -36,6 +46,7 @@ import {
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
   type CellSettingsWrite,
@@ -299,7 +310,7 @@ function CardBody(props: {
 
 /**
  * What a card offers at rest: its quick setting, its dismiss control and menu (in its header,
- * or floated over an unframed card), and where its sheet's save goes.
+ * or floated over an unframed card), and where its sheet's Done goes.
  */
 function useRestingControls(
   props: ArrangedCellProps,
@@ -322,7 +333,7 @@ function useRestingControls(
   return {
     quick,
     ...dismissAffordance(widget, props, props.on.dismiss, menu),
-    saveSettings: settingsSaverFor(props),
+    done: doneFor(props),
   };
 }
 
@@ -347,16 +358,35 @@ function restingMenuFor(
 }
 
 /**
- * Where the sheet's save goes. Outside customise mode it is saved at once, through the same
- * write as the quick setting; while customising it is recorded in the draft, saved with the rest.
+ * Where the sheet's Done goes, decided by where the reader is when they press it, since the
+ * sheet stays open across a change of mode. While customising it is recorded in the draft, kept
+ * with the dashboard's other unsaved changes, and the sheet closes. Outside it, it is saved at
+ * once through the same write as the quick setting, and the sheet hears how that ended: it
+ * closes when the save lands and says why in place when it does not.
  */
-function settingsSaverFor(
-  props: ArrangedCellProps
-): (config: Record<string, unknown>) => void {
+function doneFor(props: ArrangedCellProps): {
+  done: ComponentProps<typeof WidgetSettingsSheet>["onDone"];
+  blocked: string | undefined;
+} {
   const write = props.settingsWrite;
-  if (props.isEditing || !write) return props.on.saveSettings;
-  return config =>
-    write.write(config, { onLanded: () => {}, onFailed: () => {} });
+  if (props.isEditing || !write) {
+    return {
+      done: (config, settled) => {
+        props.on.saveSettings(config);
+        settled.saved();
+      },
+      blocked: undefined,
+    };
+  }
+  return {
+    done: (config, settled) =>
+      write.write(config, {
+        onLanded: settled.saved,
+        onFailed: settled.failed,
+        showsFailure: true,
+      }),
+    blocked: write.unavailable,
+  };
 }
 
 /** The cell's classes: its width, its collapse when empty, and its spacing. */
@@ -411,7 +441,66 @@ function editActionsOf(
   );
 }
 
-export function ArrangedCell(props: ArrangedCellProps) {
+/**
+ * The card's width and menu while customising, where its frame keeps them: over a framed card's
+ * own header, or in the small header the cell draws for an unframed one. Nothing at rest.
+ */
+function CellEditActions({
+  unframed,
+  title,
+  actions,
+}: {
+  unframed: boolean;
+  title: string;
+  actions: ReactNode;
+}) {
+  if (!actions) return null;
+  if (!unframed) return <CardControlsOverlay>{actions}</CardControlsOverlay>;
+  return <UnframedEditHeader title={title}>{actions}</UnframedEditHeader>;
+}
+
+/**
+ * The card's settings sheet, beside the card as the sheet's values would draw it: the declared
+ * widget, the reader's stored settings it was asked with, and the answer it shows now.
+ */
+function CellSettings({
+  row,
+  widget,
+  data,
+  done,
+  open,
+  onOpenChange,
+}: {
+  row: ArrangedCellProps["row"];
+  widget: DashboardWidget;
+  data: ArrangedCellProps["data"];
+  done: ReturnType<typeof doneFor>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <WidgetSettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={widget.title}
+      settings={widget.settings ?? []}
+      config={row.config}
+      onDone={done.done}
+      {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
+      renderPreview={draft => (
+        <SettingsPreview
+          widget={row.widget}
+          placementId={row.placementId}
+          stored={row.config}
+          draft={draft}
+          shown={data}
+        />
+      )}
+    />
+  );
+}
+
+export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const { row, isEditing, data } = props;
   /*
    * Open state lives with the CELL rather than with the grid: the sheet belongs
@@ -421,27 +510,30 @@ export function ArrangedCell(props: ArrangedCellProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
-  const widget = useMemo(
-    () => widgetAsAsked(row.widget, row.config),
-    [row.widget, row.config]
-  );
+  const sources = useBranding().widgetSources;
+  const widget = useMemo(() => {
+    const asked = widgetAsAsked(row.widget, row.config, sources);
+    const title = titleAsAsked(row.widget, row.config, sources);
+    return title === asked.title ? asked : { ...asked, title };
+  }, [row.widget, row.config, sources]);
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
-   * config are both in scope. `resolveWidgetSettings` returns only DECLARED
-   * names, so a component cannot act on a key its widget never offered.
+   * config are both in scope. Only DECLARED names are returned, so a component
+   * cannot act on a key its widget never offered, and each as the card's query
+   * was asked with it, so a link the component builds matches its answer.
    */
   const placement = useMemo(
     () => ({
       id: row.placementId,
-      settings: resolveWidgetSettings(widget.settings, row.config),
+      settings: settingsAsAsked(row.widget, row.config, sources),
     }),
-    [row.placementId, widget.settings, row.config]
+    [row.placementId, row.widget, row.config, sources]
   );
   const {
     quick,
     floating: floatingControl,
     header: dismissControl,
-    saveSettings,
+    done,
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
@@ -470,27 +562,21 @@ export function ArrangedCell(props: ArrangedCellProps) {
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
-      {!unframed && editActions ? (
-        <CardControlsOverlay>{editActions}</CardControlsOverlay>
-      ) : null}
-      {unframed && editActions ? (
-        <UnframedEditHeader title={widget.title}>
-          {editActions}
-        </UnframedEditHeader>
-      ) : null}
+      <CellEditActions
+        unframed={unframed}
+        title={widget.title}
+        actions={editActions}
+      />
       {floatingControl}
       {/* Mounted whenever the widget offers settings, not only while
           customising. A closed `Sheet` renders nothing, so this costs a card
           nothing — and it is what lets the panel outlive customise mode rather
           than being torn out from under a reader still filling it in. */}
       {hasSettings ? (
-        <WidgetSettingsSheet
+        <CellSettings
+          {...{ row, widget, data, done }}
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
-          title={widget.title}
-          settings={widget.settings ?? []}
-          config={row.config}
-          onSave={saveSettings}
         />
       ) : null}
       <CardBody

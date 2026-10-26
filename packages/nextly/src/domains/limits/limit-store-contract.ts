@@ -189,7 +189,10 @@ const cases: readonly LimitStoreContractCase[] = [
         JSON.stringify(entry?.value) === JSON.stringify(value),
         "the value read differs from the value written"
       );
-      (entry?.value as { text: string }).text = "changed";
+      // Through a local, so no write goes through `?.`; an absent entry
+      // still fails here, as it did.
+      const written = entry?.value as { text: string };
+      written.text = "changed";
       const again = await first.read([key]);
       expectThat(
         (again.get(key)?.value as { text?: string } | undefined)?.text ===

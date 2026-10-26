@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useRef } from "react";
+import type { JSX } from "react";
 
 import { Loader2, AlertTriangle } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -24,7 +25,7 @@ export function UserDeleteDialog({
   user,
   onOpenChange,
   onConfirm,
-}: UserDeleteDialogProps) {
+}: UserDeleteDialogProps): JSX.Element | null {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

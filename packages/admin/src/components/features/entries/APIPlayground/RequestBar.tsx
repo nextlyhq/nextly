@@ -15,6 +15,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   Check,
@@ -49,7 +50,24 @@ import type { HttpMethod } from "./APIPlayground";
  * because a read is not an event; the other three are things that happen to
  * your data.
  */
-export const METHOD_SEMANTICS = {
+export const METHOD_SEMANTICS: {
+  readonly GET: {
+    readonly tone: "text-foreground";
+    readonly pill: "bg-muted text-foreground";
+  };
+  readonly POST: {
+    readonly tone: "text-success";
+    readonly pill: "bg-success/15 text-foreground";
+  };
+  readonly PATCH: {
+    readonly tone: "text-warning";
+    readonly pill: "bg-warning/15 text-foreground";
+  };
+  readonly DELETE: {
+    readonly tone: "text-destructive";
+    readonly pill: "bg-destructive/15 text-foreground";
+  };
+} = {
   GET: { tone: "text-foreground", pill: "bg-muted text-foreground" },
   POST: { tone: "text-success", pill: "bg-success/15 text-foreground" },
   PATCH: { tone: "text-warning", pill: "bg-warning/15 text-foreground" },
@@ -89,7 +107,7 @@ export function RequestBar({
   onCancel,
   onCopy,
   onOpen,
-}: RequestBarProps) {
+}: RequestBarProps): JSX.Element {
   return (
     // `overflow-hidden` is what makes the strip clip to its own rounded
     // corner, and it also clips anything a child paints outside its box --

@@ -7,8 +7,7 @@
 //
 // Fix: switch the > comparison to Drizzle's typed `gt()` operator, which
 // converts `Date` to the column's typed representation (epoch seconds for
-// SQLite mode:"timestamp"). Same operator the same file's `cleanupExpired`
-// uses (line 481) and which has worked fine on all dialects.
+// SQLite mode:"timestamp"), and which has worked fine on all dialects.
 //
 // This test runs against an in-memory better-sqlite3 instance and a
 // minimal hand-rolled adapter — keeps the regression coverage independent

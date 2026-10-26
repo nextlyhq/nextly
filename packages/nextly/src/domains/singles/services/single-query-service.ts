@@ -22,6 +22,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
 import { singleGateVerdict } from "../../../auth/access/gate-adapters";
+import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
@@ -30,6 +31,7 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -95,6 +97,10 @@ import {
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
+import {
+  liveFieldGroupReadPass,
+  withFieldGroupEvidence,
+} from "../../field-groups/live-read-access";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -102,6 +108,10 @@ import {
   populateTranslationStatus,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -255,8 +265,8 @@ export function buildSingleHookContext<T>(
  *    already ran the RBAC gate, so skip that redundant re-check.
  * 4. Anonymous publish/unpublish → 403, whatever any rule says.
  * 5. No user → the Single's own code-defined rule decides, handed a real
- *    anonymous context; a rule that names nothing lets the request through
- *    to the public default.
+ *    anonymous context; a rule that names nothing lets a read through to
+ *    the public default and refuses an update.
  * 6. No access-control service → null (skip)
  * 7. The decision for the user or key (super-admin → code-defined →
  *    permissions)
@@ -328,13 +338,19 @@ export async function checkSingleAccess(params: {
       ...errorEnvelopeFields(error),
     };
   }
+  // The caller is told what was refused in the site's words. Which check
+  // refused rides along for the server's log, written where the refusal
+  // reaches its caller: a caller asking only whether it may is not refused.
   return {
     success: false,
-    statusCode: 403,
-    message:
+    statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
+    code: "FORBIDDEN",
+    refusalReason:
       verdict.refusal === "unauthenticated"
-        ? `Access denied: ${operation} on single "${slug}" requires an authenticated user`
-        : `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+        ? `${operation} on single "${slug}" requires an authenticated user`
+        : `the caller may not ${operation} single "${slug}"`,
+    // Named by the service's caller, so its slug is the site's own.
+    message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
 }
 
@@ -475,6 +491,11 @@ export class SingleQueryService extends BaseService {
     return matchesStatus || decisions.reveal.includes(input.documentId);
   }
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -484,7 +505,7 @@ export class SingleQueryService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * What a due release makes visible.
      *
@@ -860,6 +881,80 @@ export class SingleQueryService extends BaseService {
     return doc;
   }
 
+  /**
+   * Field read rules on one Single document, in place: its own fields, and
+   * the fields inside the field groups it holds.
+   */
+  private async judgeReadFields(
+    doc: Record<string, unknown>,
+    slug: string,
+    fields: FieldConfig[],
+    options: GetSingleOptions
+  ): Promise<void> {
+    // Field read access, then the field-level afterRead hooks, then field
+    // read access AGAIN, sharing one redactions store: the two passes the
+    // collection read runs. The first hides a denied field from the hooks,
+    // so a hook on an allowed field cannot read a denied sibling and copy it
+    // onto its own value; the second re-judges the post-hook document, with
+    // the first pass's removals restored as evidence where the rows still
+    // stand, so a denied field a hook reintroduced is caught. Document trust
+    // and FIELD trust are separate questions and this read may answer them
+    // differently: `overrideAccess` alone means both; a caller that asked for
+    // field rules to be enforced keeps its document bypass and gives up only
+    // the field one.
+    const skipFieldRules =
+      options.enforceFieldAccess === true ? false : options.overrideAccess;
+    // The field-access identity, never the hook one. A preview judges these
+    // fields as the sharer while the hooks go on seeing the anonymous bearer
+    // who is actually asking.
+    const fieldAccessUser = options.fieldAccessUser ?? options.user;
+    const fieldAccess = {
+      kind: "single" as const,
+      slug,
+      entry: doc,
+      user: fieldAccessUser,
+      overrideAccess: skipFieldRules,
+      // One grants resolver for both passes, so the caller's roles and
+      // permissions are read once and both passes judge with one authority:
+      // a scoped API key's own grants, never its owner's.
+      grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
+    };
+    // The rules on fields inside field groups, which the Single's own pass
+    // does not reach, judged with the same grants resolver. Before
+    // the hooks and after them, as the collection read runs it: a hook cannot
+    // copy a denied value onto an allowed field, one it puts back is caught,
+    // and the second run restores what the first removed as evidence.
+    const fieldGroupPass = skipFieldRules
+      ? undefined
+      : await liveFieldGroupReadPass(fields, this.fieldGroupDataService);
+    const sourceRedactions: ReadAccessRedactions = new WeakMap();
+    // The field groups' own store, so the Single's second pass can be shown
+    // what their first pass removed; see `withFieldGroupEvidence`.
+    const fieldGroupRedactions: ReadAccessRedactions = new WeakMap();
+    const fieldGroupCaller = {
+      user: fieldAccessUser,
+      authenticatedScope: options.authenticatedScope,
+      grants: fieldAccess.grants,
+      redactions: fieldGroupRedactions,
+    };
+    await applyFieldReadAccess(fieldAccess, sourceRedactions);
+    await fieldGroupPass?.(doc, fieldGroupCaller);
+
+    await runFieldHooks({
+      kind: "single",
+      slug,
+      phase: "afterRead",
+      data: doc,
+      operation: "read",
+      user: options.user,
+    });
+
+    await withFieldGroupEvidence(doc, fieldGroupRedactions, () =>
+      applyFieldReadAccess(fieldAccess, sourceRedactions)
+    );
+    await fieldGroupPass?.(doc, fieldGroupCaller);
+  }
+
   // ============================================================
   // Public API
   // ============================================================
@@ -1060,46 +1155,7 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field read access, then the field-level afterRead hooks, then field
-      // read access AGAIN, sharing one redactions store: the two passes the
-      // collection read runs. The first hides a denied field from the hooks,
-      // so a hook on an allowed field cannot read a denied sibling and copy it
-      // onto its own value; the second re-judges the post-hook document, with
-      // the first pass's removals restored as evidence where the rows still
-      // stand, so a denied field a hook reintroduced is caught. Document trust
-      // and FIELD trust are separate questions and this read may answer them
-      // differently: `overrideAccess` alone means both; a caller that asked for
-      // field rules to be enforced keeps its document bypass and gives up only
-      // the field one.
-      const skipFieldRules =
-        options.enforceFieldAccess === true ? false : options.overrideAccess;
-      // The field-access identity, never the hook one. A preview judges these
-      // fields as the sharer while the hooks go on seeing the anonymous bearer
-      // who is actually asking.
-      const fieldAccessUser = options.fieldAccessUser ?? options.user;
-      const fieldAccess = {
-        kind: "single" as const,
-        slug,
-        entry: doc,
-        user: fieldAccessUser,
-        overrideAccess: skipFieldRules,
-        // One grants resolver for both passes, so the caller's roles and
-        // permissions are read once and both passes judge with one authority.
-        grants: callerAccessGrants(fieldAccessUser),
-      };
-      const sourceRedactions: ReadAccessRedactions = new WeakMap();
-      await applyFieldReadAccess(fieldAccess, sourceRedactions);
-
-      await runFieldHooks({
-        kind: "single",
-        slug,
-        phase: "afterRead",
-        data: doc,
-        operation: "read",
-        user: options.user,
-      });
-
-      await applyFieldReadAccess(fieldAccess, sourceRedactions);
+      await this.judgeReadFields(doc, slug, singleMeta.fields, options);
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last

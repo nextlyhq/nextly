@@ -3,7 +3,7 @@ title: Installation
 description: Install Nextly in a new or existing Next.js project with step-by-step instructions.
 ---
 
-There are two ways to install Nextly: scaffold a new project with the CLI, or add Nextly to an existing Next.js app manually. Both paths take a few minutes.
+There are two ways to install Nextly: scaffold a new project with the CLI, or add Nextly to an existing Next.js app, with the same CLI or by hand.
 
 ## Option A: Create a New Project (Recommended)
 
@@ -83,13 +83,64 @@ The first time you run the dev server, the database is empty -- there's no admin
 http://localhost:3000/admin/setup
 ```
 
-Enter an email, password, and name. The first user is bootstrapped with a `Super Admin` role that has every permission. After that, you'll be redirected to the login screen at `/admin`.
+Enter your name, an email and a password. The first account gets the Super Admin role, with every permission. Setup then signs you in and opens the admin's dashboard at `/admin`.
 
 ### Default storage is local disk
 
-Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served by Next.js as static assets. When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served at `/uploads/...`. Under `next start`, files uploaded after the server started also need a route at `src/app/uploads/[...path]/route.ts`; see [How local uploads are served](/docs/guides/media-storage#how-local-uploads-are-served). When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
 ## Option B: Add to an Existing Next.js Project
+
+### With the CLI
+
+Run `create-nextly-app` inside an existing Next.js app to add Nextly; it writes only the files the app does not have and extends the Next config. Run it from the app's folder, with no project name:
+
+<Tabs items={["pnpm", "npm"]}>
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app@alpha
+```
+</Tab>
+<Tab value="npm">
+```bash
+npx create-nextly-app@alpha
+```
+</Tab>
+</Tabs>
+
+**What it checks first.** A folder whose `package.json` lists `next` in `dependencies` or `devDependencies` is an existing app, and the CLI asks "Install Nextly in this project?" before it changes anything. It then needs the App Router: an `app/` folder, or `src/app/` when the app has a `src/` folder. Without one it stops with "App Router not detected". It also stops, before installing or writing anything, when the app already has a Nextly package at another version or declared as a range (see [Which release you get](#which-release-you-get)). It asks which database to use and, for PostgreSQL or MySQL, the connection string. `--yes` answers yes and, unless `--database` names another, picks SQLite. An existing app always gets the blank setup: no template pages are added to it.
+
+**What it installs.** `nextly`, `@nextlyhq/admin`, `@nextlyhq/ui`, `@nextlyhq/adapter-drizzle` and the adapter for your database, at the CLI's own release, plus `@tanstack/react-query` and `lucide-react`, and `esbuild` as a dev dependency unless the app already declares it. It installs with the package manager the app's lockfile names. On pnpm 10 or later it also approves the native packages' build scripts (the settings in [Install Packages](#1-install-packages) below), and on bun it adds them to a `trustedDependencies` list the app already has, saying what it changed.
+
+**What it writes.** Each of these is created only where the app has no file yet:
+
+- `nextly.config.ts`, with no collections or singles yet
+- `app/admin/[[...params]]/page.tsx` and `layout.tsx`, the admin panel
+- `app/admin/api/[[...params]]/route.ts`, the admin's API
+- `app/admin/api/media/[[...path]]/route.ts` and `app/api/media/[[...path]]/route.ts`, the media routes
+- `app/api/health/route.ts`, a health check
+- `instrumentation.ts` beside `app/`, which starts Nextly when the server starts
+- `types/generated/nextly-types.ts`, a placeholder until types are generated, beside a `.gitkeep`
+- `.env` and `.env.example`. In one the app already has, only the keys Nextly needs and the file lacks are added at the end; a value already there is kept.
+
+With a `src/` folder, all of these except `nextly.config.ts` and the env files go under `src/`. When git would not ignore `.env`, it also adds `.env` to `.gitignore`, creating the file if there is none.
+
+**What it extends.** In the Next config it adds the packages missing from `serverExternalPackages`, and turns [Cache Components](#cache-components) off, removing `partialPrefetching` where it is set. An app with no Next config gets a `next.config.ts`. The rest of the config stays as it was.
+
+**What it leaves to you.** Its report lists every file it wrote, every file it changed, and every file it left alone and why. Nothing the app already has is replaced:
+
+- **A file that is already there** is kept, and the report prints Nextly's version of it: merge that in by hand. A route folder the app already uses, such as `app/api/health/`, is left alone the same way.
+- **An instrumentation hook the app already has** is kept, and the report prints the lines to add to its `register()`.
+- **A Next config it can't change safely**, because it can't tell where the settings are or the app runs Next.js 14, is left as it is, and the report prints the options to add.
+- **An app that sets `pageExtensions`** gets no routes or hook written, since Next.js would not serve them under the default names; the report names the file to create and its content.
+- **A `.env` that git already tracks** gets no generated secret, since it would be committed; the report says how to stop tracking it.
+- **`--yes` with `--database postgresql` or `--database mysql`** puts a placeholder `DATABASE_URL` in `.env`: set your own before you start the app.
+
+Then start the dev server and open `/admin/setup` to create the first administrator, as in [Verify](#7-verify) below. Running the CLI a second time writes nothing that is already there.
+
+### By hand
+
+Or add Nextly yourself, step by step.
 
 ### 1. Install Packages
 
@@ -198,12 +249,14 @@ export default defineConfig({
 
 ### 3. Update `next.config.ts`
 
-Add `serverExternalPackages` so Next.js doesn't try to bundle server-only dependencies:
+Add `serverExternalPackages` so Next.js doesn't try to bundle server-only dependencies, and turn [Cache Components](#cache-components) off:
 
 ```typescript title="next.config.ts"
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Nextly does not support Cache Components yet.
+  cacheComponents: false,
   serverExternalPackages: [
     "nextly",
     "@nextlyhq/adapter-drizzle",
@@ -224,7 +277,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Drop adapters and drivers your project doesn't actually use.
+Drop adapters and drivers your project doesn't actually use. A project made with `create-next-app` 16.4 also has `partialPrefetching: true`: remove it, since Next.js accepts it only with Cache Components on.
 
 ### 4. Set Up Admin Routes
 
@@ -326,7 +379,10 @@ export async function register(): Promise<void> {
 
   const { createRegister } = await import("nextly");
   const { default: config } = await import("../nextly.config");
-  await createRegister(config)();
+  // Next.js writes its Cache Components setting into this file as it builds it.
+  await createRegister(config, {
+    cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+  })();
 }
 ```
 
@@ -407,14 +463,14 @@ bun run dev
 </Tab>
 </Tabs>
 
-Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first super admin account, then log in at [http://localhost:3000/admin](http://localhost:3000/admin).
+Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first super admin account. Setup signs you in and opens the admin's dashboard at [http://localhost:3000/admin](http://localhost:3000/admin).
 
 ## Requirements
 
 | Requirement | Version |
 | --- | --- |
-| Node.js | `^20.19.0 \|\| ^22.12.0 \|\| >=24.0.0` (not Node 23) |
-| Next.js | 16+ (App Router required) |
+| Node.js | `^22.12.0 \|\| >=24.0.0` (not Node 20 or 23) |
+| Next.js | 16.4.1+ (App Router required) |
 | React | 19+ |
 | TypeScript | 5+ |
 | Database | PostgreSQL (recommended for production), MySQL, or SQLite (local demo only) |
@@ -423,9 +479,18 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 
 Nextly installs and generates types under Yarn's Plug'n'Play, but Next.js's default bundler, Turbopack, does not support Plug'n'Play: it is listed among Turbopack's [unsupported features](https://nextjs.org/docs/app/api-reference/turbopack#unsupported-and-unplanned-features), and `next build` stops with "Could not find the Next.js package". Run Next.js with webpack instead (`next dev --webpack`, `next build --webpack`), or set `nodeLinker: node-modules` in `.yarnrc.yml` and install again.
 
+### Cache Components
+
+Nextly does not support Next.js [Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents) yet, so a Nextly app runs with it off: set `cacheComponents: false` in `next.config`, and remove `partialPrefetching`, which Next.js accepts only with Cache Components on. Nextly caches with `unstable_cache` and opts out with `unstable_noStore`, the model Cache Components replaces, and Cache Components refuses the `runtime` route export some of Nextly's routes carry.
+
+`create-next-app` 16.4 turns Cache Components on by default. `create-nextly-app` writes it off in a new project, and turns it off when it adds Nextly to an existing app, saying so in its report. If it is on anyway, `withNextly()` and Nextly's start both print a warning saying so; the app keeps running, since an app with Cache Components on is untested with Nextly rather than known to be broken.
+
+Next.js 17 turns Cache Components on for every app and removes the option, so Nextly will support it before that release.
+
 ## Next Steps
 
-- [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
+- [Quick start](/docs/getting-started/quick-start) -- Create a project, start it and create the first admin
+- [Tutorial: build a blog](/docs/getting-started/build-a-blog) -- Build a blog, step by step
 - [Project Structure](/docs/getting-started/project-structure) -- Understand the file layout
 - [Configuration](/docs/configuration) -- Full configuration reference
 - [Environment Variables](/docs/configuration/environment) -- All environment variables explained

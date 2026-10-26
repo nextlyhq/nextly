@@ -295,6 +295,30 @@ describe("getDashboardActivity", () => {
     expect(json).not.toHaveProperty("total");
     expect(json).toEqual(result);
   });
+
+  it("publishes no position, even when the service hands one back", async () => {
+    // A position can name a row this reader may not read (the last row a walk
+    // read when it found nothing to show), so it stays on the server.
+    const hidden = "6f1c2a4e-0000-4000-8000-000000000000";
+    const result: ActivityLogResult = {
+      activities: [],
+      hasMore: true,
+      next: { createdAt: "2026-10-22T12:00:00.000Z", id: hidden },
+    };
+    serviceStub = {
+      getRecentActivity: vi.fn().mockResolvedValue(result),
+    };
+
+    const res = await getDashboardActivity(
+      makeReq("http://x/api/dashboard/activity?limit=5")
+    );
+
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ activities: [], hasMore: true });
+    // Nothing of the position under any name: not its id, and not its instant.
+    expect(body).not.toContain(hidden);
+    expect(body).not.toContain("2026-10-22T12:00:00");
+  });
 });
 
 /**
@@ -479,6 +503,74 @@ describe("dashboard activity scope", () => {
         scope: { kind: "some", resources: new Set(["posts"]) },
       })
     );
+  });
+
+  it("hands the feed the collections the registry keeps off the dashboard", async () => {
+    // Read from the registry by the same function the card's source calls, so
+    // the endpoint and the card leave out the same rows (R-17).
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllSlugs: vi.fn().mockResolvedValue(["posts", "pb_patterns"]),
+          getAllCollections: vi
+            .fn()
+            .mockResolvedValue([
+              { slug: "posts" },
+              { slug: "pb_patterns", admin: { hidden: true } },
+            ]),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSlugs: vi.fn().mockResolvedValue([]),
+          getAllSingles: vi.fn().mockResolvedValue([]),
+        };
+      }
+      return serviceStub;
+    });
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
+    serviceStub = { getRecentActivity };
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
+
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keptOffCollections: { slugs: new Set(["pb_patterns"]), complete: true },
+      })
+    );
+  });
+
+  it("hands its limit to the service as asked, where the one clamp is", async () => {
+    // The service clamps for every door onto the feed, this endpoint and the
+    // Recent activity card's widget source alike. A clamp here as well would be
+    // a second rule that could come to disagree with it.
+    readableEntities.mockResolvedValue(new Set(["posts"]));
+    const getRecentActivity = vi.fn().mockResolvedValue({
+      activities: [],
+      hasMore: false,
+    } satisfies ActivityLogResult);
+    serviceStub = { getRecentActivity };
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity?limit=500")
+    );
+    expect(getRecentActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 500 })
+    );
+
+    // Not given, zero, or not a number: the default, as the route has always
+    // answered them, so no limit is handed on and the service's 5 applies.
+    for (const query of ["", "?limit=0", "?limit=abc"]) {
+      await getDashboardActivity(
+        makeReq(`http://localhost/api/dashboard/activity${query}`)
+      );
+      expect(getRecentActivity.mock.lastCall?.[0]).not.toHaveProperty("limit");
+    }
   });
 
   it("passes an EMPTY scope through rather than omitting it", async () => {

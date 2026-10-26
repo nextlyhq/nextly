@@ -9,7 +9,6 @@
  *
  * @module admin/context/read-only.test
  */
-import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

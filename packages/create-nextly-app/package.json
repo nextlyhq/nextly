@@ -1,6 +1,6 @@
 {
   "name": "create-nextly-app",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "CLI to scaffold Nextly in your Next.js project",
   "license": "MIT",
   "type": "module",
@@ -24,11 +24,9 @@
     "templates"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
+    "build": "tsdown --config-loader tsx",
+    "dev": "tsdown --config-loader tsx --watch",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -47,29 +45,28 @@
   },
   "devDependencies": {
     "@babel/types": "^7.29.7",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
     "@types/fs-extra": "^11.0.4",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/picomatch": "^4.0.3",
     "@types/tar": "^6.1.13",
-    "@typescript-eslint/parser": "^8.59.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
-    "eslint": "^9.39.1",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "jsdom": "^27.1.0",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
+    "oxc-parser": "^0.155.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tsdown": "^0.23.1",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "keywords": [
     "nextly",
