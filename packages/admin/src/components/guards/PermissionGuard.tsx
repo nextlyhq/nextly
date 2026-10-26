@@ -49,7 +49,8 @@ interface PermissionGuardProps {
 /**
  * Whether a collection or Single route keeps its page through a change of
  * content language. The answer for the language moved from stays on screen
- * until the new one's arrives (`content.isPlaceholder`, here `placeholder`).
+ * until the new one's arrives (`content.isPlaceholder`), read on a collection
+ * or Single route only.
  * The page this guard has open for the same entity stays mounted through it,
  * so the editor keeps its place; that answer grants nothing on the page, and
  * the route is decided again on the new one. Any other route waits for the new
@@ -60,13 +61,13 @@ interface PermissionGuardProps {
  */
 function useOpenThroughSwitch(
   entity: EntityAccess | undefined,
-  placeholder: boolean,
+  content: { isPlaceholder: boolean },
   hasAnswer: boolean,
   hasAccess: boolean
 ): { switching: boolean; keepsPage: boolean } {
   const entityKey = entity ? `${entity.slug}:${entity.action}` : null;
   const [openedFor, setOpenedFor] = useState<string | null>(null);
-  const switching = entity !== undefined && placeholder;
+  const switching = entity !== undefined && content.isPlaceholder;
   const settledOpen = hasAccess ? entityKey : null;
   if (!switching && hasAnswer && settledOpen !== openedFor) {
     setOpenedFor(settledOpen);
@@ -105,7 +106,7 @@ export function PermissionGuard({
 
   const { switching, keepsPage } = useOpenThroughSwitch(
     entity,
-    content.isPlaceholder,
+    content,
     hasAnswer,
     hasAccess
   );
