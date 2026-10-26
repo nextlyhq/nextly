@@ -6300,25 +6300,12 @@ export class CollectionMutationService extends BaseService {
       // locales even when the main row is already published. Runs only once
       // there is actually something publishable.
 
-      // Readiness for this collection AND for every field-group type it can hold, resolved on the
-      // pool before the transaction opens. The snapshot built inside it reads all of them, and
-      // there it can only READ a verdict — resolving issues a query, and a query against a missing
-      // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
-      // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
-      // would be missing from the durable event.
-      await this.warmCompanionReadiness(params.collectionName);
-      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
-        fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
-        // Nothing is being written, so nothing is judged: this call is here purely for the
-        // verdicts it leaves behind.
-        data: {},
-        locale: undefined,
-      });
-
-      // The lifecycle permission and rule for this direction. Not
-      // route-authorized: the POST was authorized as `update`, so the publish
-      // or unpublish permission is checked here. A scoped API key is judged on
-      // its own `<action>-<slug>` grant.
+      // The lifecycle permission and rule for this direction, asked before any
+      // readiness below is resolved, so a caller who may not publish is refused
+      // before any work only a publish needs. Never route-authorized: a route
+      // attests no lifecycle gate. A scoped API key is judged on its own
+      // `<action>-<slug>` grant. The languages going live read this
+      // collection's own translations, whose readiness is resolved above.
       const lifecycleDenied = () =>
         this.accessService.checkCollectionAccess({
           collectionName: params.collectionName,
@@ -6344,6 +6331,21 @@ export class CollectionMutationService extends BaseService {
           ask: lifecycleDenied,
         });
       if (deniedBeforePublish) return deniedBeforePublish;
+
+      // Readiness for this collection AND for every field-group type it can hold, resolved on the
+      // pool before the transaction opens. The snapshot built inside it reads all of them, and
+      // there it can only READ a verdict — resolving issues a query, and a query against a missing
+      // relation aborts the whole transaction on PostgreSQL. A publish is a plausible first act on
+      // a fresh worker, and an unresolved verdict reads as unusable, so every translated value
+      // would be missing from the durable event.
+      await this.warmCompanionReadiness(params.collectionName);
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: (publishCollection as { fields?: FieldConfig[] }).fields ?? [],
+        // Nothing is being written, so nothing is judged: this call is here purely for the
+        // verdicts it leaves behind.
+        data: {},
+        locale: undefined,
+      });
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
