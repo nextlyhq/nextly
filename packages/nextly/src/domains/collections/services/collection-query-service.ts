@@ -53,7 +53,6 @@ import {
   type StatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type {
   CollectionFileManager,
   CompanionSchema,
@@ -69,14 +68,12 @@ import {
   sortByDistance,
 } from "../../../services/collections/geo-utils";
 import {
-  buildWhereClause,
   extractGeoFilters,
-  extractComponentFieldConditions,
   componentFilterTargets,
 } from "../../../services/collections/query-operators";
 import type {
   WhereFilter,
-  ComponentFieldFilter,
+  buildWhereClause,
 } from "../../../services/collections/query-operators";
 import {
   readExpansionCaches,
@@ -135,7 +132,6 @@ import {
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
-import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -193,6 +189,11 @@ import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import {
+  componentTableNamesFor,
+  prepareFilterCondition,
+  type FilterConditionSources,
+} from "../query/filter-condition";
+import {
   isPlainObject,
   refuseFilterProblems,
   unknownFieldProblem,
@@ -227,90 +228,6 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
-
-/**
- * One component-field predicate, as raw SQL against a named column.
- *
- * Extracted from the filter loop so it can be built once per component TABLE
- * rather than once per filter: a `_componentType` filter over a dynamic zone
- * spans several tables, and the storage migration can have moved the
- * discriminator on some of them and not others.
- */
-function buildComponentValueCondition(
-  filter: ComponentFieldFilter,
-  dbColumnName: string
-): ReturnType<typeof sql> | undefined {
-  let valueCondition: ReturnType<typeof sql>;
-
-  switch (filter.operator) {
-    case "equals":
-      valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
-      break;
-    case "not_equals":
-      valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
-      break;
-    case "greater_than":
-      valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
-      break;
-    case "greater_than_equal":
-      valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
-      break;
-    case "less_than":
-      valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
-      break;
-    case "less_than_equal":
-      valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
-      break;
-    case "like":
-      valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
-      break;
-    case "contains":
-    case "search":
-      // The same rule as every other case-insensitive search: whatever the collation, and with
-      // the text matched as typed.
-      valueCondition = caseInsensitiveContains(
-        sql`${sql.identifier(dbColumnName)}`,
-        String(filter.value)
-      );
-      break;
-    case "in": {
-      const inValues = Array.isArray(filter.value)
-        ? filter.value
-        : [filter.value];
-      if (inValues.length === 0) return undefined;
-      const inPlaceholders = sql.join(
-        inValues.map(v => sql`${v}`),
-        sql`, `
-      );
-      valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
-      break;
-    }
-    case "not_in": {
-      const notInValues = Array.isArray(filter.value)
-        ? filter.value
-        : [filter.value];
-      if (notInValues.length === 0) return undefined;
-      const notInPlaceholders = sql.join(
-        notInValues.map(v => sql`${v}`),
-        sql`, `
-      );
-      valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
-      break;
-    }
-    case "exists":
-      if (filter.value === true || filter.value === "true") {
-        valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
-      } else {
-        valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
-      }
-      break;
-    default:
-      // An operator this builder does not implement contributes no condition.
-      return undefined;
-  }
-
-  return valueCondition;
-}
 
 /**
  * A collection's declared top-level fields.
@@ -1915,15 +1832,6 @@ export class CollectionQueryService extends BaseService {
    * used: the list path resolves them here and hands them to its own count, so
    * one request costs one registry lookup rather than two.
    */
-  // Flagged on CRAP only (cyclomatic 12, cognitive 10 are both under their
-  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
-  // coverage term here is estimated rather than measured. It is covered: the
-  // where-clause, component-filter and search tests in collection-query.test.ts
-  // all run through here, and removing the access predicate this method's
-  // sibling adds turns four tests red. The logic itself is not new — it was
-  // inlined in `listEntries` (cyclomatic 87) and `countEntries` (44), both
-  // critical, and lifting it out is what let those drop to 46 and 14.
-  // fallow-ignore-next-line complexity
   private async resolveFilterConditions(params: {
     collectionName: string;
     /** The filter with the language and geo keys already removed. */
@@ -1937,70 +1845,38 @@ export class CollectionQueryService extends BaseService {
     componentTables: Map<string, string>;
     componentTypeColumns: Map<string, string>;
   }> {
-    const conditions: SQLWrapper[] = [];
-    if (!params.where) {
-      return {
-        conditions,
-        componentTables: params.resolvedComponentTables ?? new Map(),
-        componentTypeColumns: params.resolvedComponentTypeColumns ?? new Map(),
-      };
-    }
-
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
+    // Built by the one filter builder every reader of a collection's entries
+    // shares, so this filter matches here the rows it matches anywhere else.
+    const prepared = await prepareFilterCondition(
+      {
+        collectionName: params.collectionName,
+        filter: params.where,
+        resolvedComponentTables: params.resolvedComponentTables,
+        resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+      },
+      this.filterSources()
     );
-    const fields = ((
-      (collection as Record<string, unknown>).schemaDefinition as
-        | Record<string, unknown>
-        | undefined
-    )?.fields ||
-      (collection as Record<string, unknown>).fields ||
-      []) as Array<{
-      name: string;
-      type: string;
-      component?: string;
-      components?: string[];
-    }>;
+    const condition = prepared.condition(params.schema, params.localizedCtx);
+    return {
+      conditions: condition ? [condition] : [],
+      componentTables: prepared.componentTables,
+      componentTypeColumns: prepared.componentTypeColumns,
+    };
+  }
 
-    const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
-      params.where,
-      fields
-    );
-
-    const componentTables =
-      params.resolvedComponentTables ??
-      (await this.resolveComponentTableNames(componentFilters));
-    const componentTypeColumns =
-      params.resolvedComponentTypeColumns ??
-      (await this.resolveComponentTypeColumns(
-        componentFilters,
-        componentTables.values()
-      ));
-
-    const componentCondition = this.buildComponentFieldConditions(
-      componentFilters,
-      // Components record their parent under the physical table the write
-      // resolved, so the filter must name the same one for a `dbName`
-      // collection or it matches no component row.
-      collectionTableName(collection, params.collectionName),
-      params.schema.id,
-      componentTables,
-      componentTypeColumns
-    );
-    if (componentCondition) conditions.push(componentCondition);
-
-    // What remains once the language, geo and component keys have each been
-    // taken by the machinery that can express them.
-    if (cleanedWhere) {
-      const whereCondition = this.buildDrizzleCondition(
-        buildWhereClause(cleanedWhere),
-        params.schema,
-        params.localizedCtx
-      );
-      if (whereCondition) conditions.push(whereCondition);
-    }
-
-    return { conditions, componentTables, componentTypeColumns };
+  /** Where the filter builder reads its facts about a collection. */
+  private filterSources(): FilterConditionSources {
+    const fieldGroups = this.fieldGroupDataService;
+    return {
+      getCollection: name => this.collectionService.getCollection(name),
+      adapter: this.adapter,
+      ...(fieldGroups
+        ? {
+            getComponentTableName: slug =>
+              fieldGroups.getComponentTableName(slug),
+          }
+        : {}),
+    };
   }
 
   /**
@@ -5261,165 +5137,14 @@ export class CollectionQueryService extends BaseService {
     );
   }
 
-  private async resolveComponentTableNames(
-    componentFilters: ComponentFieldFilter[]
-  ): Promise<Map<string, string>> {
-    if (componentFilters.length === 0) return new Map();
-
-    // Mirror the condition builder's own narrowing: a _componentType filter
-    // pinned to one type queries only that table, so resolving the whole zone
-    // would cost a round trip per unused component choice.
-    const slugs = new Set(
-      componentFilters.flatMap(f =>
-        f.isComponentTypeFilter && typeof f.value === "string"
-          ? [f.value]
-          : f.componentSlugs
-      )
-    );
-    return this.componentTableNamesFor(slugs);
-  }
-
   /**
    * The physical table name of each component slug the registry knows; a
    * slug it does not know is left out, for the caller's canonical fallback.
    */
-  private async componentTableNamesFor(
+  private componentTableNamesFor(
     slugs: Iterable<string>
   ): Promise<Map<string, string>> {
-    const resolved = new Map<string, string>();
-    if (!this.fieldGroupDataService) return resolved;
-    // Resolved together rather than in sequence: these are independent point
-    // lookups, and this runs on every list request carrying a component filter.
-    const lookups = await Promise.all(
-      [...new Set(slugs)].map(async slug => ({
-        slug,
-        tableName:
-          await this.fieldGroupDataService?.getComponentTableName(slug),
-      }))
-    );
-    for (const { slug, tableName } of lookups) {
-      if (tableName) resolved.set(slug, tableName);
-    }
-    return resolved;
-  }
-
-  /**
-   * The physical discriminator column each named component table carries.
-   *
-   * 🔴 This predicate is built as raw SQL rather than through the table object,
-   * so it does not get the runtime schema's stable property key: it emits the
-   * column name it is handed. A `_componentType` filter must therefore be given
-   * the name the table actually has, or it addresses a column the storage
-   * migration has moved and the query fails instead of matching documents.
-   */
-  private async resolveComponentTypeColumns(
-    filters: readonly ComponentFieldFilter[],
-    tableNames: Iterable<string>
-  ): Promise<Map<string, string>> {
-    // Only a `_componentType` filter addresses the discriminator. Every other
-    // component filter names a user column, so introspecting here would spend
-    // per-table catalog queries — column and index reads, or a PRAGMA each on
-    // SQLite — on a value nothing goes on to read.
-    if (!filters.some(filter => filter.isComponentTypeFilter)) return new Map();
-
-    const tables = [...new Set(tableNames)];
-    if (tables.length === 0) return new Map();
-    return resolveTypeColumns(this.adapter, tables);
-  }
-
-  private buildComponentFieldConditions(
-    componentFilters: ComponentFieldFilter[],
-    parentTableName: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
-    parentIdColumn: any,
-    componentTableNames: Map<string, string> = new Map(),
-    componentTypeColumns: Map<string, string> = new Map()
-  ): ReturnType<typeof and> | undefined {
-    if (componentFilters.length === 0) {
-      return undefined;
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const existsConditions: any[] = [];
-
-    for (const filter of componentFilters) {
-      // Convert component field path to snake_case for database column
-      const columnName = toSnakeCase(filter.componentFieldPath);
-
-      // 🔴 The discriminator's physical name is resolved PER TABLE, so the
-      // condition is built inside the per-table loop below rather than once for
-      // the filter. This predicate is raw SQL and does not go through the
-      // runtime table object, so it emits whatever column name it is handed —
-      // and a dynamic-zone filter can span several tables whose storage the
-      // migration has moved independently.
-
-      // For _componentType filter on dynamic zone, we may need to query multiple tables
-      // But the filter value tells us which specific component type to look for
-      // So we can be smart: if filtering by _componentType, only query that component's table
-      const slugsToQuery =
-        filter.isComponentTypeFilter && typeof filter.value === "string"
-          ? [filter.value] // Only query the specific component type's table
-          : filter.componentSlugs;
-
-      // Generate EXISTS subquery for each component table
-      // For multi-component fields, if entry has matching data in ANY table, it matches
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-      const tableExistsConditions: any[] = [];
-
-      for (const slug of slugsToQuery) {
-        // The registry records the physical name, which is the only source for
-        // a component with a custom dbName; canonical resolution is the
-        // fallback when the lookup was unavailable.
-        const componentTableName =
-          componentTableNames.get(slug) ?? resolveComponentTableName(slug);
-
-        const dbColumnName = filter.isComponentTypeFilter
-          ? (componentTypeColumns.get(componentTableName) ??
-            STORAGE_FORMAT.columns.type)
-          : columnName;
-        const valueCondition = buildComponentValueCondition(
-          filter,
-          dbColumnName
-        );
-        // An operator with nothing to match — an empty `in` list, or one this
-        // builder does not implement — contributes no condition for this table.
-        if (valueCondition === undefined) continue;
-
-        // Build EXISTS subquery:
-        // EXISTS (SELECT 1 FROM comp_{slug}
-        //         WHERE _parent_id = {parentIdColumn}
-        //         AND _parent_table = {parentTableName}
-        //         AND _parent_field = {fieldName}
-        //         AND {valueCondition})
-        const existsSubquery = sql`
-          EXISTS (
-            SELECT 1 FROM ${sql.identifier(componentTableName)}
-            WHERE ${sql.identifier(STORAGE_FORMAT.columns.parentId)} = ${parentIdColumn}
-            AND ${sql.identifier(STORAGE_FORMAT.columns.parentTable)} = ${parentTableName}
-            AND ${sql.identifier(STORAGE_FORMAT.columns.parentField)} = ${filter.fieldName}
-            AND ${valueCondition}
-          )
-        `;
-
-        tableExistsConditions.push(existsSubquery);
-      }
-
-      // Combine table conditions with OR (match if any table has matching data)
-      if (tableExistsConditions.length === 1) {
-        existsConditions.push(tableExistsConditions[0]);
-      } else if (tableExistsConditions.length > 1) {
-        existsConditions.push(or(...tableExistsConditions));
-      }
-    }
-
-    // Combine all EXISTS conditions with AND
-    if (existsConditions.length === 0) {
-      return undefined;
-    }
-    if (existsConditions.length === 1) {
-      return existsConditions[0];
-    }
-    return and(...existsConditions);
+    return componentTableNamesFor(slugs, this.filterSources());
   }
 
   /**
