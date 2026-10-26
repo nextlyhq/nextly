@@ -30,10 +30,7 @@ import {
 
 import { Pencil, Trash2 } from "@admin/components/icons";
 import { RangeField } from "@admin/components/shared/range-field";
-import type {
-  DataTableSelection,
-  RowAction,
-} from "@admin/components/ui/table/data-table";
+import type { RowAction } from "@admin/components/ui/table/data-table";
 import {
   ListView,
   type ListColumnsControl,
@@ -50,6 +47,7 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import { useEntryBulkActions } from "./useEntryBulkActions";
+import { rowId, useEntrySelection, type EntryRow } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -70,10 +68,6 @@ export interface TablePaginationState {
   /** Total number of pages */
   totalPages: number;
 }
-
-type EntryRow = Record<string, unknown>;
-
-const rowId = (row: EntryRow): string => String(row.id);
 
 /**
  * Props for the EntryTable component.
@@ -215,15 +209,11 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const [globalFilter, setGlobalFilter] = useState("");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Rows are selectable only when some bulk action is offered on them, and a
-  // row's Delete only with the delete permission. A selection kept from
-  // before the answer changed counts as none, so no bar or shortcut acts on
-  // rows the caller may no longer act on.
+  // row's Delete only with the delete permission.
   const offered = useEntryBulkActions(collection);
-  const selected = useMemo(
-    () => (offered.any ? selectedIds : []),
-    [offered.any, selectedIds]
+  const { selection, selected, selectAll, clear } = useEntrySelection(
+    offered.any
   );
 
   // -------------------------------------------------------------------------
@@ -262,27 +252,6 @@ export const EntryTable: ForwardRefExoticComponent<
   // Selection
   // -------------------------------------------------------------------------
 
-  const selection = useMemo<DataTableSelection<EntryRow>>(
-    () => ({
-      selectedIds,
-      onToggle: row => {
-        const id = rowId(row);
-        setSelectedIds(prev =>
-          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
-      },
-      onToggleAll: (rows, allSelected) => {
-        const ids = rows.map(rowId);
-        setSelectedIds(prev =>
-          allSelected
-            ? prev.filter(id => !ids.includes(id))
-            : Array.from(new Set([...prev, ...ids]))
-        );
-      },
-    }),
-    [selectedIds]
-  );
-
   // Notify parent when selection changes.
   useEffect(() => {
     onSelectionChange?.(selected);
@@ -293,13 +262,11 @@ export const EntryTable: ForwardRefExoticComponent<
   useImperativeHandle(
     ref,
     () => ({
-      selectAll: () => {
-        if (offered.any) setSelectedIds(entries.map(rowId));
-      },
-      clearSelection: () => setSelectedIds([]),
+      selectAll: () => selectAll(entries),
+      clearSelection: clear,
       getSelectedIds: () => selected,
     }),
-    [entries, offered.any, selected]
+    [entries, selectAll, clear, selected]
   );
 
   // -------------------------------------------------------------------------
@@ -526,7 +493,7 @@ export const EntryTable: ForwardRefExoticComponent<
               onBulkUnpublish ? () => onBulkUnpublish(selected) : undefined
             }
             isPublishing={isBulkPublishing}
-            onClear={() => setSelectedIds([])}
+            onClear={clear}
           />
         ) : undefined
       }
@@ -536,7 +503,7 @@ export const EntryTable: ForwardRefExoticComponent<
       rows={entries}
       getRowId={rowId}
       // No selection removes the checkbox column, on every width.
-      selection={offered.any ? selection : undefined}
+      selection={selection}
       rowActions={rowActions}
       sort={sort}
       onSortChange={onSortChange}
