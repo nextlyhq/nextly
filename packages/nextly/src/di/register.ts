@@ -1164,6 +1164,13 @@ async function registerServicesOnce(
   setInitializedPlugins(
     globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
   );
+  // Every plugin has registered its widgets by now, so each one registered
+  // with an id a plugin also contributes is checked as the admin will draw it:
+  // the registration's query beside whichever settings the merge keeps.
+  const { assertCollisionPairs } = await import(
+    "../plugins/widget-collision-pairs"
+  );
+  assertCollisionPairs(transformedConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 8: Register Global Sanitization + Activity Log Hooks
