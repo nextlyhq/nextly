@@ -914,12 +914,15 @@ export function SingleForm({
     // rule, and the entry editor records on exactly the same terms. A
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
-    enabled: mayRecordRecovery(busy, viewingVersion),
+    // Nor is a reader's form recorded: it cannot change the document.
+    enabled: !readOnlyForReader && mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
   });
   const recovery = useAutosaveRecovery({
-    scope: autosaveScope,
+    // A reader is offered no recovery point: restoring one would make the
+    // read-only form dirty with work it cannot save.
+    scope: readOnlyForReader ? null : autosaveScope,
     form,
     savedCount,
   });
@@ -1138,7 +1141,8 @@ export function SingleForm({
                                   {...previewPane.toggle}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
-                                    lock.actionsDisabled,
+                                    // A reader's page holds the slot's writes too.
+                                    editsHeld,
                                     "single",
                                     controllerNames[0]
                                   )}

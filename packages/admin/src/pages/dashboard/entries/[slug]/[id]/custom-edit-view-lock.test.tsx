@@ -245,9 +245,11 @@ describe("a custom collection edit view", () => {
     });
   });
 
-  it("makes no claim for a user who may only read, and hands the view a read-only page", () => {
+  it("makes no claim for a user who may only read, and hands the view a read-only page with its writes withheld", () => {
     // The server refuses such a user's claim, and its refusal would read as
     // "could not check whether anyone else is editing" over editable fields.
+    // A view gates its own save on `actionsDisabled`, so that is withheld as
+    // well as the fields.
     withCustomView();
     readOnlyForReader = true;
 
@@ -256,7 +258,7 @@ describe("a custom collection edit view", () => {
     expect(claimRequest()).toMatchObject({ enabled: false });
     expect(customViewProps?.documentLock).toEqual({
       readOnly: true,
-      actionsDisabled: false,
+      actionsDisabled: true,
     });
     expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
       "Your access lets you view this, but not change it."

@@ -580,7 +580,10 @@ export default function EditEntryPage({
       // from is what keeps that sentence true.
       documentLock: {
         readOnly: customViewLock.readOnly,
-        actionsDisabled: customViewLock.actionsDisabled,
+        // A view knows only these two gates, and its own writes (a save
+        // among them) follow `actionsDisabled`, so a reader's view has them
+        // withheld too.
+        actionsDisabled: customViewLock.actionsDisabled || customViewReader,
       },
     };
 

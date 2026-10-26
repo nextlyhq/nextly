@@ -653,7 +653,9 @@ export function EntryForm({
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
   const recovery = useAutosaveRecovery({
-    scope: autosaveScope,
+    // A reader is offered no recovery point: restoring one would make the
+    // read-only form dirty with work it cannot save.
+    scope: readOnlyForReader ? null : autosaveScope,
     form,
     savedCount,
   });
@@ -679,7 +681,9 @@ export function EntryForm({
      * the reading describes work against a document nobody is tending. The
      * shared predicate states the rule once for both editors.
      */
-    enabled: mayRecordRecovery(isSubmitting, viewingVersion),
+    // Nor is a reader's form recorded: it cannot change the document.
+    enabled:
+      !readOnlyForReader && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
   });
@@ -1084,7 +1088,8 @@ export function EntryForm({
                                     : { shareDocument })}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
-                                    lock.actionsDisabled,
+                                    // A reader's page holds the slot's writes too.
+                                    editsHeld,
                                     "collection",
                                     controllerNames[0]
                                   )}
