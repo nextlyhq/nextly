@@ -199,17 +199,21 @@ const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
  * - `publishEveryLanguage`: publishing every language at once;
  * - `createInDefaultLanguage`, `updateInDefaultLanguage`: a create or an
  *   update sent with no language, which writes the default one;
- * - `duplicate`: a copy of an entry, written in the default language from
- *   what a read of the source shows there, its fallbacks included.
+ * - `duplicate`: a copy of a published entry, written in the default
+ *   language from what a read of the source shows there, its fallbacks
+ *   included. The route reads a copy's source as published only, so a draft
+ *   never published cannot be copied by anyone, and the cell does not answer
+ *   for it: an editor offers a copy only of an entry with a published
+ *   version.
  *
  * A cell answers for every document of its collection, while two of these
  * requests depend on the document: publishing every language asks the
- * publish rule only for the languages going live, and a copy reads its source
- * as a visitor would see it, so a draft that was never published is not found.
- * Both cells take the strict side, so the answer never offers what the route
- * might refuse for some document: `publishEveryLanguage` asks every
- * configured language, and `duplicate` is never offered where the collection
- * has a Draft/Published lifecycle.
+ * publish rule only for the languages going live, and a copy of a published
+ * entry is created published where the collection has a lifecycle. Both cells
+ * take the strict side, so the answer
+ * never offers what the route might refuse for some document:
+ * `publishEveryLanguage` asks every configured language, and `duplicate` asks
+ * publish as well wherever the collection has a Draft/Published lifecycle.
  */
 type CollectionOperationCell =
   | "readTranslations"
@@ -455,11 +459,10 @@ async function entityCapabilities(
 }
 
 /**
- * Whether `caller` may copy any entry of `resource`, as that request is
- * judged: a read of the source and a create, both in the default language and
- * its fallbacks. Where the collection has a lifecycle the route reads the
- * source published only, so a draft never published is not found whoever
- * asks: no answer for every document can be yes there.
+ * Whether `caller` may copy a published entry of `resource`, as that request
+ * is judged: a read of the source and a create, both in the default language
+ * and its fallbacks. Where the collection has a lifecycle the copy is created
+ * published, so the publish check is asked too.
  */
 async function duplicates(
   caller: GateCaller,
@@ -468,12 +471,11 @@ async function duplicates(
   language: RuleLanguage,
   hasLifecycle: boolean
 ): Promise<boolean> {
-  if (hasLifecycle) return false;
   return withRuleLanguage(language, async () => {
     for (const action of ["read", "create"] as const) {
       if (!(await capability(caller, action, resource, rules))) return false;
     }
-    return true;
+    return !hasLifecycle || capability(caller, "publish", resource, rules);
   });
 }
 

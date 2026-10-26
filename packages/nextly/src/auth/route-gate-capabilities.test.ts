@@ -77,6 +77,16 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
         grant("unpublish", POSTS),
       ],
     },
+    // May read, create and publish posts: everything a copy of a published
+    // post asks, and no update.
+    copier: {
+      roles: ["copier"],
+      grants: [
+        grant("read", POSTS),
+        grant("create", POSTS),
+        grant("publish", POSTS),
+      ],
+    },
     // May publish posts, and holds no update to send the change through.
     "publisher-only": {
       roles: ["publisher"],
@@ -388,24 +398,32 @@ describe("routeGateCapabilities", () => {
     });
   });
 
-  it("never offers a duplicate where the collection has a lifecycle", async () => {
-    // The route reads a copy's source published only, so a draft never
-    // published is not found whoever asks: even a super-admin, who passes
-    // every check, cannot be told yes for every document.
+  it("asks the publish check for a duplicate where the collection has a lifecycle", async () => {
+    // The cell answers a copy of a published entry, which is created
+    // published, so a collection with a lifecycle asks publish of every
+    // duplicate. The editor may read and create posts, and holds no publish;
+    // the copier holds all three.
     registered.rbac = new RBACAccessControlService();
-    const answer = (hasLifecycle: (slug: string) => boolean) =>
+    const answer = (userId: string, hasLifecycle: (slug: string) => boolean) =>
       routeGateCapabilities(
-        { userId: "admin" },
+        { userId },
         ENTITIES,
         registered.rbac,
         LANGUAGE_OF,
         hasLifecycle
       );
+    const posts = (slug: string) => slug === POSTS;
+    expect((await answer("editor", posts)).entities[POSTS]).toMatchObject({
+      duplicate: false,
+      createInDefaultLanguage: true,
+    });
+    expect((await answer("copier", posts)).entities[POSTS]).toMatchObject({
+      duplicate: true,
+    });
+    // POPULATION CONTROL: without a lifecycle the editor may duplicate.
     expect(
-      (await answer(slug => slug === POSTS)).entities[POSTS]
-    ).toMatchObject({ duplicate: false, createInDefaultLanguage: true });
-    // POPULATION CONTROL: without a lifecycle the same caller may duplicate.
-    expect((await answer(NO_LIFECYCLE)).entities[POSTS]).toMatchObject({
+      (await answer("editor", NO_LIFECYCLE)).entities[POSTS]
+    ).toMatchObject({
       duplicate: true,
     });
   });
