@@ -198,19 +198,22 @@ const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
  * - `readHistory`: the version history of every language, unfiltered;
  * - `publishEveryLanguage`: publishing every language at once;
  * - `createInDefaultLanguage`, `updateInDefaultLanguage`: a create or an
- *   update sent with no language, which writes the default one.
+ *   update sent with no language, which writes the default one;
+ * - `duplicate`: a copy of an entry, written in the default language from
+ *   what a read of the source shows there, its fallbacks included.
  */
 type CollectionOperationCell =
   | "readTranslations"
   | "readHistory"
   | "publishEveryLanguage"
   | "createInDefaultLanguage"
-  | "updateInDefaultLanguage";
+  | "updateInDefaultLanguage"
+  | "duplicate";
 
-/** A Single is never created, so it has no create cell. */
+/** A Single is never created or copied, so it has neither cell. */
 type SingleOperationCell = Exclude<
   CollectionOperationCell,
-  "createInDefaultLanguage"
+  "createInDefaultLanguage" | "duplicate"
 >;
 
 /** What the caller may do with one collection or Single. */
@@ -323,6 +326,11 @@ const OPERATION_CELLS: {
     updateInDefaultLanguage: {
       action: "update",
       operation: "updateEntry",
+      sent: "none",
+    },
+    duplicate: {
+      action: "create",
+      operation: "duplicateEntry",
       sent: "none",
     },
   },

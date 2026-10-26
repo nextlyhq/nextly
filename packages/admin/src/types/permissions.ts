@@ -105,4 +105,9 @@ export interface UserPermissionsResponse {
   isSuperAdmin: boolean;
   /** User's role slugs (e.g., ['super-admin', 'editor']) */
   roles: string[];
+  /**
+   * When this list stops holding, in epoch ms, or null: the soonest end of a
+   * role assignment it was read under. Absent from a server that predates it.
+   */
+  validUntil?: number | null;
 }

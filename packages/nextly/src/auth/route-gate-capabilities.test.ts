@@ -279,6 +279,7 @@ const REQUEST_OF_CELL: Readonly<Record<string, readonly string[]>> = {
   createInDefaultLanguage: ["create"],
   updateInDefaultLanguage: ["update"],
   publishEveryLanguage: ["update", "publish"],
+  duplicate: ["create"],
 };
 
 /** Each setup and rule the comparison is made under, and its service. */
@@ -348,6 +349,7 @@ describe("routeGateCapabilities", () => {
       "create",
       "createInDefaultLanguage",
       "delete",
+      "duplicate",
       "kind",
       "publish",
       "publishEveryLanguage",
@@ -358,7 +360,7 @@ describe("routeGateCapabilities", () => {
       "update",
       "updateInDefaultLanguage",
     ]);
-    // A Single is never created, so it has no create in any language.
+    // A Single is never created or copied, so it has neither cell.
     expect(Object.keys(entities[HOME] ?? {}).sort()).toEqual([
       "kind",
       "publish",
