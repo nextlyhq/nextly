@@ -11,11 +11,13 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import { BaseService } from "../../../shared/base-service";
 import {
   type FieldGroupReach,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  type LocalizedFieldRef,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -333,6 +335,13 @@ export class FieldGroupQueryService extends BaseService {
         dataArray,
         true
       );
+      await this.stripOverlaidPasswords(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        true,
+        executor
+      );
       return;
     }
 
@@ -378,6 +387,41 @@ export class FieldGroupQueryService extends BaseService {
       dataArray,
       false
     );
+    await this.stripOverlaidPasswords(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      false,
+      executor
+    );
+  }
+
+  /**
+   * Withhold the passwords a companion overlay put back: a translated
+   * password, or one in a translated container, is stored on the companion
+   * row, so the strip the instance row had before the overlay never saw it.
+   * A read of every translation holds each translated field as a map by
+   * language, and the walk goes into each language's value in turn.
+   */
+  private async stripOverlaidPasswords(
+    meta: DynamicFieldGroupRecord,
+    localizedFields: readonly LocalizedFieldRef[],
+    dataArray: Record<string, unknown>[],
+    everyLanguage: boolean,
+    executor?: unknown
+  ): Promise<void> {
+    const fields = meta.fields;
+    const reach = await this.passwordReach(fields, executor);
+    if (!reachesPasswordField(fields, reach)) return;
+    const translated = new Set(localizedFields.map(field => field.name));
+    const walk: FieldGroupReach = everyLanguage
+      ? {
+          ...reach,
+          keyedByLanguage: field =>
+            field.name !== undefined && translated.has(field.name),
+        }
+      : reach;
+    for (const data of dataArray) stripPasswordFieldValues(data, fields, walk);
   }
 
   /**
