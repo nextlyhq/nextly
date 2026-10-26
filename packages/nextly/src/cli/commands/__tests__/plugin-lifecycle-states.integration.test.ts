@@ -23,6 +23,7 @@ import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import { MYSQL_MIGRATE_LOCK_NAME_SQL } from "../../../domains/schema/pipeline/locks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -196,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
     async function endStoppedProcess(): Promise<void> {
       if (dialect !== "mysql") return;
       const [held] = (await handle.adapter.executeQuery(
-        "SELECT IS_USED_LOCK('nextly:migrate') AS holder"
+        `SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME_SQL}) AS holder`
       )) as Array<{ holder: number | null }>;
       if (held?.holder) {
         await handle.adapter.executeQuery(`KILL ${String(held.holder)}`);

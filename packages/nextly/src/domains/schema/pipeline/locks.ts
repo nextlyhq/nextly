@@ -9,7 +9,10 @@
  * is pooler-agnostic. Acquire is an atomic upsert that succeeds only when the
  * lock is free or its TTL has expired; release deletes only our own row.
  *
- * MySQL: GET_LOCK (unchanged). SQLite: single-writer no-op (unchanged).
+ * MySQL: GET_LOCK, named for the connection's database. A named lock belongs
+ * to the whole server, so a fixed name made every Nextly database on a server
+ * share one migrate lock: two apps (or two test workers) on one server refused
+ * or waited on each other's migrations. SQLite: single-writer no-op.
  *
  * @module domains/schema/pipeline/locks
  * @since v0.0.3-alpha (Plan C2; pooler-safe rewrite 2026-06)
@@ -26,7 +29,17 @@ import type {
 
 import { NextlyError } from "../../../errors";
 
-const MYSQL_LOCK_NAME = "nextly:migrate";
+/**
+ * The MySQL migrate lock's name, as SQL evaluated on the connection that takes
+ * it: one name per database, so only a migration of the same database waits.
+ * The database name is hashed because MySQL caps a lock name at 64 characters
+ * and a database name may itself be 64: this is 15 + 40 = 55. A connection
+ * with no database selected gets the hash of the empty string, one shared name,
+ * as before.
+ */
+export const MYSQL_MIGRATE_LOCK_NAME_SQL =
+  "CONCAT('nextly:migrate:', SHA1(COALESCE(DATABASE(), '')))";
+const MYSQL_LOCK_NAME = sql.raw(MYSQL_MIGRATE_LOCK_NAME_SQL);
 const DEFAULT_TTL_SECONDS = 900;
 const POLL_MS = 1000;
 
