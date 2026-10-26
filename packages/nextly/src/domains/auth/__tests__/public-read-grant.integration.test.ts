@@ -108,6 +108,14 @@ async function boot(
               access: { read: ({ locale }) => locale === "en" },
               fields,
             }),
+            // Read by a visitor only where a read names no one language: a
+            // read of every translation.
+            defineCollection({
+              slug: "everylang",
+              localized: true,
+              access: { read: ({ locale }) => locale === undefined },
+              fields,
+            }),
           ]
         : []),
       defineCollection({
@@ -237,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
       expect(listing()).toContain("ruleless");
     });
 
-    it("asks a rule in each language a visitor may read in", async () => {
+    it("asks a rule in each language a visitor may read in, and in all at once", async () => {
       const nextly = await boot(dialect, {
         locales: ["en", "de"],
         defaultLocale: "en",
@@ -245,6 +253,118 @@ describe.each(getConfiguredTestDialects())(
       await seedPermissionsAndRolePresets();
 
       expect(await publicHolds(nextly)).toContain("read-english");
+      expect(await publicHolds(nextly)).toContain("read-everylang");
+    });
+
+    it("claims a read Public holds already without adding it twice", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      // An install whose owner gave Public `read-media` and whose record of
+      // grants is gone: `read-open` is still to be granted.
+      const meta = nextly.getService("metaService");
+      await meta.delete("public-role-granted");
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      const held =
+        await services(nextly).rolePermissions.listRolePermissions(id);
+      await services(nextly).roles.updateRole(id, {
+        permissionIds: held
+          .filter(p => !(p.action === "read" && p.resource === "open"))
+          .map(p => p.id),
+      });
+
+      await seedPermissionsAndRolePresets();
+
+      expect(await publicHolds(nextly)).toContain("read-open");
+      expect(await publicHolds(nextly)).toContain("read-media");
+    });
+
+    it("commits what is claimed with the grant, and rolls both back together", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      const grants = services(nextly).rolePermissions;
+      const meta = nextly.getService("metaService");
+      const readClosed = String(
+        (
+          await services(nextly).permissions.listPermissions({
+            action: "read",
+            resource: "closed",
+          })
+        ).data[0].id
+      );
+
+      await expect(
+        grants.addRolePermissionsOnce(id, async (_held, executor) => {
+          await meta.insertIfAbsent("claimed-with-grant", ["read"], executor);
+          throw new Error("stopped before the grant");
+        })
+      ).rejects.toThrow("stopped before the grant");
+      expect(await meta.get("claimed-with-grant")).toBeNull();
+      expect(await publicHolds(nextly)).not.toContain("read-closed");
+
+      await grants.addRolePermissionsOnce(id, async (_held, executor) => {
+        await meta.insertIfAbsent("claimed-with-grant", ["read"], executor);
+        return [readClosed];
+      });
+      expect(await meta.get("claimed-with-grant")).toEqual(["read"]);
+      expect(await publicHolds(nextly)).toContain("read-closed");
+    });
+
+    it("waits for the Public role to be made before granting", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      // An upgrade where the site's own role holds the slug, and another
+      // boot has claimed making the Public role but not moved it yet.
+      const roles = services(nextly).roles;
+      const readMedia = (
+        await services(nextly).permissions.listPermissions({
+          action: "read",
+          resource: "media",
+        })
+      ).data[0].id;
+      const own = await roles.createRole({
+        name: "Ours",
+        slug: "ours",
+        permissionIds: [String(readMedia)],
+      });
+      const { roles: rolesTable } = getDialectTables();
+      const db = nextly.adapter.getDrizzle() as unknown as {
+        delete: (t: unknown) => { where: (c: unknown) => Promise<unknown> };
+        update: (t: unknown) => {
+          set: (v: unknown) => { where: (c: unknown) => Promise<unknown> };
+        };
+      };
+      await db
+        .delete(rolesTable)
+        .where(
+          eq(
+            rolesTable.id,
+            (await roles.findRoleIdBySlug(PUBLIC_ROLE_SLUG))!.id
+          )
+        );
+      await db
+        .update(rolesTable)
+        .set({ slug: PUBLIC_ROLE_SLUG })
+        .where(eq(rolesTable.id, own.id));
+      const meta = nextly.getService("metaService");
+      await meta.delete("public-role-granted");
+      await meta.set("public-role-created", {
+        claim: "another boot",
+        at: new Date().toISOString(),
+      });
+
+      await seedPermissionsAndRolePresets();
+
+      const ownHolds = await services(
+        nextly
+      ).rolePermissions.listRolePermissions(own.id);
+      expect(ownHolds.map(p => `${p.action}-${p.resource}`)).toEqual([
+        "read-media",
+      ]);
     });
 
     it("grants a read again to a collection made anew under the same slug", async () => {

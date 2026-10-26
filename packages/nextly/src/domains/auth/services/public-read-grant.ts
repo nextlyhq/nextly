@@ -4,11 +4,11 @@
  * Each collection's and Single's read rule is asked about a visitor. Where it
  * answers exactly `true`, a plain `true` or a function returning `true`,
  * Public is granted that read, as it is `read-media`; `read-users` never.
- * Each grant is made once: claimed in `nextly_meta` by permission id before
- * it is made, so a read an owner takes away again stays away, while an entity
- * added later, or a rule changed to `true`, is granted at the first boot that
- * sees it. Rules are asked as a visitor's request is, through the same
- * evaluator and in each configured language.
+ * Each grant is made once: claimed in `nextly_meta` by permission id in the
+ * transaction that makes it, so a read an owner takes away again stays away,
+ * while an entity added later, or a rule changed to `true`, is granted at the
+ * first boot that sees it. Rules are asked as a visitor's request is, through
+ * the same evaluator, in each configured language and in all at once.
  *
  * Then what Public does not hold yet and visitors may be relying on is
  * listed, at every boot while Public lacks it: a read with no rule, which a
@@ -68,15 +68,31 @@ interface PublicReadGrantSeeding {
   permissionIds: () => Promise<Map<string, string>>;
   /** The permission slugs the role holds now. */
   publicHolds: (roleId: string) => Promise<Set<string>>;
-  /** Grants the role the read of `resource`. */
-  grantRead: (roleId: string, resource: string) => Promise<void>;
+  /**
+   * Adds to the role the permission ids `pick` chooses, in one transaction
+   * that never interleaves with an edit of the role's permissions; `pick` is
+   * told the ids the role holds and handed the transaction's executor. The
+   * ids added.
+   */
+  addOnce: (
+    roleId: string,
+    pick: (
+      held: ReadonlySet<string>,
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ) => Promise<readonly string[]>;
   meta: {
-    get<T>(key: string): Promise<T | null>;
-    insertIfAbsent(key: string, value: unknown): Promise<void>;
+    get<T>(key: string, executor?: unknown): Promise<T | null>;
+    insertIfAbsent(
+      key: string,
+      value: unknown,
+      executor?: unknown
+    ): Promise<void>;
     compareAndSet(
       key: string,
       expected: unknown,
-      next: unknown
+      next: unknown,
+      executor?: unknown
     ): Promise<boolean>;
   };
   logger: Logger;
@@ -145,7 +161,8 @@ async function askIn(
 
 /**
  * Asks a target's rule for `action` about a visitor in each configured
- * language, as a visitor's request in that language is asked, and keeps the
+ * language, as a visitor's request in that language is asked, and in every
+ * language at once, as a request naming none is asked, and keeps the
  * answer that lets the most through: `true` in any language, as Public needs
  * the permission for that language's visitors; else a failure, as the rule
  * could not be told apart from one that lets them through.
@@ -156,10 +173,16 @@ async function ask(target: AccessTarget, action: Action): Promise<Answer> {
     action === "read"
       ? registeredReadLanguagesFor
       : registeredWriteLanguagesFor;
+  // Each language a visitor may ask in, and every language at once, as a
+  // read of every translation, a translation overview, a write to every
+  // language or a delete is asked.
   const answers = await Promise.all(
     codes.length === 0
       ? [askIn(target, action, undefined)]
-      : codes.map(code => askIn(target, action, languageFor(code)))
+      : [
+          ...codes.map(code => askIn(target, action, languageFor(code))),
+          askIn(target, action, everyLanguage()),
+        ]
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;
@@ -177,19 +200,23 @@ async function ask(target: AccessTarget, action: Action): Promise<Answer> {
 }
 
 /**
- * Claims `ids` in the recorded grants before they are made, against any other
- * boot doing the same, keeping only ids of permissions that still exist.
- * Returns the ids this boot claimed: those no other boot recorded first.
+ * Claims `ids` in the recorded grants, on `executor`, the transaction they are
+ * made in, keeping only ids of permissions that still exist. Returns the ids
+ * this boot claimed: those no other boot recorded first.
  */
 async function claimGrants(
   meta: PublicReadGrantSeeding["meta"],
   ids: readonly string[],
-  existing: ReadonlySet<string>
+  existing: ReadonlySet<string>,
+  executor: unknown
 ): Promise<string[]> {
   for (let attempt = 0; attempt < 5; attempt++) {
-    const recorded = await meta.get<string[]>(PUBLIC_GRANTED_META_KEY);
+    const recorded = await meta.get<string[]>(
+      PUBLIC_GRANTED_META_KEY,
+      executor
+    );
     if (recorded === null) {
-      await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, []);
+      await meta.insertIfAbsent(PUBLIC_GRANTED_META_KEY, [], executor);
       continue;
     }
     const claimed = ids.filter(id => !recorded.includes(id));
@@ -197,32 +224,20 @@ async function claimGrants(
     const next = Array.from(
       new Set([...recorded.filter(id => existing.has(id)), ...claimed])
     ).sort();
-    if (await meta.compareAndSet(PUBLIC_GRANTED_META_KEY, recorded, next)) {
+    if (
+      await meta.compareAndSet(
+        PUBLIC_GRANTED_META_KEY,
+        recorded,
+        next,
+        executor
+      )
+    ) {
       return claimed;
     }
   }
   throw NextlyError.internal({
     logContext: { reason: "public-read-grants-not-recorded" },
   });
-}
-
-/**
- * Takes `ids` back out of the recorded grants, for grants claimed and then
- * not made, so the next boot makes them. Best effort: the failure that made
- * them unmade is the one reported.
- */
-async function releaseClaims(
-  meta: PublicReadGrantSeeding["meta"],
-  ids: readonly string[]
-): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const recorded = await meta.get<string[]>(PUBLIC_GRANTED_META_KEY);
-    if (recorded === null) return;
-    const next = recorded.filter(id => !ids.includes(id));
-    if (await meta.compareAndSet(PUBLIC_GRANTED_META_KEY, recorded, next)) {
-      return;
-    }
-  }
 }
 
 /** A target, with what its rules said about a visitor. */
@@ -290,7 +305,7 @@ export async function seedPublicReadGrants({
   targets,
   permissionIds,
   publicHolds,
-  grantRead,
+  addOnce,
   meta,
   logger,
 }: PublicReadGrantSeeding): Promise<void> {
@@ -315,32 +330,20 @@ export async function seedPublicReadGrants({
   );
 
   const ids = await permissionIds();
-  const wanted = new Map<string, string>();
-  for (const resource of [
+  const wanted = [
     "media",
     ...asked
       .filter(({ read }) => read.kind === "answered" && read.value === true)
       .map(({ target }) => target.slug),
-  ]) {
-    const id = ids.get(permissionSlug("read", resource));
-    if (id !== undefined) wanted.set(id, resource);
-  }
-  // Claimed before it is made, so a grant is never made twice: not by two
-  // boots at once, and not again after an owner has taken it away. A boot
-  // that stops between the two leaves the grant unmade rather than repeated.
-  const claimed = await claimGrants(
-    meta,
-    [...wanted.keys()],
-    new Set(ids.values())
+  ].flatMap(resource => ids.get(permissionSlug("read", resource)) ?? []);
+  // Claimed and made in one transaction, under the lock an edit of the
+  // role's permissions takes, so a grant is made once: not by two boots at
+  // once, not again after an owner has taken it away, and not over an owner's
+  // edit made meanwhile. The claim and the grant commit or roll back
+  // together. One the role holds already is claimed and left as it is.
+  await addOnce(roleId, (_held, executor) =>
+    claimGrants(meta, wanted, new Set(ids.values()), executor)
   );
-  for (const [i, id] of claimed.entries()) {
-    try {
-      await grantRead(roleId, wanted.get(id)!);
-    } catch (error) {
-      await releaseClaims(meta, claimed.slice(i)).catch(() => undefined);
-      throw error;
-    }
-  }
 
   const said = listing(asked, await publicHolds(roleId));
   if (said !== null) logger.warn(said);

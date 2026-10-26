@@ -22,6 +22,7 @@ import {
 } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
+  publicRoleMade,
   seedPublicRole,
 } from "../domains/auth/services/public-role";
 import { RoleMutationService } from "../domains/auth/services/role/role-mutation-service";
@@ -255,14 +256,18 @@ async function seedEverything(): Promise<void> {
 function seedPublicRoleReads(): Promise<void> {
   const adapter = getService("adapter");
   const logger = getService("logger");
-  const grants = () => new RolePermissionService(adapter, logger);
+  const grants = new RolePermissionService(adapter, logger);
   return seedPublicReadGrants({
+    // Only once the Public role is made and recorded: before that, another
+    // boot may still be moving a site's own role off the slug.
     publicRoleId: async () =>
-      (
-        await new RoleQueryService(adapter, logger).findRoleIdBySlug(
-          PUBLIC_ROLE_SLUG
-        )
-      )?.id ?? null,
+      (await publicRoleMade(getService("metaService")))
+        ? ((
+            await new RoleQueryService(adapter, logger).findRoleIdBySlug(
+              PUBLIC_ROLE_SLUG
+            )
+          )?.id ?? null)
+        : null,
     targets: async () => {
       const rbac = getService("rbacAccessControlService");
       const [collections, singles] = await Promise.all([
@@ -286,12 +291,11 @@ function seedPublicRoleReads(): Promise<void> {
       permissionIdsBySlug(new PermissionService(adapter, logger)),
     publicHolds: async roleId =>
       new Set(
-        (await grants().listRolePermissions(roleId)).map(
-          ({ action, resource }) => permissionSlug(action, resource)
+        (await grants.listRolePermissions(roleId)).map(({ action, resource }) =>
+          permissionSlug(action, resource)
         )
       ),
-    grantRead: (roleId, resource) =>
-      grants().addPermissionToRole(roleId, { action: "read", resource }),
+    addOnce: (roleId, pick) => grants.addRolePermissionsOnce(roleId, pick),
     meta: getService("metaService"),
     logger,
   });

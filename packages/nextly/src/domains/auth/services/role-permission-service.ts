@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, getColumns } from "drizzle-orm";
 
 import type {
@@ -285,11 +286,8 @@ export class RolePermissionService extends BaseService {
 
     // Each statement binds no more parameters than the adapter says one query
     // may: one per id plus the role's for a removal, and up to one per column
-    // for each inserted row, defaults included.
+    // for each inserted row, defaults included (`insertAssignments`).
     const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
-    const paramsPerRow = Object.keys(
-      getColumns(this.tables.rolePermissions)
-    ).length;
 
     await this.adapter.transaction(async tx => {
       // Serialises writers to this role: a second writer waits, then reads what
@@ -297,14 +295,7 @@ export class RolePermissionService extends BaseService {
       // are named as the schema declares them, which is how the adapter reads a
       // where clause and returns a row.
       await tx.lockRow("roles", roleId);
-      const held = new Set(
-        (
-          await tx.select<{ permissionId: string }>("role_permissions", {
-            columns: ["permissionId"],
-            where: this.whereEq("roleId", roleId),
-          })
-        ).map(row => String(row.permissionId))
-      );
+      const held = await this.heldIn(tx, roleId);
 
       const extra = [...held].filter(id => !desired.has(id));
       for (const ids of batches(extra, maxParams - 1)) {
@@ -338,24 +329,86 @@ export class RolePermissionService extends BaseService {
         });
       }
 
-      // Through Drizzle, on this transaction's connection, so the schema's own
-      // defaults apply: SQLite's `created_at` is filled by the table
-      // definition, which an insert by table name leaves as NULL.
-      const drizzle = tx.getDrizzle<RBACDatabaseInstance>();
-      for (const ids of batches(missing, maxParams / paramsPerRow)) {
-        await drizzle.insert(this.tables.rolePermissions).values(
-          ids.map(permissionId => ({
-            id: randomUUID(),
-            roleId,
-            permissionId,
-          }))
-        );
-      }
+      await this.insertAssignments(tx, roleId, missing);
     });
 
     await afterRoleGrantsChanged(roleId);
 
     return this.listRolePermissions(roleId);
+  }
+
+  /** The permission ids `roleId` holds, read on transaction `tx`. */
+  private async heldIn(
+    tx: TransactionContext,
+    roleId: string
+  ): Promise<Set<string>> {
+    return new Set(
+      (
+        await tx.select<{ permissionId: string }>("role_permissions", {
+          columns: ["permissionId"],
+          where: this.whereEq("roleId", roleId),
+        })
+      ).map(row => String(row.permissionId))
+    );
+  }
+
+  /**
+   * Assigns `permissionIds` to `roleId` on transaction `tx`, each statement
+   * binding no more parameters than the adapter says one query may. Through
+   * Drizzle, on the transaction's connection, so the schema's own defaults
+   * apply: SQLite's `created_at` is filled by the table definition, which an
+   * insert by table name leaves as NULL.
+   */
+  private async insertAssignments(
+    tx: TransactionContext,
+    roleId: string,
+    permissionIds: readonly string[]
+  ): Promise<void> {
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const paramsPerRow = Object.keys(
+      getColumns(this.tables.rolePermissions)
+    ).length;
+    const drizzle = tx.getDrizzle<RBACDatabaseInstance>();
+    for (const ids of batches(permissionIds, maxParams / paramsPerRow)) {
+      await drizzle.insert(this.tables.rolePermissions).values(
+        ids.map(permissionId => ({
+          id: randomUUID(),
+          roleId,
+          permissionId,
+        }))
+      );
+    }
+  }
+
+  /**
+   * Adds to the role the permissions `pick` chooses, in one transaction under
+   * the lock on the role's row that {@link setRolePermissions} takes, so the
+   * two never interleave: a change to the role's set lands wholly before or
+   * wholly after this, never between the choice and the add. `pick` is told
+   * the ids the role holds and handed the transaction's executor, so what it
+   * records commits or rolls back with the add; it returns the ids to add, and
+   * one the role holds already is left as it is rather than added twice.
+   *
+   * @returns The permission ids added
+   */
+  async addRolePermissionsOnce(
+    roleId: string,
+    pick: (
+      held: ReadonlySet<string>,
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ): Promise<string[]> {
+    let added: string[] = [];
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      added = [...new Set(await pick(held, tx.getDrizzle()))].filter(
+        id => !held.has(id)
+      );
+      await this.insertAssignments(tx, roleId, added);
+    });
+    if (added.length > 0) await afterRoleGrantsChanged(roleId);
+    return added;
   }
 
   /**
