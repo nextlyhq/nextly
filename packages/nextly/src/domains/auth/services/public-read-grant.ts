@@ -24,6 +24,7 @@ import { visitorActor } from "../../../auth/access/actor";
 import { askRule, type AccessTarget } from "../../../auth/access/decide";
 import {
   everyLanguage,
+  languagesOfContent,
   registeredReadLanguagesFor,
   registeredWriteLanguagesFor,
   withRuleLanguage,
@@ -92,8 +93,9 @@ interface PublicReadGrantSeeding {
    */
   addOnce: (
     roleId: string,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
     pick: (
-      held: ReadonlySet<string>,
+      ids: readonly string[],
       executor: unknown
     ) => Promise<readonly string[]>
   ) => Promise<readonly string[]>;
@@ -176,31 +178,39 @@ async function askIn(
 }
 
 /**
- * Every set of languages a visitor's request for `action` can tell a rule, as
- * the request paths work them out: for a read, each language or every
- * translation asked for, with the configured fallback, none, or any language
- * named as the fallback, as a plain read or one that also reads each
- * language's translation state; for a write, each language or every one; and
- * every language at once, as a delete is told. Each distinct set once. A site
- * without languages has one: none.
+ * Every set of languages a visitor's request can tell a rule of `target`, as
+ * the request paths work them out: a read's, for each language, the default
+ * or every translation asked for, with the configured fallback, none, or any
+ * language named as the fallback, as a plain read or one that also reads each
+ * language's translation state; a write's, for each language or every one;
+ * and every language at once, as a delete is told. Each distinct set the rule
+ * is told, once. A site without languages has one: none.
  */
-function languageContexts(action: Action): Array<RuleLanguage | undefined> {
+function languageContexts(
+  target: AccessTarget
+): Array<RuleLanguage | undefined> {
   const codes = everyLanguage().locales;
   if (codes.length === 0) return [undefined];
-  const contexts =
-    action === "read"
-      ? [...codes, EVERY_TRANSLATION].flatMap(requested =>
-          [undefined, false as const, ...codes].flatMap(fallback =>
-            [{}, { translationStatus: true }].map(asked =>
-              registeredReadLanguagesFor(requested, fallback, asked)
-            )
-          )
+  // Read and write languages for every action: an operation is not told its
+  // own kind alone (duplicating an entry asks `create` in a read's
+  // languages), so each action is asked in all of them.
+  const contexts = [
+    ...[undefined, ...codes, EVERY_TRANSLATION].flatMap(requested =>
+      [undefined, false as const, ...codes].flatMap(fallback =>
+        [{}, { translationStatus: true }].map(asked =>
+          registeredReadLanguagesFor(requested, fallback, asked)
         )
-      : [...codes, EVERY_LOCALE].map(requested =>
-          registeredWriteLanguagesFor(requested)
-        );
+      )
+    ),
+    ...[...codes, EVERY_LOCALE].map(requested =>
+      registeredWriteLanguagesFor(requested)
+    ),
+  ];
   const distinct = new Map<string, RuleLanguage>();
-  for (const language of [...contexts, everyLanguage()]) {
+  for (const asked of [...contexts, everyLanguage()]) {
+    // As the rule is told it: content the same in every language is told
+    // every language whatever the request named, so those collapse to one.
+    const language = languagesOfContent(target, asked);
     distinct.set(
       JSON.stringify([language.locale ?? null, language.locales]),
       language
@@ -218,7 +228,7 @@ function languageContexts(action: Action): Array<RuleLanguage | undefined> {
  */
 async function ask(target: AccessTarget, action: Action): Promise<Answer> {
   const answers = await Promise.all(
-    languageContexts(action).map(language => askIn(target, action, language))
+    languageContexts(target).map(language => askIn(target, action, language))
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;
@@ -394,16 +404,18 @@ export async function seedPublicReadGrants({
       .filter(({ read }) => read.kind === "answered" && read.value === true)
       .map(({ target }) => ({ action: "read", resource: target.slug })),
     ...pluginGrants,
-  ].flatMap(
-    ({ action, resource }) => ids.get(permissionSlug(action, resource)) ?? []
-  );
+  ].flatMap(({ action, resource }) => {
+    const id = ids.get(permissionSlug(action, resource));
+    return id === undefined ? [] : [{ id, action, resource }];
+  });
   // Claimed and made in one transaction, under the lock an edit of the
   // role's permissions takes, so a grant is made once: not by two boots at
   // once, not again after an owner has taken it away, and not over an owner's
   // edit made meanwhile. The claim and the grant commit or roll back
-  // together. One the role holds already is claimed and left as it is.
-  await addOnce(roleId, (_held, executor) =>
-    claimGrants(meta, roleId, wanted, new Set(ids.values()), executor)
+  // together. One the role holds already is claimed and left as it is, and
+  // one whose permission was edited meanwhile into another is left out.
+  await addOnce(roleId, wanted, (asWanted, executor) =>
+    claimGrants(meta, roleId, asWanted, new Set(ids.values()), executor)
   );
 
   const said = listing(asked, await publicHolds(roleId));

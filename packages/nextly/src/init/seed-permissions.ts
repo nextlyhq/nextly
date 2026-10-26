@@ -298,7 +298,8 @@ function seedPublicRoleGrants(): Promise<void> {
         )
       ),
     declared: () => collectPublicGrants(getService("config").plugins ?? []),
-    addOnce: (roleId, pick) => grants.addRolePermissionsOnce(roleId, pick),
+    addOnce: (roleId, wanted, pick) =>
+      grants.addRolePermissionsOnce(roleId, wanted, pick),
     meta: getService("metaService"),
     logger,
   });

@@ -35,6 +35,7 @@ let t: TestNextly | undefined;
 afterEach(async () => {
   await t?.destroy();
   t = undefined;
+  counted = () => false;
 });
 
 /** Every warning boot seeding logged, as one string each. */
@@ -50,6 +51,9 @@ const logger: Logger = {
 } as Logger;
 
 const fields = [text({ name: "title" })];
+
+/** What the `counted` collection's read rule does when asked. */
+let counted: () => boolean = () => false;
 
 /** The site's languages, for a boot that has them. */
 type Languages = NonNullable<
@@ -114,6 +118,23 @@ async function boot(
               slug: "everylang",
               localized: true,
               access: { read: ({ locale }) => locale === undefined },
+              fields,
+            }),
+            // Creatable by a visitor only where English is read with every
+            // language beside it, as duplicating an entry asks its create.
+            defineCollection({
+              slug: "duplicable",
+              localized: true,
+              access: {
+                create: ({ locale, locales }) =>
+                  locale === "en" && locales.length > 1,
+              },
+              fields,
+            }),
+            // Stored once for every language; its rule counts its askings.
+            defineCollection({
+              slug: "counted",
+              access: { read: () => counted() },
               fields,
             }),
             // Read by a visitor only in German with no fallback, as
@@ -278,6 +299,52 @@ describe.each(getConfiguredTestDialects())(
       expect(await publicHolds(nextly)).toContain("read-everylang");
       expect(await publicHolds(nextly)).toContain("read-overview");
       expect(await publicHolds(nextly)).toContain("read-germanonly");
+      // A write a rule opens in a read's languages is named too.
+      expect(listing()).toContain("create-duplicable");
+    });
+
+    it("has an owner's addition of a Public permission wait for a grant in progress, and add it once", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      let entered!: () => void;
+      const inside = new Promise<void>(resolve => (entered = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
+        id,
+        [],
+        async () => {
+          entered();
+          await released;
+          return [];
+        }
+      );
+      await inside;
+
+      const permissions = services(nextly).rolePermissions;
+      let added = false;
+      const addition = permissions
+        .addPermissionToRole(id, { action: "read", resource: "closed" })
+        .then(() => {
+          added = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const addedWhileGranting = added;
+      release();
+      await Promise.all([grant, addition]);
+      // Added again, it is held once and nothing fails.
+      await permissions.addPermissionToRole(id, {
+        action: "read",
+        resource: "closed",
+      });
+
+      expect(addedWhileGranting).toBe(false);
+      expect(
+        (await publicHolds(nextly)).filter(p => p === "read-closed")
+      ).toHaveLength(1);
     });
 
     it("has an owner's removal of a Public permission wait for a grant in progress", async () => {
@@ -292,6 +359,7 @@ describe.each(getConfiguredTestDialects())(
       const released = new Promise<void>(resolve => (release = resolve));
       const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
         id,
+        [],
         async () => {
           entered();
           await released;
@@ -355,6 +423,7 @@ describe.each(getConfiguredTestDialects())(
       const released = new Promise<void>(resolve => (release = resolve));
       const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
         id,
+        [],
         async () => {
           entered();
           await released;
@@ -420,9 +489,10 @@ describe.each(getConfiguredTestDialects())(
           })
         ).data[0].id
       );
+      const closed = [{ id: readClosed, action: "read", resource: "closed" }];
 
       await expect(
-        grants.addRolePermissionsOnce(id, async (_held, executor) => {
+        grants.addRolePermissionsOnce(id, closed, async (_ids, executor) => {
           await meta.insertIfAbsent("claimed-with-grant", ["read"], executor);
           throw new Error("stopped before the grant");
         })
@@ -430,12 +500,58 @@ describe.each(getConfiguredTestDialects())(
       expect(await meta.get("claimed-with-grant")).toBeNull();
       expect(await publicHolds(nextly)).not.toContain("read-closed");
 
-      await grants.addRolePermissionsOnce(id, async (_held, executor) => {
-        await meta.insertIfAbsent("claimed-with-grant", ["read"], executor);
-        return [readClosed];
-      });
+      await grants.addRolePermissionsOnce(
+        id,
+        closed,
+        async (_ids, executor) => {
+          await meta.insertIfAbsent("claimed-with-grant", ["read"], executor);
+          return [readClosed];
+        }
+      );
       expect(await meta.get("claimed-with-grant")).toEqual(["read"]);
       expect(await publicHolds(nextly)).toContain("read-closed");
+    });
+
+    it("leaves out a permission that no longer grants what it was wanted for", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      const readClosed = String(
+        (
+          await services(nextly).permissions.listPermissions({
+            action: "read",
+            resource: "closed",
+          })
+        ).data[0].id
+      );
+
+      // Wanted as `delete-closed`, which the row it names does not grant.
+      const added = await services(
+        nextly
+      ).rolePermissions.addRolePermissionsOnce(
+        id,
+        [{ id: readClosed, action: "delete", resource: "closed" }],
+        async ids => ids
+      );
+
+      expect(added).toEqual([]);
+      expect(await publicHolds(nextly)).not.toContain("read-closed");
+    });
+
+    it("asks a rule once where every request context comes to the same", async () => {
+      let asked = 0;
+      counted = () => {
+        asked++;
+        return false;
+      };
+      await boot(dialect, { locales: ["en", "de"], defaultLocale: "en" });
+      await seedPermissionsAndRolePresets();
+
+      // `counted` is stored once for every language, so each read context
+      // tells its rule every language, and it is asked once.
+      expect(asked).toBe(1);
     });
 
     it("waits for the Public role to be made before granting", async () => {
