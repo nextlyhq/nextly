@@ -13,6 +13,7 @@
  * - a full uninstall stopped after its first committed drop, which the boot
  *   refuses until the uninstall is run again and finishes.
  */
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
@@ -23,7 +24,7 @@ import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
-import { MYSQL_MIGRATE_LOCK_NAME_SQL } from "../../../domains/schema/pipeline/locks";
+import { MYSQL_MIGRATE_LOCK_NAME } from "../../../domains/schema/pipeline/locks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -196,9 +197,18 @@ describe.each(getConfiguredTestDialects())(
      */
     async function endStoppedProcess(): Promise<void> {
       if (dialect !== "mysql") return;
-      const [held] = (await handle.adapter.executeQuery(
-        `SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME_SQL}) AS holder`
-      )) as Array<{ holder: number | null }>;
+      const db = handle.adapter.getDrizzle<{
+        execute: (q: unknown) => Promise<unknown>;
+      }>();
+      const result = await db.execute(
+        sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS holder`
+      );
+      // mysql2 answers [rows, fields].
+      const [held] = (
+        Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
+      ) as Array<{
+        holder: number | null;
+      }>;
       if (held?.holder) {
         await handle.adapter.executeQuery(`KILL ${String(held.holder)}`);
       }

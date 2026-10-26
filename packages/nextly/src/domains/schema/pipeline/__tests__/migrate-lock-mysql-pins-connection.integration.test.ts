@@ -5,6 +5,7 @@
  * named lock belongs to the whole server, so its name carries the database.
  */
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
@@ -14,7 +15,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import {
-  MYSQL_MIGRATE_LOCK_NAME_SQL,
+  MYSQL_MIGRATE_LOCK_NAME,
   forceUnlock,
   withMigrateLock,
 } from "../locks";
@@ -35,10 +36,19 @@ afterEach(async () => {
 });
 
 async function holderOfLock(): Promise<number | null> {
-  const [row] = (await handle.adapter.executeQuery(
-    `SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME_SQL}) AS holder`
-  )) as Array<{ holder: number | null }>;
-  return row?.holder ?? null;
+  const db = handle.adapter.getDrizzle<{
+    execute: (q: unknown) => Promise<unknown>;
+  }>();
+  const result = await db.execute(
+    sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS holder`
+  );
+  // mysql2 answers [rows, fields].
+  const rows = (
+    Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
+  ) as Array<{
+    holder: number | null;
+  }>;
+  return rows[0]?.holder ?? null;
 }
 
 describeMysql("withMigrateLock on MySQL", () => {
@@ -75,8 +85,8 @@ describeMysql("withMigrateLock on MySQL", () => {
     // wait for, or be refused by, this one's.
     const scratch = await createScratchDatabase("mysql", "migrate_lock_other");
     const other = createMySqlAdapter({ url: scratch.url });
-    await other.connect();
     try {
+      await other.connect();
       const outcome = await withMigrateLock(
         handle.adapter.getDrizzle(),
         "mysql",
@@ -87,8 +97,12 @@ describeMysql("withMigrateLock on MySQL", () => {
         value: { ran: true, value: "ran" },
       });
     } finally {
-      await other.disconnect();
-      await scratch.drop();
+      // The scratch database goes whether connecting or closing failed.
+      try {
+        await other.disconnect();
+      } finally {
+        await scratch.drop();
+      }
     }
   });
 
@@ -112,6 +126,60 @@ describeMysql("withMigrateLock on MySQL", () => {
     });
     expect(heldAfter).not.toBeNull();
     expect(await holderOfLock()).toBeNull();
+  });
+
+  /**
+   * During an upgrade an older Nextly may still be migrating this database
+   * under the lock's old, server-wide name. A new process must not run beside
+   * it, so it treats that lock as busy too, until no older version is left.
+   */
+  describe("while an older version holds the lock's old name", () => {
+    async function holdLegacyLock() {
+      const { createConnection } = await import("mysql2/promise");
+      const connection = await createConnection({
+        uri: process.env.TEST_MYSQL_URL as string,
+      });
+      await connection.query("SELECT GET_LOCK('nextly:migrate', 0)");
+      return {
+        release: () =>
+          connection.query("SELECT RELEASE_LOCK('nextly:migrate')"),
+        end: () => connection.end(),
+      };
+    }
+
+    it("refuses at once in fail-fast mode, and gives its own lock back", async () => {
+      const db = handle.adapter.getDrizzle();
+      const legacy = await holdLegacyLock();
+      try {
+        let ran = false;
+        await expect(
+          withMigrateLock(db, "mysql", async () => {
+            ran = true;
+          })
+        ).rejects.toThrow("holds the migrate lock");
+        expect(ran).toBe(false);
+        expect(await holderOfLock()).toBeNull();
+      } finally {
+        await legacy.end();
+      }
+    });
+
+    it("waits in wait mode until the old name is free, then runs", async () => {
+      const db = handle.adapter.getDrizzle();
+      const legacy = await holdLegacyLock();
+      try {
+        const started = Date.now();
+        setTimeout(() => void legacy.release(), 1500);
+        const outcome = await withMigrateLock(db, "mysql", async () => "ran", {
+          mode: "wait",
+          maxWaitMs: 10_000,
+        });
+        expect(outcome).toEqual({ ran: true, value: "ran" });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
+      } finally {
+        await legacy.end();
+      }
+    });
   });
 
   it("releases the lock when the work throws", async () => {

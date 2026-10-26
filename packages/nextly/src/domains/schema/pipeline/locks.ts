@@ -37,9 +37,39 @@ import { NextlyError } from "../../../errors";
  * with no database selected gets the hash of the empty string, one shared name,
  * as before.
  */
-export const MYSQL_MIGRATE_LOCK_NAME_SQL =
-  "CONCAT('nextly:migrate:', SHA1(COALESCE(DATABASE(), '')))";
-const MYSQL_LOCK_NAME = sql.raw(MYSQL_MIGRATE_LOCK_NAME_SQL);
+export const MYSQL_MIGRATE_LOCK_NAME = sql`CONCAT('nextly:migrate:', SHA1(COALESCE(DATABASE(), '')))`;
+const MYSQL_LOCK_NAME = MYSQL_MIGRATE_LOCK_NAME;
+
+/**
+ * The name every Nextly before the per-database lock took, on any database.
+ * While an older version may still be running against this one (a rolling or
+ * serverless deploy with `db.runMigrationsOnBoot`), a holder of this name may
+ * be migrating it, so it is treated as busy too. Remove once no supported
+ * version takes it.
+ */
+const MYSQL_LEGACY_LOCK_NAME = "nextly:migrate";
+
+/**
+ * Whether the legacy name is free, waiting up to `waitSeconds` for it. It is
+ * checked after this database's own lock is taken, so a new process never
+ * holds neither.
+ */
+async function legacyLockFree(
+  db: PgLike,
+  waitSeconds: number
+): Promise<boolean> {
+  const deadline = Date.now() + waitSeconds * 1000;
+  for (;;) {
+    const [row] = toRows(
+      await db.execute(
+        sql`SELECT IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS holder`
+      )
+    );
+    if (row?.holder === null || row?.holder === undefined) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, POLL_MS));
+  }
+}
 const DEFAULT_TTL_SECONDS = 900;
 const POLL_MS = 1000;
 
@@ -219,6 +249,11 @@ async function withMysqlLock<T>(
     );
     const v = acquired[0]?.locked;
     if (!(v === 1 || v === true)) {
+      pinned.release();
+      return { acquired: false };
+    }
+    if (!(await legacyLockFree(pinned.db, waitSeconds))) {
+      await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
       pinned.release();
       return { acquired: false };
     }
