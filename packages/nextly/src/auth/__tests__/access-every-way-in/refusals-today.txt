@@ -1,7 +1,3 @@
-no-service user-with read collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
-no-service user-with read collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
-no-service user-with read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
-no-service user-with read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 no-service user-without read collection async-filter at direct  403 - other  | 
 no-service user-without read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 no-service user-without read collection malformed-filter at direct  403 - other  | 
