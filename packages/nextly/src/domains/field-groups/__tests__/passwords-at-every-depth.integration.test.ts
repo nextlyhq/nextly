@@ -308,3 +308,91 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "a password in a translated container, read in every language (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let trusted: Nextly;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: {
+          locales: ["en", "es"],
+          defaultLocale: "en",
+          fallback: false,
+        },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "pwlpin",
+            fields: [text({ name: "heading" }), password({ name: "pin" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "pwlentries",
+            localized: true,
+            access: {
+              create: () => true,
+              read: () => true,
+              update: () => true,
+            },
+            fields: [
+              text({ name: "title" }),
+              // A password of the collection's own, and one in a field group
+              // held inline, each in a translated group.
+              group({
+                name: "own",
+                localized: true,
+                fields: [text({ name: "a" }), password({ name: "pin" })],
+              }),
+              group({
+                name: "wrap",
+                localized: true,
+                fields: [fieldGroup({ name: "held", component: "pwlpin" })],
+              }),
+            ],
+          }),
+        ],
+      } as never);
+      trusted = new Nextly();
+    }, 180_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("returns no password from a read of every language", async () => {
+      const { item } = await trusted.create({
+        collection: "pwlentries",
+        data: {
+          title: "t",
+          own: { a: "1", pin: "own-en" },
+          wrap: { held: { heading: "h", pin: "in-en" } },
+        },
+      } as never);
+      const id = String(item.id);
+      await trusted.update({
+        collection: "pwlentries",
+        id,
+        locale: "es",
+        data: {
+          own: { a: "2", pin: "own-es" },
+          wrap: { held: { heading: "h", pin: "in-es" } },
+        },
+      } as never);
+
+      for (const reader of [trusted, new Nextly({ overrideAccess: false })]) {
+        const read = await reader.findByID({
+          collection: "pwlentries",
+          id,
+          locale: "all",
+        } as never);
+        // Every language's value is there, and no password in any of them.
+        expect(valuesAt(read, "a")).toEqual(["1", "2"]);
+        expect(valuesAt(read, "pin")).toEqual([]);
+      }
+    });
+  }
+);
