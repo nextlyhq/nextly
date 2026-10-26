@@ -470,6 +470,11 @@ export class EmailTemplateService extends BaseService {
    * boot reconciliation does not run (see `ensureBuiltInTemplates`).
    */
   private registry: TemplateOwnerRegistry;
+
+  /** What sends a template, as its running owner says; empty when it says nothing. */
+  ownerSentBy(slug: string): string[] {
+    return [...(this.registry.owned.get(slug)?.sentBy ?? [])];
+  }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
   /**

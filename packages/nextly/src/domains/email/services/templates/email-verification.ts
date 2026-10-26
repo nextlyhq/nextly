@@ -23,6 +23,7 @@ export const emailVerificationTemplate: OwnerTemplate = {
     "Sent when someone needs to confirm their email address, with the link that confirms it.",
   // The link verifies the address for whoever opens it.
   carriesSecret: true,
+  sentBy: ["Someone signs up", "Someone asks for a new verification link"],
   subject: "Verify your {{appName}} email address",
   htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Verify Your Email</h1>
 <p style="margin: 0; padding: 0 0 8px; font-size: 16px; color: #3f3f46; line-height: 24px;">Hi {{userName}},</p>

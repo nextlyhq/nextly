@@ -1761,6 +1761,8 @@ const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
   // and the step that reads it as Liquid from now on.
   engine: { httpMethod: "GET", method: "templateEngine" },
   "read-as-liquid": { httpMethod: "PATCH", method: "readAsLiquid" },
+  // What sends it: its owner's word and the settings that use it.
+  senders: { httpMethod: "GET", method: "templateSenders" },
 };
 
 /** A route's operation (which picks nothing: the HTTP method picks the permission) and service method. */
@@ -1837,6 +1839,7 @@ function emailTemplateSubresourceRoute(
  * - POST /api/email-templates/[id]/preview → preview with sample data
  * - GET /api/email-templates/[id]/send-test → where a test would go, and which provider delivers it
  * - PATCH /api/email-templates/[id]/send-test → send a test, of the saved template or of a draft, to the signed-in user
+ * - GET /api/email-templates/[id]/senders → what sends it, before it is deleted
  * - GET /api/email-templates/[id]/engine → whether it is kept on its first engine, and why
  * - PATCH /api/email-templates/[id]/read-as-liquid → read a kept template as Liquid from now on
  * - PATCH /api/email-templates/[id]/override → override an owned template

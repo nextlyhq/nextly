@@ -13,6 +13,8 @@ import type {
   EmailAfterSendValue,
   EmailFilterContext,
   EmailPayloadFilterValue,
+  EmailTemplateReference,
+  EmailTemplateReferencesContext,
   ListQueryFilterContext,
   ListQueryWhere,
   NavCollectionItem,
@@ -68,6 +70,16 @@ export interface HookPointPayloads {
     kind: "filter";
     value: ListQueryWhere;
     context: ListQueryFilterContext;
+  };
+  /**
+   * Settings that send an email template, by slug. Each handler appends the
+   * references its plugin's settings make; core runs each one on its own, so
+   * one that throws is reported as unchecked rather than as no references.
+   */
+  "email.templateReferences": {
+    kind: "filter";
+    value: EmailTemplateReference[];
+    context: EmailTemplateReferencesContext;
   };
 }
 

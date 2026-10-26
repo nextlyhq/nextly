@@ -35,11 +35,16 @@ import {
   overrideTemplateSchema,
   undoOwnerUpdateSchema,
 } from "../../domains/email/template-ownership-requests";
+import {
+  collectTemplateReferences,
+  sendersBySlug,
+} from "../../domains/email/template-references";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import { consoleLogger } from "../../shared/types";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import {
   getEmailProviderServiceFromDI,
@@ -93,6 +98,14 @@ function fromContainer<T>(name: string): T | undefined {
     // DI not initialized
     return undefined;
   }
+}
+
+/** A plugin's references handler that failed, for the server log. */
+function logReferenceFailure(error: unknown): void {
+  consoleLogger.warn(
+    "An email.templateReferences handler failed; what sends each email could not all be checked",
+    { error: error instanceof Error ? error.message : String(error) }
+  );
 }
 
 /** The email service, or the generic internal error when it isn't wired. */
@@ -259,14 +272,46 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // says whether it is kept on the previous engine, so the admin's list can
     // name those emails without asking once per row; the service answers for
     // the whole list in one pass.
+    //
+    // Each row also says what sends it: what its owner declares, and the
+    // settings that send it (a form's notification rules). Whether every
+    // plugin answered is said once, for the list.
     execute: async svc => {
       const records = await svc.templateService.listTemplates();
       const kept = await svc.templateService.keptOnOldEngineIds(records);
+      const { references, complete } = await collectTemplateReferences(
+        {},
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        records.map(record => record.slug),
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      );
       const templates = records.map(record => ({
         ...record,
         keptOnOldEngine: kept.has(record.id),
+        sentBy: senders.get(record.slug),
       }));
-      return respondData({ templates });
+      return respondData({ templates, referencesComplete: complete });
+    },
+  },
+  templateSenders: {
+    // What sends one template, read fresh, for the delete guard: what would
+    // stop sending if it went. `complete` is false when a plugin could not
+    // be asked, so the admin says so rather than "nothing sends this".
+    execute: async (svc, p) => {
+      const template = await svc.templateService.getTemplate(p.templateId);
+      const { references, complete } = await collectTemplateReferences(
+        { slug: template.slug },
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        [template.slug],
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      ).get(template.slug);
+      return respondData({ ...senders, complete });
     },
   },
   createTemplate: {

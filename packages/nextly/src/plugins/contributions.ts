@@ -159,6 +159,14 @@ export interface PluginEmailTemplate {
    */
   description?: string;
   /**
+   * @experimental What sends the template, each in a sentence the admin shows
+   * as one of its senders (for example "A customer asks to reset their
+   * password"). Shown with the settings that send it, such as a form's
+   * notification rules. Left out, an email the plugin owns reads "Not known:
+   * may be sent from code".
+   */
+  sentBy?: string[];
+  /**
    * @experimental Mark a template that carries a secret: a sign-in, reset or
    * verification link or code. Such a template takes no `cc` or `bcc`, and
    * any stored on it are not sent, so nobody who can edit templates can copy

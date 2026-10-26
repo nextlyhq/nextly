@@ -34,7 +34,11 @@ export type RegisteredOwner =
  * A template as its owner declares it: the row it ships, and whether it
  * carries a secret, which only an owner can say and no edit can change.
  */
-export type OwnerTemplate = EmailTemplateInsert & { carriesSecret?: boolean };
+export type OwnerTemplate = EmailTemplateInsert & {
+  carriesSecret?: boolean;
+  /** What sends it, as its owner says; never stored on the row. */
+  sentBy?: string[];
+};
 
 /** One owned template's current default. */
 export interface OwnedTemplate {
@@ -48,6 +52,8 @@ export interface OwnedTemplate {
   digest: string;
   /** Whether the owner marks it as carrying a secret. */
   carriesSecret: boolean;
+  /** What sends it, as its owner says; empty when it says nothing. */
+  sentBy: string[];
   /**
    * The engine the owner wrote its version for, where it says. Unsaid, the
    * version is Liquid unless Liquid can't read it.
@@ -251,7 +257,7 @@ function owned(
     earlier?: ReadonlyArray<EmailTemplateVersion>;
   } = {}
 ): OwnedTemplate {
-  const { carriesSecret, ...defaults } = declared;
+  const { carriesSecret, sentBy, ...defaults } = declared;
   const version = versionOf(defaults);
   return {
     slug: defaults.slug,
@@ -262,6 +268,10 @@ function owned(
     // Strictly true: a plugin is plain JavaScript at runtime, and only an
     // explicit mark should count as one.
     carriesSecret: carriesSecret === true,
+    // Only sentences: a plugin is plain JavaScript at runtime.
+    sentBy: (Array.isArray(sentBy) ? sentBy : []).filter(
+      (line): line is string => typeof line === "string" && line.trim() !== ""
+    ),
     ...(extras.engine ? { engine: extras.engine } : {}),
     earlier: (extras.earlier ?? []).map(versionDigest),
   };
@@ -281,6 +291,7 @@ function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
     description: template.description ?? null,
     replyTo: template.replyTo ?? null,
     carriesSecret: template.carriesSecret,
+    sentBy: template.sentBy,
   };
 }
 

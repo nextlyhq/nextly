@@ -102,12 +102,31 @@ export interface ListQueryFilterContext {
   limit?: number;
 }
 
+/**
+ * @experimental One setting that sends an email template, such as a form's
+ * notification rule: shown beside the template, and named before the
+ * template is deleted.
+ */
+export interface EmailTemplateReference {
+  /** The slug of the template the setting sends. */
+  slug: string;
+  /** What sends it, as the admin says it: "Form: Contact us, Notify team". */
+  label: string;
+}
+
+/** @experimental Context passed to `email.templateReferences` handlers. */
+export interface EmailTemplateReferencesContext {
+  /** Set when only the references to this template are wanted. */
+  slug?: string;
+}
+
 /** @experimental Named seam constants for all built-in Nextly filter/action extension points (D63). */
 export const FilterSeams = {
   EmailBeforeSend: "email.beforeSend",
   EmailAfterSend: "email.afterSend",
   AdminNav: "admin.nav",
   CollectionsListQuery: "collections.listQuery",
+  EmailTemplateReferences: "email.templateReferences",
 } as const;
 
 /** @experimental Union of all built-in Nextly filter/action seam names (D63). */

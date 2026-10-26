@@ -285,6 +285,18 @@ export class FilterRegistry {
     this.actions.clear();
   }
 
+  /**
+   * The filters registered under `name`, in order, as a copy.
+   *
+   * For a caller that has to know which handler failed, which
+   * `applyFilters` deliberately hides: it logs and skips a throwing one. The
+   * delete guard of an email template runs each reference handler itself, so a
+   * plugin that failed reads as "couldn't be checked", not "nothing uses it".
+   */
+  handlersFor(name: FilterName): Filter[] {
+    return [...(this.filters.get(name) ?? [])];
+  }
+
   hasFilters(name: FilterName): boolean {
     return (this.filters.get(name)?.length ?? 0) > 0;
   }
