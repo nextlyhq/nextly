@@ -74,6 +74,57 @@ describe("ruleAnswer", () => {
   });
 });
 
+describe("ruleAnswer, for an answer that is not plain data", () => {
+  it("refuses a class instance, which is not a filter's data", () => {
+    class Answer {
+      slug = { equals: "x" };
+    }
+    for (const value of [
+      new Map(),
+      new URL("https://example.com"),
+      new Answer(),
+    ]) {
+      expect(ruleAnswer(value), String(value)).toEqual({ kind: "refuse" });
+    }
+    // POPULATION CONTROL: a plain object, and one with no prototype at all,
+    // are read as filters.
+    expect(ruleAnswer({ ...OWN }).kind).toBe("filter");
+    expect(ruleAnswer(Object.assign(Object.create(null), OWN)).kind).toBe(
+      "filter"
+    );
+  });
+
+  it("reads a filter that refers to itself, or nests without end, as not well formed rather than failing", () => {
+    const cyclic: Record<string, unknown> = { slug: { equals: "x" } };
+    cyclic.and = [cyclic];
+    let deep: Record<string, unknown> = OWN;
+    for (let i = 0; i < 5000; i++) deep = { and: [deep] };
+    for (const value of [cyclic, deep]) {
+      expect(ruleAnswer(value).kind).toBe("malformed-filter");
+    }
+  });
+
+  it("reads an answer once, and hands on the copy it read, which no later change to the answer reaches", () => {
+    let reads = 0;
+    const shifting = {
+      get slug() {
+        reads += 1;
+        return reads <= 1 ? { equals: "x" } : undefined;
+      },
+    };
+    const meaning = ruleAnswer(shifting);
+    expect(reads).toBe(1);
+    expect(meaning).toEqual({
+      kind: "filter",
+      filter: { slug: { equals: "x" } },
+    });
+    const shared = { slug: { equals: "a" } };
+    const read = ruleAnswer(shared);
+    shared.slug.equals = "b";
+    expect(read).toEqual({ kind: "filter", filter: { slug: { equals: "a" } } });
+  });
+});
+
 describe("mayAnswerFilter", () => {
   it("is a collection's read, update, delete, publish and unpublish only", () => {
     for (const action of ["read", "update", "delete", "publish", "unpublish"]) {
@@ -106,6 +157,14 @@ describe("reportRuleFilterMisuse", () => {
     const message = String(logged.mock.calls[0]?.[0]);
     expect(message).toContain('read rule of "posts"');
     expect(message).not.toContain("token-123");
+  });
+
+  it("names no key of the filter either, which a rule may have built from the caller's data", () => {
+    const answer = ruleAnswer({ "someone@example.com": { resembles: "x" } });
+    reportRuleFilterMisuse("posts", "read", "collection", answer);
+    const message = String(logged.mock.calls[0]?.[0]);
+    expect(message).toContain('read rule of "posts"');
+    expect(message).not.toContain("someone@example.com");
   });
 
   it("reports a filter from a create rule or a Single", () => {

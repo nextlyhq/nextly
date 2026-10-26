@@ -118,8 +118,10 @@ does a page the website resolves by its slug. Every other read refuses a caller 
 answers with a filter, as it did before: a read by id, every REST route, and relationship
 population. The rule's type still says it returns a boolean.
 
-A rule's filter can't use `near` or `within` yet. A rule whose filter does is refused, and
-the refusal is logged once with the collection and the operation.
+A rule's filter can't use `near` or `within` yet, nor the keys a list's `where` reserves
+for a request's own view: `_translated`, `_pendingChange` and `_inRelease`. A rule whose
+filter does is refused, and the refusal is logged once with the collection and the
+operation.
 
 ## Related rows
 

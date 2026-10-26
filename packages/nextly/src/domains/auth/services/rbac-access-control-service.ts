@@ -300,7 +300,8 @@ export class RBACAccessControlService {
         target.slug,
         operation,
         "signed-in user",
-        asked.answer
+        asked.answer,
+        asked.meaning
       );
     }
     return asked.meaning.kind === "allow";
@@ -408,7 +409,7 @@ export class RBACAccessControlService {
     // once; a plugin's person was already held to `true`.
     const { answer, meaning } = asked;
     if (principal === null && meaning.kind !== "allow" && answer !== false) {
-      noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
+      noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
     }
     return meaning.kind === "allow";
   }

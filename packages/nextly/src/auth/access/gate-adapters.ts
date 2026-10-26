@@ -35,6 +35,7 @@ import {
   decide,
   declaresRule,
   judge,
+  outcomeAnswer,
   ruleLetsThrough,
   plainRule,
   type AccessTarget,
@@ -52,12 +53,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import {
-  allowsSome,
-  mayAnswerFilter,
-  ruleAnswer,
-  type RuleFilter,
-} from "./rule-answer";
+import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -150,7 +146,7 @@ function readFilterOf(
 ): RuleFilter | undefined {
   if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
   if (!outcome.declared || "threw" in outcome) return;
-  const answer = ruleAnswer(outcome.value);
+  const answer = outcomeAnswer(outcome);
   return answer.kind === "filter" ? answer.filter : undefined;
 }
 
@@ -522,7 +518,7 @@ async function grantJudgedVerdict(
  */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
-  return !("threw" in outcome) && ruleAnswer(outcome.value).kind === "allow";
+  return !("threw" in outcome) && outcomeAnswer(outcome).kind === "allow";
 }
 
 /**
@@ -540,7 +536,13 @@ function noticeWhereRuleAllowedBefore(
 ): void {
   if (!outcome.declared || "threw" in outcome) return;
   if (!allowedBefore(outcome.value)) return;
-  noticeRuleNoLongerAllows(q.slug, q.action, caller, outcome.value);
+  noticeRuleNoLongerAllows(
+    q.slug,
+    q.action,
+    caller,
+    outcome.value,
+    outcomeAnswer(outcome)
+  );
 }
 
 /** A visitor's rule refused only by answering `false`. */
@@ -564,7 +566,7 @@ async function decidedFrom(
   // Asked exactly when the decision itself would ask it, so the outcomes it
   // is handed are the ones it reads.
   const update =
-    isLifecycle(action) && ruleLetsThrough(outcome)
+    isLifecycle(action) && ruleLetsThrough(outcome, target, action)
       ? await askRule(actor, "update", target)
       : undefined;
   return judge(actor, action, target, { action: outcome, update }).allowed;
