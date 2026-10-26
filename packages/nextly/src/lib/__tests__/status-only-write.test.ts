@@ -39,6 +39,15 @@ describe("isStatusOnlyWrite", () => {
     );
   });
 
+  it("fails for a body whose status is left undefined, which names no status", () => {
+    // The write drops an undefined status, so the body changes nothing it
+    // would name: an update, not an unpublish.
+    expect(isStatusOnlyWrite({ status: undefined }, "collection")).toBe(false);
+    expect(isStatusOnlyWrite({ status: undefined, id: "e1" }, "single")).toBe(
+      false
+    );
+  });
+
   it("fails for a body that names no status", () => {
     expect(isStatusOnlyWrite({}, "collection")).toBe(false);
     expect(isStatusOnlyWrite({ id: "e1" }, "collection")).toBe(false);
@@ -79,6 +88,12 @@ describe("writeGateFor", () => {
     // `status` is then an ordinary field.
     await expect(
       writeGateFor({ status: "published" }, "collection", () => false)
+    ).resolves.toBe("update");
+  });
+
+  it("names update for a body whose status is left undefined", async () => {
+    await expect(
+      writeGateFor({ status: undefined }, "collection", () => true)
     ).resolves.toBe("update");
   });
 });

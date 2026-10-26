@@ -58,6 +58,7 @@ const SHARED_NESTED = "sharednested";
 const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
 const FRENCH_INVOLVED_ARTICLES = "frenchinvolvedarticles";
+const UNPUBLISHABLE_ARTICLES = "unpublishablearticles";
 const FRENCH_INVOLVED_BANNER = "frenchinvolvedbanner";
 const USER = { id: "user-1", isActive: true };
 
@@ -148,6 +149,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: changesWhatGoesLive,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: UNPUBLISHABLE_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: () => false,
         },
         fields: [text({ name: "heading" })],
       }),
@@ -1226,6 +1239,41 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publishEvery(false);
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    it("refuses a caller who may not publish an entry before the work only a publish needs", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: UNPUBLISHABLE_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // The field groups' readiness, which only a publish goes on to need,
+      // failing: a caller refused the publish never reaches it.
+      const readiness = vi
+        .spyOn(
+          t.getService("fieldGroupDataService"),
+          "assertLocalizedFieldGroupsWritable"
+        )
+        .mockRejectedValue(new Error("field groups unavailable"));
+      const publishAll = (trusted: boolean) =>
+        handlerOf(t).publishAllLocales({
+          collectionName: UNPUBLISHABLE_ARTICLES,
+          entryId: id,
+          ...(trusted
+            ? { overrideAccess: true }
+            : { overrideAccess: false, user: USER }),
+        });
+
+      const refused = await publishAll(false);
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(readiness).not.toHaveBeenCalled();
+      // The control: a trusted publish of every language meets the failure.
+      await publishAll(true).catch(() => undefined);
+      expect(readiness).toHaveBeenCalled();
     });
 
     it("refuses a caller who may not publish a Single before the work only a publish needs", async () => {
