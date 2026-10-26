@@ -83,8 +83,9 @@ function site(
   const granted: string[] = [];
   const addOnce = (
     roleId: string,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
     pick: (
-      held: ReadonlySet<string>,
+      ids: readonly string[],
       executor: unknown
     ) => Promise<readonly string[]>
   ) => {
@@ -92,9 +93,12 @@ function site(
       role.locked = true;
       const before = new Map(meta.rows);
       try {
-        const added = (await pick(new Set(role.held), TX)).filter(
-          id => !role.held.has(id)
-        );
+        const added = (
+          await pick(
+            wanted.map(({ id }) => id),
+            TX
+          )
+        ).filter(id => !role.held.has(id));
         for (const id of added) await grantRead(roleId, RESOURCE[id]);
         for (const id of added) role.held.add(id);
         granted.push(...added.map(id => RESOURCE[id]));

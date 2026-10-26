@@ -295,7 +295,8 @@ function seedPublicRoleReads(): Promise<void> {
           permissionSlug(action, resource)
         )
       ),
-    addOnce: (roleId, pick) => grants.addRolePermissionsOnce(roleId, pick),
+    addOnce: (roleId, wanted, pick) =>
+      grants.addRolePermissionsOnce(roleId, wanted, pick),
     meta: getService("metaService"),
     logger,
   });

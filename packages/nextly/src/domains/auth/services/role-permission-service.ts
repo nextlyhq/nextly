@@ -385,20 +385,26 @@ export class RolePermissionService extends BaseService {
   }
 
   /**
-   * Adds to the role the permissions `pick` chooses, in one transaction under
-   * the lock on the role's row that {@link setRolePermissions} takes, so the
-   * two never interleave: a change to the role's set lands wholly before or
-   * wholly after this, never between the choice and the add. `pick` is told
-   * the ids the role holds and handed the transaction's executor, so what it
-   * records commits or rolls back with the add; it returns the ids to add, and
-   * one the role holds already is left as it is rather than added twice.
+   * Adds to the role the permissions `pick` chooses among `wanted`, in one
+   * transaction under the lock on the role's row that every writer of its
+   * permissions takes, so none lands between the choice and the add.
+   *
+   * Each wanted permission is named by its id and the action and resource it
+   * is meant to grant. Its row is locked and read again here, and one whose
+   * row is gone or now grants something else is left out: an id looked up
+   * before the transaction may since have been edited into another
+   * permission. `pick` is handed the ids still as wanted and the
+   * transaction's executor, so what it records commits or rolls back with the
+   * add; it returns the ids to add, and one the role holds already is left as
+   * it is rather than added twice.
    *
    * @returns The permission ids added
    */
   async addRolePermissionsOnce(
     roleId: string,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
     pick: (
-      held: ReadonlySet<string>,
+      ids: readonly string[],
       executor: unknown
     ) => Promise<readonly string[]>
   ): Promise<string[]> {
@@ -406,13 +412,48 @@ export class RolePermissionService extends BaseService {
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
       const held = await this.heldIn(tx, roleId);
-      added = [...new Set(await pick(held, tx.getDrizzle()))].filter(
-        id => !held.has(id)
-      );
+      const asWanted = await this.stillAsWanted(tx, wanted);
+      const picked = new Set(await pick(asWanted, tx.getDrizzle()));
+      added = asWanted.filter(id => picked.has(id) && !held.has(id));
       await this.insertAssignments(tx, roleId, added);
     });
     if (added.length > 0) await afterRoleGrantsChanged(roleId);
     return added;
+  }
+
+  /**
+   * The ids among `wanted` whose permission row, locked on transaction `tx`,
+   * still grants the action and resource it is wanted for.
+   */
+  private async stillAsWanted(
+    tx: TransactionContext,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>
+  ): Promise<string[]> {
+    const ids = [...new Set(wanted.map(({ id }) => id))];
+    for (const id of ids) await tx.lockRow("permissions", id);
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const rows = new Map<string, { action: string; resource: string }>();
+    for (const batch of batches(ids, maxParams)) {
+      for (const row of await tx.select<{
+        id: string;
+        action: string;
+        resource: string;
+      }>("permissions", {
+        columns: ["id", "action", "resource"],
+        where: { and: [{ column: "id", op: "IN", value: batch }] },
+      })) {
+        rows.set(String(row.id), row);
+      }
+    }
+    return ids.filter(id => {
+      const row = rows.get(id);
+      return wanted.some(
+        want =>
+          want.id === id &&
+          row?.action === want.action &&
+          row?.resource === want.resource
+      );
+    });
   }
 
   /**
