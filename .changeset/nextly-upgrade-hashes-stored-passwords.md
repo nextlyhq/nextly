@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-`nextly upgrade` now runs in steps, and says it has nothing to do only when no step has work. A new step hashes passwords stored before this release: each password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working, and a value already in a password hasher's format is left alone. It reports counts, never values, and `nextly migrate` names `nextly upgrade` while any such password remains.
+`nextly upgrade` now runs in steps, and says it has nothing to do only when no step has work. A new step hashes passwords stored before this release: each password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working, and a value already in a password hasher's format is left alone. Another removes any password a version's snapshot still holds. Both report counts, never values, and `nextly migrate` names `nextly upgrade` while a password stored as written remains.

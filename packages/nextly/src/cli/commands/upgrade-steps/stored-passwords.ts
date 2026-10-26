@@ -22,20 +22,28 @@ import { consoleLogger } from "../../../services/shared";
 import { installRegistryResolver } from "../../utils/registry-resolver";
 import type { UpgradeStep, UpgradeStepContext } from "../upgrade-step";
 
+/** The registry installed on each adapter, so every step shares one. */
+const registries = new WeakMap<
+  DrizzleAdapter,
+  StoredPasswordsSource["registry"]
+>();
+
 /**
- * Where the step reads, over the upgrade's connection. The CLI hands the
+ * Where the steps read, over the upgrade's connection. The CLI hands the
  * upgrade a DrizzleAdapter; its tables are resolved through a registry
- * installed here, as every CLI command that reads through the adapter
- * installs one.
+ * installed here once, as every CLI command that reads through the adapter
+ * installs one, and shared by the steps after, so a table one registers
+ * stays resolvable for the rest.
  */
 export function storedPasswordsOn(
   adapter: DrizzleAdapter
 ): StoredPasswordsSource {
-  return {
-    adapter,
-    registry: installRegistryResolver(adapter),
-    logger: consoleLogger,
-  };
+  let registry = registries.get(adapter);
+  if (!registry) {
+    registry = installRegistryResolver(adapter);
+    registries.set(adapter, registry);
+  }
+  return { adapter, registry, logger: consoleLogger };
 }
 
 /** How many passwords stored as given the counts add up to. */
