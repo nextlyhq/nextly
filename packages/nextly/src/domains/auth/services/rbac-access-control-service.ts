@@ -48,6 +48,10 @@ import {
   declareTarget,
 } from "../../../auth/access/declared-rules";
 import {
+  reportRuleFilterMisuse,
+  ruleAnswer,
+} from "../../../auth/access/rule-answer";
+import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "../../../auth/access/rule-answer-log";
@@ -233,7 +237,7 @@ export class RBACAccessControlService {
           operationAccess,
           executor
         );
-        return this.userRuleAllows(operationAccess, ctx, operation, resource);
+        return this.userRuleAllows(operationAccess, ctx, operation, target);
       }
     }
 
@@ -249,8 +253,9 @@ export class RBACAccessControlService {
     rule: (ctx: AccessControlContext) => unknown,
     ctx: AccessControlContext,
     operation: AccessOperation,
-    resource: string
+    target: AccessTarget
   ): Promise<boolean> {
+    const resource = target.slug;
     let answer: unknown;
     try {
       answer = await rule(ctx);
@@ -262,10 +267,14 @@ export class RBACAccessControlService {
       );
       return false;
     }
-    if (answer !== true && Boolean(answer)) {
+    // Only `true` allows every entry; a filter, which this check does not
+    // apply, refuses, and one that is misused is reported as such.
+    const meaning = ruleAnswer(answer);
+    reportRuleFilterMisuse(resource, operation, target.kind, meaning);
+    if (meaning.kind !== "allow" && Boolean(answer)) {
       noticeRuleNoLongerAllows(resource, operation, "signed-in user", answer);
     }
-    return answer === true;
+    return meaning.kind === "allow";
   }
 
   /**
@@ -366,13 +375,17 @@ export class RBACAccessControlService {
       );
       return false;
     }
-    // A rule allows only by answering `true`. A visitor was refused before
-    // only by `false`, so any other answer that now refuses one is named
-    // once; a plugin's person was already held to `true`.
-    if (principal === null && answer !== true && answer !== false) {
+    // A rule allows only by answering `true`; a filter, which this check does
+    // not apply, refuses, and one that is misused is reported as such. A
+    // visitor was refused before only by `false`, so any other answer that
+    // now refuses one is named once; a plugin's person was already held to
+    // `true`.
+    const meaning = ruleAnswer(answer);
+    reportRuleFilterMisuse(resource, operation, target.kind, meaning);
+    if (principal === null && meaning.kind !== "allow" && answer !== false) {
       noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
     }
-    return answer === true;
+    return meaning.kind === "allow";
   }
 
   /**

@@ -35,6 +35,7 @@ import {
   decide,
   declaresRule,
   judge,
+  ruleLetsThrough,
   plainRule,
   type AccessTarget,
   type Decision,
@@ -51,6 +52,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
+import { ruleAnswer } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -382,10 +384,14 @@ async function grantJudgedVerdict(
   );
 }
 
-/** A rule allows only by answering `true`; no rule adds no limit. */
+/**
+ * A rule allows every entry only by answering `true`; no rule adds no limit.
+ * A filter allows only the entries it matches, which this gate does not
+ * apply, so it refuses.
+ */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
-  return !("threw" in outcome) && outcome.value === true;
+  return !("threw" in outcome) && ruleAnswer(outcome.value).kind === "allow";
 }
 
 /**
@@ -424,8 +430,10 @@ async function decidedFrom(
   target: AccessTarget,
   outcome: RuleOutcome
 ): Promise<boolean> {
+  // Asked exactly when the decision itself would ask it, so the outcomes it
+  // is handed are the ones it reads.
   const update =
-    isLifecycle(action) && outcomeAllows(outcome)
+    isLifecycle(action) && ruleLetsThrough(outcome)
       ? await askRule(actor, "update", target)
       : undefined;
   return judge(actor, action, target, { action: outcome, update }).allowed;
