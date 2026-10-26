@@ -43,6 +43,7 @@ import {
 } from "../../../plugins/test-nextly";
 import {
   countPasswordsStoredAsGiven,
+  countVersionsHoldingPasswords,
   hashPasswordsStoredAsGiven,
 } from "../../../domains/field-groups/stored-plain-passwords";
 import { describeError } from "../../../errors";
@@ -627,6 +628,25 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(output).not.toContain("version-plain");
+    });
+
+    it("finds no versions to change where the install has no version history table", async () => {
+      // An install from before version history: the table was added later.
+      await t.adapter.dropTable("nextly_versions", { ifExists: true });
+
+      expect(
+        await countVersionsHoldingPasswords({
+          adapter: t.adapter,
+          registry: installRegistryResolver(t.adapter),
+          logger: consoleLogger,
+        })
+      ).toEqual([]);
+      await expect(
+        runUpgrade(
+          { confirmBackedUp: true },
+          { adapter: t.adapter as unknown as UpgradeAdapter }
+        )
+      ).resolves.toBeUndefined();
     });
   }
 );
