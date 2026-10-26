@@ -424,26 +424,19 @@ const EMAIL_TEMPLATE_METHODS: Record<
     //
     // With a draft, the test is of what is on screen: the editor's unsaved
     // fields over the stored template, through the same render path as a real
-    // send. The response says which provider took it, and whether that
-    // provider delivers anything (the log provider doesn't).
+    // send. The response says which provider the send went through, and
+    // whether that provider delivers anything (the log provider doesn't).
     execute: async (svc, p, body) => {
       const { variables, draft } = parseBody(sendTestSchema, body ?? {});
       const to = await ownAddressOfCaller();
-      const emailService = emailServiceOrFail();
       const template = await svc.templateService.getTemplate(p.templateId);
-      const delivery = await emailService.testDelivery(
-        draft?.providerId !== undefined ? draft.providerId : template.providerId
-      );
-      const result = await emailService.sendTemplateTest(
+      const result = await emailServiceOrFail().sendTemplateTest(
         template.slug,
         to,
         variables ?? {},
         draft
       );
-      return respondAction(sendOutcomeMessage(result.success), {
-        ...result,
-        delivery,
-      });
+      return respondAction(sendOutcomeMessage(result.success), { ...result });
     },
   },
   testSendTarget: {
