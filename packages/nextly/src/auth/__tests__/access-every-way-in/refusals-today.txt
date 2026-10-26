@@ -37,6 +37,9 @@ service custom-role count collection false at service  403 FORBIDDEN thrown  | Y
 service custom-role count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service custom-role count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service custom-role count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service custom-role count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service custom-role count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service custom-role count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service custom-role count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service custom-role count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service custom-role count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -87,6 +90,10 @@ service custom-role create collection malformed-filter at direct  403 FORBIDDEN 
 service custom-role create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
 service custom-role create collection malformed-filter at route  403 FORBIDDEN error  | You can't create c malformed filters.
 service custom-role create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service custom-role create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service custom-role create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service custom-role create collection permission-spelling at route  403 FORBIDDEN error  | You can't create c permission spellings.
+service custom-role create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service custom-role create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service custom-role create collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
 service custom-role create collection principal-kind at route  403 FORBIDDEN error  | You can't create c principal kinds.
@@ -149,6 +156,10 @@ service custom-role delete collection malformed-filter at direct  403 FORBIDDEN 
 service custom-role delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this c malformed filter.
 service custom-role delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service custom-role delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
+service custom-role delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service custom-role delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this c permission spelling.
+service custom-role delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
+service custom-role delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service custom-role delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service custom-role delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this c principal kind.
 service custom-role delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
@@ -206,6 +217,9 @@ service custom-role list collection false at service  403 FORBIDDEN thrown  | Yo
 service custom-role list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service custom-role list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service custom-role list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service custom-role list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service custom-role list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service custom-role list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service custom-role list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service custom-role list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service custom-role list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -259,6 +273,10 @@ service custom-role publish collection malformed-filter at service  403 FORBIDDE
 service custom-role publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service custom-role publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service custom-role publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service custom-role publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service custom-role publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service custom-role publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service custom-role publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service custom-role publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service custom-role publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -320,6 +338,9 @@ service custom-role publish single-pub malformed-filter at rest  403 FORBIDDEN e
 service custom-role publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service custom-role publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service custom-role publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service custom-role publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service custom-role publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service custom-role publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service custom-role publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service custom-role publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service custom-role publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -373,6 +394,10 @@ service custom-role read collection malformed-filter at direct  403 FORBIDDEN th
 service custom-role read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service custom-role read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service custom-role read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service custom-role read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service custom-role read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service custom-role read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service custom-role read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service custom-role read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service custom-role read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service custom-role read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -428,6 +453,9 @@ service custom-role read single false at route  403 FORBIDDEN error  | You can't
 service custom-role read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service custom-role read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service custom-role read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service custom-role read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service custom-role read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service custom-role read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service custom-role read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service custom-role read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service custom-role read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -483,6 +511,10 @@ service custom-role unpublish collection malformed-filter at service  403 FORBID
 service custom-role unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service custom-role unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service custom-role unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service custom-role unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service custom-role unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
+service custom-role unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service custom-role unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service custom-role unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service custom-role unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -544,6 +576,9 @@ service custom-role unpublish single-pub malformed-filter at rest  403 FORBIDDEN
 service custom-role unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
 service custom-role unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service custom-role unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service custom-role unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service custom-role unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service custom-role unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service custom-role unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service custom-role unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service custom-role unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
@@ -607,6 +642,11 @@ service custom-role update collection other-operation at lock  403 FORBIDDEN err
 service custom-role update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service custom-role update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service custom-role update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service custom-role update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service custom-role update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service custom-role update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service custom-role update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service custom-role update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service custom-role update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service custom-role update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service custom-role update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -683,6 +723,10 @@ service custom-role update single other-operation at direct  403 FORBIDDEN throw
 service custom-role update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service custom-role update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service custom-role update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service custom-role update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service custom-role update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service custom-role update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service custom-role update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service custom-role update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service custom-role update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service custom-role update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -740,6 +784,9 @@ service key-full-access count collection false at service  403 FORBIDDEN thrown 
 service key-full-access count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-full-access count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-full-access count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-full-access count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-full-access count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-full-access count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-full-access count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-full-access count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-full-access count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -784,6 +831,10 @@ service key-full-access create collection malformed-filter at direct  403 FORBID
 service key-full-access create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-full-access create collection malformed-filter at route  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-full-access create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-full-access create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-full-access create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-full-access create collection permission-spelling at route  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-full-access create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service key-full-access create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service key-full-access create collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
 service key-full-access create collection principal-kind at route  403 FORBIDDEN error  | You can't create c principal kinds.
@@ -838,6 +889,10 @@ service key-full-access delete collection malformed-filter at direct  403 FORBID
 service key-full-access delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this c malformed filter.
 service key-full-access delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-full-access delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
+service key-full-access delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service key-full-access delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this c permission spelling.
+service key-full-access delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
+service key-full-access delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service key-full-access delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service key-full-access delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this c principal kind.
 service key-full-access delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
@@ -887,6 +942,9 @@ service key-full-access list collection false at service  403 FORBIDDEN thrown  
 service key-full-access list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-full-access list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-full-access list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-full-access list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-full-access list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-full-access list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-full-access list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-full-access list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-full-access list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -934,6 +992,10 @@ service key-full-access publish collection malformed-filter at service  403 FORB
 service key-full-access publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-full-access publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-full-access publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-full-access publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-full-access publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service key-full-access publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-full-access publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-full-access publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-full-access publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -987,6 +1049,9 @@ service key-full-access publish single-pub malformed-filter at rest  403 FORBIDD
 service key-full-access publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service key-full-access publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-full-access publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-full-access publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-full-access publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-full-access publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service key-full-access publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-full-access publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-full-access publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -1034,6 +1099,10 @@ service key-full-access read collection malformed-filter at direct  403 FORBIDDE
 service key-full-access read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service key-full-access read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-full-access read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service key-full-access read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service key-full-access read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service key-full-access read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-full-access read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service key-full-access read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service key-full-access read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service key-full-access read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -1081,6 +1150,9 @@ service key-full-access read single false at route  403 FORBIDDEN error  | You c
 service key-full-access read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service key-full-access read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service key-full-access read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service key-full-access read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service key-full-access read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service key-full-access read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service key-full-access read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service key-full-access read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service key-full-access read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -1130,6 +1202,10 @@ service key-full-access unpublish collection malformed-filter at service  403 FO
 service key-full-access unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-full-access unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-full-access unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-full-access unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-full-access unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
+service key-full-access unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-full-access unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-full-access unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-full-access unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -1183,6 +1259,9 @@ service key-full-access unpublish single-pub malformed-filter at rest  403 FORBI
 service key-full-access unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
 service key-full-access unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-full-access unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-full-access unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-full-access unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-full-access unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service key-full-access unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-full-access unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-full-access unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
@@ -1240,6 +1319,11 @@ service key-full-access update collection other-operation at lock  403 FORBIDDEN
 service key-full-access update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-full-access update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-full-access update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-full-access update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-full-access update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-full-access update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-full-access update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service key-full-access update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-full-access update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-full-access update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-full-access update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -1306,6 +1390,10 @@ service key-full-access update single other-operation at direct  403 FORBIDDEN t
 service key-full-access update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service key-full-access update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service key-full-access update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service key-full-access update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service key-full-access update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service key-full-access update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service key-full-access update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service key-full-access update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service key-full-access update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service key-full-access update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -1355,6 +1443,9 @@ service key-partial count collection false at service  403 FORBIDDEN thrown  | Y
 service key-partial count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-partial count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-partial count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-partial count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-partial count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-partial count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-partial count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-partial count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-partial count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -1593,6 +1684,9 @@ service key-partial list collection false at service  403 FORBIDDEN thrown  | Yo
 service key-partial list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-partial list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-partial list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-partial list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-partial list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-partial list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-partial list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-partial list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-partial list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -1643,6 +1737,10 @@ service key-partial publish collection malformed-filter at service  403 FORBIDDE
 service key-partial publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-partial publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-partial publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-partial publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-partial publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-partial publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service key-partial publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-partial publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-partial publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-partial publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -1700,6 +1798,9 @@ service key-partial publish single-pub malformed-filter at rest  403 FORBIDDEN e
 service key-partial publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service key-partial publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-partial publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-partial publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-partial publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-partial publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service key-partial publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-partial publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-partial publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -1750,6 +1851,10 @@ service key-partial read collection malformed-filter at direct  403 FORBIDDEN th
 service key-partial read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service key-partial read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-partial read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service key-partial read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service key-partial read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service key-partial read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-partial read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service key-partial read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service key-partial read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service key-partial read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -1801,6 +1906,9 @@ service key-partial read single false at route  403 FORBIDDEN error  | You can't
 service key-partial read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service key-partial read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service key-partial read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service key-partial read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service key-partial read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service key-partial read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service key-partial read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service key-partial read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service key-partial read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -1862,10 +1970,10 @@ service key-partial unpublish collection other-operation at direct  403 FORBIDDE
 service key-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-partial unpublish collection other-operation at route  403 FORBIDDEN error  | You can't unpublish c other operations.
 service key-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-partial unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
-service key-partial unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
+service key-partial unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-partial unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
 service key-partial unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
-service key-partial unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
+service key-partial unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-partial unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-partial unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-partial unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -1946,8 +2054,8 @@ service key-partial unpublish single-pub none at route  403 FORBIDDEN error  | Y
 service key-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-partial unpublish single-pub other-operation at route  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
-service key-partial unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Permission Spelling.
-service key-partial unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
+service key-partial unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-partial unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
 service key-partial unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service key-partial unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-partial unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
@@ -2021,6 +2129,11 @@ service key-partial update collection other-operation at lock  403 FORBIDDEN err
 service key-partial update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-partial update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-partial update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-partial update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-partial update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-partial update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service key-partial update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-partial update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-partial update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-partial update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -2092,6 +2205,10 @@ service key-partial update single other-operation at direct  403 FORBIDDEN throw
 service key-partial update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service key-partial update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service key-partial update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service key-partial update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service key-partial update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service key-partial update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service key-partial update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service key-partial update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service key-partial update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service key-partial update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -2145,6 +2262,9 @@ service key-read-only count collection false at service  403 FORBIDDEN thrown  |
 service key-read-only count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-read-only count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-read-only count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-read-only count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-read-only count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-read-only count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-read-only count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-read-only count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-read-only count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -2380,6 +2500,9 @@ service key-read-only list collection false at service  403 FORBIDDEN thrown  | 
 service key-read-only list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-read-only list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-read-only list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-read-only list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-read-only list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-read-only list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-read-only list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-read-only list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-read-only list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -2585,6 +2708,10 @@ service key-read-only read collection malformed-filter at direct  403 FORBIDDEN 
 service key-read-only read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service key-read-only read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-read-only read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service key-read-only read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service key-read-only read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service key-read-only read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-read-only read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service key-read-only read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service key-read-only read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service key-read-only read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -2632,6 +2759,9 @@ service key-read-only read single false at route  403 FORBIDDEN error  | You can
 service key-read-only read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service key-read-only read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service key-read-only read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service key-read-only read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service key-read-only read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service key-read-only read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service key-read-only read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service key-read-only read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service key-read-only read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -3047,6 +3177,9 @@ service key-role-based count collection false at service  403 FORBIDDEN thrown  
 service key-role-based count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-role-based count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-role-based count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-role-based count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-role-based count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-role-based count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-role-based count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-role-based count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-role-based count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -3094,6 +3227,10 @@ service key-role-based create collection malformed-filter at direct  403 FORBIDD
 service key-role-based create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-role-based create collection malformed-filter at route  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-role-based create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-role-based create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-role-based create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-role-based create collection permission-spelling at route  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-role-based create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service key-role-based create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service key-role-based create collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
 service key-role-based create collection principal-kind at route  403 FORBIDDEN error  | You can't create c principal kinds.
@@ -3152,6 +3289,10 @@ service key-role-based delete collection malformed-filter at direct  403 FORBIDD
 service key-role-based delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this c malformed filter.
 service key-role-based delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-role-based delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
+service key-role-based delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service key-role-based delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this c permission spelling.
+service key-role-based delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
+service key-role-based delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service key-role-based delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service key-role-based delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this c principal kind.
 service key-role-based delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
@@ -3205,6 +3346,9 @@ service key-role-based list collection false at service  403 FORBIDDEN thrown  |
 service key-role-based list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-role-based list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-role-based list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-role-based list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-role-based list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-role-based list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-role-based list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-role-based list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-role-based list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -3255,6 +3399,10 @@ service key-role-based publish collection malformed-filter at service  403 FORBI
 service key-role-based publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-role-based publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-role-based publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-role-based publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-role-based publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service key-role-based publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-role-based publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-role-based publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-role-based publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -3312,6 +3460,9 @@ service key-role-based publish single-pub malformed-filter at rest  403 FORBIDDE
 service key-role-based publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service key-role-based publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-role-based publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-role-based publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-role-based publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-role-based publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service key-role-based publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-role-based publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-role-based publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -3362,6 +3513,10 @@ service key-role-based read collection malformed-filter at direct  403 FORBIDDEN
 service key-role-based read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service key-role-based read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-role-based read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service key-role-based read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service key-role-based read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service key-role-based read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-role-based read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service key-role-based read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service key-role-based read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service key-role-based read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -3413,6 +3568,9 @@ service key-role-based read single false at route  403 FORBIDDEN error  | You ca
 service key-role-based read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service key-role-based read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service key-role-based read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service key-role-based read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service key-role-based read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service key-role-based read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service key-role-based read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service key-role-based read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service key-role-based read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -3465,6 +3623,10 @@ service key-role-based unpublish collection malformed-filter at service  403 FOR
 service key-role-based unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-role-based unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-role-based unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-role-based unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-role-based unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
+service key-role-based unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-role-based unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-role-based unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-role-based unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -3522,6 +3684,9 @@ service key-role-based unpublish single-pub malformed-filter at rest  403 FORBID
 service key-role-based unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
 service key-role-based unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-role-based unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-role-based unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-role-based unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-role-based unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service key-role-based unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-role-based unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-role-based unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
@@ -3582,6 +3747,11 @@ service key-role-based update collection other-operation at lock  403 FORBIDDEN 
 service key-role-based update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-role-based update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-role-based update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-role-based update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-role-based update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-role-based update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-role-based update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service key-role-based update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-role-based update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-role-based update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-role-based update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -3653,6 +3823,10 @@ service key-role-based update single other-operation at direct  403 FORBIDDEN th
 service key-role-based update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service key-role-based update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service key-role-based update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service key-role-based update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service key-role-based update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service key-role-based update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service key-role-based update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service key-role-based update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service key-role-based update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service key-role-based update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -3706,6 +3880,9 @@ service key-super-admin count collection false at service  403 FORBIDDEN thrown 
 service key-super-admin count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-super-admin count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-super-admin count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-super-admin count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-super-admin count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-super-admin count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-super-admin count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-super-admin count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-super-admin count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -3756,6 +3933,10 @@ service key-super-admin create collection malformed-filter at direct  403 FORBID
 service key-super-admin create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-super-admin create collection malformed-filter at route  403 FORBIDDEN error  | You can't create c malformed filters.
 service key-super-admin create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-super-admin create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-super-admin create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-super-admin create collection permission-spelling at route  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-super-admin create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service key-super-admin create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service key-super-admin create collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
 service key-super-admin create collection principal-kind at route  403 FORBIDDEN error  | You can't create c principal kinds.
@@ -3816,6 +3997,10 @@ service key-super-admin delete collection malformed-filter at direct  403 FORBID
 service key-super-admin delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this c malformed filter.
 service key-super-admin delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service key-super-admin delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
+service key-super-admin delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service key-super-admin delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this c permission spelling.
+service key-super-admin delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
+service key-super-admin delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service key-super-admin delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service key-super-admin delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this c principal kind.
 service key-super-admin delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
@@ -3871,6 +4056,9 @@ service key-super-admin list collection false at service  403 FORBIDDEN thrown  
 service key-super-admin list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service key-super-admin list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-super-admin list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service key-super-admin list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service key-super-admin list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-super-admin list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service key-super-admin list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service key-super-admin list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service key-super-admin list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -3924,6 +4112,10 @@ service key-super-admin publish collection malformed-filter at service  403 FORB
 service key-super-admin publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-super-admin publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-super-admin publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-super-admin publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-super-admin publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service key-super-admin publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-super-admin publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-super-admin publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-super-admin publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -3985,6 +4177,9 @@ service key-super-admin publish single-pub malformed-filter at rest  403 FORBIDD
 service key-super-admin publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service key-super-admin publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-super-admin publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-super-admin publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-super-admin publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-super-admin publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service key-super-admin publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-super-admin publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-super-admin publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -4038,6 +4233,10 @@ service key-super-admin read collection malformed-filter at direct  403 FORBIDDE
 service key-super-admin read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service key-super-admin read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service key-super-admin read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service key-super-admin read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service key-super-admin read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service key-super-admin read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service key-super-admin read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service key-super-admin read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service key-super-admin read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service key-super-admin read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -4093,6 +4292,9 @@ service key-super-admin read single false at route  403 FORBIDDEN error  | You c
 service key-super-admin read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service key-super-admin read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service key-super-admin read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service key-super-admin read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service key-super-admin read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service key-super-admin read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service key-super-admin read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service key-super-admin read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service key-super-admin read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -4146,6 +4348,10 @@ service key-super-admin unpublish collection malformed-filter at service  403 FO
 service key-super-admin unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-super-admin unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-super-admin unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-super-admin unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-super-admin unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
+service key-super-admin unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-super-admin unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-super-admin unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-super-admin unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -4207,6 +4413,9 @@ service key-super-admin unpublish single-pub malformed-filter at rest  403 FORBI
 service key-super-admin unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
 service key-super-admin unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service key-super-admin unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-super-admin unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service key-super-admin unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service key-super-admin unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service key-super-admin unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service key-super-admin unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service key-super-admin unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
@@ -4270,6 +4479,11 @@ service key-super-admin update collection other-operation at lock  403 FORBIDDEN
 service key-super-admin update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-super-admin update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-super-admin update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-super-admin update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service key-super-admin update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-super-admin update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service key-super-admin update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service key-super-admin update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service key-super-admin update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service key-super-admin update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service key-super-admin update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -4345,6 +4559,10 @@ service key-super-admin update single other-operation at direct  403 FORBIDDEN t
 service key-super-admin update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service key-super-admin update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service key-super-admin update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service key-super-admin update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service key-super-admin update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service key-super-admin update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service key-super-admin update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service key-super-admin update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service key-super-admin update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service key-super-admin update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -5222,6 +5440,9 @@ service user-partial count collection false at service  403 FORBIDDEN thrown  | 
 service user-partial count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service user-partial count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-partial count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service user-partial count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service user-partial count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-partial count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service user-partial count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service user-partial count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service user-partial count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -5463,6 +5684,9 @@ service user-partial list collection false at service  403 FORBIDDEN thrown  | Y
 service user-partial list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service user-partial list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-partial list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service user-partial list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service user-partial list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-partial list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service user-partial list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service user-partial list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service user-partial list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -5516,6 +5740,10 @@ service user-partial publish collection malformed-filter at service  403 FORBIDD
 service user-partial publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-partial publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-partial publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-partial publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-partial publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-partial publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service user-partial publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-partial publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-partial publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-partial publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -5577,6 +5805,9 @@ service user-partial publish single-pub malformed-filter at rest  403 FORBIDDEN 
 service user-partial publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service user-partial publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service user-partial publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service user-partial publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service user-partial publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service user-partial publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service user-partial publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service user-partial publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service user-partial publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -5630,6 +5861,10 @@ service user-partial read collection malformed-filter at direct  403 FORBIDDEN t
 service user-partial read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service user-partial read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-partial read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service user-partial read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service user-partial read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service user-partial read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-partial read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service user-partial read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service user-partial read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service user-partial read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -5685,6 +5920,9 @@ service user-partial read single false at route  403 FORBIDDEN error  | You can'
 service user-partial read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service user-partial read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service user-partial read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service user-partial read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service user-partial read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service user-partial read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service user-partial read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service user-partial read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service user-partial read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -5749,10 +5987,10 @@ service user-partial unpublish collection other-operation at direct  403 FORBIDD
 service user-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-partial unpublish collection other-operation at route  403 FORBIDDEN error  | You can't unpublish c other operations.
 service user-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service user-partial unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
-service user-partial unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
+service user-partial unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-partial unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
 service user-partial unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
-service user-partial unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
+service user-partial unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-partial unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-partial unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-partial unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -5833,8 +6071,8 @@ service user-partial unpublish single-pub none at route  403 FORBIDDEN error  | 
 service user-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service user-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service user-partial unpublish single-pub other-operation at route  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
-service user-partial unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Permission Spelling.
-service user-partial unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
+service user-partial unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service user-partial unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
 service user-partial unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service user-partial unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service user-partial unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
@@ -5908,6 +6146,11 @@ service user-partial update collection other-operation at lock  403 FORBIDDEN er
 service user-partial update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-partial update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service user-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-partial update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-partial update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-partial update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-partial update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service user-partial update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-partial update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-partial update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-partial update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -5984,6 +6227,10 @@ service user-partial update single other-operation at direct  403 FORBIDDEN thro
 service user-partial update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service user-partial update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service user-partial update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service user-partial update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service user-partial update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service user-partial update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service user-partial update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service user-partial update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service user-partial update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service user-partial update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
@@ -6041,6 +6288,9 @@ service user-with count collection false at service  403 FORBIDDEN thrown  | You
 service user-with count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service user-with count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-with count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service user-with count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service user-with count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-with count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service user-with count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service user-with count collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service user-with count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -6085,6 +6335,10 @@ service user-with create collection malformed-filter at direct  403 FORBIDDEN th
 service user-with create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
 service user-with create collection malformed-filter at route  403 FORBIDDEN error  | You can't create c malformed filters.
 service user-with create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-with create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-with create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service user-with create collection permission-spelling at route  403 FORBIDDEN error  | You can't create c permission spellings.
+service user-with create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service user-with create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service user-with create collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
 service user-with create collection principal-kind at route  403 FORBIDDEN error  | You can't create c principal kinds.
@@ -6139,6 +6393,10 @@ service user-with delete collection malformed-filter at direct  403 FORBIDDEN th
 service user-with delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this c malformed filter.
 service user-with delete collection malformed-filter at route  403 FORBIDDEN error  | You can't delete c malformed filters.
 service user-with delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
+service user-with delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
+service user-with delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this c permission spelling.
+service user-with delete collection permission-spelling at route  403 FORBIDDEN error  | You can't delete c permission spellings.
+service user-with delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service user-with delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service user-with delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this c principal kind.
 service user-with delete collection principal-kind at route  403 FORBIDDEN error  | You can't delete c principal kinds.
@@ -6188,6 +6446,9 @@ service user-with list collection false at service  403 FORBIDDEN thrown  | You 
 service user-with list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service user-with list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-with list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
+service user-with list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
+service user-with list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-with list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service user-with list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service user-with list collection principal-kind at rest  403 FORBIDDEN error  | You can't see c principal kinds.
 service user-with list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
@@ -6235,6 +6496,10 @@ service user-with publish collection malformed-filter at service  403 FORBIDDEN 
 service user-with publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-with publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-with publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-with publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-with publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
+service user-with publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-with publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-with publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-with publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
@@ -6288,6 +6553,9 @@ service user-with publish single-pub malformed-filter at rest  403 FORBIDDEN err
 service user-with publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
 service user-with publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service user-with publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service user-with publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service user-with publish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service user-with publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
 service user-with publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service user-with publish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service user-with publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
@@ -6335,6 +6603,10 @@ service user-with read collection malformed-filter at direct  403 FORBIDDEN thro
 service user-with read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 service user-with read collection malformed-filter at route  403 FORBIDDEN error  | You can't see c malformed filters.
 service user-with read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
+service user-with read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
+service user-with read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this c permission spelling.
+service user-with read collection permission-spelling at route  403 FORBIDDEN error  | You can't see c permission spellings.
+service user-with read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service user-with read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service user-with read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this c principal kind.
 service user-with read collection principal-kind at route  403 FORBIDDEN error  | You can't see c principal kinds.
@@ -6382,6 +6654,9 @@ service user-with read single false at route  403 FORBIDDEN error  | You can't s
 service user-with read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service user-with read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 service user-with read single malformed-filter at route  403 FORBIDDEN error  | You can't see S Malformed Filter.
+service user-with read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
+service user-with read single permission-spelling at rest  403 FORBIDDEN error  | You can't see S Permission Spelling.
+service user-with read single permission-spelling at route  403 FORBIDDEN error  | You can't see S Permission Spelling.
 service user-with read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service user-with read single principal-kind at rest  403 FORBIDDEN error  | You can't see S Principal Kind.
 service user-with read single principal-kind at route  403 FORBIDDEN error  | You can't see S Principal Kind.
@@ -6431,6 +6706,10 @@ service user-with unpublish collection malformed-filter at service  403 FORBIDDE
 service user-with unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-with unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-with unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-with unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-with unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
+service user-with unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-with unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-with unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-with unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
@@ -6484,6 +6763,9 @@ service user-with unpublish single-pub malformed-filter at rest  403 FORBIDDEN e
 service user-with unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
 service user-with unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
 service user-with unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service user-with unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service user-with unpublish single-pub permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Permission Spelling.
+service user-with unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
 service user-with unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
 service user-with unpublish single-pub principal-kind at rest  403 FORBIDDEN error  | You can't edit S Pub Principal Kind.
 service user-with unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
@@ -6541,6 +6823,11 @@ service user-with update collection other-operation at lock  403 FORBIDDEN error
 service user-with update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service user-with update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service user-with update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-with update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service user-with update collection permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-with update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c permission spelling.
+service user-with update collection permission-spelling at route  403 FORBIDDEN error  | You can't edit c permission spellings.
+service user-with update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
 service user-with update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service user-with update collection principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
 service user-with update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this c principal kind.
@@ -6607,6 +6894,10 @@ service user-with update single other-operation at direct  403 FORBIDDEN thrown 
 service user-with update single other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit S Other Operation.
 service user-with update single other-operation at rest  403 FORBIDDEN error  | You can't edit S Other Operation.
 service user-with update single other-operation at route  403 FORBIDDEN error  | You can't edit S Other Operation.
+service user-with update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Permission Spelling.
+service user-with update single permission-spelling at lock  403 FORBIDDEN error  missing=same  | You can't edit S Permission Spelling.
+service user-with update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit S Permission Spelling.
+service user-with update single permission-spelling at route  403 FORBIDDEN error  | You can't edit S Permission Spelling.
 service user-with update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service user-with update single principal-kind at lock  403 FORBIDDEN error  missing=same  | You can't edit S Principal Kind.
 service user-with update single principal-kind at rest  403 FORBIDDEN error  | You can't edit S Principal Kind.
