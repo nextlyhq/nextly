@@ -39,9 +39,15 @@ const fb = formBuilder({
 
 export default defineConfig({
   plugins: [fb.plugin],
-  collections: [...fb.collections],
+  collections: [
+    /* your own collections only */
+  ],
 });
 ```
+
+The plugin registers its `forms` and `form-submissions` collections itself. Don't
+also add `fb.collections` to `collections`: the same slug twice stops the app
+from booting with a duplicate `forms` collection.
 
 > A `formBuilderPlugin` default-instance shortcut is also exported for cases where no customization is needed. See [the plugin docs](https://nextlyhq.com/docs/plugins/form-builder) for the full options reference.
 

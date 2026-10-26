@@ -24,11 +24,13 @@
  */
 import { buildErrorResponse } from "../api/error-response";
 import { readOrGenerateRequestId } from "../api/request-id";
+import { recordRefusalReason } from "../auth/access/refusal-message";
 import { container } from "../di/container";
 import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
 import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
 import type { LimitStoreSelection } from "../domains/limits/limit-store-setting";
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 import { consoleLogger } from "../shared/types";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
@@ -49,6 +51,7 @@ import {
 import {
   openRestLimitGate,
   type ApiKeyMemory,
+  type KnownApiKey,
   type PersonResolution,
   type RestLimitDecider,
   type RestLimitTarget,
@@ -330,7 +333,10 @@ class RestLimits implements RestLimitDecider {
     const before = await this.boundBefore(bound);
     if ("refused" in before) return this.refusal(request, before.refused);
     try {
-      const resolved = await this.readers.lookupKey(rawKey);
+      let cause: KnownApiKey["cause"];
+      const resolved = await this.readers.lookupKey(rawKey, refused => {
+        cause = refused;
+      });
       if (resolved) {
         keys.remember(rawKey, { resolved, debited: true });
         return await this.readers.debitKey(resolved.id, request);
@@ -338,7 +344,7 @@ class RestLimits implements RestLimitDecider {
       // A key that does not resolve is answered without a second lookup; one
       // nothing could ask about is left for authentication to ask again.
       if (resolved === null) {
-        keys.remember(rawKey, { resolved, debited: false });
+        keys.remember(rawKey, { resolved, debited: false, cause });
       }
       return await this.spendBound(request, bound, before);
     } finally {
@@ -416,6 +422,13 @@ class RestLimits implements RestLimitDecider {
   }
 
   private refusal(request: Request, result: RateLimitResult): Response {
+    // Recorded as every refusal is, whoever words the answer.
+    recordRefusalReason({
+      status: NEXTLY_ERROR_STATUS.RATE_LIMITED,
+      code: "RATE_LIMITED",
+      reason: `the REST rate limit of ${result.limit} a window is spent`,
+      requestId: readOrGenerateRequestId(request),
+    });
     if (this.settings.handler) return this.settings.handler(request, result);
     return tooManyRequests(request, result);
   }

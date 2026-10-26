@@ -36,13 +36,8 @@
 import { warnIfCacheComponentsOn } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
-import {
-  getService,
-  isServicesRegistered,
-  registerServices,
-  shutdownServices,
-} from "./di/register";
 import { recordRegisteredLocalization } from "./di/registered-localization";
+import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
@@ -209,6 +204,8 @@ function buildNextlyInstance(
 
     // Shutdown method
     shutdown: async () => {
+      // Loaded on use, as the boot loads it: see `getNextly` below.
+      const { shutdownServices } = await import("./di/register");
       await shutdownServices();
       globalForInit.__nextly_cachedInstance = null;
       consoleLogger.info("Nextly shutdown complete");
@@ -342,6 +339,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
       // entirely, so this is also the only place the public factory learns that
       // another surface is still waiting on the migrate lock.
       await awaitBootMigrations();
+
+      // The registry imports every service registration, so it is loaded
+      // here, where a boot needs it, rather than by importing this module.
+      // Loaded before the check, so the check, the seeding hold and the
+      // registration below still run with nothing awaited between them.
+      const { registerServices } = await import("./di/register");
 
       if (!isServicesRegistered()) {
         // Build final config from provided options

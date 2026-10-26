@@ -101,3 +101,23 @@ export function MoreExist({ query }: { query: CardQuery }): JSX.Element {
     <p className={cn(MORE_LINE_CLASS, "text-muted-foreground")}>More exist</p>
   );
 }
+
+/**
+ * A card's footer link to the list view holding its rows and the rest of them, under its filter
+ * and sort: the same address "More exist" opens, offered whether or not more exist. Nothing for
+ * a card that does not read one collection.
+ */
+export function ViewAll({ query }: { query: CardQuery }): JSX.Element | null {
+  const href = moreExistHref(query);
+  return href ? (
+    <Link
+      href={href}
+      className={cn(
+        MORE_LINE_CLASS,
+        "font-medium text-primary hover:underline"
+      )}
+    >
+      View all
+    </Link>
+  ) : null;
+}

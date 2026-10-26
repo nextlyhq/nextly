@@ -170,7 +170,9 @@ export class RoleInheritanceService extends BaseService {
       .where(eq(roles.id, roleId))
       .limit(1)) as Array<{ isSystem: unknown }>;
     if (role && Boolean(role.isSystem)) {
-      throw NextlyError.forbidden({
+      throw NextlyError.builtIn({
+        thing: "role",
+        change: "change",
         logContext: { reason: "system-role-immutable", roleId },
       });
     }

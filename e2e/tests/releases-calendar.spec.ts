@@ -23,6 +23,10 @@ import {
 } from "./support/axe";
 import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
 import { post, publishNow, release, schedule } from "./support/releases-api";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.releases] });
 
 test.use({ timezoneId: "America/New_York" });
 

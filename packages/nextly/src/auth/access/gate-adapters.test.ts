@@ -3,21 +3,24 @@
  * runs once per question even while a test records deviations, and a
  * super-admin is recognised before the caller's whole access is read.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   callerIsSuperAdmin,
   callerMay,
+  callerMayNot,
   fakeActorForUser,
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "../../domains/collections/__tests__/collection-test-helpers";
+import { consoleLogger } from "../../shared/types";
 import type { CollectionAccessControl } from "../../shared/types/access";
 import { apiKeyScope } from "../authenticated-scope";
 import { runWithCallerScope } from "../caller-scope";
 
 import type { AccessTarget } from "./decide";
 import { recordingDeviations } from "./deviations";
+import { clearRuleAnswerNotices } from "./rule-answer-log";
 import {
   collectionGateVerdict,
   singleGateVerdict,
@@ -60,9 +63,11 @@ function asked(
 
 describe("a rule function", () => {
   it("is asked once for a signed-in user, even while deviations are recorded", async () => {
-    // Truthy but not `true`: today admits on it, the decision does not, so a
-    // deviation is recorded, and the comparison must not ask the rule again.
-    const rule = vi.fn(() => "yes" as unknown as boolean);
+    // The rule admits a user who lacks the permission: today admits on it,
+    // the decision does not, so a deviation is recorded, and the comparison
+    // must not ask the rule again.
+    callerMayNot("read");
+    const rule = vi.fn(() => true);
     const { result, deviations } = await recordingDeviations(() =>
       collectionGateVerdict(asked({ read: rule }, { user: { id: "u1" } }))
     );
@@ -92,6 +97,101 @@ describe("a rule function", () => {
     );
     expect(result.allowed).toBe(true);
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a rule's answer, at the collection gate", () => {
+  beforeEach(() => {
+    clearRuleAnswerNotices();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const answer = (value: unknown, user?: { id: string }) =>
+    collectionGateVerdict(
+      asked({ read: () => value as boolean }, user ? { user } : {})
+    );
+
+  it("lets a visitor through only on true: null, undefined and a truthy value refuse", async () => {
+    for (const value of [null, undefined, "yes"]) {
+      expect((await answer(value)).allowed).toBe(false);
+    }
+    // The control: `true` still lets a visitor through.
+    expect((await answer(true)).allowed).toBe(true);
+  });
+
+  it("lets a signed-in user through only on true: a truthy value refuses", async () => {
+    // The user holds the permission, so only the rule can refuse.
+    expect((await answer("yes", { id: "u1" })).allowed).toBe(false);
+    expect((await answer(true, { id: "u1" })).allowed).toBe(true);
+  });
+
+  it("names a refusal once where the answer let the caller in before, and not where it did not", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    // A visitor was refused before only by `false`, so `null` let it in.
+    await answer(null);
+    await answer(null);
+    // A signed-in user was judged truthy, so `null` refused it already, and
+    // `"yes"` let it in.
+    await answer(null, { id: "u1" });
+    await answer("yes", { id: "u1" });
+    const named = warn.mock.calls.map(([message]) => String(message));
+    expect(named).toHaveLength(2);
+    expect(named[0]).toContain("answered null, so a visitor is now refused");
+    expect(named[1]).toContain(
+      "answered a string, so a signed-in user is now refused"
+    );
+  });
+});
+
+describe("a visitor's write", () => {
+  const WRITES = ["create", "update", "delete"] as const;
+
+  it("is refused as needing a signed-in caller where no rule names it", async () => {
+    // `read: true` is declared so the target has an access object: only the
+    // write's own rule is missing, which is the case the public default used
+    // to let through.
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ read: true }, { action })
+      );
+      expect(verdict, action).toEqual({
+        allowed: false,
+        refusal: "unauthenticated",
+      });
+    }
+  });
+
+  it("is refused at a Single where no rule names the update", async () => {
+    const target: AccessTarget = { kind: "single", slug: "site", access: {} };
+    const verdict = await singleGateVerdict({
+      slug: "site",
+      action: "update",
+      principal: null,
+      rules: { getRegisteredTarget: () => target },
+    });
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("is allowed where the target's rule answers true, plain or as a function", async () => {
+    for (const action of WRITES) {
+      const plain = await collectionGateVerdict(
+        asked({ [action]: true }, { action })
+      );
+      expect(plain.allowed, `${action}: true`).toBe(true);
+      const fn = await collectionGateVerdict(
+        asked({ [action]: () => true }, { action })
+      );
+      expect(fn.allowed, `${action}: () => true`).toBe(true);
+    }
+  });
+
+  it("leaves a visitor's read with no rule on the public default", async () => {
+    // The control for the refusals above: the same target with no rule at
+    // all still admits a visitor's read, so only writes changed.
+    const verdict = await collectionGateVerdict(asked({}, { action: "read" }));
+    expect(verdict.allowed).toBe(true);
   });
 });
 

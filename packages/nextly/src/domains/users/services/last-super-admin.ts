@@ -65,18 +65,6 @@ export type SuperAdminChange =
   /** The role `roleId` is deleted, with its assignments and inheritance. */
   | { kind: "deleteRole"; roleId: string };
 
-/**
- * The changes to roles, as opposed to accounts, that can take super-admin
- * authority from someone. Each is a super-admin person's to make.
- */
-const ROLE_CHANGES: ReadonlySet<SuperAdminChange["kind"]> = new Set([
-  "replaceRoles",
-  "unassignRole",
-  "removeInheritance",
-  "replaceChildren",
-  "deleteRole",
-]);
-
 type Rows = Array<Record<string, unknown>>;
 
 /** A read that can be awaited as it is, or taken with a row lock. */
@@ -141,13 +129,14 @@ export interface FirstAdministratorTables extends LastSuperAdminTables {
  * stands and as the change would leave it, and the change is refused when it
  * would take the set from some to none. A failed read refuses, by throwing.
  *
- * Before that, a role change that would take super-admin authority from
- * anyone, the last or not, is refused unless a super-admin person or trusted
- * server code makes it, as giving that authority is. Here everyone holding it
+ * Before that, a change that would take super-admin authority from anyone,
+ * the last or not, is refused unless a super-admin person or trusted server
+ * code makes it, as giving that authority is: a role change, and deleting or
+ * deactivating the account alike. Here everyone holding it
  * now counts, an expiring assignment or a deactivated account included, since
  * it is theirs until it lapses or they are reactivated.
  *
- * @throws NextlyError(FORBIDDEN) when a role change would take super-admin
+ * @throws NextlyError(FORBIDDEN) when the change would take super-admin
  *   authority from someone and its caller may not.
  * @throws NextlyError(CONFLICT) when the change would leave no active
  *   super-admin.
@@ -156,11 +145,16 @@ export async function refuseRemovingLastSuperAdmin(
   tx: LastSuperAdminTx,
   tables: FirstAdministratorTables,
   dialect: SupportedDialect,
-  change: SuperAdminChange
+  requested: SuperAdminChange
 ): Promise<void> {
-  const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
+  const lockedRoleId = await lockSuperAdminRole(tx, tables, dialect);
   // No role, no super-admin to protect.
-  if (superAdminRoleId === undefined) return;
+  if (lockedRoleId === undefined) return;
+  // Every id below, the change's and the rows', is compared by one key that
+  // matches as the database does.
+  const key = idKey(dialect);
+  const superAdminRoleId = key(lockedRoleId);
+  const change = keyedChange(requested, key);
 
   const { roleInherits } = tables;
   const edges = (
@@ -175,8 +169,8 @@ export async function refuseRemovingLastSuperAdmin(
       dialect
     )
   ).map(row => ({
-    parent: String(row.parentRoleId),
-    child: String(row.childRoleId),
+    parent: key(String(row.parentRoleId)),
+    child: key(String(row.childRoleId)),
   }));
 
   const before = conferringFrom(edges, superAdminRoleId);
@@ -185,26 +179,26 @@ export async function refuseRemovingLastSuperAdmin(
   const roleIds = new Set([...before, ...after]);
 
   // Who may make the change comes first: a caller who may not is refused
-  // whether or not the last super-admin would go.
-  if (ROLE_CHANGES.has(change.kind)) {
-    const held = holdersAround(
-      await assignments(tx, tables, dialect, roleIds, "in-force"),
-      before,
-      after,
-      change
-    );
-    const losing = [...held.before].filter(userId => !held.after.has(userId));
-    if (losing.length > 0) {
-      await refuseUnlessSuperAdminCaller(tx, {
-        reason: "super-admin-removal-refused",
-        change: change.kind,
-        userIds: losing,
-      });
-    }
+  // whether or not the last super-admin would go. Every kind of change asks
+  // it, an account's deletion or deactivation as much as a role change,
+  // since each takes the authority from whoever it removes.
+  const held = holdersAround(
+    keyed(await assignments(tx, tables, dialect, roleIds, "in-force"), key),
+    before,
+    after,
+    change
+  );
+  const losing = [...held.before].filter(userId => !held.after.has(userId));
+  if (losing.length > 0) {
+    await refuseUnlessSuperAdminCaller(tx, {
+      reason: "super-admin-removal-refused",
+      change: change.kind,
+      userIds: losing,
+    });
   }
 
   const kept = holdersAround(
-    await assignments(tx, tables, dialect, roleIds, "permanent"),
+    keyed(await assignments(tx, tables, dialect, roleIds, "permanent"), key),
     before,
     after,
     change
@@ -230,6 +224,67 @@ export async function refuseRemovingLastSuperAdmin(
       ...("roleId" in change ? { roleId: change.roleId } : {}),
     },
   });
+}
+
+/**
+ * The form an id is compared in, matching ids as the database does.
+ *
+ * MySQL matches ids case-insensitively, so one row can be named, and stored
+ * in the rows that point at it, in spellings that differ only in case: an id
+ * a request passes, an assignment row written with the spelling its request
+ * gave, and the account's own row. Compared as given, those would not match.
+ * So on MySQL every id is compared lower-cased, from the change and from the
+ * rows alike. PostgreSQL and SQLite match ids exactly, and so do the
+ * comparisons there.
+ */
+function idKey(dialect: SupportedDialect): (id: string) => string {
+  return dialect === "mysql" ? id => id.toLowerCase() : id => id;
+}
+
+/** `change` with every id it names in its comparison form. */
+function keyedChange(
+  change: SuperAdminChange,
+  key: (id: string) => string
+): SuperAdminChange {
+  switch (change.kind) {
+    case "delete":
+    case "deactivate":
+      return { ...change, userId: key(String(change.userId)) };
+    case "replaceRoles":
+      return {
+        ...change,
+        userId: key(String(change.userId)),
+        roleIds: change.roleIds.map(id => key(String(id))),
+      };
+    case "unassignRole":
+      return {
+        ...change,
+        userId: key(String(change.userId)),
+        roleId: key(change.roleId),
+      };
+    case "removeInheritance":
+      return {
+        ...change,
+        parentRoleId: key(change.parentRoleId),
+        childRoleId: key(change.childRoleId),
+      };
+    case "replaceChildren":
+      return {
+        ...change,
+        roleId: key(change.roleId),
+        childRoleIds: change.childRoleIds.map(id => key(String(id))),
+      };
+    case "deleteRole":
+      return { ...change, roleId: key(change.roleId) };
+  }
+}
+
+/** `held` with each assignment's ids in their comparison form. */
+function keyed(
+  held: readonly Assignment[],
+  key: (id: string) => string
+): Assignment[] {
+  return held.map(a => ({ userId: key(a.userId), roleId: key(a.roleId) }));
 }
 
 /** One role inheriting another: `parent` holds everything `child` does. */

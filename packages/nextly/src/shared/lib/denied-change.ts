@@ -48,8 +48,16 @@ import type { ValidationIssue } from "./entry-validation";
  * Names, not paths, because the caller compares the last segment of a path: a
  * field is content wherever it is declared, and the store's own columns are
  * what the name list is for.
+ *
+ * `reaches` gives the fields a field reaches beyond its own `fields`: a
+ * field-group field's are its field groups' schemas, which a document holds
+ * as instances like any other value, so a field one of them declares is
+ * content too.
  */
-export function declaredFieldNames(fields: unknown): Set<string> {
+export function declaredFieldNames(
+  fields: unknown,
+  reaches?: (field: unknown) => readonly unknown[]
+): Set<string> {
   const names = new Set<string>();
   const seen = new WeakSet<object>();
   const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
@@ -61,6 +69,7 @@ export function declaredFieldNames(fields: unknown): Set<string> {
     const record = field as { name?: unknown; fields?: unknown };
     if (typeof record.name === "string") names.add(record.name);
     if (Array.isArray(record.fields)) pending.push(...record.fields);
+    if (reaches) pending.push(...reaches(field));
   }
   return names;
 }
@@ -86,6 +95,20 @@ export interface PromotionAccessInput {
    * value the same patch supplies.
    */
   callerSupplied?: Record<string, unknown>;
+  /**
+   * The pending change on its own, in the same shape as `before`, where the
+   * promotion overlays a caller's payload on it.
+   *
+   * A group is written whole, so a group the caller sends replaces the pending
+   * change's, and the field gate puts each protected child of it back at the
+   * value the LIVE row holds. Judged on `before` alone, a protected edit the
+   * pending change made there reads as no change at all, and the publish would
+   * consume the draft and lose it while reporting success. A denied value the
+   * caller was not allowed to send is the pending change's, so it is judged
+   * here. Omitted, `before` is the pending change, which is right for a caller
+   * that overlays nothing.
+   */
+  pending?: Record<string, unknown>;
   /**
    * Applies the field rules to the document it is given, in place, removing
    * what this caller may not write.
@@ -132,8 +155,31 @@ export async function resolvePromotedDocument(
   const permittedLive = detachData(input.live);
   await input.applyRules(permittedLive);
 
-  const denied = collectDenied(input, permittedBefore, permittedLive);
-  const refusals = [...denied].flatMap(path => refusedLeaves(input, path));
+  // And of the pending change on its own, where a caller's payload was laid
+  // over it: a protected value it adds, inside a group the caller replaced,
+  // is in neither document above.
+  const permittedPending =
+    input.pending === undefined ? undefined : detachData(input.pending);
+  if (permittedPending) await input.applyRules(permittedPending);
+
+  // What the caller was ALLOWED to send, judged on its own as the field gate
+  // judged it: the gate keeps a protected child of a group they sent at its
+  // stored value, so the payload's paths alone would credit them with a value
+  // they were never permitted to write.
+  const credited =
+    input.callerSupplied === undefined
+      ? undefined
+      : detachData(input.callerSupplied);
+  if (credited) await input.applyRules(credited);
+
+  const denied = collectDenied(input, [
+    [input.before, permittedBefore],
+    [input.live, permittedLive],
+    [input.pending, permittedPending],
+  ]);
+  const refusals = [...denied].flatMap(path =>
+    refusedLeaves(input, path, credited)
+  );
   if (refusals.length > 0) refuse(input, refusals);
 
   return restoreDenied(
@@ -215,13 +261,20 @@ export async function keepDeniedAtStored(input: {
  */
 function collectDenied(
   input: PromotionAccessInput,
-  permittedBefore: Record<string, unknown>,
-  permittedLive: Record<string, unknown>
+  judged: ReadonlyArray<
+    readonly [
+      Record<string, unknown> | undefined,
+      Record<string, unknown> | undefined,
+    ]
+  >
 ): Set<string> {
-  return new Set([
-    ...deniedPaths(input.before, permittedBefore, ""),
-    ...deniedPaths(input.live, permittedLive, ""),
-  ]);
+  // Each document beside what the rules left of it; the pending change is
+  // judged too where the caller passed it.
+  return new Set(
+    judged.flatMap(([document, permitted]) =>
+      document === undefined ? [] : deniedPaths(document, permitted, "")
+    )
+  );
 }
 
 /**
@@ -232,22 +285,37 @@ function collectDenied(
  * have two authors, and a property present only on the live side is one this
  * document deletes.
  */
-function refusedLeaves(input: PromotionAccessInput, path: string): string[] {
+function refusedLeaves(
+  input: PromotionAccessInput,
+  path: string,
+  credited: Record<string, unknown> | undefined
+): string[] {
   const leaves = new Set([
     ...leafPaths(valueAt(input.before, path), path),
     ...leafPaths(valueAt(input.live, path), path),
+    ...(input.pending ? leafPaths(valueAt(input.pending, path), path) : []),
   ]);
-  return [...leaves].filter(leaf => isRefusal(input, leaf));
+  return [...leaves].filter(leaf => isRefusal(input, leaf, credited));
 }
 
-/** Whether one denied leaf is a change the pending change makes. */
-function isRefusal(input: PromotionAccessInput, leaf: string): boolean {
+/**
+ * Whether one denied leaf is a change the pending change makes.
+ *
+ * The caller's own edit, a value the rules let them send, is dropped back to
+ * live, not refused. Any other denied leaf is the pending change's, so it is
+ * judged as the pending change has it: where the caller's group replaced the
+ * pending change's, the promoted document holds the live value the field gate
+ * kept there, and comparing that with live would hide the pending edit.
+ */
+function isRefusal(
+  input: PromotionAccessInput,
+  leaf: string,
+  credited: Record<string, unknown> | undefined
+): boolean {
   if (isStoreBookkeeping(leaf, input.authoredFieldNames)) return false;
-  if (sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))) {
-    return false;
-  }
-  // The caller's own edit is dropped back to live, not refused.
-  return !pathExists(input.callerSupplied, leaf);
+  if (pathExists(credited, leaf)) return false;
+  const promoted = input.pending ?? input.before;
+  return !sameStoredValue(valueAt(promoted, leaf), valueAt(input.live, leaf));
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */
@@ -360,18 +428,26 @@ function rowPairing(
   const byId = idIndex(to);
   const byPosition = (index: number) => (index < to.length ? index : undefined);
   if (byId === undefined) return byPosition;
-  // The rows another row names by id are that row's. A row without an id
-  // pairs by position only with a row nothing names, so a new row added ahead
-  // of rows that keep their ids takes none of their values, while a list sent
-  // without its ids still pairs each row with the one at its place.
+  // The rows another row names by id are that row's, in order: the first
+  // row naming an id has the first row carrying it, the second the second,
+  // and a row repeating an id more often than `to` holds it is new, so it
+  // takes none of their values. A row without an id pairs by position only
+  // with a row nothing names, so a new row added ahead of rows that keep
+  // their ids takes none of their values, while a list sent without its ids
+  // still pairs each row with the one at its place.
   const named = new Set<number>();
-  for (const row of from) {
-    const at = byId.get(rowId(row) ?? "");
+  const repeats = new Map<string, number>();
+  const pairs = from.map(row => {
+    const id = rowId(row);
+    if (id === undefined) return undefined;
+    const nth = repeats.get(id) ?? 0;
+    repeats.set(id, nth + 1);
+    const at = byId.get(id)?.[nth];
     if (at !== undefined) named.add(at);
-  }
+    return at;
+  });
   return index => {
-    const id = rowId(from[index]);
-    if (id !== undefined) return byId.get(id);
+    if (rowId(from[index]) !== undefined) return pairs[index];
     const at = byPosition(index);
     return at === undefined || named.has(at) ? undefined : at;
   };
@@ -383,18 +459,23 @@ function rowId(row: unknown): string | undefined {
 }
 
 /**
- * The rows that carry an id, by it, or nothing when no row can be told apart
- * that way: a list with no ids, a repeated id, or an empty list all fall back
- * to position. A row without an id is left out rather than spoiling the rest,
- * so an id-less row inserted among identified ones leaves them paired by id.
+ * The rows that carry an id, by it, in order, or nothing when no row does: a
+ * list with no ids, or an empty one, falls back to position. A repeated id
+ * names each row carrying it in turn, rather than sending the whole list to
+ * position, where a row would be judged with the siblings of whichever row
+ * sits at its index. A row without an id is left out rather than spoiling the
+ * rest, so an id-less row inserted among identified ones leaves them paired
+ * by id.
  */
-function idIndex(rows: readonly unknown[]): Map<string, number> | undefined {
-  const map = new Map<string, number>();
+function idIndex(rows: readonly unknown[]): Map<string, number[]> | undefined {
+  const map = new Map<string, number[]>();
   for (const [index, row] of rows.entries()) {
     const id = rowId(row);
     if (id === undefined) continue;
-    if (map.has(id)) return undefined;
-    map.set(id, index);
+    // Appended in place: a list repeating one id many times is copied once.
+    const indices = map.get(id);
+    if (indices) indices.push(index);
+    else map.set(id, [index]);
   }
   return map.size > 0 ? map : undefined;
 }

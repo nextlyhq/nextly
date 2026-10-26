@@ -81,7 +81,9 @@ import {
 } from "../../../schemas/widget-layout";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
-import { ServiceContainer } from "../../../services/index";
+// Built per call from this service's adapter, and loaded then: the container
+// imports every core service.
+import { serviceContainerFor } from "../../../services/service-container-for";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
@@ -1304,7 +1306,7 @@ export class UserMutationService extends BaseService {
       // VALIDATION_ERROR for the caller.
       if (userData.roles && userData.roles.length > 0) {
         const uniqueRoleIds = Array.from(new Set(userData.roles));
-        const services = new ServiceContainer(this.adapter);
+        const services = await serviceContainerFor(this.adapter);
         const invalidRoleIds: string[] = [];
         for (const rid of uniqueRoleIds) {
           try {
@@ -1544,22 +1546,24 @@ export class UserMutationService extends BaseService {
       const requestedRoleIds = userData.roles?.length
         ? Array.from(new Set(userData.roles.map(String)))
         : [];
+      // Asked again in the account's transaction, so the roles are judged as
+      // they stand when they are written. It takes the `super-admin` row's
+      // lock, so it runs first in that transaction, before the account's row
+      // and the roles' rows are written or locked: the order every change to
+      // who is a super-admin takes them in. A role deletion, say, takes that
+      // lock first and then reads the accounts holding roles; taken after the
+      // account's own row here, the two could deadlock.
+      const judgeRequestedRoles = async (txDb: DrizzleTransactionLike) => {
+        if (requestedRoleIds.length === 0 || caller !== "app") return;
+        await refuseGrantingSuperAdmin(
+          txDb as unknown as LastSuperAdminTx,
+          this.dialect,
+          requestedRoleIds,
+          { email }
+        );
+      };
       const insertRequestedRoles = async (txDb: DrizzleTransactionLike) => {
         if (requestedRoleIds.length === 0) return;
-        // Asked again here, in the account's transaction, so the roles are
-        // judged as they stand when they are written. It takes the
-        // `super-admin` row's lock, which comes before the roles' own rows
-        // below, the order every change to who is a super-admin takes them
-        // in: deleting a role takes that lock first and the role's row last,
-        // so taken the other way round here the two would deadlock.
-        if (caller === "app") {
-          await refuseGrantingSuperAdmin(
-            txDb as unknown as LastSuperAdminTx,
-            this.dialect,
-            requestedRoleIds,
-            { email }
-          );
-        }
         // RE-READ here, holding what exists: a role deleted since the early
         // lookup would otherwise be assigned as a dangling row on MySQL,
         // whose `user_roles` carries no foreign key, and the account would
@@ -1589,6 +1593,7 @@ export class UserMutationService extends BaseService {
 
       const insertAccount = async (txDb: DrizzleTransactionLike) => {
         const superAdminRoleId = await lockForBootstrap(txDb);
+        await judgeRequestedRoles(txDb);
         await requireExistingAccount(txDb);
         await txDb.insert(users).values(values);
         // Before the first-administrator grant, which then finds an account
@@ -1710,9 +1715,9 @@ export class UserMutationService extends BaseService {
       // role caches that answered for this account before it existed are
       // flushed now.
       if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
-        await new ServiceContainer(this.adapter).userRoles.invalidateRoleCaches(
-          String(user.id)
-        );
+        await (
+          await serviceContainerFor(this.adapter)
+        ).userRoles.invalidateRoleCaches(String(user.id));
       }
 
       // Hand the invite link back to the admin. The token was committed with
@@ -2026,7 +2031,7 @@ export class UserMutationService extends BaseService {
           : undefined;
       let hasRoleUpdates = false;
       const services = requestedRoleIds
-        ? new ServiceContainer(this.adapter)
+        ? await serviceContainerFor(this.adapter)
         : undefined;
 
       // 2c) The custom fields' user_ext row, written in the account's own
@@ -2134,7 +2139,11 @@ export class UserMutationService extends BaseService {
                 }
               );
             }
-            if (changes.isActive === false) {
+            // Only when this update writes the deactivation: an account that
+            // is already inactive, sent `isActive: false` again as the edit
+            // form resends it, loses nothing, so nothing is asked of the
+            // caller for it.
+            if (updateData.isActive === false) {
               await refuseRemovingLastSuperAdmin(
                 tx as LastSuperAdminTx,
                 this.tables,
@@ -2536,7 +2545,9 @@ export class UserMutationService extends BaseService {
    */
   private async roleForSignUpToWaitOn(): Promise<void> {
     try {
-      await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+      await (
+        await serviceContainerFor(this.adapter)
+      ).roles.ensureSuperAdminRole();
     } catch {
       // Refused when a role of the install's own already holds the
       // administrator role's name: then no administrator role can exist, so
@@ -2557,7 +2568,9 @@ export class UserMutationService extends BaseService {
     if (await superAdminRoleHeld(this.db, this.tables)) {
       return false;
     }
-    await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+    await (
+      await serviceContainerFor(this.adapter)
+    ).roles.ensureSuperAdminRole();
     return true;
   }
 

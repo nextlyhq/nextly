@@ -244,12 +244,18 @@ jobs:
         ports:
           - 5432:5432
         # Health-gate so test steps never race a database that is still
-        # starting up.
+        # starting up. The data directory lives in memory, as the mysql leg's
+        # does: the job throws the database away, so nothing gains from
+        # surviving a crash, and the runner's shared disk sets no pace. With
+        # the data in memory, also turning off fsync, synchronous_commit and
+        # full_page_writes was measured and made the suite no faster, so the
+        # server keeps its defaults.
         options: >-
           --health-cmd "pg_isready -U nextly"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - name: Checkout
@@ -285,6 +291,11 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers, each on a database of its own
+          # (nextly_test_pool1, nextly_test_pool2) that the run's global setup
+          # creates beside nextly_test and drops at the end
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
@@ -562,6 +573,11 @@ jobs:
             pnpm lane:test:integration:sqlite -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers. This leg sets no TEST_*_URL, so
+          # each worker runs on its own in-memory SQLite database; the MySQL
+          # leg shares one server database and stays on one worker
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post

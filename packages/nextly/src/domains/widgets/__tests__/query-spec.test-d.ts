@@ -72,4 +72,5 @@ expectTypeOf<keyof WidgetQuery>().toEqualTypeOf<
   | "limit"
   | "since"
   | "until"
+  | "range"
 >();

@@ -27,6 +27,7 @@ import {
   isErrorResponse,
   type AuthContext,
   type ErrorResponse,
+  type RefusalTarget,
 } from "@nextly/auth/middleware";
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
@@ -86,6 +87,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
+import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -380,6 +382,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
@@ -848,6 +851,15 @@ export const _needsResolvedRolesForTest = needsResolvedRoles;
 export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
 
 /**
+ * What a refused read of permissions names, whichever of the grants it
+ * accepts the caller lacked.
+ */
+const READING_PERMISSIONS: RefusalTarget = {
+  action: "read",
+  resource: "permissions",
+};
+
+/**
  * Centralized permission resolver for all API service endpoints.
  *
  * Determines the correct permission check for each service/method combination
@@ -1059,15 +1071,23 @@ async function resolveAuthorization(
     // listRolePermissions: allow read-roles or read-permissions
     // (role edit form needs this to populate the PermissionMatrix)
     if (method === "listRolePermissions") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // listPermissions: allow users with read-roles (for role form's permission matrix)
     if (method === "listPermissions") {
-      return requireAnyPermission(req, [{ action: "read", resource: "roles" }]);
+      return requireAnyPermission(
+        req,
+        [{ action: "read", resource: "roles" }],
+        READING_PERMISSIONS
+      );
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1094,10 +1114,14 @@ async function resolveAuthorization(
     // getPermissionById: allow read-roles or read-permissions
     // (reading a single permission is needed for display and role editing)
     if (method === "getPermissionById") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // ensurePermission, updatePermission, deletePermissionById → manage-permissions (or CRUD)
@@ -1541,6 +1565,13 @@ async function serveServiceRequest(
   // super-admin gate). Read-only GET — no body to consume.
   if (service === "schema") {
     return handleSchemaRequest(req, method);
+  }
+
+  // ==================== ROLES SCREEN DIRECT DISPATCH ====================
+  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
+  // GET, so there is no body to consume.
+  if (service === "rolesScreen") {
+    return getRolesScreen(req);
   }
 
   // ==================== AUTHENTICATION & AUTHORIZATION ====================

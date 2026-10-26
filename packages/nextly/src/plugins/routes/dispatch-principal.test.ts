@@ -33,7 +33,7 @@ vi.mock("../../domains/audit/audit-log-writer", async importOriginal => ({
   buildAuditLogWriter: () => ({ write: auditWrite }),
 }));
 
-vi.mock("../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../di/service-access", () => ({ getService: () => ({}) }));
 
 import { signAccessToken } from "../../auth/jwt/sign";
 import { requireAuthentication } from "../../auth/middleware";

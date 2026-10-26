@@ -64,7 +64,9 @@ import {
   CONTENT_WIDTHS,
   CREATE_WIDTHS,
   NEEDS_ATTENTION_WIDTHS,
+  OVER_TIME_WIDTHS,
   RECENT_ACTIVITY_WIDTHS,
+  RECENT_ENTRIES_WIDTHS,
   RECENTLY_EDITED_WIDTHS,
   TEAM_WIDTHS,
   UPCOMING_RELEASES_WIDTHS,
@@ -110,6 +112,41 @@ const NOTE_TEXT: WidgetSetting = {
   name: "text",
   label: "Note",
   ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
+};
+
+/** Recent entries' "Number of items", the same offer under the same name. */
+const RECENT_ENTRIES_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+
+/**
+ * Over time's Date range, its one quick setting: the range its chart draws,
+ * which becomes its query's `range`.
+ */
+const OVER_TIME_DATE_RANGE: WidgetSetting = {
+  name: "dateRange",
+  label: "Date range",
+  type: "select",
+  defaultValue: "30d",
+  quick: true,
+  // Named for the reader, as the card's header shows them; each value is a
+  // range the query draws (`TIMESERIES_RANGES`).
+  options: [
+    { label: "Last 7 days", value: "7d" },
+    { label: "Last 30 days", value: "30d" },
+    { label: "Last 90 days", value: "90d" },
+    { label: "Last 12 months", value: "12m" },
+  ],
+};
+
+/** Over time's Chart style: a line, or one bar per interval. */
+const OVER_TIME_CHART_STYLE: WidgetSetting = {
+  name: "chartStyle",
+  label: "Chart style",
+  type: "select",
+  defaultValue: "line",
+  options: [
+    { label: "Line", value: "line" },
+    { label: "Bars", value: "bars" },
+  ],
 };
 
 /** Recently edited's "Number of items", the same offer under the same name. */
@@ -490,6 +527,68 @@ const CORE_WIDGET_LITERALS = [
     offered: "on-request",
     defaultSize: "md",
     settings: [NOTE_TEXT],
+  },
+  {
+    id: "core/recent-entries",
+    title: "Recent entries",
+    description:
+      "A collection's entries changed most recently, each linking to its entry.",
+    archetype: "custom",
+    component: "core#RecentEntries",
+    // Added from a collection's group of the add panel, once per collection or
+    // more, and never placed on the default dashboard.
+    offered: "per-collection",
+    defaultSize: "md",
+    ...RECENT_ENTRIES_WIDTHS,
+    // Asked like core's own lists: the rows its size draws and one more, so the
+    // card can say more exist at every size.
+    sizedQuery: true,
+    settings: [
+      // Titled: each row is asked by the collection's own title field, its
+      // status where it has a lifecycle, and when it was updated.
+      {
+        name: "collection",
+        type: "collection",
+        label: "Collection",
+        rows: "titled",
+      },
+      { name: "filter", type: "filter", of: "collection", label: "Filter" },
+      {
+        name: "sort",
+        type: "sort",
+        of: "collection",
+        label: "Sort",
+        defaultValue: "-updatedAt",
+      },
+      RECENT_ENTRIES_ITEMS,
+    ],
+    query: { op: "list", status: "all", sort: "-updatedAt", limit: 5 },
+  },
+  {
+    id: "core/over-time",
+    title: "Over time",
+    description:
+      "How many entries a collection gained in each day, week or month of a range.",
+    archetype: "custom",
+    component: "core#OverTime",
+    offered: "per-collection",
+    defaultSize: "md",
+    ...OVER_TIME_WIDTHS,
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "filter", type: "filter", of: "collection", label: "Filter" },
+      // The card's one quick setting: its range, on the card's header.
+      OVER_TIME_DATE_RANGE,
+      OVER_TIME_CHART_STYLE,
+    ],
+    // Entries created: `createdAt`, every interval the range overlaps, the
+    // first one counting only what falls inside the range.
+    query: {
+      op: "timeseries",
+      status: "all",
+      dateField: "createdAt",
+      range: "30d",
+    },
   },
 ] as const satisfies readonly WidgetDefinition[];
 

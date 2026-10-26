@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import { CONTENT_SOURCE_ID } from "../../../domains/widgets/system-source-ids";
@@ -54,6 +55,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
   });
   await current.adapter.insert("users", { ...READER, is_active: true });
+  // A code rule only narrows the permission, so the reader holds read on all
+  // three collections and the rules admit them to each.
+  await grantTo(current, READER.id, "read", [ARTICLES, TAGS, HIDDEN]);
   return current;
 }
 

@@ -225,6 +225,7 @@ describe("deleting media inside core's own transaction on sqlite", () => {
       entries.deleteEntryInTransaction(tx as never, {
         collectionName: "posts",
         entryId,
+        overrideAccess: true,
       })
     );
 

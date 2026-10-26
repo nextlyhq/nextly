@@ -34,6 +34,10 @@ import { expect, type Page, type Request, type Route } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 /** The Get started card's widget id, as core registers it. */
 const GET_STARTED_WIDGET_ID = "core/get-started";
@@ -99,7 +103,16 @@ function trackStatusReads(page: Page): string[] {
 async function placeGetStartedCard(page: Page): Promise<void> {
   await page.route("**/dashboard/layout", async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
+    // A read still in flight when the test ends fails its fetch. Aborted rather
+    // than thrown: a throw out of the handler fails a test that had passed,
+    // and its message prints the request, session cookie included.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
     const body = (await response.json()) as Record<string, unknown>;
     // The read may come bare or in a `data` envelope; place the card in
     // whichever holds the placements.

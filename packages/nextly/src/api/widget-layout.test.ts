@@ -1243,6 +1243,11 @@ describe("PUT /api/dashboard/layout", () => {
     );
 
     expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: {
+        message: "Only a signed-in person can change a dashboard layout.",
+      },
+    });
     expect(saved).toBeUndefined();
   });
 

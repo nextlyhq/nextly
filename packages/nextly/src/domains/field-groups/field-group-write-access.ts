@@ -18,6 +18,8 @@ import {
   anyFieldGroupHasAccessRule,
   applyFieldWriteAccess,
   callerAccessGrants,
+  getFieldFunctions,
+  type FieldFunctions,
 } from "../../shared/lib/field-level-registry";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
@@ -95,6 +97,7 @@ export async function keepDeniedAtStoredOnUpdate(params: {
         operation: "update",
         access: params.access,
         executor: params.executor,
+        stored: params.stored,
       });
     },
   });
@@ -119,22 +122,33 @@ export async function applyInlineFieldGroupWriteAccess(params: {
   access: FieldGroupWriteAccess;
   /** The write's transaction-bound executor, when it holds a connection. */
   executor?: unknown;
+  /**
+   * An update's stored document, with the instances it holds in their own
+   * tables. An instance there the update adds is created by it, and so is
+   * what that instance holds inline, as its save judges it: without it, an
+   * inline instance is judged by `operation` wherever it is held.
+   */
+  stored?: Record<string, unknown>;
 }): Promise<void> {
   const { access, operation } = params;
   if (access.overrideAccess) return;
   if (!anyFieldGroupHasAccessRule(operation)) return;
+  const fieldGroupFields = await resolveFieldGroupFields(
+    params.fields,
+    params.source,
+    params.executor
+  );
   await judgeFieldGroupInstances({
     data: params.data,
     fields: params.fields,
-    fieldGroupFields: await resolveFieldGroupFields(
-      params.fields,
-      params.source,
-      params.executor
-    ),
+    fieldGroupFields,
     operation,
     access: withGrants(access, params.executor),
     // One stored in its own table is judged by the save that writes it there.
     inlineOnly: true,
+    existing: params.stored
+      ? await storedInstanceKeys(params.stored, params.fields, fieldGroupFields)
+      : undefined,
   });
 }
 
@@ -286,6 +300,13 @@ export async function keepDeniedFieldGroupsInDraft(params: {
   fields: readonly FieldConfig[];
   fieldGroupFields: FieldGroupFieldsBySlug;
   access: FieldGroupWriteAccess;
+  /**
+   * The stored instances in each of the entity's languages, so a removal is
+   * judged in every language it removes, as an update's is: a held draft
+   * writes no translation, so what an instance holds in another language is
+   * what the live rows hold there.
+   */
+  storedIn?: StoredFieldGroupsInLanguages;
 }): Promise<void> {
   if (params.access.overrideAccess) return;
   if (
@@ -318,6 +339,9 @@ export async function keepDeniedFieldGroupsInDraft(params: {
       fields: params.fields,
       fieldGroupFields: params.fieldGroupFields,
       access: params.access,
+      translations: params.storedIn
+        ? translationsOf(params.storedIn, params.fields)
+        : undefined,
     });
   }
   const kept = await keepDeniedAtStored({
@@ -346,20 +370,46 @@ function instanceKey(field: string, slug: string, id: string): string {
   return `${field}\u0000${slug}\u0000${id}`;
 }
 
-/** The identities of the instances `document` holds in their own tables. */
+/**
+ * The key a single field group's field has its stored instance under,
+ * whatever id an instance is sent with: the save updates the row that field's
+ * instance is, so any instance sent for it is that row. A dynamic zone's
+ * blocks, even a single one, are matched by id.
+ */
+function singleInstanceKey(field: string, slug: string): string {
+  return instanceKey(field, slug, "");
+}
+
+/**
+ * The instances `document` holds in their own tables, each by its identity,
+ * to the id it is stored under; a single field group's has it under
+ * {@link singleInstanceKey} as well.
+ */
 async function storedInstanceKeys(
   document: Record<string, unknown>,
   fields: readonly FieldConfig[],
   fieldGroupFields: FieldGroupFieldsBySlug
-): Promise<Set<string>> {
-  const keys = new Set<string>();
+): Promise<Map<string, string>> {
+  const holdsOne = new Set(
+    directFieldGroupFields(fields)
+      .filter(
+        field =>
+          (field as { repeatable?: unknown }).repeatable !== true &&
+          extractFieldGroupReferences(field).many === undefined
+      )
+      .map(nameOf)
+  );
+  const keys = new Map<string, string>();
   await forEachFieldGroupInstance(
     detachData(document),
     fields,
     fieldGroupFields,
     ({ instance, slug, field, inline }) => {
       if (!inline && typeof instance.id === "string") {
-        keys.add(instanceKey(field, slug, instance.id));
+        keys.set(instanceKey(field, slug, instance.id), instance.id);
+        if (holdsOne.has(field)) {
+          keys.set(singleInstanceKey(field, slug), instance.id);
+        }
       }
       return Promise.resolve();
     },
@@ -550,18 +600,53 @@ async function holdsProtectedValue(
   return false;
 }
 
+/**
+ * Whether `fields` declare a password whose update a rule judges, at any
+ * depth, by `fns`, the functions registered for those fields. A stored value
+ * is read with its password hashes stripped, so such a rule could only be
+ * asked about a value it was not given; the instance is protected instead.
+ */
+function judgesAnUnreadPassword(
+  fields: readonly FieldConfig[],
+  fns: Record<string, FieldFunctions> | undefined
+): boolean {
+  return fields.some(field => {
+    const name = nameOf(field);
+    const sub = subFieldsOf(field);
+    // A layout container keeps its fields on the level it sits on.
+    if (name === undefined) return judgesAnUnreadPassword(sub ?? [], fns);
+    if ((field as { type?: unknown }).type === "password") {
+      return fns?.[name]?.access?.update !== undefined;
+    }
+    return (
+      sub !== undefined && judgesAnUnreadPassword(sub, fns?.[name]?.fields)
+    );
+  });
+}
+
 /** {@link holdsProtectedValue} for one language's view of the instance. */
 async function holdsProtectedValueHere(
   row: Record<string, unknown>,
   slug: string,
   params: ProtectedInstanceParams
 ): Promise<boolean> {
-  // Only what it holds: an empty field has no value to change.
-  const held = Object.fromEntries(
-    Object.entries(row).filter(
-      ([, value]) => value !== null && value !== undefined
+  // Only what it holds: an empty field has no value to change. A copy all
+  // the way down, since the rules below remove from its containers, and the
+  // row itself may be kept and written back.
+  const held = detachData(
+    Object.fromEntries(
+      Object.entries(row).filter(
+        ([, value]) => value !== null && value !== undefined
+      )
     )
   );
+  const inner = params.fieldGroupFields.get(slug);
+  if (
+    inner &&
+    judgesAnUnreadPassword(inner, getFieldFunctions("fieldGroup", slug))
+  ) {
+    return true;
+  }
   const probe = detachData(held);
   const { access } = params;
   await applyFieldWriteAccess({
@@ -575,7 +660,6 @@ async function holdsProtectedValueHere(
     id: typeof row.id === "string" ? row.id : undefined,
     grants: access.grants,
   });
-  const inner = params.fieldGroupFields.get(slug);
   if (inner) {
     await judgeFieldGroupInstances({
       data: probe,
@@ -589,32 +673,64 @@ async function holdsProtectedValueHere(
   return JSON.stringify(probe) !== JSON.stringify(held);
 }
 
+/**
+ * Whether `fields` hold a field-group field at any depth: directly, or in a
+ * group, repeater or layout container. A field group's rules can judge only a
+ * document that holds one.
+ */
+export function reachesFieldGroup(fields: readonly FieldConfig[]): boolean {
+  let found = false;
+  walkFieldsOnce(fields, field => {
+    if (found || isFieldGroupField(field)) {
+      found = true;
+      return undefined;
+    }
+    return subFieldsOf(field);
+  });
+  return found;
+}
+
 /** The field-group fields directly on a document, through its layout containers. */
 function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
   const found: FieldConfig[] = [];
+  walkFieldsOnce(fields, field => {
+    if (nameOf(field) === undefined) return subFieldsOf(field);
+    if (isFieldGroupField(field)) found.push(field);
+    return undefined;
+  });
+  return found;
+}
+
+/**
+ * Visit each field `fields` reach once, through the fields `visit` returns
+ * for each: a field reached twice, as a container shared by two places or
+ * one that reaches itself, is visited the first time only.
+ */
+function walkFieldsOnce(
+  fields: readonly FieldConfig[],
+  visit: (field: FieldConfig) => readonly FieldConfig[] | undefined
+): void {
   const seen = new WeakSet<object>();
   const pending = [...fields];
   while (pending.length > 0) {
     const field = pending.pop()!;
     if (seen.has(field)) continue;
     seen.add(field);
-    if (nameOf(field) === undefined)
-      pending.push(...(subFieldsOf(field) ?? []));
-    else if (isFieldGroupField(field)) found.push(field);
+    pending.push(...(visit(field) ?? []));
   }
-  return found;
 }
 
 /**
  * Whether an instance the walk reaches is new, and the stored id it is
  * judged with: one in its own table is new where `existing` does not hold
- * it, and one held inline is created with the instance it is held in.
- * `created` collects the new instances in their own tables, which the walk
- * reaches before what they hold.
+ * it, by its id or as its field's one instance, as the save tells; one held
+ * inline is created with the instance it is held in. `created` collects the
+ * new instances in their own tables, which the walk reaches before what they
+ * hold.
  */
 function standingOf(
   reached: FieldGroupInstanceVisit,
-  existing: ReadonlySet<string> | undefined,
+  existing: ReadonlyMap<string, string> | undefined,
   created: WeakSet<object>
 ): { isNew: boolean; storedId: string | undefined } {
   const { instance, slug, field, inline, outer } = reached;
@@ -625,11 +741,14 @@ function standingOf(
     };
   }
   const id = typeof instance.id === "string" ? instance.id : undefined;
-  const storedHere =
-    id !== undefined && existing?.has(instanceKey(field, slug, id)) === true;
-  const isNew = existing !== undefined && !storedHere;
+  const storedId =
+    (id === undefined
+      ? undefined
+      : existing?.get(instanceKey(field, slug, id))) ??
+    existing?.get(singleInstanceKey(field, slug));
+  const isNew = existing !== undefined && storedId === undefined;
   if (isNew) created.add(instance);
-  return { isNew, storedId: storedHere ? id : undefined };
+  return { isNew, storedId };
 }
 
 /** The one judgment both passes make, over the instances the walk reaches. */
@@ -641,13 +760,13 @@ async function judgeFieldGroupInstances(params: {
   access: FieldGroupWriteAccess;
   inlineOnly: boolean;
   /**
-   * The identities of the instances already stored in their own tables
+   * The instances already stored in their own tables
    * (`storedInstanceKeys`). Given, one in its own table that is not among
    * them is new, and judged as a create; an inline one has no row of its own,
    * and is created with the instance it is held in when that one is new, and
    * otherwise takes `operation`, the document's.
    */
-  existing?: ReadonlySet<string>;
+  existing?: ReadonlyMap<string, string>;
 }): Promise<void> {
   const { access, existing } = params;
   const created = new WeakSet<object>();

@@ -308,6 +308,17 @@ export class SingleRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every Single's slug and label, read without the rest of its record: what
+   * a screen naming every Single needs.
+   */
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "label">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["label"]);
+    return records.map(({ slug, label }) => ({ slug, label }));
+  }
+
   async getAllSingles(
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
@@ -490,8 +501,11 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN — slug + source go to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single-locked",
           slug,
@@ -771,9 +785,10 @@ export class SingleRegistryService extends BaseRegistryService<
     const existing = await this.getSingle(slug);
 
     if (!options?.force) {
-      // Generic FORBIDDEN per §13.8 — the policy explanation is operator-only.
-      // Public clients see "You don't have permission to perform this action."
-      throw NextlyError.forbidden({
+      // Refused in words that say a Single is not deleted from here, a fact
+      // about Singles and not about the caller's permissions (which §13.8
+      // keeps generic). The `force` hint stays operator-only, in logContext.
+      throw NextlyError.singleNotDeletable({
         logContext: {
           reason: "single-requires-force-delete",
           slug,

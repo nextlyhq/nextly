@@ -24,6 +24,7 @@ import { EMAIL_VERIFICATION_BEFORE_BRAND } from "../services/templates/email-ver
 import { PASSWORD_RESET_BEFORE_BRAND } from "../services/templates/password-reset";
 import { WELCOME_BEFORE_BRAND } from "../services/templates/welcome";
 
+import { rendersWithReadableMutedText } from "./readable-muted-text";
 import {
   forgetOwnership,
   openTemplateStore,
@@ -130,7 +131,11 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
 
       const service = await boot();
 
-      expect(await renderBodies(service)).toEqual(before);
+      // Today's bodies, against the pre-brand ones with core's later muted-text
+      // contrast change applied: nothing else may differ.
+      expect(await renderBodies(service)).toEqual(
+        rendersWithReadableMutedText(before)
+      );
       // The control: the bodies were wrapped in the layout, so the equality
       // above compared the layout's output too.
       expect(JSON.stringify(before)).toContain("All rights reserved.");
@@ -370,7 +375,9 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         `ALTER TABLE ${q(EMAIL_BRAND_TABLE)} RENAME TO ${q(aside)}`
       );
       try {
-        expect(await renderBodies(service)).toEqual(before);
+        expect(await renderBodies(service)).toEqual(
+          rendersWithReadableMutedText(before)
+        );
         expect((await service.getBrand()).settings).toEqual(STARTING_BRAND);
       } finally {
         await store.exec(

@@ -80,6 +80,10 @@
       "samples": 1,
       "compiled": 1
     },
+    "docs/getting-started/build-a-blog.mdx": {
+      "samples": 5,
+      "compiled": 5
+    },
     "docs/getting-started/index.mdx": {
       "samples": 2,
       "compiled": 2
@@ -91,10 +95,6 @@
     "docs/getting-started/project-structure.mdx": {
       "samples": 3,
       "compiled": 3
-    },
-    "docs/getting-started/quick-start.mdx": {
-      "samples": 5,
-      "compiled": 5
     },
     "docs/guides/authentication.mdx": {
       "samples": 6,
@@ -117,8 +117,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 15,
-      "compiled": 10
+      "samples": 16,
+      "compiled": 11
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -141,15 +141,15 @@
       "compiled": 1
     },
     "docs/page-builder/index.mdx": {
-      "samples": 5,
-      "compiled": 5
+      "samples": 6,
+      "compiled": 6
     },
     "docs/page-builder/locked-areas.mdx": {
       "samples": 2,
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 3,
+      "samples": 4,
       "compiled": 2
     },
     "docs/plugins/admin-ui.mdx": {
@@ -326,7 +326,7 @@
     }
   },
   "pages": {
-    "docs/getting-started/quick-start.mdx": 1,
+    "docs/getting-started/build-a-blog.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/admin-ui.mdx": 1,
     "docs/plugins/auth.mdx": 2,
@@ -341,7 +341,7 @@
     "docs/plugins/services.mdx": 4
   },
   "findings": {
-    "docs/getting-started/quick-start.mdx": {
+    "docs/getting-started/build-a-blog.mdx": {
       "#1 error TS2769: No overload matches this call. The last overload gave the following error. Argument of type 'unknown' is not assignable to parameter of type 'string | number'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
@@ -446,6 +446,10 @@
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
       "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
     },
+    "docs/guides/media-storage.mdx": {
+      "uninstalled #0 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
+      "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/plugins/commerce/index.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1,
       "uninstalled #1 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1
@@ -511,9 +515,6 @@
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
-    "docs/guides/media-storage.mdx": {
-      "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
-    },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
     },
@@ -521,7 +522,8 @@
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
-      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1

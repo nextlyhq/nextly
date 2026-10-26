@@ -4,15 +4,17 @@
  * key of the query's `where` there and leave its source alone, and Only mine
  * drives nothing on a source that does not narrow by it.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { WidgetQuery } from "../query";
-
 import {
   type AnyWidgetSetting,
   applyWidgetSettings,
+  settingsSourceOf,
   widgetSettingsProblem,
 } from "../settings";
+import { clearSources } from "../sources";
+import { clearSystemResolvers, registerSystemSource } from "../system-sources";
 
 const collection: AnyWidgetSetting = { name: "collection", type: "collection" };
 const onlyMine: AnyWidgetSetting = {
@@ -109,6 +111,58 @@ describe("Only mine on a source that narrows by it", () => {
     // Admitted beside Collection where the source declares both.
     expect(
       widgetSettingsProblem([onlyMine, collection], false, filtering)
+    ).toBeUndefined();
+  });
+});
+
+describe("a cells card over a source that narrows by its filters", () => {
+  afterEach(() => {
+    clearSources();
+    clearSystemResolvers();
+  });
+
+  const cellsCard = {
+    cells: [{ key: "edits", query: { source: "system:edits", op: "list" } }],
+  };
+
+  function registerEdits(): void {
+    registerSystemSource(
+      {
+        id: "system:edits",
+        label: "Edits",
+        kind: "system",
+        supports: ["list"],
+        fields: [{ name: "entryTitle", type: "string" }],
+        filters: ["collection", "onlyMine"],
+      },
+      async () => ({ op: "list", items: [] })
+    );
+  }
+
+  it("refuses an Only mine checkbox its cells would never be asked with", () => {
+    // 🔴 Admitted, the card shows "only mine" on while every cell counts
+    // everyone's rows: the admin asks each cell with no filter metadata.
+    registerEdits();
+    expect(
+      widgetSettingsProblem([onlyMine], false, settingsSourceOf(cellsCard))
+    ).toMatch(/"onlyMine" is applied through its source's filters/);
+  });
+
+  it("refuses a Collection setting only a cell source's filter could apply", () => {
+    registerEdits();
+    expect(
+      widgetSettingsProblem([collection], false, settingsSourceOf(cellsCard))
+    ).toMatch(/"collection" is applied through its source's filters/);
+  });
+
+  it("admits both on a card's own query, which is asked with its filters", () => {
+    registerEdits();
+    expect(
+      widgetSettingsProblem(
+        [collection, onlyMine],
+        false,
+        settingsSourceOf({ query: { source: "system:edits", op: "list" } })
+      )
     ).toBeUndefined();
   });
 });

@@ -11,6 +11,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -67,6 +68,9 @@ async function boot(): Promise<TestNextly> {
     data: { siteName: "Acme", tagline: "Hello" },
     overrideAccess: true,
   });
+  // A code rule only narrows the permission, so the editor holds read on both
+  // singles and each single's read rule decides.
+  await userWhoMay(t, editor.user.id, "read", [SETTINGS, PRIVATE]);
   // What the layout and query endpoints do before resolving anything: publish
   // the sources and the cards derived from them from the live registries.
   await refreshCollectionWidgets();

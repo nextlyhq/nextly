@@ -87,11 +87,7 @@ export function QuickCreate(): JSX.Element | null {
   } = useCollections({
     pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
   });
-  const {
-    hasPermission,
-    isLoading: permissionsLoading,
-    error: permissionsError,
-  } = useCurrentUserPermissions();
+  const { canAccessCollection, content } = useCurrentUserPermissions();
   const tier = useCardTier();
 
   const creatable = useMemo(() => {
@@ -104,19 +100,21 @@ export function QuickCreate(): JSX.Element | null {
       collection =>
         !keptOffDashboard(collection) &&
         !collection.admin?.disableCreate &&
-        hasPermission(`create-${collection.name}`)
+        // The server's answer, not the `create-` slug: a collection's code
+        // rule can refuse a create the reader's role holds the permission for.
+        canAccessCollection(collection.name, "create")
     );
-  }, [data?.items, hasPermission]);
+  }, [data?.items, canAccessCollection]);
 
-  // 🔴 BOTH requests, and a failure of either. `hasPermission` answers from an
-  // empty set until `/me/permissions` lands, so a collection list that resolves
-  // first filters every row out and the card says the reader may create
-  // nothing — for the whole of that interval, and permanently if either request
-  // fails. Absence is the honest answer until both have arrived, because a
-  // claim about what someone may do cannot be made from an answer that has not
-  // come back.
-  if (collectionsLoading || permissionsLoading) return null;
-  if (collectionsError || permissionsError) return null;
+  // 🔴 BOTH requests, and a failure of either. `canAccessCollection` answers
+  // no until the server's answer about collections lands, so a collection list
+  // that resolves first filters every row out and the card says the reader may
+  // create nothing — for the whole of that interval, and permanently if a
+  // request fails. Absence is the honest answer until both have arrived,
+  // because a claim about what someone may do cannot be made from an answer
+  // that has not come back.
+  if (collectionsLoading || content.isLoading) return null;
+  if (collectionsError || !content.hasAnswer) return null;
 
   // 🔴 A truncated list cannot support the empty claim either. The page holds
   // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than

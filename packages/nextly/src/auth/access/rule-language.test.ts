@@ -25,6 +25,7 @@ vi.mock("../../di/container", () => ({
 
 import { buildRuleContext, type RuleCaller } from "./rule-context";
 import {
+  askEachLanguage,
   currentRuleLanguage,
   everyLanguage,
   languagesOfContent,
@@ -305,5 +306,40 @@ describe("languagesOfContent", () => {
     );
     expect(related.locale).toBeUndefined();
     expect(related.locales).toEqual(every.locales);
+  });
+});
+
+describe("askEachLanguage", () => {
+  it("asks once for each language, each time told that language and all of them", async () => {
+    const asked: { locale?: string; locales: readonly string[] }[] = [];
+    const answer = await askEachLanguage(["en", "fr"], async () => {
+      asked.push(currentRuleLanguage());
+      return undefined;
+    });
+    expect(answer).toBeUndefined();
+    expect(asked).toEqual([
+      { locale: "en", locales: ["en", "fr"] },
+      { locale: "fr", locales: ["en", "fr"] },
+    ]);
+  });
+
+  it("refuses with the first refusal, naming every language refused", async () => {
+    const answer = await askEachLanguage(["en", "fr", "de"], async () => {
+      const { locale } = currentRuleLanguage();
+      return locale === "en" ? undefined : `refused in ${locale}`;
+    });
+    expect(answer).toEqual({ refusal: "refused in fr", refused: ["fr", "de"] });
+  });
+
+  it("asks once, in the operation's own languages, where no language is named", async () => {
+    container.config = { localization: LOCALISED };
+    const asked: { locale?: string; locales: readonly string[] }[] = [];
+    await withRuleLanguage(everyLanguage(), () =>
+      askEachLanguage([], async () => {
+        asked.push(currentRuleLanguage());
+        return undefined;
+      })
+    );
+    expect(asked).toEqual([{ locales: ["en", "fr", "de"] }]);
   });
 });

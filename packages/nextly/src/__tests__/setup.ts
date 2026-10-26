@@ -9,6 +9,41 @@ import {
   recordTransactionEscapes,
   takeTransactionEscapes,
 } from "./transaction-escapes";
+import {
+  CLAIMS_ENV,
+  POSTGRES_BASE_ENV,
+  claimWorker,
+  integrationWorkers,
+  releaseWorker,
+  workerDatabaseUrl,
+  workerPoolId,
+} from "./worker-database-guard";
+
+// On PostgreSQL with more than one worker, this file's suites connect to its
+// worker's own database, which the run's global setup created. Every suite
+// reads TEST_POSTGRES_URL, so pointing it there before any suite loads moves
+// them all. The URL is derived from the one the run was given (kept apart),
+// never from a value an earlier file in this process already rewrote.
+const postgresBase = process.env[POSTGRES_BASE_ENV];
+if (postgresBase) {
+  process.env.TEST_POSTGRES_URL = workerDatabaseUrl(
+    postgresBase,
+    workerPoolId(process.env.VITEST_POOL_ID, integrationWorkers(process.env))
+  );
+}
+
+// This file's claim on its worker's pool id, and so on its database, for as
+// long as its tests run. Vitest may start a slot's next process while the last
+// one is still exiting, so the claim is held per file rather than per process:
+// what must never happen is two files running at once on one database. Only
+// integration runs set the claims directory (their global setup); a unit run,
+// which loads this file too, has none.
+const claims = process.env[CLAIMS_ENV];
+if (claims) {
+  const poolId = process.env.VITEST_POOL_ID ?? "unknown";
+  beforeAll(() => claimWorker(claims, poolId));
+  afterAll(() => releaseWorker(claims, poolId));
+}
 
 beforeAll(() => {
   // Setup test environment

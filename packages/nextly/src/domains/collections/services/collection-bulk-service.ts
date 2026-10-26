@@ -19,7 +19,10 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
-import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import {
+  errorFromServiceEnvelope,
+  recordServiceRefusal,
+} from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -1279,18 +1282,7 @@ export class CollectionBulkService extends BaseService {
         // below already carries the scope, but this gate ran without it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message || "Access denied",
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE on the pooled connection
     // before the shared transaction, so each worker enforces the create-as-
@@ -1423,17 +1415,7 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE before looping the workers,
     // so each create-as-published is enforced without a per-row permission read.
@@ -1544,18 +1526,7 @@ export class CollectionBulkService extends BaseService {
         // it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
     // connection before the shared transaction, so each worker enforces its
@@ -1700,17 +1671,7 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
     // the workers, so each transition is enforced under the row lock without a
@@ -1804,18 +1765,7 @@ export class CollectionBulkService extends BaseService {
         operation: "delete",
         user: params.user,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
 
     // Every companion verdict the batch needs, resolved on the pool before the shared
     // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
@@ -1975,17 +1925,7 @@ export class CollectionBulkService extends BaseService {
         user: params.user,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
 
     // The shared batch loop. The intents and outbox signal it accumulates are
     // surfaced on the result for the CALLER to flush after ITS commit — this
@@ -2272,4 +2212,26 @@ async function assertCallerFilterReadable(
       },
     }
   );
+}
+
+/**
+ * The result of a batch the collection gate refused as a whole: every item
+ * failed, each with the refusal's words. The refusal reaches its caller here,
+ * folded into the batch, so it is recorded here, as one converted to an error
+ * is where it is converted.
+ */
+function everyItemRefused(
+  refused: CollectionServiceResult<BatchOperationResult>,
+  count: number
+): BatchOperationResult {
+  recordServiceRefusal(refused);
+  return {
+    successful: 0,
+    failed: count,
+    errors: Array.from({ length: count }, (_, index) => ({
+      index,
+      error: refused.message,
+    })),
+    ids: [],
+  };
 }

@@ -51,9 +51,10 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
+import { noticeRuleNoLongerAllows } from "./rule-answer-log";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
-export type GateVerdict = (
+export type GateVerdict =
   | { readonly allowed: true }
   | {
       readonly allowed: false;
@@ -64,15 +65,7 @@ export type GateVerdict = (
        */
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
-    }
-) & {
-  /**
-   * A signed-in user's rule answer when it was not a yes or no (`null`, a
-   * string): the gate judges it truthy, and `ctx.caller.can` hands it back as
-   * it came.
-   */
-  readonly ruleAnswer?: unknown;
-};
+    };
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
@@ -244,15 +237,50 @@ async function visitorVerdict(
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
   const visitor = actorForVisitor();
   const outcome = await askRule(visitor, q.action, target);
-  // A rule refuses a visitor by answering `false`, or by failing.
+  // A rule that answers `false` or fails refuses a visitor outright, and a
+  // publish or an unpublish needs a signed-in user whatever the rule says.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
   }
   if (isLifecycle(q.action)) return UNAUTHENTICATED;
-  const allowed = await deviate("visitor-public-default", true, () =>
-    decided(visitor, q.action, target)
+  // Otherwise a declared rule lets a visitor through only by answering
+  // `true`.
+  if (!outcomeAllows(outcome)) {
+    noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
+    return INSUFFICIENT;
+  }
+  return visitorPassVerdict(q, target, outcome.declared);
+}
+
+/**
+ * A visitor whose rule did not refuse: no rule for the action, or one that
+ * answered `true`.
+ *
+ * Only a read keeps the public default. Every other action changes data, so
+ * with no rule naming it the write needs a signed-in caller: an anonymous
+ * create, update or delete is allowed only where the target's author wrote a
+ * rule that answers `true`. Asked of every action but a read, so an action
+ * added later is refused rather than let through.
+ */
+async function visitorPassVerdict(
+  q: GateQuestion,
+  target: AccessTarget,
+  ruleDeclared: boolean
+): Promise<GateVerdict> {
+  const visitor = actorForVisitor();
+  if (q.action === "read") {
+    return verdictOf(
+      await deviate("visitor-public-default", true, () =>
+        decided(visitor, q.action, target)
+      )
+    );
+  }
+  if (!ruleDeclared) return UNAUTHENTICATED;
+  return verdictOf(
+    await deviate("visitor-write-by-rule", true, () =>
+      decided(visitor, q.action, target)
+    )
   );
-  return verdictOf(allowed);
 }
 
 async function keyVerdict(
@@ -351,11 +379,35 @@ async function grantJudgedVerdict(
   );
 }
 
-/** A key's rule allows only by answering `true`; no rule adds no limit. */
+/** A rule allows only by answering `true`; no rule adds no limit. */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
   return !("threw" in outcome) && outcome.value === true;
 }
+
+/**
+ * Names a refusal this gate would have allowed before, once. `allowedBefore`
+ * says how this caller's answer was judged then, because the two callers
+ * differed: a visitor was refused only by `false` or a throw, so `null` and
+ * `undefined` let it through, while a signed-in user was judged truthy, so
+ * those refused it already. A throw refused both then and now.
+ */
+function noticeWhereRuleAllowedBefore(
+  outcome: RuleOutcome,
+  allowedBefore: (value: unknown) => boolean,
+  q: GateQuestion,
+  caller: string
+): void {
+  if (!outcome.declared || "threw" in outcome) return;
+  if (!allowedBefore(outcome.value)) return;
+  noticeRuleNoLongerAllows(q.slug, q.action, caller, outcome.value);
+}
+
+/** A visitor's rule refused only by answering `false`. */
+const allowedVisitorBefore = (value: unknown): boolean => value !== false;
+
+/** A signed-in user's rule answer was judged truthy. */
+const allowedUserBefore = (value: unknown): boolean => Boolean(value);
 
 /**
  * The decision's answer from the action rule's outcome the gate has already
@@ -478,16 +530,20 @@ async function ruleVerdict({
   }
   const actor = await looked();
   const outcome = await askRule(actor, q.action, target);
-  const today =
-    outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
-  const verdict = verdictOf(
+  // The rule lets a signed-in user through only by answering `true`, as it
+  // has always done for a key.
+  const today = outcomeAllows(outcome);
+  if (!today) {
+    noticeWhereRuleAllowedBefore(
+      outcome,
+      allowedUserBefore,
+      q,
+      "signed-in user"
+    );
+  }
+  return verdictOf(
     await deviate("rule-alone-for-people", today, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );
-  return outcome.declared &&
-    !("threw" in outcome) &&
-    typeof outcome.value !== "boolean"
-    ? { ...verdict, ruleAnswer: outcome.value }
-    : verdict;
 }

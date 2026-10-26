@@ -29,9 +29,11 @@ metadata:
 3. **Isolation is per-file prefixes, not parallelism.** Use the canonical
    helper (`packages/nextly/src/database/__tests__/integration/helpers/test-db.ts`)
    which generates a random per-file table/schema prefix. In packages/nextly
-   the integration config runs files sequentially (`fileParallelism: false`,
-   single fork) because system-table suites share fixed table names like
-   `nextly_schema_events`. Do not re-enable parallelism to make runs faster.
+   each integration worker runs its files in sequence, and more than one
+   worker runs only where each has its own database
+   (`packages/nextly/src/__tests__/worker-database-guard.ts`), because
+   system-table suites share fixed table names like `nextly_schema_events`.
+   Never run files in parallel on a shared database to make runs faster.
 4. **System tables come from production DDL.** If a suite needs a Nextly
    system table, create it with the production helper (for example
    `getSchemaEventsDdl(dialect)`), never a hand-copied CREATE TABLE. Copies

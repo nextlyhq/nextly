@@ -82,6 +82,47 @@ describe("route-auth wrappers", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("passes on what a 403 says was refused, and keeps its reason for the log", async () => {
+    // The wrappers convert a refusal as every other route does, so the same
+    // gate is answered in the same words through either.
+    middleware.requirePermission.mockResolvedValue({
+      ...errorResponse(403),
+      error: "You can't edit posts.",
+      reason: "the caller does not hold update-posts",
+    });
+    const refused = requireRoutePermission(request, "update", "posts");
+    await expect(refused).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: "You can't edit posts.",
+    });
+    await refused.catch((err: NextlyError) => {
+      expect(err.logContext).toMatchObject({
+        reason: "the caller does not hold update-posts",
+      });
+    });
+  });
+
+  it("keeps a 401's reason for the log", async () => {
+    middleware.requireAuthentication.mockResolvedValue({
+      ...errorResponse(401),
+      reason: "the API key is revoked",
+    });
+    const refused = requireRouteAuthentication(request);
+    await expect(refused).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
+    await refused.catch((err: NextlyError) => {
+      expect(err.logContext).toMatchObject({
+        reason: "the API key is revoked",
+      });
+    });
+  });
+
+  it("answers an unavailable key service as unavailable, not as a refusal", async () => {
+    middleware.requireAuthentication.mockResolvedValue(errorResponse(503));
+    await expect(requireRouteAuthentication(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
   it("throws RATE_LIMITED for a 429 middleware response", async () => {
     middleware.requireCollectionAccess.mockResolvedValue(errorResponse(429));
     await expect(
