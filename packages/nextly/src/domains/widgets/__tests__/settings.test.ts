@@ -969,6 +969,23 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
         }
       );
 
+      it("drops the source and fields it was declared with, set to a collection it cannot title", () => {
+        // 🔴 Kept, the card would read pages' rows under a setting naming posts.
+        const declared = {
+          ...list,
+          source: "collection:pages",
+          select: ["title", "updatedAt"],
+        };
+        expect(
+          applyWidgetSettings(
+            declared,
+            [titled],
+            { collection: "posts" },
+            published({ titleField: undefined })
+          )
+        ).toEqual(list);
+      });
+
       it("asks nothing where the reader's collections are not known", () => {
         expect(
           applyWidgetSettings(list, [titled], { collection: "posts" })
