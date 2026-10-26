@@ -873,7 +873,9 @@ async function resolveAuthorization(
   method: string,
   operation: string,
   routeParams: Record<string, string> | undefined,
-  httpMethod: string
+  httpMethod: string,
+  // Whether the request's path names one entry; see the caller.
+  entryInPath = false
 ): Promise<AuthContext | ErrorResponse> {
   // --- Collection endpoints ---
   if (service === "collections") {
@@ -884,6 +886,7 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        namesOne: entryInPath,
       });
     }
     if (method === "getCollection") {
@@ -924,6 +927,8 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        // A Single is its one document, named by its slug.
+        namesOne: true,
       });
     }
     if (method === "getSingleSchema") {
@@ -1328,6 +1333,11 @@ async function serveServiceRequest(
     httpMethod,
     searchParams
   );
+  // Whether the PATH names one entry. The parsed parameters also carry the
+  // query, so a list request with `?entryId=` would otherwise read as naming
+  // one; parsed without its query, only a route that names one has an id.
+  const entryInPath =
+    parseRestRoute(params, httpMethod).routeParams?.entryId !== undefined;
 
   if (!service || !operation || !method) {
     // Only now. A plugin may claim a top-level path, and this is the point at
@@ -1609,7 +1619,8 @@ async function serveServiceRequest(
         method,
         operation,
         routeParams,
-        httpMethod
+        httpMethod,
+        entryInPath
       );
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
@@ -2146,7 +2157,10 @@ function refuseRequest(
 ): Response {
   // Answered with the request's own id, as every other error is.
   const response = createJsonErrorResponse(refusal, req);
-  return SESSION_PRIVATE_METHODS.has(method)
+  // A named entry answered as missing depends on who asked, unlike a missing
+  // entry's 404, and a 404 is cacheable by default: kept private, so a shared
+  // cache never replays one caller's answer to another who may read it.
+  return SESSION_PRIVATE_METHODS.has(method) || refusal.statusCode === 404
     ? withSessionCacheHeaders(response)
     : response;
 }

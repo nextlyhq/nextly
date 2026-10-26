@@ -67,7 +67,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
       },
     });
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The same super-admin as a session caller (no scope) bypasses the rule —
     // proving the scope, not the role, decides.

@@ -21,7 +21,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
-import { singleGateVerdict } from "../../../auth/access/gate-adapters";
+import {
+  answerForRefusal,
+  singleGateVerdict,
+} from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -310,19 +313,30 @@ export async function checkSingleAccess(params: {
 
   // Asked of the one access decision, through the adapter that keeps this
   // gate's answers as they were (`auth/access/gate-adapters`).
-  const verdict = await singleGateVerdict({
-    slug,
-    action: operation,
-    user,
-    routeAuthorized,
-    scope: authenticatedScope,
-    principal: currentPrincipal(),
-    rules: rbacAccessControlService,
-  });
+  const ask = (action: typeof operation) =>
+    singleGateVerdict({
+      slug,
+      action,
+      user,
+      routeAuthorized,
+      scope: authenticatedScope,
+      principal: currentPrincipal(),
+      rules: rbacAccessControlService,
+    });
+  const verdict = await ask(operation);
   if (verdict.allowed) return null;
+  // A Single is its one document: a caller who may not read it is answered
+  // as a missing Single is. A caller with no identity, neither a user nor a
+  // plugin's own principal, is left to the sign-in answer, which comes first.
+  const answer = await answerForRefusal(
+    verdict,
+    operation,
+    user !== undefined || currentPrincipal() !== null,
+    ask
+  );
 
-  if (verdict.refusal === "failed") {
-    const error = verdict.error;
+  if (answer.answer === "failed") {
+    const error = answer.error;
     logger.error("RBAC access check failed for Single", {
       slug,
       operation,
@@ -336,6 +350,14 @@ export async function checkSingleAccess(params: {
       statusCode: 500,
       message: "Failed to verify RBAC permissions",
       ...errorEnvelopeFields(error),
+    };
+  }
+  if (answer.answer === "missing") {
+    // The missing Single's own answer, data and all, so nothing in it tells
+    // the two apart; only the server's reason is added.
+    return {
+      ...singleAbsentResult(slug),
+      refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
   // The caller is told what was refused in the site's words. Which check

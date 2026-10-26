@@ -7660,6 +7660,12 @@ export class CollectionMutationService extends BaseService {
    */
   async resolveTransitionAuthorization(args: {
     collectionName: string;
+    /**
+     * The one entry the write changes, where it changes one, so a caller who
+     * may not read it is answered as if it were missing. A create or a
+     * batch resolved ahead names no one existing entry.
+     */
+    entryId?: string;
     accessUser?: UserContext;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
@@ -7688,6 +7694,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "publish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -7697,6 +7704,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "unpublish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -12302,6 +12310,7 @@ export class CollectionMutationService extends BaseService {
         params.transitionAuth ??
         (await this.resolveTransitionAuthorization({
           collectionName: params.collectionName,
+          entryId,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
           // This fallback fires only for a direct caller-owned-tx write (the bulk
@@ -13192,6 +13201,9 @@ export class CollectionMutationService extends BaseService {
         }>({
           collectionName: params.collectionName,
           operation: "delete",
+          // The one entry it deletes, so a caller who may not read it is
+          // answered as if it were missing, as the ordinary delete answers.
+          entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),

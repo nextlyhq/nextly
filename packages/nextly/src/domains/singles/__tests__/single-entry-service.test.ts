@@ -369,7 +369,7 @@ describe("SingleEntryService", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
       expect(ctx.adapter.selectOne).not.toHaveBeenCalled();
     });
 
@@ -907,7 +907,24 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("update — RBAC", () => {
-    it("denies with 403 when RBAC reports access denied", async () => {
+    it("refuses an update in words, to a caller who may read the Single", async () => {
+      // One it may read, the caller is told what it may not do.
+      ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      callerMay("read");
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "X" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(result.message).toMatch(/^You can't edit /);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
+    it("answers a caller who may not read the Single as if it were missing", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       callerMay();
@@ -919,7 +936,13 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // The missing Single's own answer, data and all, so nothing tells the two
+      // apart.
+      expect(result).toMatchObject({
+        statusCode: 404,
+        publicData: { single: "site-settings" },
+      });
       expect(ctx.adapter.update).not.toHaveBeenCalled();
     });
 

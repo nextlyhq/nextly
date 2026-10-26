@@ -65,7 +65,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The denial left nothing written: the persisted row is still draft, not a
     // published row that merely returned an error after the write.
@@ -117,7 +118,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The code-defined publish denial also left the row draft.
     const [afterDenial] = await current.adapter.select<{ status: string }>(
@@ -259,7 +261,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // The companion `_status` was not moved to published.
     const rows = (await adapter.executeQuery(
@@ -306,7 +309,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // Same owner, key scoped WITH `publish-posts` → allowed.
     const allowed = await handler.updateEntry(
@@ -406,7 +410,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
   });
 
   it("route-authorizes publish-all's update gate for a scoped key", async () => {

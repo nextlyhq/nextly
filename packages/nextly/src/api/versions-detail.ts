@@ -20,7 +20,7 @@ import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondDoc } from "./response-shapes";
+import { privateToSession, respondDoc } from "./response-shapes";
 import {
   assertHistoryLocalesReadable,
   hydrateVersionSnapshot,
@@ -69,8 +69,10 @@ function parseScopeKind(kind: string): VersionScopeKind {
  * passed through field-level read redaction — a stored snapshot must never
  * reveal a field a normal read would hide.
  */
-export const GET = withErrorHandler(
-  async (request: Request, context: RouteContext) => {
+// Private to the session, refusals included: a version the caller may not
+// read is answered as missing, and that answer belongs to the one caller.
+export const GET = privateToSession(
+  withErrorHandler(async (request: Request, context: RouteContext) => {
     const { kind, slug, id, versionNo } = await context.params;
     const scopeKind = parseScopeKind(kind);
 
@@ -133,5 +135,5 @@ export const GET = withErrorHandler(
     );
 
     return respondDoc({ ...row, withheld: [...withheld] });
-  }
+  })
 );
