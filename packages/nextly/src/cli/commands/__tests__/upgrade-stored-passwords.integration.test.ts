@@ -385,6 +385,17 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // Registered, with its table later dropped from under it.
+          defineCollection({
+            slug: "upgone",
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "own",
+                fields: [text({ name: "a" }), password({ name: "pin" })],
+              }),
+            ],
+          }),
         ],
       } as never);
       trusted = new Nextly();
@@ -509,6 +520,15 @@ describe.each(getConfiguredTestDialects())(
       const reported = `${describeError(failure)} ${JSON.stringify(failure)}`;
       expect(reported).not.toContain("fail-0");
       expect(reported).not.toMatch(/\$2[aby]\$/);
+    });
+
+    it("counts the tables that exist when a registered one is missing", async () => {
+      await seedPlain("gone");
+      await t.adapter.dropTable("dc_upgone", { ifExists: true });
+
+      expect(await countPasswordsStoredAsGiven(source())).toEqual([
+        { kind: "collection", slug: "upbulk", count: 5 },
+      ]);
     });
   }
 );
