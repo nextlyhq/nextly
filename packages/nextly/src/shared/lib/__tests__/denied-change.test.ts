@@ -127,24 +127,85 @@ describe("resolvePromotedDocument", () => {
   });
 
   it("drops the CALLER's own denied edit back to live instead of refusing", async () => {
+    // Allowed on the caller's payload alone, which carries no `kind`, and
+    // denied once the pending change's `kind` is folded in: the caller's own
+    // input, which the publish may drop.
     const out = await resolve({
-      before: { guarded: "caller wrote this" },
-      live: { guarded: "live" },
+      before: { kind: "private", guarded: "caller wrote this" },
+      live: { kind: "private", guarded: "live" },
       callerSupplied: { guarded: "caller wrote this" },
-      applyRules: denies("guarded"),
+      applyRules: deniesGuardedWhilePrivate,
     });
-    expect(out).toEqual({ guarded: "live" });
+    expect(out).toEqual({ kind: "private", guarded: "live" });
+  });
+
+  it("does not credit the caller with a value the rules deny them", async () => {
+    // The field gate keeps a protected child of a group the caller sent at its
+    // stored value, so their payload carries it although they may not write
+    // it. Credited, the pending change's edit of it would be dropped to live
+    // while the publish consumes the draft.
+    await expect(
+      resolve({
+        before: { seo: { title: "caller", secret: "live" } },
+        live: { seo: { title: "old", secret: "live" } },
+        callerSupplied: { seo: { title: "caller", secret: "live" } },
+        pending: { seo: { title: "draft", secret: "pending" } },
+        applyRules: denies("seo.secret"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
+  });
+
+  it("judges a denied value the caller's group replaced as the PENDING change holds it", async () => {
+    // The caller's group carries the protected child at its live value, and
+    // the pending change left it alone: nothing the caller is denied changes.
+    const out = await resolve({
+      before: { seo: { title: "caller", secret: "live" } },
+      live: { seo: { title: "old", secret: "live" } },
+      callerSupplied: { seo: { title: "caller", secret: "live" } },
+      pending: { seo: { title: "draft", secret: "live" } },
+      applyRules: denies("seo.secret"),
+    });
+    expect(out).toEqual({ seo: { title: "caller", secret: "live" } });
+  });
+
+  it("refuses a protected value the pending change ADDS inside a group the caller replaced", async () => {
+    // Neither the promoted document nor live holds it, so only the pending
+    // change on its own names it.
+    await expect(
+      resolve({
+        before: { seo: { title: "caller" } },
+        live: { seo: { title: "old" } },
+        callerSupplied: { seo: { title: "caller" } },
+        pending: { seo: { title: "draft", secret: "pending" } },
+        applyRules: denies("seo.secret"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
   });
 
   it("still refuses a sibling the caller did NOT supply, inside the same container", async () => {
     // The removal is reported at the container, and its contents have two
     // authors: exempting the whole subtree loses the pending change's sibling.
+    // The rule reads the pending change's `kind`, so the caller's payload alone
+    // is allowed and the folded document is not.
     await expect(
       resolve({
-        before: { promo: { label: "caller", tagline: "draft" } },
-        live: { promo: { label: "live", tagline: "live tagline" } },
+        before: {
+          kind: "private",
+          promo: { label: "caller", tagline: "draft" },
+        },
+        live: {
+          kind: "private",
+          promo: { label: "live", tagline: "live tagline" },
+        },
         callerSupplied: { promo: { label: "caller" } },
-        applyRules: denies("promo"),
+        applyRules: document => {
+          if (document.kind === "private") delete document.promo;
+          return Promise.resolve();
+        },
       })
     ).rejects.toMatchObject({
       publicData: { errors: [{ path: "promo.tagline" }] },

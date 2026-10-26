@@ -1,7 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { createSeededRole } from "../../database/seeders/create-seeded-role";
-import { ServiceContainer } from "../../services/index";
+import { serviceContainerFor } from "../../services/service-container-for";
 import type { Logger } from "../../services/shared";
 
 import type { CollectedRole } from "./collect-roles";
@@ -24,7 +24,9 @@ export async function seedPluginRoles(
 ): Promise<void> {
   if (collected.length === 0) return;
 
-  const container = new ServiceContainer(adapter);
+  // Loaded when roles are seeded, not by importing this module: the container
+  // imports every core service.
+  const container = await serviceContainerFor(adapter);
   const roleService = container.roles;
   const permissionService = container.permissions;
 

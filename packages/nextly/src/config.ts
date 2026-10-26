@@ -290,7 +290,7 @@ export type {
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
 // module that builds it into a `nextly.config.ts`.
-export type { PublishedContentSource } from "./domains/widgets/publish";
+export type { PublishedContentSource } from "./domains/widgets/published-content-source";
 // The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
@@ -328,6 +328,7 @@ export {
 } from "./domains/widgets/get-started-steps";
 export type {
   SourcelessWidgetQuery,
+  TimeseriesRange,
   WidgetQuery,
 } from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
@@ -343,6 +344,7 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
  */
 export {
   applyWidgetSettings,
+  effectiveWidgetSettings,
   resolveWidgetSettings,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
@@ -355,6 +357,7 @@ export type {
   AnyWidgetSetting,
   ContentSetting,
   KnobContext,
+  KnobField,
   KnobSource,
 } from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity

@@ -8,7 +8,7 @@
  * torn down — and every one of those was wrong while that suite was green.
  */
 import { createServer, type Server } from "node:http";
-import { AddressInfo, createServer as createNetServer } from "node:net";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 

@@ -52,6 +52,8 @@ const serverEntries = [
   "src/api/auth-state.ts",
   "src/api/health.ts",
   "src/api/media-handlers.ts",
+  // The route serving local uploads Next.js has no static file for.
+  "src/api/uploads.ts",
   "src/api/collections-schema.ts",
   "src/api/collections-schema-detail.ts",
   "src/api/collections-schema-export.ts",

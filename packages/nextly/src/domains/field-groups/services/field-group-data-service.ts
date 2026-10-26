@@ -5,7 +5,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
-import { type LocalizationSource } from "../../i18n/localization-source";
+import type { LocalizationSource } from "../../i18n/localization-source";
 
 import {
   FieldGroupMutationService,

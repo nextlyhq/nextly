@@ -107,8 +107,10 @@ describe("both configs actually run", () => {
     // green that covers no test file at all. That exact false pass has already
     // cost this repo a defect, which is why the script is asserted rather than
     // assumed.
+    // The compiler runs through `scripts/tsc.mjs`, which sizes its checkers
+    // to the machine and passes every other argument to `tsc`.
     const script = packageJson().scripts["check-types"];
-    expect(script).toContain("tsc --noEmit");
+    expect(script).toContain("scripts/tsc.mjs --noEmit");
     expect(script).toContain("-p tsconfig.tests.json");
   });
 });

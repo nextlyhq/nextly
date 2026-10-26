@@ -39,6 +39,11 @@ import {
 import type { WidgetDefinition } from "./definition";
 import type { WidgetPermissionGate } from "./gate";
 import { publishableWidgets } from "./publish";
+import {
+  textBoundsOf,
+  type AnyWidgetSetting,
+  type TextBound,
+} from "./settings";
 import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
 
 /**
@@ -138,6 +143,12 @@ export interface CanonicalWidget {
   /** Whether the reader may send this card away; see `WidgetDefinition`. */
   dismissible?: boolean;
   /**
+   * The bounds the declaration's textarea settings state, from either channel,
+   * so the layout write holds a placement's text to them whichever channel
+   * declared the widget. Absent when the declaration states no settings.
+   */
+  textBounds?: readonly TextBound[];
+  /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none, and a declared
    * widget's empty-state action's, when it has one.
@@ -214,7 +225,20 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
         : [definition.empty.action.requiredPermission]),
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
+    ...textBoundsField(definition.settings),
   };
+}
+
+/**
+ * A declaration's textarea bounds as a summary field: absent when it states no
+ * settings, so a merge reads the other channel's, as the admin reads its
+ * settings.
+ */
+export function textBoundsField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "textBounds"> {
+  const textBounds = textBoundsOf(settings);
+  return textBounds === undefined ? {} : { textBounds };
 }
 
 /**
@@ -314,6 +338,10 @@ function mergeCanonical(
   // declaration says nothing about it, which is exactly the two-implementations
   // divergence this function exists to prevent.
   const dismissible = registration.dismissible ?? contribution.dismissible;
+  // The admin's own rule for settings: the registration's wherever it states
+  // any, else the contribution's. Dropped by the spread below, a merged
+  // widget's sheet would bound a note its layout write let through.
+  const textBounds = registration.textBounds ?? contribution.textBounds;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -325,6 +353,7 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...(dismissible === undefined ? {} : { dismissible }),
+    ...(textBounds === undefined ? {} : { textBounds }),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
     // Both copies' action gates, because both copies ship: the payload carries

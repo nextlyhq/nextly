@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.",
   "license": "MIT",
   "type": "module",
@@ -114,6 +114,10 @@
     "./api/media-handlers": {
       "types": "./dist/api/media-handlers.d.mts",
       "import": "./dist/api/media-handlers.mjs"
+    },
+    "./api/uploads": {
+      "types": "./dist/api/uploads.d.mts",
+      "import": "./dist/api/uploads.mjs"
     },
     "./api/collections-schema": {
       "types": "./dist/api/collections-schema.d.mts",
@@ -250,7 +254,7 @@
   "scripts": {
     "build": "rimraf dist .dts-tmp && tsc -p tsconfig.dts.json && tsdown && tsdown -c tsdown.dts.config.ts && node scripts/postbuild.cjs",
     "dev": "node scripts/dev.mjs",
-    "check-types": "tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist .dts-tmp",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -291,7 +295,7 @@
     "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "tsx": "^4.20.5",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },
@@ -347,7 +351,7 @@
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",
     "server-only": "^0.0.1",
-    "zod": "^4.6.2"
+    "zod": "^4.6.7"
   },
   "repository": {
     "type": "git",

@@ -10,11 +10,13 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { PublishedContentSource } from "../publish";
 import type { SourcelessWidgetQuery } from "../query";
 import {
   type AnyWidgetSetting,
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
+  effectiveWidgetSettings,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
@@ -79,6 +81,27 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
         "core/x"
       )
     ).toThrow(/function default/);
+  });
+
+  it("takes rows on a Collection setting alone, and only titled", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", rows: "titled" }],
+        "core/x"
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "note", type: "text", rows: "titled" } as never],
+        "core/x"
+      )
+    ).toThrow(/declares rows, which only a Collection setting takes/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", rows: "all" } as never],
+        "core/x"
+      )
+    ).toThrow(/has rows "all"; expected "titled"/);
   });
 
   /*
@@ -763,6 +786,24 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
       });
     });
 
+    it("hands the card the same values its query was asked with, not the stored ones it set aside", () => {
+      // 🔴 Drawn from the stored values, a card links its number to a filter
+      // the query never counted under.
+      const stored = {
+        collection: "posts",
+        where: { salary: { gt: 1 } },
+        order: "salary",
+        by: "status",
+      };
+      expect({
+        ...effectiveWidgetSettings(content, stored, ctx),
+      }).toEqual({ collection: "posts", order: "-updatedAt", by: "status" });
+      // Without the reader's fields, nothing is known to be withheld.
+      expect(effectiveWidgetSettings(content, stored).where).toEqual({
+        salary: { gt: 1 },
+      });
+    });
+
     it("narrows a declared condition with the reader's Filter, keeping the declared keys at the top level", () => {
       // A workflow condition is read only at the top level, so the Filter
       // joins it under `and` rather than wrapping it.
@@ -821,6 +862,118 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
       expect(applyWidgetSettings(base, [dateRange], { dateRange: "7d" })).toBe(
         base
       );
+    });
+
+    it("sets a ranged chart's range from the card's Date range, never a since beside it", () => {
+      // 🔴 Joined by a since, the query names two windows and the server
+      // refuses it, so the chart would never draw.
+      const dateRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "30d",
+        options: [
+          { label: "7 days", value: "7d" },
+          { label: "30 days", value: "30d" },
+          { label: "60 days", value: "60d" },
+          { label: "12 months", value: "12m" },
+        ],
+      };
+      const ranged = {
+        op: "timeseries" as const,
+        dateField: "createdAt",
+        range: "30d" as const,
+      };
+      const asked = applyWidgetSettings(ranged, [dateRange], {
+        dateRange: "12m",
+      });
+      expect(asked).toMatchObject({ range: "12m" });
+      expect(asked).not.toHaveProperty("since");
+      // A span that is no range leaves the declared range as it was.
+      expect(
+        applyWidgetSettings(ranged, [dateRange], { dateRange: "60d" })
+      ).toBe(ranged);
+    });
+
+    describe("a titled list", () => {
+      const titled = {
+        name: "collection",
+        type: "collection" as const,
+        rows: "titled" as const,
+      };
+      const list: {
+        op: "list";
+        sort: string;
+        limit: number;
+        select?: string[];
+      } = { op: "list", sort: "-updatedAt", limit: 5 };
+      const published = (over: Partial<PublishedContentSource> = {}) => ({
+        sourceOf: (collection: string) =>
+          collection === "posts"
+            ? {
+                collection: "posts",
+                label: "Posts",
+                lifecycle: true,
+                titleField: "headline",
+                fields: [
+                  { name: "headline", type: "string" as const },
+                  { name: "updatedAt", type: "date" as const },
+                ],
+                ...over,
+              }
+            : undefined,
+      });
+
+      it("asks each row's title, its status and when it was updated, and nothing else", () => {
+        expect(
+          applyWidgetSettings(
+            list,
+            [titled],
+            { collection: "posts" },
+            published()
+          )
+        ).toEqual({
+          ...list,
+          source: "collection:posts",
+          select: ["headline", "status", "updatedAt"],
+        });
+        // No lifecycle, no status.
+        expect(
+          applyWidgetSettings(
+            list,
+            [titled],
+            { collection: "posts" },
+            published({ lifecycle: false })
+          ).select
+        ).toEqual(["headline", "updatedAt"]);
+      });
+
+      it.each([
+        ["names no title", { titleField: undefined }],
+        [
+          "has no updatedAt",
+          { fields: [{ name: "headline", type: "string" as const }] },
+        ],
+      ])(
+        "asks nothing of a collection that %s, rather than whole rows",
+        (_why, over) => {
+          // 🔴 Given its source with no select, the read would return every
+          // column of every row.
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled],
+              { collection: "posts" },
+              published(over)
+            )
+          ).toBe(list);
+        }
+      );
+
+      it("asks nothing where the reader's collections are not known", () => {
+        expect(
+          applyWidgetSettings(list, [titled], { collection: "posts" })
+        ).toBe(list);
+      });
     });
 
     it("leaves a widget's own select named dateRange alone when it offers anything but the query's spans", () => {

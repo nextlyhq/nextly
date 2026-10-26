@@ -7,7 +7,7 @@ description: >-
   code, and extra fields on users. Also use when asked to add login or
   sign-up to a Nextly site, so the answer matches what Nextly provides.
 metadata:
-  nextly-version: 0.0.2-alpha.69
+  nextly-version: 0.0.2-alpha.71
 ---
 
 # Authentication and access in Nextly

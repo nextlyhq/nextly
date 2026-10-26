@@ -45,6 +45,7 @@ import {
   tryAcquire,
   waitingChain,
   withWorkerCap,
+  workerCount,
 } from "./bounded.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -300,6 +301,24 @@ describe("passing Vitest its worker cap", () => {
     expect(withWorkerCap(["turbo", "run", "test", "--maxWorkers=1", "--", "-t", "x"], 2)).toEqual([
       "turbo", "run", "test", "--maxWorkers=1", "--", "-t", "x", "--maxWorkers=2",
     ]);
+  });
+});
+
+describe("how many Vitest workers to pass", () => {
+  const integration = ["turbo", "run", "test:integration"];
+
+  it("passes an integration run's asked-for count when the cap allows it", () => {
+    expect(workerCount(integration, 4, { NEXTLY_INTEGRATION_WORKERS: "2" })).toBe(2);
+  });
+
+  it("keeps the cap when it is the smaller, or nothing was asked", () => {
+    expect(workerCount(integration, 1, { NEXTLY_INTEGRATION_WORKERS: "2" })).toBe(1);
+    expect(workerCount(integration, 4, {})).toBe(4);
+    expect(workerCount(integration, 4, { NEXTLY_INTEGRATION_WORKERS: "" })).toBe(4);
+  });
+
+  it("leaves other runs at the cap", () => {
+    expect(workerCount(["turbo", "run", "test"], 4, { NEXTLY_INTEGRATION_WORKERS: "2" })).toBe(4);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/module-specifiers",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "One AST reader for the module specifiers a source file loads. Consumed only by layering guards inside this repository; exports TypeScript source and is never published or bundled.",
   "license": "MIT",
   "type": "module",
@@ -17,14 +17,14 @@
     }
   },
   "scripts": {
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "engines": {

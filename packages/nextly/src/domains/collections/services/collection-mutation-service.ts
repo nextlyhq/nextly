@@ -485,8 +485,8 @@ interface DeleteEntryWriteParams {
   collectionName: string;
   user?: UserContext;
   /**
-   * Not consulted on this path. The batch caller honours it at its
-   * once-per-batch gate, and the transaction API's gate never received it.
+   * Trusted server work. The batch caller honours it at its once-per-batch
+   * gate, and the transaction API's gate returns before any check on it.
    */
   overrideAccess?: boolean;
   /**
@@ -3098,18 +3098,28 @@ export class CollectionMutationService extends BaseService {
       grants: () => Promise<CallerGrants>;
     }
   ): Promise<ValidationIssue[]> {
+    const draftInput = buildRestorePayload(
+      args.snapshot,
+      shared.fields as unknown as FieldConfig[],
+      args.restoreCtx
+    ).payload;
     return refusalIssues(async () => {
       await this.judgePromotionAccess({
-        before: this.promotedDocumentOf(
-          shared,
-          buildRestorePayload(
-            args.snapshot,
-            shared.fields as unknown as FieldConfig[],
-            args.restoreCtx
-          ).payload
-        ),
+        before: this.promotedDocumentOf(shared, draftInput),
         live: args.live,
         callerSupplied: this.promotedDocumentOf(shared, {}),
+        // The draft with nothing of the write's laid over it, judged as the
+        // publish judges it, so the release is refused for what its run
+        // would refuse.
+        pending: this.promotedDocumentOf(
+          {
+            ...shared,
+            finalData: {},
+            componentFieldData: {},
+            manyToManyData: {},
+          },
+          draftInput
+        ),
         collectionName: args.collectionName,
         entryId: args.entryId,
         user: args.user,
@@ -5998,6 +6008,53 @@ export class CollectionMutationService extends BaseService {
    * collection it is a plain publish of the single row. Only touches status columns (no field
    * values), so it needs none of the localized-write machinery.
    */
+  /**
+   * The one entry an update acts on, and the caller's update gate for it: the
+   * entry with its schema, or the answer to return instead, when the entry is
+   * not found or the caller may not update it. Shared by the update and the
+   * publish of every language, which ask both the same way.
+   */
+  private async entryToUpdate(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }) {
+    const accessUser = params.overrideAccess ? undefined : params.user;
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const [existingEntry] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+    if (!existingEntry) {
+      const answer: CollectionServiceResult = {
+        success: false,
+        statusCode: 404,
+        message: "Entry not found",
+        data: null,
+      };
+      return { answer };
+    }
+    const accessDenied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "update",
+      entryId: params.entryId,
+      user: accessUser,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own grants here too, so the session
+      // super-admin bypass does not apply to it on the update gate.
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (accessDenied) return { answer: accessDenied };
+    return { accessUser, schema, existingEntry };
+  }
+
   private async setLifecycleAllLocales(
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
@@ -6019,37 +6076,12 @@ export class CollectionMutationService extends BaseService {
     // saved rather than one the caller should send again.
     let committedWrite = false;
     try {
-      const accessUser = params.overrideAccess ? undefined : params.user;
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
-      );
-
-      const [existingEntry] = await this.db
-        .select()
-        .from(schema)
-        .where(eq(schema.id, params.entryId))
-        .limit(1);
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
-      const accessDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // The route already ran the `update` gate (against the API key's scope,
-        // when applicable), so skip the redundant RBAC re-check here; the publish
-        // gate below still runs.
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) return accessDenied;
+      // The route already ran the `update` gate (against the API key's scope,
+      // when applicable), so the update gate here skips the redundant RBAC
+      // re-check; the publish gate below still runs.
+      const toUpdate = await this.entryToUpdate(params);
+      if (toUpdate.answer) return toUpdate.answer;
+      const { accessUser, schema, existingEntry } = toUpdate;
 
       // The draft/published lifecycle flag on the collection config, NOT the
       // mere presence of a `status` column: a collection that defines an
@@ -6108,6 +6140,7 @@ export class CollectionMutationService extends BaseService {
       const publishDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: direction.accessAction,
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         // Not route-authorized as publish: the POST was authorized as `update`,
@@ -7000,6 +7033,7 @@ export class CollectionMutationService extends BaseService {
     const denied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
       operation: "update",
+      entryId: params.entryId,
       user: params.user,
       // Never overridden: this exists to APPLY the document's rules, so a
       // caller that could opt out of them would defeat the point.
@@ -7113,6 +7147,8 @@ export class CollectionMutationService extends BaseService {
     before: Record<string, unknown>;
     live: Record<string, unknown>;
     callerSupplied: Record<string, unknown>;
+    /** The pending change alone, where `before` lays the caller's payload over it. */
+    pending?: Record<string, unknown>;
     collectionName: string;
     entryId: string;
     user: UserContext | undefined;
@@ -7128,6 +7164,7 @@ export class CollectionMutationService extends BaseService {
       before: args.before,
       live: args.live,
       callerSupplied: args.callerSupplied,
+      pending: args.pending,
       // The entry's own rules, then every field group's on the instances the
       // document holds: a pending change can carry a field-group edit too, and
       // a denied one is refused or kept at its live value like any other.
@@ -8133,29 +8170,9 @@ export class CollectionMutationService extends BaseService {
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
       if (badLocale) return badLocale;
 
-      const accessUser = params.overrideAccess ? undefined : params.user;
-
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
-      );
-
-      // Fetch the existing entry first (needed for access control and hooks)
-
-      const [existingEntry] = await this.db
-        .select()
-        .from(schema)
-        .where(eq(schema.id, params.entryId))
-        .limit(1);
-
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Entry not found",
-          data: null,
-        };
-      }
-
+      // Fetch the existing entry first (needed for access control and hooks),
+      // then:
+      //
       // 1. Check collection-level access FIRST (with document for owner checks)
       //
       // This verdict is NOT atomic with the write it guards, and that is a known
@@ -8210,19 +8227,9 @@ export class CollectionMutationService extends BaseService {
       //
       // A rule that must be judged against the row as locked belongs in the
       // under-lock re-check the publish path already uses, not here.
-      const accessDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        // A scoped API key is judged on its own grants here too, so the session
-        // super-admin bypass does not apply to it on the update gate.
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) {
-        return accessDenied;
-      }
+      const toUpdate = await this.entryToUpdate(params);
+      if (toUpdate.answer) return toUpdate.answer;
+      const { accessUser, schema, existingEntry } = toUpdate;
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -8582,6 +8589,7 @@ export class CollectionMutationService extends BaseService {
           {
             collectionName: params.collectionName,
             operation: transitionOp,
+            entryId: params.entryId,
             user: accessUser,
             overrideAccess: params.overrideAccess,
             // Never route-authorized: the route authorizes the write as `update`,
@@ -9235,21 +9243,38 @@ export class CollectionMutationService extends BaseService {
                 fields
               );
               // The caller's own contribution, from the payload the field gate
-              // has ALREADY filtered, so it holds only what this publisher was
-              // allowed to send. Read from the raw request, it would credit the
-              // publisher with the pending change's edit whenever they echo the
-              // same path: the gate strips their value, the merged document still
-              // holds the draft's, the resolver treats that edit as theirs and
-              // restores live, and the publish consumes the draft. Filtered, an
-              // echoed protected value is simply absent, so the draft's edit is
-              // refused rather than lost. Logical, through the same conversion as
-              // the document it is compared against.
+              // has ALREADY judged, never the raw request. Read from the request,
+              // it would credit the publisher with the pending change's edit
+              // whenever they echo the same path: the gate drops their value, the
+              // merged document still holds the draft's, the resolver treats that
+              // edit as theirs and restores live, and the publish consumes the
+              // draft. The gate keeps a protected child of a group they sent at
+              // its stored value rather than dropping it, so the resolver credits
+              // them only with what the rules let them send, and judges the rest
+              // as the pending change holds it. Logical, through the same
+              // conversion as the document it is compared against.
               const callerContribution = this.deserializeJsonFieldsForSnapshot(
                 this.assemblePromotedDocument(
                   {},
                   finalData,
                   componentFieldData,
                   manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
+                fields
+              );
+              // The locked draft on its own, through the same conversion: the
+              // field gate keeps a protected child of a group the caller sent
+              // at its LIVE value, so where that group replaced the draft's,
+              // only the draft still says what its author changed there.
+              const pendingDocument = this.deserializeJsonFieldsForSnapshot(
+                this.assemblePromotedDocument(
+                  draftInput,
+                  {},
+                  {},
+                  {},
                   fields,
                   manyToManyFields,
                   splitComponentSchemas
@@ -9265,6 +9290,7 @@ export class CollectionMutationService extends BaseService {
                 before: mergedPromoteData,
                 live: previousDocument ?? {},
                 callerSupplied: callerContribution,
+                pending: pendingDocument,
                 collectionName: params.collectionName,
                 entryId: params.entryId,
                 user: params.user,
@@ -10695,6 +10721,7 @@ export class CollectionMutationService extends BaseService {
       const accessDenied = await this.accessService.checkCollectionAccess({
         collectionName: params.collectionName,
         operation: "delete",
+        entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
@@ -11740,6 +11767,7 @@ export class CollectionMutationService extends BaseService {
         const accessDenied = await this.accessService.checkCollectionAccess({
           collectionName: params.collectionName,
           operation: "update",
+          entryId: entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
@@ -12791,6 +12819,8 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** Trusted server work; see {@link DeleteEntryWriteParams}. */
+      overrideAccess?: boolean;
       /** The caller's own grants; see {@link DeleteEntryWriteParams}. */
       authenticatedScope?: AuthenticatedScope;
       /** Who performed the delete, recorded on the outbox event. */
@@ -12887,13 +12917,17 @@ export class CollectionMutationService extends BaseService {
         // collection-level delete gate out of its loop, and no row-ownership
         // rule remains for a safety net to compare against.
       } else {
-        // The transaction API asks the access service for the whole verdict.
+        // The transaction API asks the access service for the whole verdict,
+        // with the caller's `overrideAccess` as the create and update paths
+        // forward it. Without it, trusted work naming no user was judged as
+        // an anonymous visitor, whose write needs a rule that allows it.
         const accessDenied = await this.accessService.checkCollectionAccess<{
           deleted: boolean;
         }>({
           collectionName: params.collectionName,
           operation: "delete",
           user: params.user,
+          overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         });
         if (accessDenied) {

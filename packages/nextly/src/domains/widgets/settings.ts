@@ -43,7 +43,14 @@ import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { textLength } from "../../shared/text-length";
 
-import { RELATIVE_SPANS, whereFieldNames, type RelativeSpan } from "./query";
+import type { PublishedContentSource } from "./published-content-source";
+import {
+  isTimeseriesRange,
+  RELATIVE_SPANS,
+  whereFieldNames,
+  type RelativeSpan,
+  type TimeseriesRange,
+} from "./query";
 import {
   getSource,
   sourceKindFromId,
@@ -156,7 +163,20 @@ export type WidgetSetting =
  * content controls are built.
  */
 export type ContentSetting =
-  | (WidgetSettingBase & { type: "collection"; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "collection";
+      defaultValue?: string;
+      /**
+       * `"titled"`: on a list, each row is asked by the collection's title
+       * field, its status where it has a draft and published lifecycle, and
+       * when it was updated, read from the collection the setting names. A
+       * collection naming no title, or with no `updatedAt`, gives the card no
+       * source, so it asks nothing there rather than whole rows.
+       *
+       * @experimental
+       */
+      rows?: "titled";
+    })
   | (WidgetSettingBase & {
       type: "filter";
       of: string;
@@ -277,6 +297,38 @@ const USABLE_AS: Record<
   filter: value =>
     typeof value === "object" && value !== null && !Array.isArray(value),
 };
+
+/** A textarea setting's declared bound, with the label a reader knows it by. */
+export interface TextBound {
+  name: string;
+  label: string;
+  maxLength: number;
+}
+
+/**
+ * The bounds a widget's textarea settings declare, which the layout write holds
+ * a placement's text to.
+ *
+ * `undefined` when the declaration states no settings at all, and an empty
+ * list when it states settings none of which is a bounded textarea: a merge of
+ * two declarations takes the registration's settings wherever it states any,
+ * so it has to tell the two apart.
+ */
+export function textBoundsOf(
+  settings: readonly AnyWidgetSetting[] | undefined
+): readonly TextBound[] | undefined {
+  return settings?.flatMap(setting =>
+    setting.type === "textarea" && setting.maxLength !== undefined
+      ? [
+          {
+            name: setting.name,
+            label: setting.label ?? setting.name,
+            maxLength: setting.maxLength,
+          },
+        ]
+      : []
+  );
+}
 
 /** Whether a value names something: a string with more than blanks in it. */
 function isName(value: unknown): value is string {
@@ -399,10 +451,8 @@ function fail(message: string): never {
 export function widgetSettingsProblem(
   settings: unknown,
   queryBuiltByCore = false,
-  // The widget's declared source; `undefined` for a query with none, which a
-  // Collection setting supplies; `null` for a widget that asks nothing a knob
-  // could drive (no query and no cells), where no content setting drives.
-  source?: KnobSource | null
+  // What the widget asks, as `settingsSourceOf` reads it.
+  source?: SettingsSource
 ): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
   if (problem !== undefined) return problem;
@@ -417,13 +467,18 @@ export function widgetSettingsProblem(
   if (collections !== undefined && collections.length > 1) {
     return `declares ${collections.length} Collection settings (${collections.map(name => `"${name}"`).join(", ")}), and one decides the source its query reads`;
   }
+  const filtered = cellFilterProblem(
+    (settings as readonly AnyWidgetSetting[] | undefined) ?? [],
+    source
+  );
+  if (filtered !== undefined) return filtered;
   // Every setting is now known to be well formed, so each has a type. Any
   // other widget's content setting is admitted exactly when a knob drives it
   // on the widget's own source, so a setting that would change nothing the
   // card asks is never offered.
   const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
     (setting): setting is ContentSetting =>
-      isContentSetting(setting) && knobFor(setting, source) === undefined
+      isContentSetting(setting) && !drivenOn(setting, source)
   );
   return content === undefined ? undefined : contentSettingRefusal(content);
 }
@@ -569,11 +624,38 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  if (quick !== undefined && typeof quick !== "boolean") {
-    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
-  }
+  const flags = flagsProblem(type, quick, (rest as { rows?: unknown }).rows);
+  if (flags !== undefined) return `setting "${name}" ${flags}`;
 
   return problemForType(type, rest, defaultValue, name);
+}
+
+/** Why a setting's `quick` or `rows` is unusable, or `undefined`. */
+function flagsProblem(
+  type: AnyWidgetSetting["type"],
+  quick: unknown,
+  rows: unknown
+): string | undefined {
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `has quick ${describeValue(quick)}; expected true or false`;
+  }
+  return rowsProblem(type, rows);
+}
+
+/**
+ * Why a setting's `rows` is unusable, or `undefined`: only a Collection setting
+ * says how a list asks its rows, and only one way, `"titled"`.
+ */
+function rowsProblem(
+  type: AnyWidgetSetting["type"],
+  rows: unknown
+): string | undefined {
+  if (rows === undefined) return undefined;
+  if (type !== "collection")
+    return "declares rows, which only a Collection setting takes";
+  return rows === "titled"
+    ? undefined
+    : `has rows ${describeValue(rows)}; expected "titled"`;
 }
 
 /**
@@ -732,7 +814,7 @@ export function validateWidgetSettings(
   settings: unknown,
   widgetId: string,
   queryBuiltByCore = false,
-  source?: KnobSource | null
+  source?: SettingsSource
 ): asserts settings is AnyWidgetSetting[] | undefined {
   const problem = widgetSettingsProblem(settings, queryBuiltByCore, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
@@ -846,6 +928,97 @@ export function knobSourceFor(id: string): KnobSource {
   return filters === undefined ? { id } : { id, filters: [...filters] };
 }
 
+/**
+ * What a widget's settings are judged against: its query's source, `undefined`
+ * for a query a Collection setting supplies one to, `null` for a widget that
+ * asks nothing a knob could drive, or each of its cells' sources, `undefined`
+ * for a cell a Collection setting supplies one to.
+ */
+export type SettingsSource =
+  | KnobSource
+  | null
+  | undefined
+  | { cells: readonly (KnobSource | undefined)[] };
+
+/**
+ * What a widget declaration asks, as its settings are judged against it. Read
+ * defensively: a malformed query or cell is another rule's to refuse by name,
+ * so here it simply names no source.
+ */
+export function settingsSourceOf(widget: {
+  query?: unknown;
+  cells?: unknown;
+}): SettingsSource {
+  if (typeof widget.query === "object" && widget.query !== null) {
+    return declaredKnobSource(widget.query);
+  }
+  if (!Array.isArray(widget.cells) || widget.cells.length === 0) return null;
+  return {
+    cells: widget.cells.map((cell: unknown) =>
+      typeof cell === "object" && cell !== null
+        ? declaredKnobSource((cell as { query?: unknown }).query)
+        : undefined
+    ),
+  };
+}
+
+/**
+ * The first setting a cells card's knobs would drive only through a cell
+ * source's filters (Only mine, or a Collection setting over a source reading
+ * across collections), or `undefined`. The admin asks each cell with no
+ * filter metadata, so such a setting would be drawn, saved and left out of
+ * every cell's query: refused until the cells are asked with their filters.
+ */
+function cellFilterProblem(
+  settings: readonly AnyWidgetSetting[],
+  source: SettingsSource
+): string | undefined {
+  // A cells card cannot yet ask its cells with their sources' filters, so a
+  // setting only a filter would apply is refused, whatever its type.
+  if (source === null || source === undefined || !("cells" in source)) {
+    return undefined;
+  }
+  const filtered = filterOnlyCellSetting(settings, source.cells);
+  return filtered === undefined
+    ? undefined
+    : `setting "${filtered.name}" is applied through its source's filters, which a widget's cells are not asked with yet`;
+}
+
+function filterOnlyCellSetting(
+  settings: readonly AnyWidgetSetting[],
+  cells: readonly (KnobSource | undefined)[]
+): AnyWidgetSetting | undefined {
+  return settings.find(setting =>
+    cells.some(
+      cell =>
+        cell?.filters !== undefined &&
+        knobFor(setting, cell) !== undefined &&
+        knobFor(setting, { id: cell.id }) === undefined
+    )
+  );
+}
+
+/** The knob source a query declares, or `undefined` when it names none. */
+function declaredKnobSource(query: unknown): KnobSource | undefined {
+  const source =
+    typeof query === "object" && query !== null
+      ? (query as { source?: unknown }).source
+      : undefined;
+  return typeof source === "string" ? knobSourceFor(source) : undefined;
+}
+
+/**
+ * Whether a knob drives `setting` on what the widget asks: on its one source,
+ * or, for a card that asks through cells, on at least one cell's, so a setting
+ * no cell can apply is never drawn.
+ */
+function drivenOn(setting: AnyWidgetSetting, source: SettingsSource): boolean {
+  if (source !== null && source !== undefined && "cells" in source) {
+    return source.cells.some(cell => knobFor(setting, cell) !== undefined);
+  }
+  return knobFor(setting, source) !== undefined;
+}
+
 /** Whether `source` declares that it narrows by `filter`. */
 function narrowsBy(
   source: KnobSource | undefined,
@@ -869,14 +1042,23 @@ export interface KnobContext {
    * judges the query, as it judges every query.
    */
   fieldsOf?: (collection: string) => readonly KnobField[] | undefined;
+  /**
+   * The collection a slug names, as the server published it to this reader,
+   * or `undefined` when it is not known.
+   *
+   * @experimental
+   */
+  sourceOf?: (collection: string) => PublishedContentSource | undefined;
 }
 
 /** The parts of a widget query a setting may drive. */
 interface KnobQuery {
   source?: string;
   op?: string;
+  select?: string[];
   limit?: number;
   since?: RelativeSpan;
+  range?: TimeseriesRange;
   where?: Record<string, unknown>;
   sort?: string;
   groupBy?: string;
@@ -891,12 +1073,56 @@ interface QueryKnob {
    * them. Absent, every value fits: the knob names no field.
    */
   fits?(value: unknown, fields: readonly KnobField[]): boolean;
-  /** `query` with `value` applied on `source`: a copy, never the query itself. */
+  /**
+   * `query` with `value` applied on `source`: a copy, never the query itself.
+   * Handed the setting and the context too, for a knob whose setting says
+   * more about the query than its value.
+   */
   apply<T extends KnobQuery>(
     query: T,
     value: unknown,
-    source: KnobSource | undefined
+    source: KnobSource | undefined,
+    setting: AnyWidgetSetting,
+    ctx: KnobContext
   ): T;
+}
+
+/**
+ * `query` reading the collection `slug` names. A titled list asks its rows'
+ * named fields too, or, where the collection publishes none, keeps no source
+ * and asks nothing at all.
+ */
+function readingCollection<T extends KnobQuery>(
+  query: T,
+  slug: string,
+  setting: AnyWidgetSetting,
+  ctx: KnobContext
+): T {
+  const titled =
+    setting.type === "collection" &&
+    setting.rows === "titled" &&
+    query.op === "list";
+  if (!titled) return { ...query, source: `collection:${slug}` };
+  const select = titledRows(ctx.sourceOf?.(slug));
+  return select === undefined
+    ? query
+    : { ...query, source: `collection:${slug}`, select };
+}
+
+/**
+ * What a titled list asks of each row in `collection`: its title, its status
+ * where it has a lifecycle, and when it was updated. `undefined` where the
+ * collection is not known, names no title, or has no `updatedAt`.
+ */
+function titledRows(
+  collection: PublishedContentSource | undefined
+): string[] | undefined {
+  const title = collection?.titleField;
+  if (title === undefined) return undefined;
+  if (!collection?.fields.some(field => field.name === "updatedAt")) {
+    return undefined;
+  }
+  return [title, ...(collection.lifecycle ? ["status"] : []), "updatedAt"];
 }
 
 /** The source a query names, as its knobs see it. */
@@ -979,14 +1205,14 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     drives: (setting, source) =>
       setting.type === "collection" &&
       (readsACollection(source) || narrowsBy(source, "collection")),
-    apply: (query, value, source) => {
+    apply: (query, value, source, setting, ctx) => {
       // Only a value shaped like a collection slug names one, read before any
       // use of it: a special default such as "*" leaves the query as it is.
       if (typeof value !== "string" || !SLUG_PATTERN.test(value)) return query;
       if (!readsACollection(source) && narrowsBy(source, "collection")) {
         return { ...query, where: { ...query.where, collection: value } };
       }
-      return { ...query, source: `collection:${value}` };
+      return readingCollection(query, value, setting, ctx);
     },
   },
   {
@@ -994,17 +1220,25 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     // offers only the query's own spans: its value becomes `since` as is, on an
     // op a window bounds. A select of the same name offering anything else is
     // the widget's own, and leaves the query as it was declared.
+    //
+    // A chart over a range declares its `range`, and there the value becomes
+    // the range instead, when it is one: a range and a `since` each name a
+    // window, so the declared range is never joined by a `since`.
     drives: (setting, source) =>
       setting.type === "select" &&
       setting.name === "dateRange" &&
       setting.options.every(option => isRelativeSpan(option.value)) &&
       readsACollection(source),
-    apply: (query, value) =>
-      isRelativeSpan(value) &&
-      query.op !== undefined &&
-      WINDOWED_OPS.has(query.op)
+    apply: (query, value) => {
+      if (query.range !== undefined) {
+        return isTimeseriesRange(value) ? { ...query, range: value } : query;
+      }
+      return isRelativeSpan(value) &&
+        query.op !== undefined &&
+        WINDOWED_OPS.has(query.op)
         ? { ...query, since: value }
-        : query,
+        : query;
+    },
   },
   {
     drives: (setting, source) =>
@@ -1091,6 +1325,36 @@ function fittingValue(
 }
 
 /**
+ * A card's settings as its query is asked with them: each resolved value, with
+ * a setting that drives a knob on `ctx.source` held to what fits this reader
+ * ({@link fittingValue}), and left out when nothing does. What a card is drawn
+ * from, so a link it builds from its Filter names the filter its number was
+ * counted under, not a stored one the query set aside.
+ *
+ * @experimental The shape may grow while the content widgets are built.
+ */
+export function effectiveWidgetSettings(
+  settings: readonly AnyWidgetSetting[] | undefined,
+  stored: Record<string, unknown> | undefined,
+  ctx: KnobContext = {}
+): Record<string, unknown> {
+  const resolved = resolveWidgetSettings(settings, stored);
+  // Prototype-free, as the resolved settings are: the keys are setting names.
+  const effective: Record<string, unknown> = Object.assign(
+    Object.create(null),
+    resolved
+  );
+  for (const setting of settings ?? []) {
+    const knob = knobFor(setting, ctx.source);
+    if (knob === undefined) continue;
+    const value = fittingValue(setting, knob, resolved, ctx);
+    if (value === undefined) delete effective[setting.name];
+    else effective[setting.name] = value;
+  }
+  return effective;
+}
+
+/**
  * The fields the collection a dependent setting reads offers this reader, or
  * `undefined` when the setting depends on none or they are not known.
  */
@@ -1132,19 +1396,22 @@ export function applyWidgetSettings<T extends KnobQuery>(
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);
 
-  const resolved = resolveWidgetSettings(settings, stored);
+  const effective = effectiveWidgetSettings(settings, stored, {
+    ...ctx,
+    ...(source === undefined ? {} : { source }),
+  });
   let next = query;
 
   for (const setting of settings) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
-    const value = fittingValue(setting, knob, resolved, ctx);
+    const value = effective[setting.name];
     if (value === undefined) continue;
     // Each knob hands back a copy, so a card whose settings drive no knob
     // keeps the query it was given, which is what lets a caller apply this to
     // every card without a branch. Every knob sees the DECLARED source, not
     // one an earlier knob put in its place.
-    next = knob.apply(next, value, source);
+    next = knob.apply(next, value, source, setting, ctx);
   }
 
   return next;

@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { container } from "../../../di/container";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { CollectionAccessService } from "../services/collection-access-service";
 import { normalizeLocalization } from "../../i18n/config/normalize";
@@ -43,6 +44,13 @@ import {
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// Where a refusal's reason is recorded, watched rather than written.
+const recordedRefusals = vi.hoisted(() => vi.fn());
+vi.mock("../../../auth/access/refusal-message", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  recordRefusalReason: recordedRefusals,
+}));
 
 // The caller the collection gate decides for: a signed-in user's actions are
 // set per test (`callerMay`), and every test starts from one holding all.
@@ -199,7 +207,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
-      expect(result.message).toContain("denied");
+      // What was refused, in words; never the permission or the check.
+      expect(result.message).toBe("You can't see posts.");
     });
 
     it("should allow listEntries when access is granted", async () => {
@@ -230,6 +239,44 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
+      // A read of one entry is refused as that entry.
+      expect(result.message).toBe("You can't see this entry.");
+    });
+
+    it("names a Schema Builder collection by the label its registry holds", async () => {
+      // Made in the builder, so the configuration holds no label for it.
+      const registry = {
+        getCollectionBySlug: vi.fn(async (slug: string) =>
+          slug === "press"
+            ? { slug, labels: { singular: "Story", plural: "Newsroom" } }
+            : null
+        ),
+      };
+      vi.mocked(container.has).mockImplementation(
+        name => name === "collectionRegistryService"
+      );
+      vi.mocked(container.get).mockImplementation((name: string) => {
+        if (name === "collectionRegistryService") return registry;
+        throw new Error(`Service "${name}" is not registered in container`);
+      });
+      try {
+        const rbac = createMockRbacAccessControlService();
+        callerMay();
+        const { service } = buildService({ rbacAccessControlService: rbac });
+
+        const result = await service.listEntries({
+          collectionName: "press",
+          user: { id: "user-1", role: "viewer" },
+        });
+
+        expect(result.statusCode).toBe(403);
+        expect(result.message).toBe("You can't see newsroom.");
+      } finally {
+        vi.mocked(container.has).mockReturnValue(false);
+        vi.mocked(container.get).mockImplementation((name: string) => {
+          throw new Error(`Service "${name}" is not registered in container`);
+        });
+      }
     });
 
     it("should deny countEntries when access is denied", async () => {
@@ -304,6 +351,30 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
+      expect(result.message).toBe("You can't edit this entry.");
+    });
+  });
+
+  describe("a batch refused as a whole", () => {
+    it("records the refusal it folds into every item", async () => {
+      recordedRefusals.mockClear();
+      const rbac = createMockRbacAccessControlService();
+      callerMay();
+      const { service } = buildService({ rbacAccessControlService: rbac });
+
+      const result = await service.createEntries(
+        { collectionName: "posts", user: { id: "user-1" } },
+        [{ title: "a" }, { title: "b" }]
+      );
+
+      expect(result).toMatchObject({ successful: 0, failed: 2 });
+      expect(recordedRefusals).toHaveBeenCalledTimes(1);
+      expect(recordedRefusals).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 403,
+          reason: "the caller may not create posts",
+        })
+      );
     });
   });
 
@@ -326,6 +397,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
+      expect(result.message).toBe("You can't delete this entry.");
     });
   });
 

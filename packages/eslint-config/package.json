@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/eslint-config",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "Placeholder kept until the alpha pre-release ends; see README",
   "type": "module",
   "private": true,

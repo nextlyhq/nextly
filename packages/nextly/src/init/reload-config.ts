@@ -23,10 +23,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { type SQL } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
-import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
   publishCollectionDbOptions,
@@ -467,7 +467,7 @@ interface MinimalField {
 
 // Default resolver: lazy-imports DI to avoid a circular import with init.ts.
 async function defaultResolver(name: string): Promise<unknown> {
-  const { getService } = await import("../di/register");
+  const { getService } = await import("../di/service-access");
   // The DI key types are a fixed map; we cast through the resolver edge.
   return getService(name as Parameters<typeof getService>[0]);
 }

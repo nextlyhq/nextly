@@ -46,6 +46,14 @@ const LINT_PACKAGES = [
   "typescript",
 ];
 
+/**
+ * How long a test that runs the scaffold's ESLint may take. The first start in
+ * the scaffold is cold: on a Windows runner `eslint --print-config` took 20.9 s
+ * where later runs took 1.4 s, past the package's 10 s default; the tests that
+ * start the compiler take a minute for the same reason.
+ */
+const ESLINT_TIMEOUT_MS = 60_000;
+
 /** One ESLint result as `--format json` prints it. */
 type LintResult = {
   filePath: string;
@@ -157,56 +165,76 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
     }
   });
 
-  it("the shipped eslint config actually mounts the three rules", () => {
-    // What ESLint itself would apply to the file, rather than the config's
-    // text: a string check passes on an import that is never spread into the
-    // exported array, which is how one of these rules once shipped inert.
-    const printed = execFileSync(
-      process.execPath,
-      [
-        path.join(target, "node_modules/eslint/bin/eslint.js"),
-        "--print-config",
-        "src/admin/SettingsPage.tsx",
-      ],
-      { cwd: target, encoding: "utf8" }
-    );
-    const rules = (JSON.parse(printed) as { rules: Record<string, unknown> })
-      .rules;
-    for (const rule of [
-      "@nextlyhq/no-palette-classes",
-      "@nextlyhq/no-hardcoded-colors",
-      "@nextlyhq/no-static-inline-style",
-    ]) {
-      expect(rules[rule], rule).toEqual([2]);
-    }
-  });
+  it(
+    "the shipped eslint config actually mounts the three rules",
+    () => {
+      // What ESLint itself would apply to the file, rather than the config's
+      // text: a string check passes on an import that is never spread into the
+      // exported array, which is how one of these rules once shipped inert.
+      const printed = execFileSync(
+        process.execPath,
+        [
+          path.join(target, "node_modules/eslint/bin/eslint.js"),
+          "--print-config",
+          "src/admin/SettingsPage.tsx",
+        ],
+        { cwd: target, encoding: "utf8" }
+      );
+      const rules = (JSON.parse(printed) as { rules: Record<string, unknown> })
+        .rules;
+      for (const rule of [
+        "@nextlyhq/no-palette-classes",
+        "@nextlyhq/no-hardcoded-colors",
+        "@nextlyhq/no-static-inline-style",
+      ]) {
+        expect(rules[rule], rule).toEqual([2]);
+      }
+    },
+    ESLINT_TIMEOUT_MS
+  );
 
-  it("passes on the template as shipped", () => {
-    const results = lintScaffold();
-    // Asserted before the verdict: zero violations over zero files is the same
-    // output as a conforming template, so this separates them.
-    expect(results.length).toBeGreaterThan(0);
-    expect(results.some(r => r.filePath.endsWith("SettingsPage.tsx"))).toBe(
-      true
-    );
-    expect(results.flatMap(r => r.messages)).toEqual([]);
-  });
+  it(
+    "passes on the template as shipped",
+    () => {
+      const results = lintScaffold();
+      // Asserted before the verdict: zero violations over zero files is the same
+      // output as a conforming template, so this separates them.
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.some(r => r.filePath.endsWith("SettingsPage.tsx"))).toBe(
+        true
+      );
+      expect(results.flatMap(r => r.messages)).toEqual([]);
+    },
+    ESLINT_TIMEOUT_MS
+  );
 
-  it("FAILS when the author writes a fixed palette colour", async () => {
-    await writeFile(
-      page(),
-      pageSource.replace('className="w-full', 'className="bg-red-500 w-full')
-    );
-    const ruleIds = lintScaffold().flatMap(r => r.messages.map(m => m.ruleId));
-    expect(ruleIds).toContain("@nextlyhq/no-palette-classes");
-  });
+  it(
+    "FAILS when the author writes a fixed palette colour",
+    async () => {
+      await writeFile(
+        page(),
+        pageSource.replace('className="w-full', 'className="bg-red-500 w-full')
+      );
+      const ruleIds = lintScaffold().flatMap(r =>
+        r.messages.map(m => m.ruleId)
+      );
+      expect(ruleIds).toContain("@nextlyhq/no-palette-classes");
+    },
+    ESLINT_TIMEOUT_MS
+  );
 
-  it("FAILS when the author writes an all-constant inline style", async () => {
-    await writeFile(
-      page(),
-      pageSource.replace("<header ", "<header style={{ padding: 24 }} ")
-    );
-    const ruleIds = lintScaffold().flatMap(r => r.messages.map(m => m.ruleId));
-    expect(ruleIds).toContain("@nextlyhq/no-static-inline-style");
-  });
+  it(
+    "FAILS when the author writes an all-constant inline style",
+    async () => {
+      await writeFile(
+        page(),
+        pageSource.replace("<header ", "<header style={{ padding: 24 }} ")
+      );
+      const ruleIds = lintScaffold().flatMap(r =>
+        r.messages.map(m => m.ruleId)
+      );
+      expect(ruleIds).toContain("@nextlyhq/no-static-inline-style");
+    },
+    ESLINT_TIMEOUT_MS
+  );
 });

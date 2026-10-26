@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-commerce",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "private": true,
   "description": "Commerce for Nextly: exact money, and the catalogue and payment contracts every provider plugin implements",
   "license": "MIT",
@@ -27,17 +27,17 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "zod": "^4.6.2"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.68"
+    "nextly": "0.0.2-alpha.71"
   },
   "devDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
@@ -46,7 +46,7 @@
     "fast-check": "^3.23.2",
     "nextly": "workspace:*",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "engines": {

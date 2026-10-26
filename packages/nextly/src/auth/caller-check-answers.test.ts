@@ -11,8 +11,8 @@
  * (`manage`, `export`), an empty action or resource, and keys whose scope
  * carries slugs without grant rows or grants stored under slugs of their own.
  *
- * Each answer is written as the check returned it, so a rule's raw answer
- * (`null`, a truthy string) shows as itself rather than as a yes or no.
+ * Each answer is written as the check returned it, so an answer that was not
+ * a yes or no (a rule's `null`, or a truthy string) would show as itself.
  *
  * The access-control service is the real one, with each rule registered as an
  * app registers it. Only the role and permission lookups are faked, from one
@@ -320,12 +320,13 @@ describe("the caller checks' answers", () => {
         lines.push(...(await answersFor(setup, ruleName, rule)));
       }
     }
-    // POPULATION CONTROL: both answers, from both checks, and a rule's raw
-    // answer, were reached.
+    // POPULATION CONTROL: both answers, from both checks, were reached, and
+    // every answer is a yes or a no: a rule's `null` or string is not handed
+    // back as it came.
     const text = lines.join("\n");
     expect(text).toMatch(/can\([a-z]+,posts\):true/);
     expect(text).toMatch(/can\([a-z]+,posts\):false/);
-    expect(text).toMatch(/can\([a-z]+,posts\):null/);
+    expect(text).not.toMatch(/(can|holds)\([^)]*\):(?!true$|false$)/m);
     expect(text).toMatch(/holds\([a-z-]+\):true/);
     expect(text).toMatch(/holds\([a-z-]+\):false/);
     await expect(`${text}\n`).toMatchFileSnapshot(

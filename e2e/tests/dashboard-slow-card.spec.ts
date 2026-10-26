@@ -10,6 +10,10 @@ import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.heavy] });
 
 const SLOW_CARD = "slow-widget-fixture/slow";
 const CELLS = '[data-testid^="widget-cell-"]';

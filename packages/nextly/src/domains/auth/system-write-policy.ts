@@ -24,7 +24,11 @@ export interface SystemPermission {
  */
 export type RouteGrant =
   | SystemPermission
-  | { readonly anyOf: readonly SystemPermission[] };
+  | {
+      readonly anyOf: readonly SystemPermission[];
+      /** What a refusal names, where the alternatives are about other things. */
+      readonly names?: SystemPermission;
+    };
 
 /** The operation's own action on `resource`, or `manage` on it, either one. */
 function ownOrManage(action: string, resource: string): RouteGrant {
@@ -81,12 +85,19 @@ export const SYSTEM_WRITE_POLICY = {
   },
 } as const satisfies Record<string, Record<string, RouteGrant>>;
 
+/** What a refused read of permissions names, whichever grant it lacked. */
+const READING_PERMISSIONS: SystemPermission = {
+  action: "read",
+  resource: "permissions",
+};
+
 /** `read-roles`, or `read-permissions`, either one. */
 const ROLE_OR_PERMISSION_READ: RouteGrant = {
   anyOf: [
     { action: "read", resource: "roles" },
     { action: "read", resource: "permissions" },
   ],
+  names: READING_PERMISSIONS,
 };
 
 /**
@@ -114,7 +125,10 @@ export const SYSTEM_READ_POLICY = {
   },
   permissions: {
     // Any of one, as REST asks it.
-    list: { anyOf: [{ action: "read", resource: "roles" }] },
+    list: {
+      anyOf: [{ action: "read", resource: "roles" }],
+      names: READING_PERMISSIONS,
+    },
     read: ROLE_OR_PERMISSION_READ,
   },
   media: {

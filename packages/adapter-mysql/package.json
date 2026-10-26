@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-mysql",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.71",
   "description": "MySQL database adapter for Nextly - extends @nextlyhq/adapter-drizzle",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run --passWithNoTests --config vitest.config.ts",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
     "test:watch": "vitest",
@@ -42,7 +42,7 @@
     "@vitest/ui": "^5.0.5",
     "mysql2": "^3.23.1",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

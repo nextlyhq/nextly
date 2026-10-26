@@ -16,8 +16,8 @@ vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
 
-const { getService, isServicesRegistered, registerServices, shutdownServices } =
-  await import("../register");
+const { registerServices, shutdownServices } = await import("../register");
+const { getService, isServicesRegistered } = await import("../service-access");
 
 afterEach(async () => {
   await shutdownServices();

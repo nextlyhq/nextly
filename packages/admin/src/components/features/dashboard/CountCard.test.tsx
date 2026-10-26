@@ -5,9 +5,9 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
 
@@ -56,7 +56,7 @@ function drawAt(tier: SizeTier, cells: Record<string, WidgetSlot>) {
 describe("the Count card", () => {
   it("is the number alone when small", () => {
     drawAt("small", CELLS);
-    expect(screen.getByLabelText("Entries: 10")).toBeInTheDocument();
+    expect(screen.getByLabelText("Entries in posts: 10")).toBeInTheDocument();
     expect(screen.queryByTestId("count-split")).not.toBeInTheDocument();
     expect(screen.queryByTestId("count-trend")).not.toBeInTheDocument();
   });
@@ -99,8 +99,27 @@ describe("the Count card", () => {
 
   it("draws the number before the trend has answered", () => {
     drawAt("large", { split: CELLS.split });
-    expect(screen.getByLabelText("Entries: 10")).toBeInTheDocument();
+    expect(screen.getByLabelText("Entries in posts: 10")).toBeInTheDocument();
     expect(screen.queryByTestId("count-trend")).not.toBeInTheDocument();
+  });
+
+  it("offers Retry when its read failed, asking the card again", () => {
+    const onRetry = vi.fn();
+    render(
+      <CardTierContext.Provider value="medium">
+        <CountCard
+          widgetId="core/count"
+          placementId="core/count:posts"
+          settings={{ collection: "posts" }}
+          slot={undefined}
+          cells={{ split: { ok: false, error: "Down" } }}
+          isFetching={false}
+          onRetry={onRetry}
+        />
+      </CardTierContext.Provider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("says it is not available when its read was refused", () => {

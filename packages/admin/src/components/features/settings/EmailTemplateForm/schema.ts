@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import {
-  type CreateEmailTemplatePayload,
-  type EmailTemplateRecord,
-  type UpdateEmailTemplatePayload,
+import type {
+  CreateEmailTemplatePayload,
+  EmailTemplateRecord,
+  UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
 
 import { ownsContent } from "./workbench-model";
