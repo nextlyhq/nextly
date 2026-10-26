@@ -1977,6 +1977,21 @@ export class FieldGroupMutationService extends BaseService {
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }
+    // After validation, which judges what the writer sent: each password an
+    // update left out of a container keeps its stored hash, whoever writes.
+    const keep = new Set(restoredHashes);
+    if (mode === "update" && slug !== undefined && storedId !== undefined) {
+      const reach = reachOf(nested);
+      if (reachesPasswordField(componentFields, reach)) {
+        const carried = carryStoredPasswords(
+          instance,
+          await this.storedContainerValues(slug, storedId, componentFields),
+          componentFields,
+          reach
+        );
+        for (const hash of carried) keep.add(hash);
+      }
+    }
     // Through the field groups held inline in this one's containers too: their
     // passwords are stored in those containers, which no save of their own
     // reaches.
@@ -1984,7 +1999,7 @@ export class FieldGroupMutationService extends BaseService {
       instance,
       componentFields,
       reachOf(nested),
-      restoredHashes
+      keep
     );
   }
 
@@ -2068,26 +2083,7 @@ export class FieldGroupMutationService extends BaseService {
         },
       });
     }
-    const reach = reachOf(
-      await this.nestedComponentsOf(componentFields as FieldConfig[])
-    );
-    // A password the update leaves out of a container keeps its stored
-    // hash, whoever writes: the stored containers are read for it even where
-    // no rule judges the instance.
-    const reachesPassword = reachesPasswordField(componentFields, reach);
-    const storedFor = () =>
-      mode === "update" && storedId !== undefined
-        ? this.storedContainerValues(slug, storedId, componentFields)
-        : Promise.resolve(undefined);
-    if (access.overrideAccess) {
-      if (!reachesPassword) return new Set();
-      return carryStoredPasswords(
-        instance,
-        await storedFor(),
-        componentFields,
-        reach
-      );
-    }
+    if (access.overrideAccess) return new Set();
     const judge = (data: Record<string, unknown>) =>
       applyFieldWriteAccess({
         kind: "fieldGroup",
@@ -2103,7 +2099,10 @@ export class FieldGroupMutationService extends BaseService {
         id: mode === "update" ? storedId : undefined,
         grants: access.grants,
       });
-    const stored = await storedFor();
+    const stored =
+      mode === "update" && storedId !== undefined
+        ? await this.storedContainerValues(slug, storedId, componentFields)
+        : undefined;
     if (!stored) {
       await judge(instance);
       return new Set();
@@ -2111,20 +2110,11 @@ export class FieldGroupMutationService extends BaseService {
     await keepContainersAtStored(instance, stored, judge);
     // The stored hashes the write may put back, so the hashing pass leaves
     // them as they are: at every depth, as the hashing pass reaches them.
-    // Judged first, so a rule sees what the writer sent; then each password
-    // it left out keeps its stored hash.
-    const kept = storedPasswordValues(stored, componentFields, reach);
-    if (reachesPassword) {
-      for (const hash of carryStoredPasswords(
-        instance,
-        stored,
-        componentFields,
-        reach
-      )) {
-        kept.add(hash);
-      }
-    }
-    return kept;
+    return storedPasswordValues(
+      stored,
+      componentFields,
+      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
+    );
   }
 
   /**

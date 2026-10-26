@@ -2164,6 +2164,13 @@ export class CollectionMutationService extends BaseService {
     tx?: { getDrizzle<T = unknown>(): T };
   }): Promise<Set<string>> {
     if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+    // Off a transaction, the companion's readiness is resolved first: its
+    // read is skipped where none is known, and a translated container's
+    // stored value is on the companion row alone. A transaction's caller
+    // resolved it before opening one.
+    if (this.localization && !args.tx) {
+      await this.warmCompanionReadiness(args.collectionName);
+    }
     const translated = this.localization
       ? await this.readCompanionLocalizedValues(
           args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },

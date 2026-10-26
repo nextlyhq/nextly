@@ -394,12 +394,25 @@ export class SingleMutationService extends BaseService {
     companion: CompanionSchema | null;
     writeLocale: string | undefined;
     documentId: string;
+    mainTableName: string;
   }): Promise<Set<string>> {
     if (!reachesPasswordField(args.fields, args.reach)) return new Set();
-    const [translated] =
-      args.companion && args.writeLocale !== undefined
+    // Read only once the translations table is there: before its migration,
+    // a translated value is still on the Single's own row, in `stored`.
+    const companion =
+      args.companion &&
+      args.writeLocale !== undefined &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: args.companion.companionTableName,
+        mainTableName: args.mainTableName,
+        localizedColumns: args.companion.localizedFields.map(f => f.column),
+      })) === "ready"
+        ? args.companion
+        : null;
+    const [row] =
+      companion && args.writeLocale !== undefined
         ? await this.adapter.select<Record<string, unknown>>(
-            args.companion.companionTableName,
+            companion.companionTableName,
             {
               where: {
                 and: [
@@ -418,6 +431,12 @@ export class SingleMutationService extends BaseService {
             }
           )
         : [];
+    // Each translated value, by its field's name rather than its column's.
+    const translated: Record<string, unknown> = {};
+    for (const field of companion?.localizedFields ?? []) {
+      const value = row?.[field.name] ?? row?.[field.column];
+      if (value !== undefined) translated[field.name] = value;
+    }
     return carryStoredPasswords(
       args.data,
       { ...args.stored, ...translated },
@@ -1698,6 +1717,7 @@ export class SingleMutationService extends BaseService {
           companion,
           writeLocale,
           documentId: String(documentId),
+          mainTableName: singleMeta.tableName,
         })
       );
 

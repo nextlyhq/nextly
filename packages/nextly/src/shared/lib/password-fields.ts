@@ -584,7 +584,8 @@ function carryField(
     if (!atEntry) carryPassword(level, field.name, stored[field.name], kept);
     return;
   }
-  if (field.name in level) {
+  // Own keys only: a field may be named like a member every object inherits.
+  if (Object.hasOwn(level, field.name)) {
     carryHeld(level, stored, field.name, field, reach, atEntry, kept);
   }
 }
@@ -629,7 +630,8 @@ function carryPassword(
 ): void {
   const value = level[name];
   const leftOut =
-    !(name in level) || (typeof value === "string" && value.trim() === "");
+    !Object.hasOwn(level, name) ||
+    (typeof value === "string" && value.trim() === "");
   if (!leftOut || typeof previous !== "string" || previous === "") return;
   level[name] = previous;
   kept.add(previous);
@@ -689,11 +691,21 @@ function forEachPairedRow(
 ): void {
   if (!Array.isArray(value) || !Array.isArray(previous)) return;
   const pairOf = rowPairing(value, previous);
+  // Where rows carry ids, a row without one is new and takes no stored
+  // password: pairing it by position could hand it another record's. Only a
+  // list whose rows carry none at all pairs by position.
+  const identified = [...value, ...previous].some(hasRowId);
   value.forEach((row, index) => {
+    if (identified && !hasRowId(row)) return;
     const at = pairOf(index);
     const storedRow = at === undefined ? undefined : previous[at];
     if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
   });
+}
+
+/** Whether a row carries an id of its own. */
+function hasRowId(row: unknown): boolean {
+  return isPlainRecord(row) && typeof row.id === "string";
 }
 
 /** A stored value, parsed where the dialect holds it as JSON text. */
