@@ -1438,7 +1438,14 @@ export class EmailTemplateService extends BaseService {
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getRow(id);
     const record = this.toRecord(existing);
-    data = writtenForUpdate(storedFormat(record), data);
+    data = writtenForUpdate(
+      {
+        ...storedFormat(record),
+        htmlContent: record.htmlContent,
+        plainTextContent: record.plainTextContent,
+      },
+      data
+    );
 
     // Validate the effective post-update row (a layout must keep exactly one
     // `{{content}}` marker). Kind is immutable on update, so use the existing
