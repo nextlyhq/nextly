@@ -15,7 +15,7 @@
  */
 import {
   filterShapeProblems,
-  isPlainObject,
+  snapshotFilter,
   type FilterProblem,
 } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
@@ -38,16 +38,66 @@ const ALLOW: RuleAnswer = Object.freeze({ kind: "allow" });
 const REFUSE: RuleAnswer = Object.freeze({ kind: "refuse" });
 
 /**
- * What a rule's answer means: `true` allows, a plain object is a filter,
- * well formed or not, and anything else refuses.
+ * What a rule's answer means: `true` allows, plain data is a filter, well
+ * formed or not, and anything else refuses, an instance of a class included.
+ *
+ * Each call reads the answer afresh, into a copy of its own, so an answer is
+ * read once per rule call by asking here once and keeping the meaning (as
+ * the decision's rule outcome does). Never kept by the answer object: a rule
+ * may hand back one object it rewrites for each caller.
  */
 export function ruleAnswer(value: unknown): RuleAnswer {
   if (value === true) return ALLOW;
-  if (!isPlainObject(value)) return REFUSE;
-  const problems = filterShapeProblems(value);
-  return problems.length === 0
-    ? { kind: "filter", filter: value }
-    : { kind: "malformed-filter", problems };
+  if (!isPlainData(value)) return REFUSE;
+  return filterMeaning(value);
+}
+
+/**
+ * Whether `value` is an object of data alone: a plain object, or one with no
+ * prototype. A `Map`, a `URL` or any other class instance is not, and neither
+ * is a value whose prototype cannot be read.
+ */
+function isPlainData(value: unknown): value is object {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype: unknown = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+/** Why an answer could not be read as a filter at all. */
+const UNREADABLE: FilterProblem = Object.freeze({
+  path: "where",
+  code: "FILTER_UNREADABLE",
+  message:
+    "the filter could not be read: it refers to itself, nests too deeply, or failed as it was read",
+});
+
+/**
+ * An answer judged as a filter. It is copied once, each property read once,
+ * and the copy is both what is judged and the filter handed on, so nothing
+ * read from the answer afterwards can change what it allows. An answer that
+ * cannot be copied, one that refers to itself or nests too deeply or throws
+ * as it is read, is not well formed.
+ */
+function filterMeaning(value: object): RuleAnswer {
+  let filter: Record<string, unknown>;
+  let problems: FilterProblem[];
+  try {
+    filter = snapshotFilter(value as Record<string, unknown>);
+    problems = filterShapeProblems(filter);
+  } catch {
+    return Object.freeze({ kind: "malformed-filter", problems: [UNREADABLE] });
+  }
+  return Object.freeze(
+    problems.length === 0
+      ? { kind: "filter", filter }
+      : { kind: "malformed-filter", problems }
+  );
 }
 
 /** The actions whose rule may answer with a filter, on a collection. */
@@ -93,9 +143,11 @@ export function reportRuleFilterMisuse(
   if (answer.kind !== "malformed-filter" && !misplaced) return;
   const problem =
     answer.kind === "malformed-filter"
-      ? `answered a filter that is not well formed (${answer.problems
-          .map(p => `${p.path}: ${p.message}`)
-          .join("; ")})`
+      ? // By its problems' codes alone: a path or a message repeats the
+        // filter's keys, which a rule may have built from the caller's data.
+        `answered a filter that is not well formed (${[
+          ...new Set(answer.problems.map(p => p.code)),
+        ].join(", ")})`
       : kind === "single"
         ? "answered a filter, but a Single's rule may only answer true or false"
         : "answered a filter, but a create rule may only answer true or false";

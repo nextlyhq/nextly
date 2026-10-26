@@ -46,6 +46,7 @@ import {
   mayAnswerFilter,
   reportRuleFilterMisuse,
   ruleAnswer,
+  type RuleAnswer,
   type RuleFilter,
 } from "./rule-answer";
 
@@ -57,16 +58,29 @@ export interface AccessTarget {
 }
 
 /**
- * What a target's rule answered, as it answered it.
+ * What a target's rule answered, as it answered it, and what that means.
  *
- * Kept raw, so a way in that judges the answer itself reads it through
- * `ruleAnswer` from one call of the rule, as the decision below does: `true`,
- * a filter, or a refusal.
+ * The raw value is kept for a way in that words a notice about it. Its
+ * meaning, read once when the rule was asked, is what every judgement reads
+ * ({@link outcomeAnswer}), so a getter or a proxy in the answer cannot tell
+ * one judgement something different from the next.
  */
 export type RuleOutcome =
   | { readonly declared: false }
-  | { readonly declared: true; readonly value: unknown }
+  | {
+      readonly declared: true;
+      readonly value: unknown;
+      /** The value's meaning, read when the rule was asked. */
+      readonly answer?: RuleAnswer;
+    }
   | { readonly declared: true; readonly threw: true };
+
+/** What a rule's outcome means: the meaning read when it was asked. */
+export function outcomeAnswer(
+  outcome: Extract<RuleOutcome, { readonly value: unknown }>
+): RuleAnswer {
+  return outcome.answer ?? ruleAnswer(outcome.value);
+}
 
 export type RefusalReason =
   | "visitor-cannot-publish"
@@ -162,41 +176,58 @@ export async function askRule(
     );
     return { declared: true, threw: true };
   }
-  reportRuleFilterMisuse(target.slug, action, target.kind, ruleAnswer(value));
-  return { declared: true, value };
+  // Read once, here, and kept with the outcome for every judgement of it.
+  const answer = ruleAnswer(value);
+  reportRuleFilterMisuse(target.slug, action, target.kind, answer);
+  return { declared: true, value, answer };
 }
 
 /**
- * Whether a rule's outcome refuses the action: no rule adds no limit, and a
- * declared rule must answer exactly `true` or a well-formed filter. Anything
- * else refuses, `null`, `undefined` and a truthy non-boolean included. A
- * filter is not a refusal here; {@link filterOf} reads it, and {@link judge}
- * decides whether this rule may answer one.
+ * Whether the rule `target` declares for `action` refuses, from its outcome:
+ * no rule adds no limit, and a declared rule must answer exactly `true` or a
+ * well-formed filter it may answer. Anything else refuses, `null`,
+ * `undefined` and a truthy non-boolean included, and so does a filter from a
+ * rule that may not answer one (a create rule, a Single's). A filter it may
+ * answer is not a refusal here; {@link filterOf} reads it.
  */
-function ruleRefusal(outcome: RuleOutcome): RefusalReason | null {
+function ruleRefusal(
+  outcome: RuleOutcome,
+  target: AccessTarget,
+  action: AccessAction
+): RefusalReason | null {
   if (!outcome.declared) return null;
   if ("threw" in outcome) return "rule-threw";
-  const answer = ruleAnswer(outcome.value);
-  if (answer.kind === "allow" || answer.kind === "filter") return null;
+  const answer = outcomeAnswer(outcome);
+  if (answer.kind === "allow") return null;
+  if (answer.kind === "filter") {
+    return mayAnswerFilter(target.kind, action)
+      ? null
+      : "rule-filter-misplaced";
+  }
   return answer.kind === "malformed-filter"
     ? "rule-filter-malformed"
     : "rule-refused";
 }
 
 /**
- * Whether a rule's outcome lets the action through to the next rule: it
- * allowed every entry, answered a filter, or declared nothing. The rule a
- * publish or an unpublish is judged on top of, update's, is asked only then,
- * by the decision and by any way in that asks the rules itself.
+ * Whether the outcome of the rule `target` declares for `action` lets the
+ * action through to the next rule: it allowed every entry, answered a filter
+ * it may answer, or declared nothing. The rule a publish or an unpublish is
+ * judged on top of, update's, is asked only then, by the decision and by any
+ * way in that asks the rules itself, so a refused change never runs it.
  */
-export function ruleLetsThrough(outcome: RuleOutcome): boolean {
-  return ruleRefusal(outcome) === null;
+export function ruleLetsThrough(
+  outcome: RuleOutcome,
+  target: AccessTarget,
+  action: AccessAction
+): boolean {
+  return ruleRefusal(outcome, target, action) === null;
 }
 
 /** The filter a rule's outcome answered, or `undefined` for none. */
 function filterOf(outcome: RuleOutcome | undefined): RuleFilter | undefined {
   if (!outcome?.declared || "threw" in outcome) return undefined;
-  const answer = ruleAnswer(outcome.value);
+  const answer = outcomeAnswer(outcome);
   return answer.kind === "filter" ? answer.filter : undefined;
 }
 
@@ -295,7 +326,7 @@ export async function askRules(
     return { action: outcome };
   }
   // The update rule is read only when the action's own rule lets it through.
-  if (!ruleLetsThrough(outcome)) return { action: outcome };
+  if (!ruleLetsThrough(outcome, target, action)) return { action: outcome };
   return { action: outcome, update: await askRule(actor, "update", target) };
 }
 
@@ -323,7 +354,7 @@ export function judge(
   if (actor.kind === "principal" && !outcomes.action.declared) {
     return refuse("principal-without-rule");
   }
-  const refusal = ruleRefusal(outcomes.action);
+  const refusal = ruleRefusal(outcomes.action, target, action);
   if (refusal) return refuse(refusal);
   // A plugin's person is judged by the action's own rule alone.
   if (actor.kind === "principal") {
@@ -361,10 +392,15 @@ function updateRuleRefusal(
       },
     });
   }
-  const update = ruleRefusal(outcome);
+  const update = ruleRefusal(outcome, target, "update");
   // Kept apart, so the log tells a failing update rule from a refusing one.
   if (update === "rule-threw") return refuse("update-rule-threw");
-  if (update === "rule-filter-malformed") return refuse(update);
+  if (
+    update === "rule-filter-malformed" ||
+    update === "rule-filter-misplaced"
+  ) {
+    return refuse(update);
+  }
   if (update) return refuse("update-rule-refused");
   return null;
 }

@@ -16,7 +16,7 @@
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import { consoleLogger } from "../../shared/types";
 
-import { ruleAnswer } from "./rule-answer";
+import type { RuleAnswer } from "./rule-answer";
 
 /** What was refused, already named, so each is logged once per process. */
 const named = new Set<string>();
@@ -47,9 +47,10 @@ export function noticeRuleNoLongerAllows(
   slug: string,
   action: string,
   caller: string,
-  value: unknown
+  value: unknown,
+  /** What `value` was read as when the rule was asked. */
+  answer: RuleAnswer
 ): void {
-  const answer = ruleAnswer(value);
   // A filter that is not well formed is reported as that instead.
   if (answer.kind === "malformed-filter") return;
   const key = `${slug}:${action}:${caller}`;

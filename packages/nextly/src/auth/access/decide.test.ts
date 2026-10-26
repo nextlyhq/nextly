@@ -503,7 +503,12 @@ describe("askRule", () => {
       slug: "posts",
       access: { read: untypedRule(rule) },
     });
-    expect(outcome).toEqual({ declared: true, value: null });
+    // With what it means, read from that one call.
+    expect(outcome).toEqual({
+      declared: true,
+      value: null,
+      answer: { kind: "refuse" },
+    });
     expect(rule).toHaveBeenCalledTimes(1);
   });
 
@@ -598,12 +603,14 @@ describe("the judge seam", () => {
       access: { publish, update },
     };
     const refused = await askRules(callers["user-with"], "publish", target);
-    expect(refused).toEqual({ action: { declared: true, value: false } });
+    expect(refused).toEqual({
+      action: { declared: true, value: false, answer: { kind: "refuse" } },
+    });
     expect(update).not.toHaveBeenCalled();
     publish.mockReturnValue(true);
     expect(await askRules(callers["user-with"], "publish", target)).toEqual({
-      action: { declared: true, value: true },
-      update: { declared: true, value: true },
+      action: { declared: true, value: true, answer: { kind: "allow" } },
+      update: { declared: true, value: true, answer: { kind: "allow" } },
     });
     expect(publish).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledTimes(1);
@@ -885,6 +892,75 @@ describe("a rule that answers with a filter", () => {
       allowed: false,
       reason: "rule-filter-malformed",
     });
+  });
+
+  it("keeps the filter a rule answered with, however its answer reads afterwards", async () => {
+    let reads = 0;
+    const shifting = {
+      get author() {
+        reads += 1;
+        return reads <= 2 ? { equals: "u1" } : undefined;
+      },
+    };
+    expect(
+      await decide(callers["user-with"], "read", postsAnswering(shifting))
+    ).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+  });
+
+  it("keeps each caller's filter apart when a rule answers with one shared object", async () => {
+    // A rule that writes the caller into one object it keeps, and answers it.
+    const shared: Record<string, unknown> = {};
+    const posts: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        read: untypedRule(({ user }) => {
+          shared.author = { equals: user?.id };
+          return shared;
+        }),
+      },
+    };
+    const reader = (userId: string) =>
+      userActor({
+        userId,
+        roles: ["editor"],
+        permissions: only("posts", ["read"]),
+      });
+    const first = await decide(reader("u1"), "read", posts);
+    const second = await decide(reader("u2"), "read", posts);
+    expect(first).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+    expect(second).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u2" } },
+    });
+  });
+
+  it("is refused from a Single's publish rule before the update rule is asked", async () => {
+    const update = vi.fn(() => true);
+    const settings: AccessTarget = {
+      kind: "single",
+      slug: "settings",
+      access: { publish: untypedRule(() => OWN), update: untypedRule(update) },
+    };
+    const editor = userActor({
+      userId: "u7",
+      roles: ["editor"],
+      permissions: only("settings", ["read", "update", "publish"]),
+    });
+    expect(await decide(editor, "publish", settings)).toEqual({
+      allowed: false,
+      reason: "rule-filter-misplaced",
+    });
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("is not mistaken for a filter when the answer is a list or a class instance", async () => {

@@ -35,6 +35,7 @@ import {
   decide,
   declaresRule,
   judge,
+  outcomeAnswer,
   ruleLetsThrough,
   plainRule,
   type AccessTarget,
@@ -52,7 +53,6 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { ruleAnswer } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -427,7 +427,7 @@ async function grantJudgedVerdict(
  */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
-  return !("threw" in outcome) && ruleAnswer(outcome.value).kind === "allow";
+  return !("threw" in outcome) && outcomeAnswer(outcome).kind === "allow";
 }
 
 /**
@@ -445,7 +445,13 @@ function noticeWhereRuleAllowedBefore(
 ): void {
   if (!outcome.declared || "threw" in outcome) return;
   if (!allowedBefore(outcome.value)) return;
-  noticeRuleNoLongerAllows(q.slug, q.action, caller, outcome.value);
+  noticeRuleNoLongerAllows(
+    q.slug,
+    q.action,
+    caller,
+    outcome.value,
+    outcomeAnswer(outcome)
+  );
 }
 
 /** A visitor's rule refused only by answering `false`. */
@@ -469,7 +475,7 @@ async function decidedFrom(
   // Asked exactly when the decision itself would ask it, so the outcomes it
   // is handed are the ones it reads.
   const update =
-    isLifecycle(action) && ruleLetsThrough(outcome)
+    isLifecycle(action) && ruleLetsThrough(outcome, target, action)
       ? await askRule(actor, "update", target)
       : undefined;
   return judge(actor, action, target, { action: outcome, update }).allowed;
