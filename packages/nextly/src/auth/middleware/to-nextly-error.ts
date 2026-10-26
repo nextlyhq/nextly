@@ -25,6 +25,8 @@ import { recordRefusal, type ErrorResponse } from "./error-response";
  * - 401 (other) -> `AUTH_REQUIRED`.
  * - 403 -> `FORBIDDEN`, with the middleware's own message, which names what
  *   was refused in the site's words and never a permission or a check.
+ * - 404 -> `NOT_FOUND`, generic: a named entry the caller may not read,
+ *   answered as a missing one.
  * - 429 -> `RATE_LIMITED`. The numeric `Retry-After` header (in seconds)
  *   is forwarded as `retryAfterSeconds` so `withErrorHandler` re-emits it.
  *   The header lookup is case-insensitive (per RFC 9110 section 5.1) so
@@ -63,6 +65,12 @@ export function toNextlyAuthError(legacy: ErrorResponse): NextlyError {
       publicMessage: legacy.error || legacy.message,
       logContext,
     });
+  }
+
+  if (legacy.statusCode === 404) {
+    // A request naming one entry the caller may not read, answered exactly as
+    // a missing entry is: the generic NOT_FOUND, so the two read alike.
+    return NextlyError.notFound({ logContext });
   }
 
   if (legacy.statusCode === 429) {

@@ -21,7 +21,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
-import { singleGateVerdict } from "../../../auth/access/gate-adapters";
+import {
+  answerForRefusal,
+  singleGateVerdict,
+} from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -90,7 +93,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
-  hasPasswordField,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -101,6 +104,7 @@ import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -310,19 +314,30 @@ export async function checkSingleAccess(params: {
 
   // Asked of the one access decision, through the adapter that keeps this
   // gate's answers as they were (`auth/access/gate-adapters`).
-  const verdict = await singleGateVerdict({
-    slug,
-    action: operation,
-    user,
-    routeAuthorized,
-    scope: authenticatedScope,
-    principal: currentPrincipal(),
-    rules: rbacAccessControlService,
-  });
+  const ask = (action: typeof operation) =>
+    singleGateVerdict({
+      slug,
+      action,
+      user,
+      routeAuthorized,
+      scope: authenticatedScope,
+      principal: currentPrincipal(),
+      rules: rbacAccessControlService,
+    });
+  const verdict = await ask(operation);
   if (verdict.allowed) return null;
+  // A Single is its one document: a caller who may not read it is answered
+  // as a missing Single is. A caller with no identity, neither a user nor a
+  // plugin's own principal, is left to the sign-in answer, which comes first.
+  const answer = await answerForRefusal(
+    verdict,
+    operation,
+    user !== undefined || currentPrincipal() !== null,
+    ask
+  );
 
-  if (verdict.refusal === "failed") {
-    const error = verdict.error;
+  if (answer.answer === "failed") {
+    const error = answer.error;
     logger.error("RBAC access check failed for Single", {
       slug,
       operation,
@@ -336,6 +351,14 @@ export async function checkSingleAccess(params: {
       statusCode: 500,
       message: "Failed to verify RBAC permissions",
       ...errorEnvelopeFields(error),
+    };
+  }
+  if (answer.answer === "missing") {
+    // The missing Single's own answer, data and all, so nothing in it tells
+    // the two apart; only the server's reason is added.
+    return {
+      ...singleAbsentResult(slug),
+      refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
   // The caller is told what was refused in the site's words. Which check
@@ -1128,9 +1151,18 @@ export class SingleQueryService extends BaseService {
       // the final redaction below is defense in depth. The server-only set
       // includes any column a schema hook contributed to this Single's table:
       // it is a real column, so the row read above carries it.
-      const singleHasPassword = hasPasswordField(singleMeta.fields);
+      // Through the field groups held inline in its containers, whose
+      // passwords sit in those containers' values.
+      const passwordReach = await passwordReachOf(
+        singleMeta.fields,
+        this.fieldGroupDataService
+      );
+      const singleHasPassword = reachesPasswordField(
+        singleMeta.fields,
+        passwordReach
+      );
       if (singleHasPassword) {
-        stripPasswordFieldValues(doc, singleMeta.fields);
+        stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
@@ -1162,7 +1194,7 @@ export class SingleQueryService extends BaseService {
       // point at which a password value or a server-only column could still be
       // put back.
       if (singleHasPassword) {
-        stripPasswordFieldValues(doc, singleMeta.fields);
+        stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
@@ -1951,7 +1983,16 @@ export class SingleQueryService extends BaseService {
             parentRow[name] = value;
           }
         }
-        applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
+        applyReadShape(
+          parentRow,
+          singleMeta.fields,
+          singleMeta.tableName,
+          await passwordReachOf(
+            singleMeta.fields,
+            this.fieldGroupDataService,
+            tx.getDrizzle()
+          )
+        );
         const { versionNo } = await captureInTx(tx, this.versionCapture, {
           lifecycle: hasLifecycle(singleMeta),
           ref: {

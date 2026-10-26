@@ -57,6 +57,7 @@ import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "./rule-answer-log";
+import { askReadAsPlainRead } from "./rule-language";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
 export type GateVerdict =
@@ -71,6 +72,41 @@ export type GateVerdict =
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
     };
+
+/**
+ * How a gate answers a refusal: `failed` when the caller's access could not
+ * be read, `missing` when the caller named one entry it may not read (it is
+ * answered exactly as a missing entry is), else `refused`, in words.
+ */
+export type RefusalAnswer =
+  | { readonly answer: "failed"; readonly error: unknown }
+  | { readonly answer: "missing" }
+  | { readonly answer: "refused" };
+
+/**
+ * The answer to `refused`, a refusal of `action`. A caller that names one
+ * entry (`namesOne`) and was refused it for want of a grant is asked whether it
+ * may read it, as a plain read is asked: one it may not read is answered as
+ * missing, so the refusal does not confirm the entry exists. `ask` asks the
+ * gate's own question about another action.
+ */
+export async function answerForRefusal(
+  refused: Extract<GateVerdict, { allowed: false }>,
+  action: string,
+  namesOne: boolean,
+  ask: (action: "read") => Promise<GateVerdict>
+): Promise<RefusalAnswer> {
+  if (refused.refusal === "failed") {
+    return { answer: "failed", error: refused.error };
+  }
+  if (!namesOne || refused.refusal !== "insufficient") {
+    return { answer: "refused" };
+  }
+  const read = action === "read" ? refused : await askReadAsPlainRead(ask);
+  if (read.allowed) return { answer: "refused" };
+  if (read.refusal === "failed") return { answer: "failed", error: read.error };
+  return { answer: "missing" };
+}
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
