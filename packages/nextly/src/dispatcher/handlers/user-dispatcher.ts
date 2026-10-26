@@ -28,7 +28,10 @@ import {
   currentRequestCaller,
 } from "../../auth/caller-scope";
 import { getRBACService } from "../../auth/code-access";
-import { readableEntities } from "../../auth/entity-read-access";
+import {
+  authorizationGroups,
+  readableEntities,
+} from "../../auth/entity-read-access";
 import { requestLanguage } from "../../auth/middleware";
 import { container } from "../../di/container";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
@@ -65,8 +68,10 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
  * so the answer names exactly what those lists show the same caller and no
  * entity the caller may not know exists. Each entity is asked as its own
  * subject, so a deviation that shapes the answer is said of the entity it
- * shaped. The route admits only an authenticated caller; were none read
- * here, nothing is named rather than everything.
+ * shaped, and in the order `readableEntities` takes a set — one, then
+ * bounded groups at once — so an install's rules are not waited on one
+ * after another. The route admits only an authenticated caller; were none
+ * read here, nothing is named rather than everything.
  */
 async function readableEntityKinds(
   kinds: ReadonlyMap<string, "collection" | "single">
@@ -74,14 +79,20 @@ async function readableEntityKinds(
   const reader = readAuthenticatedUser();
   if (!reader) return new Map();
   const caller = readAccessCallerForDispatch(reader);
-  const readable = new Map<string, "collection" | "single">();
-  for (const [slug, kind] of kinds) {
-    const allowed = await aboutSubject(permissionSlug("read", slug), () =>
-      readableEntities([slug], caller)
+  const allowed = new Set<string>();
+  for (const group of authorizationGroups([...kinds.keys()])) {
+    const decided = await Promise.all(
+      group.map(slug =>
+        aboutSubject(permissionSlug("read", slug), () =>
+          readableEntities([slug], caller)
+        )
+      )
     );
-    if (allowed.has(slug)) readable.set(slug, kind);
+    for (const readable of decided) {
+      for (const slug of readable) allowed.add(slug);
+    }
   }
-  return readable;
+  return new Map([...kinds].filter(([slug]) => allowed.has(slug)));
 }
 
 type UsersService = ServiceContainer["users"];

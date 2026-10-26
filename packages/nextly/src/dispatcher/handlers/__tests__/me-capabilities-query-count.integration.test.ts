@@ -80,12 +80,20 @@ describe.each(getConfiguredTestDialects())(
      * named. The caller reads them all because the answer names only what
      * the caller may read, deciding that for each entity: a caller reading
      * one collection would leave every other entity's cells out of the count.
+     * `read`, when given, is every collection's read rule.
      */
-    async function measure(collections: number): Promise<Measured> {
+    async function measure(
+      collections: number,
+      read?: () => Promise<boolean>
+    ): Promise<Measured> {
       const t: TestNextly = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         collections: slugsFor(collections).map(slug =>
-          defineCollection({ slug, fields: [text({ name: "title" })] })
+          defineCollection({
+            slug,
+            ...(read ? { access: { read } } : {}),
+            fields: [text({ name: "title" })],
+          })
         ),
       });
       try {
@@ -115,6 +123,14 @@ describe.each(getConfiguredTestDialects())(
             }>;
           };
         };
+        // The install's first user is its super-admin, who passes every rule
+        // without asking it. The owner takes that place, so the reader below
+        // is answered from their role and each collection's rule.
+        await direct.users.create({
+          email: "owner@example.com",
+          password: "Password123!",
+          data: { name: "Owner", isActive: true },
+        });
         const seeded = await direct.permissions.find({ limit: 1000 });
         const roleId = (
           await direct.roles.create({
@@ -216,6 +232,29 @@ describe.each(getConfiguredTestDialects())(
       // was read once. Asking each cell's permission on its own would add a
       // read per cell, and re-resolving the caller several.
       expect(many.reads).toBe(one.reads);
+    }, 240_000);
+
+    it("decides which entities the caller may read a group at a time, not one after another", async () => {
+      // Every collection's read rule takes a moment, and says how many of
+      // them were waited on at once.
+      const inFlight = { now: 0, most: 0 };
+      const slowRead = async (): Promise<boolean> => {
+        inFlight.now += 1;
+        inFlight.most = Math.max(inFlight.most, inFlight.now);
+        await new Promise(done => setTimeout(done, 25));
+        inFlight.now -= 1;
+        return true;
+      };
+
+      const { named } = await measure(12, slowRead);
+
+      // POPULATION CONTROL: every collection was decided readable, so every
+      // rule ran.
+      expect(named).toEqual(slugsFor(12).sort());
+      // Rules waited on one after another never overlap; a set decided as
+      // the list endpoints decide it runs a bounded group at once.
+      expect(inFlight.most).toBeGreaterThan(1);
+      expect(inFlight.most).toBeLessThanOrEqual(8);
     }, 240_000);
   }
 );
