@@ -15,11 +15,9 @@ import {
   type LastSuperAdminTx,
 } from "../../users/services/last-super-admin";
 
-import {
-  listDescendantRoleIds,
-  MAX_ROLE_HIERARCHY_DEPTH,
-} from "./role-descendants";
+import { listDescendantRoleIds } from "./role-descendants";
 import { afterRoleGrantsChanged } from "./role-grants-changed";
+import { MAX_ROLE_HIERARCHY_DEPTH, walkRoleGraph } from "./role-graph";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
@@ -207,33 +205,20 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of ancestor role IDs (excluding the starting roleId)
    */
   async listAncestorRoles(roleId: string): Promise<string[]> {
-    const visited = new Set<string>();
-    const queue: string[] = [roleId];
-
-    while (queue.length) {
-      const batch = queue.splice(0, 50);
-      const inheritances = await (
-        this.db as RBACDatabaseInstance
-      ).query.roleInherits.findMany({
-        where: { childRoleId: { in: batch } },
-        columns: {
-          parentRoleId: true,
-        },
-      });
-
-      for (const r of inheritances) {
-        const parent = String(r.parentRoleId);
-        if (!visited.has(parent)) {
-          visited.add(parent);
-          queue.push(parent);
-        }
-      }
-
-      // Safety limit to prevent infinite loops
-      if (visited.size > MAX_ROLE_HIERARCHY_DEPTH) break;
-    }
-
-    return Array.from(visited);
+    // Up the inheritance, as far as the limit reaches: a list, so a walk cut
+    // short is the part it reached.
+    const { ids } = await walkRoleGraph(
+      [roleId],
+      async batch =>
+        (
+          await (this.db as RBACDatabaseInstance).query.roleInherits.findMany({
+            where: { childRoleId: { in: [...batch] } },
+            columns: { parentRoleId: true },
+          })
+        ).map(r => r.parentRoleId),
+      { seedsVisited: false, limit: MAX_ROLE_HIERARCHY_DEPTH }
+    );
+    return ids;
   }
 
   /**
