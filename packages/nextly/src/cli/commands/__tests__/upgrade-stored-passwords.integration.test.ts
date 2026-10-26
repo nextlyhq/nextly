@@ -424,9 +424,14 @@ describe.each(getConfiguredTestDialects())(
       await seedPlain("page");
       const offsets: unknown[] = [];
       const select = t.adapter.select.bind(t.adapter);
-      t.adapter.select = ((table: string, options?: { offset?: unknown }) => {
-        if (table === "dc_upbulk") offsets.push(options?.offset);
-        return select(table, options as never);
+      // Passes on every argument: a transaction's reads go through here too,
+      // carrying its connection.
+      t.adapter.select = ((...args: Parameters<typeof select>) => {
+        const [table, options] = args;
+        if (table === "dc_upbulk") {
+          offsets.push((options as { offset?: unknown } | undefined)?.offset);
+        }
+        return select(...args);
       }) as typeof t.adapter.select;
       try {
         const counted = await countPasswordsStoredAsGiven(source(2));
