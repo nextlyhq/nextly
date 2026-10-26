@@ -11,6 +11,7 @@ import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
 import {
   genericPublicMessage,
   NEXTLY_ERROR_STATUS,
@@ -21,13 +22,11 @@ import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
-import { answerForRefusal } from "../access/gate-adapters";
+import { answerForRefusal, type GateVerdict } from "../access/gate-adapters";
 import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
-import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
-import type { GateVerdict } from "../access/gate-adapters";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -883,14 +882,27 @@ export async function requireLifecycleAccess(
   const authResult = await requireAuthentication(req);
   if ("statusCode" in authResult) return authResult;
   // The languages still matter to the read a refusal is answered by.
-  return withRuleLanguage(requestLanguage(operation), () =>
-    authorizeCallerOnGrant(
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    const scope = operation?.namesOne ? "one" : "all";
+    const onGrant = await authorizeCallerOnGrant(
       authResult,
       action,
       collectionSlug,
-      operation?.namesOne ? "one" : "all"
-    )
-  );
+      scope
+    );
+    if (!isErrorResponse(onGrant)) return onGrant;
+    // A target with no lifecycle has nothing to publish, and the service
+    // tells a caller who may update so; one with a lifecycle still asks the
+    // lifecycle gate whoever the route admitted. So update admits too, and a
+    // caller neither admits is refused as the lifecycle grant refuses them.
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    return isErrorResponse(asUpdate) ? onGrant : asUpdate;
+  });
 }
 
 /** The action a write route admitted each caller on, where it accepts several. */

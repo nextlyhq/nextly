@@ -6273,7 +6273,19 @@ export class CollectionMutationService extends BaseService {
       if (!hasMainStatus && !companionPublishable) {
         // Nothing to publish — the collection has no status concept. Returned
         // before the publish permission check so a collection with no lifecycle
-        // does not demand `publish-<slug>` for a call that changes nothing.
+        // does not demand `publish-<slug>` for a call that changes nothing; the
+        // caller's update gate decides whether they are told so, as a Single's
+        // does, so a caller with no grant learns nothing about the entry.
+        const updateDenied = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "update",
+          entryId: params.entryId,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+        if (updateDenied) return updateDenied;
         return {
           success: true,
           statusCode: 200,
