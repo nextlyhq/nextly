@@ -67,6 +67,12 @@ describe("a handler's returned envelope", () => {
     });
   });
 
+  it("reads a status named only as `status`, the legacy spelling", async () => {
+    const result = await dispatchReturning({ success: false, status: 403 });
+
+    expect(result.error).toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+  });
+
   it("answers a failure that carries no message with its status", async () => {
     // Without a message the envelope used to carry no error at all, and the
     // route answered it as an unexplained 500.

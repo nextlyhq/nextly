@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { setNextlyLogger } from "../../../observability/logger";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
@@ -104,7 +105,25 @@ beforeEach(async () => {
 afterEach(async () => {
   await handle?.destroy();
   handle = undefined;
+  setNextlyLogger(undefined);
 });
+
+/** The errors logged from here on, as the logger was handed them. */
+function loggedErrors(): Record<string, unknown>[] {
+  const errors: Record<string, unknown>[] = [];
+  const ignore = () => {};
+  setNextlyLogger({
+    error: payload => errors.push(payload as Record<string, unknown>),
+    warn: ignore,
+    info: ignore,
+    debug: ignore,
+  });
+  return errors;
+}
+
+/** The plugin route faults among `errors`. */
+const routeFaults = (errors: Record<string, unknown>[]) =>
+  errors.filter(entry => entry.kind === "plugin-route-error");
 
 /** A key holding exactly `read-notes`, minted by the super-admin first user. */
 async function readOnlyKey(): Promise<string> {
@@ -188,8 +207,12 @@ describe("a route gated by a computed permission", () => {
   it("refuses a caller without the grant, at the door", async () => {
     const key = await readOnlyKey();
 
+    const errors = loggedErrors();
     const res = await post("write", { authorization: `Bearer ${key}` });
     expect(res.status, "the key holds no `create-notes`").toBe(403);
+    // The control for the logged faults below: refusing the caller is the
+    // gate working, and is not logged as a fault.
+    expect(routeFaults(errors)).toEqual([]);
 
     const body = (await res.json()) as { reached?: boolean };
     expect(
@@ -202,6 +225,7 @@ describe("a route gated by a computed permission", () => {
   it("answers a server fault when the permission cannot be computed, rather than opening", async () => {
     const key = await readOnlyKey();
 
+    const errors = loggedErrors();
     const res = await post("broken", { authorization: `Bearer ${key}` });
     const body = (await res.json()) as {
       reached?: boolean;
@@ -220,11 +244,25 @@ describe("a route gated by a computed permission", () => {
       500
     );
     expect(body.error?.code).toBe("INTERNAL_ERROR");
+    // Logged for the operator, naming the plugin, the route and the cause:
+    // the caller's 500 says nothing, so the log is where it can be fixed.
+    expect(routeFaults(errors)).toEqual([
+      expect.objectContaining({
+        plugin: PLUGIN,
+        logContext: expect.objectContaining({
+          reason: "plugin-route-permission-unresolved",
+        }),
+        cause: expect.objectContaining({
+          message: "cannot resolve this permission",
+        }),
+      }),
+    ]);
   });
 
   it("answers a server fault for an EMPTY computed permission, rather than opening the route", async () => {
     const key = await readOnlyKey();
 
+    const errors = loggedErrors();
     const res = await post("empty", { authorization: `Bearer ${key}` });
     const body = (await res.json()) as {
       reached?: boolean;
@@ -240,6 +278,7 @@ describe("a route gated by a computed permission", () => {
     ).not.toBe(true);
     expect(res.status).toBe(500);
     expect(body.error?.code).toBe("INTERNAL_ERROR");
+    expect(routeFaults(errors)).toHaveLength(1);
   });
 
   it("still refuses an unauthenticated caller", async () => {

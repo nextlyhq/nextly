@@ -30,6 +30,7 @@ import {
   type RestLimitGate,
   type RestLimitTarget,
 } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import {
@@ -860,9 +861,21 @@ export async function runPluginRoute(
   }
   const auth = settled.resolved;
   if ("error" in auth) {
+    const requestId = readOrGenerateRequestId(req);
+    // A server fault here, such as a permission the route cannot work out, is
+    // the plugin's to fix, so it is logged with what caused it. A refusal of
+    // the caller is not: it is the gate working.
+    if (auth.error.statusCode >= 500) {
+      getNextlyLogger().error({
+        kind: "plugin-route-error",
+        ...auth.error.toLogJSON(requestId),
+        plugin: matched.pluginName,
+        path: matched.route.path,
+      });
+    }
     return markPluginResponse(
       buildErrorResponse(auth.error, {
-        requestId: readOrGenerateRequestId(req),
+        requestId,
         flattened: currentFlattenedErrors(),
       }),
       matched.route
