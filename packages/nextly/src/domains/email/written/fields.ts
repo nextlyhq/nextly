@@ -81,6 +81,21 @@ export function sitesVersionFormat(
     : { format: "code", blocks: null };
 }
 
+/**
+ * A version as its blocks compile now: the site's blocks kept through a
+ * review or an undo send what they say, though their HTML was stored by a
+ * release that wrote blocks as other markup.
+ */
+export function compiledVersion<
+  T extends { htmlContent: string; plainTextContent: string | null },
+>(version: T, blocks: WrittenDocument): T {
+  return {
+    ...version,
+    htmlContent: compileWrittenHtml(blocks),
+    plainTextContent: compileWrittenText(blocks),
+  };
+}
+
 /** A stored format as the record reads it: anything but `written` is coded. */
 function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";
@@ -159,7 +174,12 @@ export function writtenForCreate<T extends FormatInput>(data: T): T {
  *   written template
  */
 export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
-  record: { format: TemplateFormat; blocks: WrittenDocument | null },
+  record: {
+    format: TemplateFormat;
+    blocks: WrittenDocument | null;
+    htmlContent?: string;
+    plainTextContent?: string | null;
+  },
   data: T
 ): T {
   const format =
@@ -177,12 +197,21 @@ export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
     return data;
   }
   if (format === "code") return convertedToCode(record.blocks, data);
-  if (data.htmlContent !== undefined || data.plainTextContent !== undefined) {
+  // A form that saves every field sends back the HTML and plain text it was
+  // given; those are the blocks' own, and only a change to them is refused.
+  const { htmlContent, plainTextContent, ...rest } = data;
+  const sameHtml =
+    htmlContent === undefined || htmlContent === record.htmlContent;
+  const sameText =
+    plainTextContent === undefined ||
+    (plainTextContent ?? null) === (record.plainTextContent ?? null);
+  if (!sameHtml || !sameText) {
     throw refused(
       "A written template's HTML is written from its blocks. Change its blocks instead.",
       "html-on-written-template"
     );
   }
+  data = rest as T;
   if (data.blocks === undefined) return data;
   const fields = writtenFields(data.blocks);
   return {

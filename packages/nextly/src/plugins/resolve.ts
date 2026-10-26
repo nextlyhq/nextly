@@ -38,6 +38,7 @@ import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
+import { assertEmailTemplates } from "./validate-email-templates";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
@@ -168,6 +169,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // An email template with both HTML and blocks, or neither, would be refused
+  // by the owner registry with only a log line, and its sends would fail
+  // later. Refused here, the boot names the plugin and the template.
+  assertEmailTemplates(plugins);
 }
 
 /**

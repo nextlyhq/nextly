@@ -47,6 +47,7 @@ export const undoOwnerUpdateSchema = z
       .object({
         version: versionSchema,
         blocks: writtenDocumentSchema.nullable().optional(),
+        baseDigest: z.string().min(1).nullable().optional(),
         base: versionSchema,
         applied: z.string().min(1),
         appliedBase: z.string().min(1),

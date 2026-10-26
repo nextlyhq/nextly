@@ -28,7 +28,11 @@ const FIELDS: ReadonlyArray<VersionField> = [
 export interface OwnerChange {
   /** Stable within one review: the field and the change's position in it. */
   id: string;
-  field: VersionField;
+  /**
+   * The field the change is in, or `"template"` (`@experimental`) for an
+   * update offered as a whole, whose lines show every field it replaces.
+   */
+  field: VersionField | "template";
   /** True when the site edited the same lines; then `mine` differs from `base`. */
   conflict: boolean;
   /** The base's lines the change replaced (empty for an insertion). */
@@ -325,4 +329,87 @@ export function applyOwnerChoices(
     });
   }
   return result;
+}
+
+/**
+ * The id of the one change an owner's update is offered as when the template
+ * is written in blocks on either side.
+ */
+export const WHOLE_TEMPLATE = "template";
+
+/**
+ * An owner's update offered whole: one change showing each side's HTML,
+ * decided at once as the site's version or the owner's. For a template
+ * written in blocks on either side: lines of HTML written from blocks are no
+ * one's to merge, and a version that took some of them would no longer be
+ * the blocks it says it is.
+ */
+export function wholeTemplateChange(
+  base: EmailTemplateVersion,
+  theirs: EmailTemplateVersion,
+  mine: EmailTemplateVersion
+): OwnerChange {
+  return {
+    id: WHOLE_TEMPLATE,
+    field: "template",
+    conflict: false,
+    base: wholeLines(base),
+    theirs: wholeLines(theirs),
+    mine: wholeLines(mine),
+  };
+}
+
+/**
+ * Every field of a version, each named, so taking it whole is taken seeing
+ * all it replaces: a subject or a preview line can change with no HTML moving.
+ */
+function wholeLines(version: EmailTemplateVersion): string[] {
+  const plain = lines(version.plainTextContent);
+  return [
+    `Subject: ${version.subject}`,
+    ...(version.preheader ? [`Preview text: ${version.preheader}`] : []),
+    "HTML:",
+    ...lines(version.htmlContent),
+    ...(plain.length > 0 ? ["Plain text:", ...plain] : []),
+  ];
+}
+
+/**
+ * Which version a review of a whole template keeps. `offered` is whether the
+ * comparison offered the change; when it didn't, the site's version stands
+ * and no choice is asked for. A missing or unknown choice is refused as a
+ * line review's is, and so is written text: there are no lines to write.
+ */
+export function wholeTemplateChoice(
+  choices: Readonly<Record<string, OwnerChangeChoice>>,
+  offered: boolean
+): "mine" | "theirs" {
+  const path = `choices.${WHOLE_TEMPLATE}`;
+  const choice = offered ? choices[WHOLE_TEMPLATE] : undefined;
+  const unknown = Object.keys(choices).filter(
+    id => !offered || id !== WHOLE_TEMPLATE
+  );
+  const errors = unknown.map(id => ({
+    path: `choices.${id}`,
+    code: "INVALID",
+    message: "This change is not part of the update.",
+  }));
+  if (offered && !choice) {
+    errors.push({
+      path,
+      code: "REQUIRED",
+      message: "Choose whether to keep your version or use the owner's.",
+    });
+  } else if (choice?.use === "edited") {
+    errors.push({
+      path,
+      code: "INVALID",
+      message:
+        "Keep your version or use the owner's: this template is reviewed as a whole.",
+    });
+  }
+  if (errors.length > 0) {
+    throw NextlyError.validation({ errors, logContext: { unknown } });
+  }
+  return choice?.use === "theirs" ? "theirs" : "mine";
 }

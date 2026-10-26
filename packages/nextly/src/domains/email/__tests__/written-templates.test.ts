@@ -132,6 +132,21 @@ describe("a written template", () => {
     ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
   });
 
+  it("takes a save that sends back the HTML its blocks write, as the admin's form does", async () => {
+    const created = await written();
+    const saved = await service.updateTemplate(created.id, {
+      htmlContent: created.htmlContent,
+      plainTextContent: created.plainTextContent,
+      useLayout: false,
+    });
+    expect(saved).toMatchObject({
+      format: "written",
+      blocks: BLOCKS,
+      useLayout: false,
+      htmlContent: created.htmlContent,
+    });
+  });
+
   it("previews from unsaved blocks", async () => {
     const preview = await service.previewDraft(
       {

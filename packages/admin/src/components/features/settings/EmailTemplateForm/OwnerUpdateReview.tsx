@@ -49,9 +49,11 @@ const FIELD_LABELS: Record<OwnerChange["field"], string> = {
   preheader: "Preview text",
   htmlContent: "HTML",
   plainTextContent: "Plain text",
+  // An update to a template written in blocks, taken or kept whole.
+  template: "Whole template",
 };
 
-const VERSION_FIELDS: OwnerChange["field"][] = [
+const VERSION_FIELDS: Exclude<OwnerChange["field"], "template">[] = [
   "subject",
   "preheader",
   "htmlContent",

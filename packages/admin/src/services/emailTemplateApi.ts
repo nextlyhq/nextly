@@ -125,7 +125,13 @@ export interface EmailTemplateVersion {
 export interface OwnerChange {
   /** Stable within one review. */
   id: string;
-  field: "subject" | "preheader" | "htmlContent" | "plainTextContent";
+  /** The field, or "template" for an update offered as a whole. */
+  field:
+    | "subject"
+    | "preheader"
+    | "htmlContent"
+    | "plainTextContent"
+    | "template";
   /** The site edited the same lines. */
   conflict: boolean;
   /** The lines the change replaced in the version the copy started from. */
@@ -155,6 +161,10 @@ export interface EmailTemplateComparison {
 /** What an applied review replaced, for Undo. */
 export interface OwnerUpdateUndo {
   version: EmailTemplateVersion;
+  /** A written template's blocks before the review; passed back as given. */
+  blocks?: unknown;
+  /** The digest the override was based on before the review. */
+  baseDigest?: string | null;
   base: EmailTemplateVersion;
   applied: string;
   appliedBase: string;
