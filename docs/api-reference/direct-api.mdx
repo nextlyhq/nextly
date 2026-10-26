@@ -55,7 +55,7 @@ The generator writes a `nextly-types.ts` (or whatever path you set in `typescrip
 
 ## Access control
 
-By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access rules and field-level rules to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` and supply a `user`:
+By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access rules and field-level rules to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` with the `user` to judge:
 
 ```typescript
 const visiblePosts = await nextly.find({
@@ -64,6 +64,8 @@ const visiblePosts = await nextly.find({
   user: { id: "user-123", role: "editor" },
 });
 ```
+
+Without a `user`, the call is judged as a signed-out visitor: it can read where no rule names the read, and a create, update or delete needs a rule that allows it.
 
 `overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
 
