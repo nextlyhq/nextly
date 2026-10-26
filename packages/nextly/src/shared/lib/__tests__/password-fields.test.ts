@@ -10,6 +10,7 @@ import {
   hashPasswordFieldValues,
   hasPasswordField,
   NO_FIELD_GROUPS,
+  reachesPasswordField,
   stripPasswordFieldValues,
 } from "../password-fields";
 
@@ -106,6 +107,31 @@ describe("hasPasswordField", () => {
         },
       ])
     ).toBe(true);
+  });
+});
+
+describe("reachesPasswordField", () => {
+  const HELD = [
+    {
+      name: "box",
+      type: "group",
+      fields: [{ name: "held", type: "component", component: "pin" }],
+    },
+  ];
+  const PIN = [{ name: "pin", type: "password" }];
+
+  it("follows a field group held inline to its password", () => {
+    expect(reachesPasswordField(HELD, { fieldsOf: () => PIN })).toBe(true);
+    expect(
+      reachesPasswordField(HELD, {
+        fieldsOf: () => [{ name: "title", type: "text" }],
+      })
+    ).toBe(false);
+  });
+
+  it("counts a field group held inline that it has no fields for", () => {
+    // The strip withholds such an instance, so the read has to run it.
+    expect(reachesPasswordField(HELD, NO_FIELD_GROUPS)).toBe(true);
   });
 });
 
