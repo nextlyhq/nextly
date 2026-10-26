@@ -149,28 +149,47 @@ export class RoleMutationService extends BaseService {
   }
 
   /**
-   * Moves the role holding the Public role's slug off it, to the first of
-   * `public-1`, `public-2`, … no role holds, changing the slug alone: its
-   * name, holders, permissions and inheritance stay as they are. Run before
-   * the Public role first exists, when whatever holds the slug is a role of
-   * the site's own, whether or not it is marked built-in. What is cached from
-   * the role's grants is then cleared, as any change to a role's slug clears
-   * it, since a code rule reading role slugs now answers its holders
-   * differently.
-   *
-   * @returns The slug the role now has, or `null` where none was moved
+   * The role holding the Public role's slug, and whether it is built in, or
+   * `null` where none does.
    */
-  async moveRoleOffPublicSlug(): Promise<string | null> {
-    const holder = await this.findRoleIdBySlug(PUBLIC_ROLE_SLUG);
-    if (!holder) return null;
+  async publicSlugHolder(): Promise<{ id: string; builtIn: boolean } | null> {
     const { roles } = this.tables;
-    for (let n = 1; ; n++) {
-      const slug = `${PUBLIC_ROLE_SLUG}-${n}`;
-      if (await this.findRoleIdBySlug(slug)) continue;
-      await this.db.update(roles).set({ slug }).where(eq(roles.id, holder.id));
-      await afterRoleGrantsChanged(holder.id);
-      return slug;
+    const [row] = await this.db
+      .select({ id: roles.id, isSystem: roles.isSystem })
+      .from(roles)
+      .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
+      .limit(1);
+    return row ? { id: String(row.id), builtIn: Boolean(row.isSystem) } : null;
+  }
+
+  /**
+   * Moves role `id` off the Public role's slug where it still holds it, to
+   * the first of `public-1`, `public-2`, … no role holds, changing the slug
+   * alone: its name, holders, permissions and inheritance stay as they are.
+   * What is cached from the role's grants is then cleared, as any change to a
+   * role's slug clears it, since a code rule reading role slugs now answers
+   * its holders differently. Cleared even where the role had already moved,
+   * so a move whose clearing was cut short is finished by running it again.
+   *
+   * @returns The slug the role now has, or `null` where there is no such role
+   */
+  async moveRoleOffPublicSlug(id: string): Promise<string | null> {
+    const { roles } = this.tables;
+    const [role] = await this.db
+      .select({ slug: roles.slug })
+      .from(roles)
+      .where(eq(roles.id, id))
+      .limit(1);
+    if (!role) return null;
+    let slug = String(role.slug);
+    for (let n = 1; slug === PUBLIC_ROLE_SLUG; n++) {
+      const free = `${PUBLIC_ROLE_SLUG}-${n}`;
+      if (await this.findRoleIdBySlug(free)) continue;
+      await this.db.update(roles).set({ slug: free }).where(eq(roles.id, id));
+      slug = free;
     }
+    await afterRoleGrantsChanged(id);
+    return slug;
   }
 
   /**

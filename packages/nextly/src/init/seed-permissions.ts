@@ -223,8 +223,9 @@ async function seedEverything(): Promise<void> {
       getService("logger")
     );
     return seedPublicRole({
+      publicSlugHolder: () => roles.publicSlugHolder(),
+      moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
       ensurePublicRole: () => roles.ensurePublicRole(),
-      moveRoleOffPublicSlug: () => roles.moveRoleOffPublicSlug(),
       meta: getService("metaService"),
       logger: getService("logger"),
     });
