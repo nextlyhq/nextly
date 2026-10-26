@@ -16,6 +16,7 @@
  * silently auto-login users. See `attemptDevAutoLogin` below.
  */
 import { respondData } from "../../api/response-shapes";
+import { wholeSecondExpiry } from "../../domains/auth/services/token-account-binding";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { consoleLogger } from "../../shared/types";
 import {
@@ -303,7 +304,13 @@ async function attemptDevAutoLogin(
     tokenHash: refreshTokenHash,
     userAgent: null,
     ipAddress: null,
-    expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+    // The whole second the instant falls in, as every session path: a
+    // column that keeps whole seconds rounds milliseconds rather than
+    // cutting them, which would store the session as living longer than
+    // issued.
+    expiresAt: wholeSecondExpiry(
+      new Date(Date.now() + deps.refreshTokenTTL * 1000)
+    ),
   });
 
   const cookies = sessionCookies(accessToken, rawRefreshToken, deps);
