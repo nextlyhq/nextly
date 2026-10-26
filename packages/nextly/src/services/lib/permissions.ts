@@ -643,10 +643,9 @@ export async function listEffectivePermissions(
  * the rows name them: each one's stored slug and the action and resource it
  * grants. Sorted by slug, each slug once.
  *
- * The rows rather than one spelling of them, because a rule is handed the
- * stored slug (`read-posts`) and, for one release, the earlier
- * `<resource>:<action>` spelling too, and a slug cannot be rebuilt from its
- * parts: `manage-api-keys` grants `update` on `api-keys`.
+ * The rows rather than the slugs alone, because a slug cannot be split back
+ * into the action and resource it grants: `manage-api-keys` grants `update`
+ * on `api-keys`. A rule is handed each one's stored slug (`read-posts`).
  *
  * Empty for a missing user id. A lookup that fails refuses rather than
  * answering empty: an empty list only denies a rule that asks for a

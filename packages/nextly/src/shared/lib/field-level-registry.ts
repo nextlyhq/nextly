@@ -594,7 +594,6 @@ async function runFieldRule(
     const userId = ctx.user?.id;
     const email = ctx.user?.email;
     const args = buildRuleContext(
-      fn,
       {
         user:
           typeof userId === "string"

@@ -38,9 +38,9 @@ inside `packages/nextly`.
   that same question, so one rule gives one answer on every door. With no
   user, `publish`/`unpublish` and `routeAuthorized` fail closed regardless.
 - A permission is spelled `read-posts` everywhere, rules included; their
-  context comes from `buildRuleContext`, which for one release also lists the
-  earlier `posts:read`, warned once per rule. `ReadAccessCaller` carries a
-  key's slugs (`permissions`) and rows (`grants`). Build callers with
+  context comes from `buildRuleContext`, and the earlier `posts:read` is not
+  in it, so a rule checking that spelling does not allow. `ReadAccessCaller`
+  carries a key's slugs (`permissions`) and rows (`grants`). Build callers with
   `readAccessCaller`; a hand-assembled literal is how two doors came to answer
   one key differently.
 - A collection whose code-defined `access` says nothing about an operation

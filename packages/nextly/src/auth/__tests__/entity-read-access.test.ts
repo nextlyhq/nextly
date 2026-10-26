@@ -187,10 +187,10 @@ describe("canReadEntity — API key callers", () => {
       true
     );
     // The role screen's spelling, the same slug the coarse check compared,
-    // with the earlier `posts:read` after it for its deprecation release.
+    // and no other.
     expect(read).toHaveBeenCalledWith(
       expect.objectContaining({
-        permissions: ["read-posts", "posts:read"],
+        permissions: ["read-posts"],
         roles: ["editor"],
         operation: "read",
         collection: "posts",

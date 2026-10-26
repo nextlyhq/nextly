@@ -102,13 +102,9 @@ export interface AccessRuleContext {
   /**
    * The caller's permissions, spelled as the role screen and the database
    * spell them: `<action>-<resource>`, such as `read-posts`. Empty for a
-   * visitor and for a plugin-defined person, who hold none.
-   *
-   * For one release the list also carries each
-   * permission's earlier rule spelling, `<resource>:<action>` (`posts:read`),
-   * after the others, so an existing rule keeps its answer. A rule that
-   * checks that spelling is warned once; it stops being accepted in a later
-   * release.
+   * visitor and for a plugin-defined person, who hold none. The earlier
+   * rule spelling, `<resource>:<action>` (`posts:read`), is not in the list,
+   * so a rule checking it does not allow.
    */
   permissions: string[];
   /**
