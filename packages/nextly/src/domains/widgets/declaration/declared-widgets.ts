@@ -276,17 +276,26 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
  * Checks every declaration, then keeps them all, or refuses startup naming
  * every fault and keeps none.
  *
- * `legacy` is the ids each plugin declares in today's shape.
+ * `legacy` is the ids each plugin declares in today's shape. `references`
+ * checks what names these widgets (the site config's dashboard, a plugin's
+ * suggestions), handed each well-formed declaration as the definition it
+ * becomes, so its faults are refused with the declarations' own, at once.
  */
 export function registerWidgetDeclarations(
   given: readonly DeclaredWidgetGroup[],
-  legacy: readonly LegacyWidgetIds[] = []
+  legacy: readonly LegacyWidgetIds[] = [],
+  references?: (
+    declared: ReadonlyMap<string, WidgetDefinition>
+  ) => readonly WidgetDeclarationFault[]
 ): void {
   const groups = given.map(snapshot);
   const faults = [
     ...collectWidgetDeclarationFaults(groups),
     ...sharedWithLegacy(groups, legacy),
   ];
+  if (references !== undefined) {
+    faults.push(...references(wellFormedDefinitions(groups, faults)));
+  }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);
 
@@ -306,6 +315,28 @@ export function registerWidgetDeclarations(
       registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
+}
+
+/**
+ * The definitions the declarations no fault names would become, by id, so a
+ * reference to a faulty one reads as unknown rather than as a second fault
+ * about the same mistake.
+ */
+function wellFormedDefinitions(
+  groups: readonly DeclaredWidgetGroup[],
+  faults: readonly WidgetDeclarationFault[]
+): ReadonlyMap<string, WidgetDefinition> {
+  const faulty = new Set(faults.map(fault => fault.widget));
+  const definitions = new Map<string, WidgetDefinition>();
+  for (const { declarations } of groups) {
+    if (!Array.isArray(declarations)) continue;
+    for (const raw of declarations as readonly unknown[]) {
+      const id = (raw as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || faulty.has(id)) continue;
+      definitions.set(id, toDefinition(raw as DeclaredWidgetShape));
+    }
+  }
+  return definitions;
 }
 
 /** Every declared widget, in the order startup kept them. */

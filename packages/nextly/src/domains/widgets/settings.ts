@@ -846,6 +846,18 @@ export function validateWidgetSettings(
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 
+/**
+ * Why `value` cannot be a starting value of `setting`, or `undefined`. Judged
+ * as a declared default is, since a card falls back to it the same way: the
+ * site config's starting values replace the declaration's.
+ */
+export function startingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  return defaultProblem(setting.type, limitsOf(setting), value, setting.name);
+}
+
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: AnyWidgetSetting, value: unknown): boolean {
   return USABLE_AS[setting.type](value, limitsOf(setting));

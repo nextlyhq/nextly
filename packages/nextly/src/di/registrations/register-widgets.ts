@@ -45,12 +45,22 @@ import { setAdminComponentPlugins } from "../../domains/widgets/declaration/comp
 import {
   clearDeclaredWidgets,
   registerWidgetDeclarations,
+  type DeclaredWidgetGroup,
 } from "../../domains/widgets/declaration/declared-widgets";
+import {
+  SITE_CONFIG,
+  siteDashboardContext,
+  siteDashboardFaults,
+  siteDashboardKeysNotApplied,
+} from "../../domains/widgets/declaration/site-dashboard";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
+import { getNextlyLogger } from "../../observability/logger";
 import {
+  pluginAlternatives,
   pluginLegacyWidgetIds,
+  pluginSuggestionFaults,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -61,7 +71,9 @@ import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
-  plugins: readonly PluginDefinition[] = []
+  plugins: readonly PluginDefinition[] = [],
+  // The site config's `admin.dashboard`, as given: startup checks it.
+  dashboard?: unknown
 ): void {
   clearWidgets();
   // Cleared with the registry it publishes into, so a reload's declarations
@@ -120,15 +132,26 @@ export function resetWidgetRegistries(
     registerWidget(definition);
   }
 
-  // Plugins' widgets declared with `defineWidget()`, after core's own, so an id
-  // that collides with one of core's fails here, by name. Every declaration of
-  // every enabled plugin is checked together and startup stops on any fault,
-  // all of them reported at once; today's shape is passed for the id rules it
-  // still keeps (`declared-widgets.ts`).
+  // Plugins' widgets declared with `defineWidget()`, and the site config's own,
+  // after core's, so an id that collides with one of core's fails here, by
+  // name. Every declaration is checked together with everything that names
+  // one (the site config's dashboard, the plugins' suggestions and
+  // alternatives), and startup stops on any fault, all of them reported at
+  // once; today's shape is passed for the id rules it still keeps
+  // (`declared-widgets.ts`).
+  const coreIds = new Set(CORE_WIDGETS.map(widget => widget.id));
   registerWidgetDeclarations(
-    pluginWidgetDeclarationGroups(plugins),
-    pluginLegacyWidgetIds(plugins)
+    [...pluginWidgetDeclarationGroups(plugins), ...siteWidgetGroup(dashboard)],
+    pluginLegacyWidgetIds(plugins),
+    declared => [
+      ...pluginSuggestionFaults(plugins, coreIds),
+      ...siteDashboardFaults(
+        dashboard,
+        siteDashboardContext(declared, pluginAlternatives(plugins))
+      ),
+    ]
   );
+  warnSiteDashboardKeysNotApplied(dashboard);
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin
@@ -142,4 +165,30 @@ export function resetWidgetRegistries(
   // sources HERE, first, so a plugin naming a built-in id is refused by
   // `registerSource` on the PLUGIN's registration -- naming the plugin an
   // operator can act on, rather than dying inside core's own publication.
+}
+
+/** The site config's own widgets, as one more owner's declarations. */
+function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
+  const widgets =
+    typeof dashboard === "object" && dashboard !== null
+      ? (dashboard as { widgets?: unknown }).widgets
+      : undefined;
+  return widgets === undefined
+    ? []
+    : [{ owner: SITE_CONFIG, declarations: widgets }];
+}
+
+/**
+ * One startup warning naming the `admin.dashboard` keys the site sets that
+ * this version checks but does not apply yet, so a setting never appears to do
+ * nothing in silence.
+ */
+function warnSiteDashboardKeysNotApplied(dashboard: unknown): void {
+  const keys = siteDashboardKeysNotApplied(dashboard);
+  if (keys.length === 0) return;
+  getNextlyLogger().warn({
+    kind: "site-dashboard-keys-not-applied",
+    keys,
+    message: `${keys.map(key => `admin.dashboard.${key}`).join(", ")} ${keys.length === 1 ? "is" : "are"} accepted but not applied yet in this version.`,
+  });
 }
