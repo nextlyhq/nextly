@@ -1022,3 +1022,43 @@ describe("a parser that changes what a credential looks like", () => {
     expect(result.messageId).toBeUndefined();
   });
 });
+
+describe("a numeric credential returned as an MX priority", () => {
+  const numeric = defineEmailProvider<{ apiKey: string; pin: number }>({
+    type: "numeric-secret",
+    label: "Numeric Secret",
+    capabilities: {},
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+      { name: "pin", label: "PIN", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string; pin: number },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [
+          { type: "MX", name: "@", value: "mx.example.com", priority: 10 },
+          {
+            type: "MX",
+            name: "@",
+            value: "mx2.example.com",
+            priority: config.pin,
+          },
+        ],
+      }),
+  });
+
+  it("drops the priority that carries the credential and keeps the others", async () => {
+    const status = await numeric.domainStatusFrom?.(
+      { apiKey: SECRET, pin: 98765 },
+      "example.com"
+    );
+    expect(status?.records[0].priority).toBe(10);
+    expect(status?.records[1]).not.toHaveProperty("priority");
+    expect(JSON.stringify(status)).not.toContain("98765");
+  });
+});

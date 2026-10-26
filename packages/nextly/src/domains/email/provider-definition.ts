@@ -1483,7 +1483,10 @@ function withoutLeakedStatus(
       type: clean(record.type),
       name: clean(record.name),
       value: clean(record.value),
-      ...(typeof record.priority === "number"
+      // A number is compared as its digits: a contributed provider may
+      // declare a numeric credential and hand it back as a priority.
+      ...(typeof record.priority === "number" &&
+      clean(String(record.priority)) === String(record.priority)
         ? { priority: record.priority }
         : {}),
     })),

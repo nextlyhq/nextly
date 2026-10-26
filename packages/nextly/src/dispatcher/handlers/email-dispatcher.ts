@@ -176,10 +176,12 @@ const EMAIL_PROVIDER_METHODS: Record<
     // Service throws NextlyError NOT_FOUND when the provider doesn't
     // exist. Carries the sending domain's status where the provider reports
     // one, so the provider's page can show it; null otherwise.
-    execute: async (svc, p) =>
-      respondDoc(
-        await svc.providerService.getProviderWithDomainStatus(p.providerId)
-      ),
+    execute: async (svc, p) => {
+      const provider = await svc.providerService.getProviderWithDomainStatus(
+        p.providerId
+      );
+      return respondDoc(provider);
+    },
   },
   getSendingSettings: {
     // How email goes out when no provider is chosen: the default sender, the

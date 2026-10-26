@@ -1951,15 +1951,6 @@ export class EmailProviderService extends BaseService {
   }
 
   /**
-   * Whether the provider has verified the domain this provider sends from,
-   * and the records it expects; null where the provider reports no status,
-   * does not know the domain, or could not be asked. Reads only.
-   */
-  async domainStatus(id: string): Promise<EmailDomainStatus | null> {
-    return this.domainStatusOf(await this.getProviderDecrypted(id));
-  }
-
-  /**
    * A provider as its page shows it, and its sending domain's status, both
    * from one read: a change saved between two reads would otherwise pair
    * one configuration's record with another's status.
