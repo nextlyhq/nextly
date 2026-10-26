@@ -32,7 +32,11 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
-import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
+import {
+  isStatusOnlyWrite,
+  statusGate,
+  stripImmutableSystemFields,
+} from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
@@ -1178,12 +1182,22 @@ export class SingleMutationService extends BaseService {
         {}
       );
 
+      // A write that changes only the status of a Single with a lifecycle is
+      // a publish or an unpublish alone, judged by the gate its status names
+      // in place of update, whether or not the status moves. Any other field
+      // it names is an edit, which needs update whatever its value.
+      const gate =
+        isStatusOnlyWrite(data, "single") &&
+        (singleMeta as { status?: boolean }).status === true
+          ? statusGate(data.status)
+          : "update";
       const accessDenied = await checkSingleAccess({
         slug,
-        operation: "update",
+        operation: gate,
         user: options.user,
         overrideAccess: options.overrideAccess,
-        routeAuthorized: options.routeAuthorized,
+        // The route attests only an update it ran itself.
+        routeAuthorized: gate === "update" && options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
         // A scoped API key is judged on its own grants here too, so the session
         // super-admin bypass does not apply to it on the primary update gate.

@@ -23,6 +23,8 @@ import {
   requirePermission,
   requireAnyPermission,
   requireCollectionAccess,
+  requireCollectionWriteAccess,
+  admittedActionOf,
   createJsonErrorResponse,
   isErrorResponse,
   type AuthContext,
@@ -867,6 +869,30 @@ const READING_PERMISSIONS: RefusalTarget = {
  *
  * @returns Auth result — either `{ user }` on success or `ErrorResponse` on failure.
  */
+/**
+ * The write routes a caller may reach on update, or on publish or unpublish
+ * alone ({@link requireCollectionWriteAccess}): the service judges a write
+ * that changes only the status by that gate, and any other by update.
+ */
+const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "updateEntry",
+  "bulkUpdateEntries",
+  "bulkUpdateByQuery",
+  "updateSingleDocument",
+]);
+
+/**
+ * The routes that change only the status of every language, each judged by
+ * its own action rather than update.
+ */
+const LIFECYCLE_ROUTE_ACTIONS: Readonly<
+  Record<string, "publish" | "unpublish">
+> = {
+  publishAllLocales: "publish",
+  unpublishAllLocales: "unpublish",
+  publishAllSingleLocales: "publish",
+};
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -881,13 +907,18 @@ async function resolveAuthorization(
   if (service === "collections") {
     if (COLLECTION_ENTRY_METHODS.has(method)) {
       // Entry operations → {action}-{collectionSlug}
-      const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(req, slug, route);
+      }
+      const action =
+        LIFECYCLE_ROUTE_ACTIONS[method] ?? getActionFromOperation(operation);
+      return requireCollectionAccess(req, action, slug, route);
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
@@ -924,12 +955,21 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         // A Single is its one document, named by its slug.
         namesOne: true,
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(req, slug, route);
+      }
+      return requireCollectionAccess(
+        req,
+        LIFECYCLE_ROUTE_ACTIONS[method] ?? action,
+        slug,
+        route
+      );
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
@@ -2853,6 +2893,11 @@ async function requestCallerFor(
       : {}),
     actor: Object.freeze(actorFromAuthContext(authorizedUser)),
     ...(roles ? { roles: Object.freeze([...roles]) } : {}),
+    // The action a write route admitted the caller on, where it accepts
+    // several, so the dispatch attests only an update the route ran.
+    ...(admittedActionOf(authorizedUser)
+      ? { routeAction: admittedActionOf(authorizedUser) }
+      : {}),
   });
 }
 

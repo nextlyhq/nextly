@@ -83,6 +83,7 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -1414,10 +1415,11 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). A caller admitted on publish or unpublish
+          // alone is judged by the service. Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1537,10 +1539,10 @@ const COLLECTIONS_METHODS: Record<
         data: b.data,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Where the route admitted the caller on update, attest it so the
+        // handler skips only that redundant re-check (field-level write access
+        // still runs). Never inferred from userId.
+        routeAuthorized: routeAdmittedUpdate(),
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
         // judged on the key's OWN grants.
@@ -1595,10 +1597,10 @@ const COLLECTIONS_METHODS: Record<
           data: b.data,
           actor: readAuthenticatedActor(),
           ...callerUser(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
           // each per-row transition are judged on the key's OWN grants.

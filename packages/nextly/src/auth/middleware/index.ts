@@ -832,6 +832,66 @@ export async function requireCollectionAccess(
   );
 }
 
+/** The action a write route admitted each caller on, where it accepts several. */
+const admittedActions = new WeakMap<
+  AuthContext,
+  "update" | "publish" | "unpublish"
+>();
+
+/**
+ * The action {@link requireCollectionWriteAccess} admitted `caller` on, or
+ * `undefined` where the route asked one action.
+ */
+export function admittedActionOf(caller: AuthContext): string | undefined {
+  return admittedActions.get(caller);
+}
+
+/**
+ * The access check for a write route a caller may reach on update, or on
+ * publish or unpublish alone. A write that changes only an entry's status is
+ * a publish or an unpublish, which the service judges by that gate, and the
+ * service asks update of any other write, so admitting a caller here on
+ * publish lets them edit nothing. Each action is asked in turn, its rule
+ * included; the first that admits the caller is recorded for the dispatch
+ * ({@link admittedActionOf}), and a caller none admits is refused as update
+ * refuses them.
+ */
+export async function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    // A route naming one entry is refused about it, as in requireCollectionAccess.
+    const scope = operation?.namesOne ? "one" : "all";
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(asUpdate)) {
+      admittedActions.set(asUpdate, "update");
+      return asUpdate;
+    }
+    for (const action of ["publish", "unpublish"] as const) {
+      const answer = await authorizeCaller(
+        authResult,
+        action,
+        collectionSlug,
+        scope
+      );
+      if (!isErrorResponse(answer)) {
+        admittedActions.set(answer, action);
+        return answer;
+      }
+    }
+    return asUpdate;
+  });
+}
+
 /**
  * Helper to check if a result is an error response
  */
