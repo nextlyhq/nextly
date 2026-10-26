@@ -13,7 +13,26 @@
 import { randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/** The roles each grants-changed notice named, in order. */
+const grantsChanged = vi.hoisted(() => ({ roleIds: [] as string[] }));
+
+// Recorded, then passed on: the notice is what clears the caches holding a
+// role's grants, so the id it names must be the one those caches hold.
+vi.mock("../services/role-grants-changed", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../services/role-grants-changed")>();
+  return {
+    ...real,
+    afterRoleGrantsChanged: async (
+      ...args: Parameters<typeof real.afterRoleGrantsChanged>
+    ) => {
+      grantsChanged.roleIds.push(String(args[0]));
+      return real.afterRoleGrantsChanged(...args);
+    },
+  };
+});
 
 import { getDialectTables } from "../../../database/index";
 import {
@@ -26,6 +45,7 @@ import { ServiceContainer } from "../../../services/index";
 
 let handle: TestNextly | undefined;
 afterEach(async () => {
+  grantsChanged.roleIds = [];
   await handle?.destroy();
   handle = undefined;
 });
@@ -213,6 +233,8 @@ describe.each(getConfiguredTestDialects())(
           parentRoleId: parent,
           childRoleId: child,
         });
+        // The caches are cleared for the role as they hold it.
+        expect(grantsChanged.roleIds).toEqual([parent]);
       });
 
       it("refuses a role inheriting itself, named in another case", async () => {
