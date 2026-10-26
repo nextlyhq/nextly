@@ -210,6 +210,8 @@ describe.each(getConfiguredTestDialects())(
         card("old", "core/count", { config: { collection: "cv_deleted" } }),
       ];
       const reader = await account("cv-reader@example.com");
+      // The permission comes before the posts' code rule, which only narrows it.
+      await grantTo(handle, reader, "read", [POSTS]);
       await service().saveLayout("user", reader, own, 0);
 
       const seen = await read(reader);
@@ -248,6 +250,8 @@ describe.each(getConfiguredTestDialects())(
         }),
       ];
       const reader = await account("cv-lister@example.com");
+      // The permission comes before the posts' code rule, which only narrows it.
+      await grantTo(handle, reader, "read", [POSTS]);
       await service().saveLayout("user", reader, own, 0);
 
       const seen = await read(reader);
