@@ -194,16 +194,10 @@ function PanelHeader({
       <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Languages
       </span>
-      <CompletenessMeter translated={counts.translated} total={counts.total} />
-      {/* The unit is stated, not left to the eyebrow above it. Every counter in
-          the admin reads "N of M <unit> translated", and this was the one that
-          did not: with three languages and two translatable fields the panel
-          said "0 of 2" about languages while translation mode said "0 of 2"
-          about fields, a few clicks apart. The numbers coincide exactly where a
-          person first meets them. */}
-      <span className="text-xs tabular-nums text-muted-foreground">
-        {counts.translated} of {counts.total} languages translated
-      </span>
+      {/* No count where the translation states were not read (a user who may
+          not read every language's): zero of them would claim each language
+          missing. */}
+      {metaKnown && <TranslationProgress counts={counts} />}
       <span className="flex-1" />
       {/* Filling the language being EDITED lives here rather than on its row.
           Every other row implies its source — the author is standing in one
@@ -244,6 +238,24 @@ function PanelHeader({
         </Button>
       )}
     </div>
+  );
+}
+
+/** How many languages are translated, as a meter and in words. */
+function TranslationProgress({ counts }: { counts: TranslationCounts }) {
+  return (
+    <>
+      <CompletenessMeter translated={counts.translated} total={counts.total} />
+      {/* The unit is stated, not left to the eyebrow above it. Every counter in
+          the admin reads "N of M <unit> translated", and this was the one that
+          did not: with three languages and two translatable fields the panel
+          said "0 of 2" about languages while translation mode said "0 of 2"
+          about fields, a few clicks apart. The numbers coincide exactly where a
+          person first meets them. */}
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {counts.translated} of {counts.total} languages translated
+      </span>
+    </>
   );
 }
 
@@ -540,7 +552,8 @@ function LanguageRow({
           costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
           and the language button's accessible name carries it in words. */}
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        <StateDot state={state} />
+        {/* No state is claimed where the states were not read. */}
+        {metaKnown ? <StateDot state={state} /> : null}
         {/* The language NAME does not yield. It is the row's identity, and a
             flex row that shrinks everything proportionally turned "Arabic" into
             "A…" — which names nothing — while the state beside it still read in
@@ -561,12 +574,14 @@ function LanguageRow({
             </span>
           ))}
         </span>
-        <span
-          className="min-w-0 truncate text-xs text-muted-foreground"
-          title={languageStateLabel(state, { pendingChange, stale })}
-        >
-          {LANGUAGE_STATE_LABEL[state]}
-        </span>
+        {metaKnown && (
+          <span
+            className="min-w-0 truncate text-xs text-muted-foreground"
+            title={languageStateLabel(state, { pendingChange, stale })}
+          >
+            {LANGUAGE_STATE_LABEL[state]}
+          </span>
+        )}
       </div>
       {/* The active row carries NO action. Filling the language being edited is
           offered from the panel header instead, because this row cannot hold
