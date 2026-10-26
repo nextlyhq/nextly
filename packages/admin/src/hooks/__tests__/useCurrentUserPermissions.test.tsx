@@ -85,7 +85,7 @@ import {
   invalidateCurrentUserAccess,
 } from "../current-user-access";
 import { useCurrentUserPermissions } from "../useCurrentUserPermissions";
-import { editsOffered, useUpdateAnswer } from "../useReadOnlyForReader";
+import { editsOffered, useUpdateAnswer } from "../useUpdateAnswer";
 
 function wrapperFor(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -1046,12 +1046,17 @@ describe("returning to a language another has answered since", () => {
   it("keeps the language's own answer on screen while it is asked again, granting nothing on it", async () => {
     onScreen.locale = "en";
     server.capabilities = answering({ read: true, update: true });
+    // A cache that keeps a language's answer once nothing reads it, as the
+    // admin's does; with none kept, returning would read as a first visit.
+    const caching = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
     const { result, rerender } = renderHook(
       () => ({
         access: useCurrentUserPermissions(),
         edits: editsOffered(useUpdateAnswer("posts")),
       }),
-      { wrapper: wrapperFor(newClient()) }
+      { wrapper: wrapperFor(caching) }
     );
     await waitFor(() =>
       expect(result.current.access.content.hasAnswer).toBe(true)

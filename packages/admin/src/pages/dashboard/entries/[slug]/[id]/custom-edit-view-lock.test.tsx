@@ -12,7 +12,7 @@
 import { screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UpdateAnswer } from "@admin/hooks/useReadOnlyForReader";
+import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
   clearRegistry,
   registerComponent,
@@ -87,10 +87,8 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
 }));
 /** What the server's answer says about the user changing this collection. */
 let updateAnswer: UpdateAnswer = "allowed";
-vi.mock("@admin/hooks/useReadOnlyForReader", async importOriginal => ({
-  ...(await importOriginal<
-    typeof import("@admin/hooks/useReadOnlyForReader")
-  >()),
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
   useUpdateAnswer: () => updateAnswer,
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({

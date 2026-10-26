@@ -52,10 +52,11 @@ function holding(
     hasAnswer: !isLoading,
     error: null,
     content: {
-      isLoading: server.content?.isLoading ?? isLoading,
-      hasAnswer: server.content?.hasAnswer ?? !isLoading,
-      error: server.content?.error ?? null,
-      isPlaceholder: server.content?.isPlaceholder ?? false,
+      isLoading,
+      hasAnswer: !isLoading,
+      error: null,
+      isPlaceholder: false,
+      ...server.content,
     },
     retry: vi.fn(),
   } as unknown as ReturnType<typeof useCurrentUserPermissions>);
@@ -397,7 +398,9 @@ describe("PermissionGuard", () => {
       // in yet. The page stays mounted, its writes held by the editor, rather
       // than swapped for a spinner or a refusal nothing supports.
       holding([], false, { allows: ["read-posts"] });
-      const guarded = (
+      // A new element each render: React re-renders the guard only for
+      // props that changed, and the same element would leave it as it was.
+      const guarded = () => (
         <PermissionGuard
           requiredPermission="read-posts"
           subject="collection"
@@ -406,14 +409,14 @@ describe("PermissionGuard", () => {
           <Page />
         </PermissionGuard>
       );
-      const { rerender } = render(guarded);
+      const { rerender } = render(guarded());
       expect(screen.getByText("the page")).toBeTruthy();
 
       holding([], false, {
         allows: [],
         content: { hasAnswer: false, isPlaceholder: true },
       });
-      rerender(guarded);
+      rerender(guarded());
       expect(screen.getByText("the page")).toBeTruthy();
       expect(
         screen.queryByRole("heading", {
@@ -426,7 +429,9 @@ describe("PermissionGuard", () => {
       // Opened in English, refused in German, then switched on to French:
       // the page was not open in German, so French's wait shows no page.
       holding([], false, { allows: ["read-posts"] });
-      const guarded = (
+      // A new element each render: React re-renders the guard only for
+      // props that changed, and the same element would leave it as it was.
+      const guarded = () => (
         <PermissionGuard
           requiredPermission="read-posts"
           subject="collection"
@@ -435,11 +440,11 @@ describe("PermissionGuard", () => {
           <Page />
         </PermissionGuard>
       );
-      const { rerender } = render(guarded);
+      const { rerender } = render(guarded());
       expect(screen.getByText("the page")).toBeTruthy();
 
       holding([], false, { allows: [] });
-      rerender(guarded);
+      rerender(guarded());
       expect(
         screen.getByRole("heading", {
           name: "You don't have access to this collection",
@@ -451,7 +456,7 @@ describe("PermissionGuard", () => {
         allows: [],
         content: { hasAnswer: false, isPlaceholder: true },
       });
-      rerender(guarded);
+      rerender(guarded());
       expect(screen.getByText("Setting up your workspace")).toBeTruthy();
       expect(pageRendered).not.toHaveBeenCalled();
     });

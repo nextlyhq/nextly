@@ -3,8 +3,11 @@ import { useCurrentUserPermissions } from "./useCurrentUserPermissions";
 /**
  * What the server's capabilities answer says about the signed-in user
  * changing the collection or Single `slug`: allowed or refused; `switching`
- * while the content language changes and the answer on screen is the one
- * moved from, which grants nothing; `unknown` while no answer is in hand.
+ * while the answer on screen is kept only until a current one arrives (the
+ * language moved from, or this one's own once it no longer holds), which
+ * grants nothing; `unknown` while no answer is in hand. A page opens
+ * read-only for a reader on `refused` alone, never on a guess while the
+ * answer is on its way.
  */
 export type UpdateAnswer = "allowed" | "refused" | "switching" | "unknown";
 
@@ -24,18 +27,4 @@ export function useUpdateAnswer(slug: string): UpdateAnswer {
  */
 export function editsOffered(answer: UpdateAnswer): boolean {
   return answer !== "refused" && answer !== "switching";
-}
-
-/**
- * Whether the signed-in user may read the collection or Single `slug` but not
- * change it, as the server's capabilities answer says, so its editor opens
- * read-only.
- *
- * False until that answer is in hand: an editor is not turned read-only, and
- * its document claim released, on a guess while the answer is on its way. The
- * server refuses any change the answer would have refused either way, and
- * nothing that saves is offered meanwhile (see {@link useUpdateAnswer}).
- */
-export function useReadOnlyForReader(slug: string): boolean {
-  return useUpdateAnswer(slug) === "refused";
 }

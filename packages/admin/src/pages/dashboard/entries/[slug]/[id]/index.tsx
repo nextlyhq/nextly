@@ -49,11 +49,8 @@ import {
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
-import {
-  editsOffered,
-  useUpdateAnswer,
-} from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,

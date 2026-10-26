@@ -39,11 +39,9 @@ vi.mock("../../PreviewMode/PreviewPanes", () => ({
     return props.children ?? null;
   },
 }));
-vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
-  useReadOnlyForReader: () => hooks.readOnlyForReader,
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
   useUpdateAnswer: () => (hooks.readOnlyForReader ? "refused" : "allowed"),
-  editsOffered: (answer: string) =>
-    answer !== "refused" && answer !== "switching",
 }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<

@@ -447,6 +447,25 @@ function latestPassed(ends: readonly number[], now: number): number | null {
 }
 
 /**
+ * Whether the answer on screen is kept only while a current one is asked:
+ * another language's, or this language's own once it no longer holds and is
+ * being asked again, as on returning to a language another has answered
+ * since.
+ */
+function keptWhileAsked(
+  query: Pick<
+    UseQueryResult<{ askedAt?: number }>,
+    "data" | "isFetching" | "isPlaceholderData"
+  >,
+  unusable: boolean
+): boolean {
+  return (
+    query.isPlaceholderData ||
+    (unusable && query.data !== undefined && query.isFetching)
+  );
+}
+
+/**
  * Where one query's answer stands, once it may no longer hold: an answer that
  * arrived before `endedAt`, the end of the role assignment it was given for,
  * no longer counts, and nor does one a change to roles, permissions,
@@ -472,12 +491,7 @@ function answerState(
     error: query.error,
     hasAnswer:
       query.data !== undefined && !unusable && !query.isPlaceholderData,
-    // Kept on screen while a current answer is asked: another language's,
-    // or this language's own once it no longer holds and is being asked
-    // again, as on returning to a language another has answered since.
-    isPlaceholder:
-      query.isPlaceholderData ||
-      (unusable && query.data !== undefined && query.isFetching),
+    isPlaceholder: keptWhileAsked(query, unusable),
   };
 }
 

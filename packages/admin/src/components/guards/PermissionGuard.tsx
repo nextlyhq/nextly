@@ -46,6 +46,34 @@ interface PermissionGuardProps {
  *   at the address that was asked for. It never redirects: a silent trip to
  *   the dashboard reads as a broken link rather than as a refusal.
  */
+/**
+ * Whether a collection or Single route keeps its page through a change of
+ * content language. The answer for the language moved from stays on screen
+ * until the new one's arrives (`content.isPlaceholder`, here `placeholder`).
+ * The page this guard has open for the same entity stays mounted through it,
+ * so the editor keeps its place; that answer grants nothing on the page, and
+ * the route is decided again on the new one. Any other route waits for the new
+ * answer as on a first visit, never opened on the old one's word. Each
+ * settled answer decides what is open: the entity it opens, or nothing once it
+ * refuses, so a page refused in one language is not reopened on the way to
+ * the next.
+ */
+function useOpenThroughSwitch(
+  entity: EntityAccess | undefined,
+  placeholder: boolean,
+  hasAnswer: boolean,
+  hasAccess: boolean
+): { switching: boolean; keepsPage: boolean } {
+  const entityKey = entity ? `${entity.slug}:${entity.action}` : null;
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  const switching = entity !== undefined && placeholder;
+  const settledOpen = hasAccess ? entityKey : null;
+  if (!switching && hasAnswer && settledOpen !== openedFor) {
+    setOpenedFor(settledOpen);
+  }
+  return { switching, keepsPage: switching && openedFor === entityKey };
+}
+
 export function PermissionGuard({
   requiredPermission,
   subject,
@@ -75,24 +103,13 @@ export function PermissionGuard({
     }
   }, []);
 
-  // While the content language changes, the answer for the one moved from
-  // stays on screen until the new one's arrives (`content.isPlaceholder`).
-  // The page this guard has open for the same entity stays mounted through
-  // it, so the editor keeps its place; that answer grants nothing on the page,
-  // and the route is decided again on the new one. Any other route waits for
-  // the new answer as on a first visit, never opened on the old one's word.
-  // Each settled answer decides what is open: the entity it opens, or nothing
-  // once it refuses, so a page refused in one language is not reopened on the
-  // way to the next.
-  const entityKey = entity ? `${entity.slug}:${entity.action}` : null;
-  const [openedFor, setOpenedFor] = useState<string | null>(null);
-  const switching = entity !== undefined && content.isPlaceholder;
-  const settledOpen = hasAccess ? entityKey : null;
-  if (!switching && hasAnswer && settledOpen !== openedFor) {
-    setOpenedFor(settledOpen);
-  }
-
-  if (switching && openedFor === entityKey && !isForceLoading) {
+  const { switching, keepsPage } = useOpenThroughSwitch(
+    entity,
+    content.isPlaceholder,
+    hasAnswer,
+    hasAccess
+  );
+  if (keepsPage && !isForceLoading) {
     return <>{children}</>;
   }
 
