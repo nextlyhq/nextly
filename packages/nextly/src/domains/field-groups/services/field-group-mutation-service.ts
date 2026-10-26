@@ -1189,7 +1189,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1326,7 +1328,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -2170,6 +2174,15 @@ export class FieldGroupMutationService extends BaseService {
       status: false,
     });
     if (!schema) return undefined;
+    // Before its migration the companion is not there, and a translated
+    // container is still on the instance's own row. A write resolves this
+    // verdict before it opens a transaction.
+    if (
+      cachedCompanionReadiness(this.adapter, schema.companionTableName) !==
+      "ready"
+    ) {
+      return undefined;
+    }
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
@@ -2335,7 +2348,9 @@ export class FieldGroupMutationService extends BaseService {
       componentFields,
       existingEntry ? "update" : "create",
       args.req,
-      meta.slug
+      meta.slug,
+      // The stored row an existing block is, for its stored passwords.
+      existingEntry ? instanceId : undefined
     );
     return { meta, componentFields, instanceId, existingEntry };
   }

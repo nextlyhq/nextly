@@ -628,10 +628,12 @@ function carryPassword(
   previous: unknown,
   kept: Set<string>
 ): void {
-  const value = level[name];
+  // Left out as the hashing pass reads it: anything but `null`, which
+  // clears, or a password to store. A blank, a missing key or a non-string
+  // would be dropped there, and with it the stored hash.
+  const value = Object.hasOwn(level, name) ? level[name] : undefined;
   const leftOut =
-    !Object.hasOwn(level, name) ||
-    (typeof value === "string" && value.trim() === "");
+    value !== null && !(typeof value === "string" && value.trim() !== "");
   if (!leftOut || typeof previous !== "string" || previous === "") return;
   level[name] = previous;
   kept.add(previous);
@@ -699,6 +701,9 @@ function forEachPairedRow(
     if (identified && !hasRowId(row)) return;
     const at = pairOf(index);
     const storedRow = at === undefined ? undefined : previous[at];
+    // Paired by id only, on both sides: an id the stored rows never carried
+    // pairs by position, which names no record.
+    if (identified && !hasRowId(storedRow)) return;
     if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
   });
 }
