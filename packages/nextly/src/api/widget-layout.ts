@@ -50,10 +50,7 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
-import {
-  COUNT_WIDGET_ID,
-  countCardConversion,
-} from "../domains/widgets/count-conversion";
+import { generatedCardConversion } from "../domains/widgets/generated-card-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -181,8 +178,8 @@ function wholeArrangement(
   stored: StoredLayout | undefined,
   conversion: WidgetRetirements
 ): WidgetPlacement[] {
-  // The saved count and health cards as Count cards, for THIS reader
-  // (`countCardConversion`): applied here, so what a reader is shown, what a
+  // The saved generated cards as the widgets offered per collection, for THIS
+  // reader (`generatedCardConversion`): applied here, so what a reader is shown, what a
   // writer carries back and what a query may ask for are one converted
   // arrangement.
   return applyRetirements(
@@ -314,18 +311,23 @@ async function visibleWidgets(auth: AuthContext) {
   // are all taken from.
   const readable = readableCollectionsOf(audience.visible);
   const registered = audience.registeredCollections;
-  const count = audience.visible.find(widget => widget.id === COUNT_WIDGET_ID);
   return {
     caller,
     audience,
     probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
-    conversion: countCardConversion(
+    conversion: generatedCardConversion(
       readable,
       registered,
       new Set(declaredWidgets().map(widget => widget.id)),
-      count === undefined ? undefined : widthFacts(count).allowedWidths
+      // Each successor's widths as registered, where this reader is shown it.
+      successor => {
+        const widget = audience.visible.find(entry => entry.id === successor);
+        return widget === undefined
+          ? undefined
+          : widthFacts(widget).allowedWidths;
+      }
     ),
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the

@@ -1,0 +1,233 @@
+/**
+ * The saved per-collection cards core once generated, as the widgets offered
+ * per collection, for one reader.
+ *
+ * Core once generated a family of cards for each collection
+ * (`collection/<slug>-<kind>`). Each kind now has a widget offered per
+ * collection that answers it, set to the collection:
+ *
+ * | Saved card            | Becomes        |
+ * | --------------------- | -------------- |
+ * | count, stats (health) | Count          |
+ * | recent, table         | Recent entries |
+ * | timeline              | Over time      |
+ * | breakdown             | Breakdown      |
+ *
+ * A converted card stores its collection and nothing else, so it is the same
+ * card a reader adds from the add panel today. Everything else the old card
+ * showed is the successor's own behaviour at the card's width: a health card's
+ * split and a table card's columns from medium size, a table when drawn large,
+ * thirty days of entries per interval, and a breakdown by status where the
+ * collection has a lifecycle. The successors' defaults that promise this are
+ * pinned by the module's tests, so a change to one is a decision, not drift.
+ *
+ * ## Why per reader, and not in the stored-row decode
+ *
+ * The generated id spells the slug with `_` read as `-`, so
+ * `collection/a-b-count` can stand for `a_b` or `a-b`. Only the install's
+ * collections can say which, and which of them THIS reader may read decides
+ * what they may be told. The decode is a pure function of the stored text
+ * (`readStoredLayout`), so this runs after it, on the read and the write
+ * alike, and stores nothing: a save stores the converted form only as any save
+ * stores what the reader holds.
+ *
+ * ## What a card becomes
+ *
+ * - One collection the reader may read matches: its successor, set to it.
+ * - Several match: its successor set to none, which draws "not available".
+ *   Naming either would draw one collection's data under a card that may have
+ *   been the other's.
+ * - None in the install matches (the collection was deleted): its successor
+ *   set to none, so the card is kept, drawn as not available.
+ * - A widget is DECLARED under the id (a plugin may take a generated-looking
+ *   id, and its card is then the plugin's): not converted.
+ * - Only collections this reader may NOT read match: not converted. The card
+ *   stays as stored, withheld from this reader as it was before, and kept by
+ *   their saves; it converts the day they may read the collection. Converting
+ *   it would hand them the slug of a collection they may not read.
+ *
+ * Cards that become the same successor for the same collection merge (the
+ * first one's position, the widest width the successor allows, removed only if
+ * all were), with a card of the successor the layout already holds for it
+ * among them, through the one merge `applyRetirements` performs.
+ *
+ * @module domains/widgets/generated-card-conversion
+ */
+
+import { widthFacts } from "./canonical";
+import { CORE_WIDGETS } from "./core-widgets";
+import type {
+  WidgetPlacement,
+  WidgetRetirement,
+  WidgetRetirements,
+} from "./layout";
+import type { WidgetWidth } from "./widths";
+
+/** The widget saved count and health cards become. */
+const COUNT_WIDGET_ID = "core/count";
+
+/**
+ * The widget each kind of generated card becomes, by the kind its id ends in.
+ * Every successor is offered per collection and reads the collection its
+ * Collection setting, `collection`, names.
+ */
+const SUCCESSORS = {
+  count: COUNT_WIDGET_ID,
+  stats: COUNT_WIDGET_ID,
+  recent: "core/recent-entries",
+  table: "core/recent-entries",
+  timeline: "core/over-time",
+  breakdown: "core/breakdown",
+} as const;
+
+type GeneratedKind = keyof typeof SUCCESSORS;
+
+/**
+ * A generated card's id, capturing the slug as the id spells it and the kind.
+ * The kind is matched at the end, so a slug that itself ends in a kind's name
+ * (`posts-count-recent`) still parses as that slug's card of the last kind.
+ */
+const GENERATED_CARD = new RegExp(
+  `^collection/([a-z0-9-]+)-(${Object.keys(SUCCESSORS).join("|")})$`
+);
+
+/** The widths a successor allows by its own declaration in core. */
+function declaredWidths(successor: string): readonly WidgetWidth[] {
+  const definition = CORE_WIDGETS.find(widget => widget.id === successor);
+  return widthFacts(definition ?? { id: successor }).allowedWidths;
+}
+
+/** How the collections a generated id may stand for resolve for one reader. */
+type GeneratedCardCollection =
+  /** One readable collection: the card is set to it. */
+  | { kind: "one"; collection: string }
+  /** Several readable collections, or none left in the install: set to none. */
+  | { kind: "none" }
+  /** Only collections this reader may not read: not converted for them. */
+  | { kind: "withheld" };
+
+/** A collection slug as a generated id spells it. */
+function asIdSlug(slug: string): string {
+  return slug.replaceAll("_", "-");
+}
+
+/**
+ * What the collection a generated id names resolves to, for a reader who may
+ * read `readable` in an install holding `existing`. With `existing` unknown
+ * (the registry not yet read), nothing reads as deleted.
+ */
+export function resolveGeneratedCardCollection(
+  idSlug: string,
+  readable: ReadonlySet<string>,
+  existing: ReadonlySet<string> | undefined
+): GeneratedCardCollection {
+  const spells = (slug: string) => asIdSlug(slug) === idSlug;
+  const mine = [...readable].filter(spells);
+  const anywhere =
+    existing === undefined ? undefined : [...existing].filter(spells);
+  if (mine.length > 0) {
+    // 🔴 Ambiguous only among the collections this reader may read. Counting
+    // an unreadable one that spells the same id would set the card to none
+    // where it would otherwise be set to the readable one, telling the reader
+    // that a collection they may not read exists.
+    const ambiguous = mine.length > 1;
+    return ambiguous ? { kind: "none" } : { kind: "one", collection: mine[0] };
+  }
+  // Nothing this reader may read. A collection still in the install that
+  // matches is one they may not read: withheld, never named.
+  if (anywhere === undefined) return { kind: "withheld" };
+  return anywhere.length > 0 ? { kind: "withheld" } : { kind: "none" };
+}
+
+/** Which Count card a card is: the collection it is set to. */
+function countIdentity(placement: WidgetPlacement): string | undefined {
+  const collection = placement.config?.collection;
+  return typeof collection === "string" ? collection : undefined;
+}
+
+/** `value` as JSON with every object's keys sorted, so equal settings spell alike. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Which Recent entries, Over time or Breakdown card a card is: its whole
+ * settings. These widgets allow several cards for one collection, told apart
+ * by a filter, sort, range or grouping, so a converted card (its collection
+ * alone) merges only into a card set to that collection with no other
+ * setting. Merged into a filtered list, the reader would lose the plain one
+ * they had.
+ */
+function settingsIdentity(placement: WidgetPlacement): string | undefined {
+  return placement.config === undefined
+    ? undefined
+    : stableJson(placement.config);
+}
+
+/**
+ * The saved generated cards' conversion for one reader, as retirements
+ * `applyRetirements` takes: `readable` is the collections this reader may
+ * read, `existing` every collection the install holds
+ * (`registeredCollectionSlugs`, which counts one without a source as held),
+ * `declared` the ids a declared widget answers to, whose cards stay its, and
+ * `widthsOf` the widths each successor allows AS REGISTERED (a plugin may
+ * extend or override one), falling back to its declaration in core.
+ */
+export function generatedCardConversion(
+  readable: ReadonlySet<string>,
+  existing: ReadonlySet<string> | undefined,
+  declared: ReadonlySet<string> = new Set(),
+  widthsOf: (successor: string) => readonly WidgetWidth[] | undefined = () =>
+    undefined
+): WidgetRetirements {
+  // One retirement per successor, carrying the identity a card of it ALREADY
+  // in the layout merges by, so a converted card joins it.
+  const into = new Map<string, WidgetRetirement>(
+    [...new Set(Object.values(SUCCESSORS))].map(successor => [
+      successor,
+      {
+        successor,
+        identity:
+          successor === COUNT_WIDGET_ID ? countIdentity : settingsIdentity,
+        allowedWidths: widthsOf(successor) ?? declaredWidths(successor),
+      },
+    ])
+  );
+  return {
+    get: widgetId => {
+      if (declared.has(widgetId)) return undefined;
+      const parsed = GENERATED_CARD.exec(widgetId);
+      if (parsed === null) return undefined;
+      const [, idSlug, kind] = parsed;
+      const retirement = into.get(SUCCESSORS[kind as GeneratedKind]);
+      if (retirement === undefined) return undefined;
+      const resolved = resolveGeneratedCardCollection(
+        idSlug,
+        readable,
+        existing
+      );
+      if (resolved.kind === "withheld") return undefined;
+      if (resolved.kind === "one") {
+        return {
+          ...retirement,
+          settings: () => ({ collection: resolved.collection }),
+        };
+      }
+      // Set to none, and merged only with the cards of the same id slug and
+      // successor, so two unresolved collections never become one card.
+      return {
+        ...retirement,
+        settings: () => undefined,
+        identity: () => `\u0000unresolved:${idSlug}`,
+      };
+    },
+    values: () => into.values(),
+  };
+}

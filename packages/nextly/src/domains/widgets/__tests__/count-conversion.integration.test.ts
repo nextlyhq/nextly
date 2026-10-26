@@ -309,6 +309,57 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(false);
     });
 
+    it("turns saved list, table, timeline and breakdown cards into exactly the cards a reader adds today", async () => {
+      // 🔴 The converted card is the added card: drawn from the same settings
+      // by the same path. One that kept anything of the old card's beyond its
+      // collection would draw differently, and would be a second card to
+      // maintain.
+      const converter = await account("cv-converter@example.com");
+      await grantTo(handle, converter, "read", [POSTS]);
+      await service().saveLayout(
+        "user",
+        converter,
+        [
+          card("list", "collection/cv-blog-posts-recent", { width: "half" }),
+          card("table", "collection/cv-blog-posts-table", { width: "full" }),
+          card("chart", "collection/cv-blog-posts-timeline", {
+            width: "full",
+          }),
+          card("split", "collection/cv-blog-posts-breakdown", {
+            width: "half",
+          }),
+        ],
+        0
+      );
+      const converted = (await read(converter)).placements;
+      // A list and a table of one collection are one Recent entries card.
+      expect(converted.map(placement => placement.widgetId)).toEqual([
+        "core/recent-entries",
+        "core/over-time",
+        "core/breakdown",
+      ]);
+
+      // Another reader holds the same cards as added today, at the same
+      // places and widths: set to the collection, and nothing else. The first
+      // is in their row already; the other two they add through a save.
+      const added = converted.map(placement => ({
+        ...placement,
+        config: { collection: POSTS },
+      }));
+      const adder = await account("cv-adder@example.com");
+      await grantTo(handle, adder, "read", [POSTS]);
+      await service().saveLayout("user", adder, added.slice(0, 1), 0);
+      const before = await read(adder);
+      expect(before.placements).toEqual(added.slice(0, 1));
+      const res = await call(adder, "PUT", {
+        placements: [...before.placements, ...added.slice(1)],
+        version: before.version,
+        scope: before.scope,
+      });
+      expect(res.status).toBe(200);
+      expect((await read(adder)).placements).toEqual(converted);
+    });
+
     it("converts the same card for a reader who may read its collection", async () => {
       await service().saveLayout("user", admin, SAVED, 0);
 
