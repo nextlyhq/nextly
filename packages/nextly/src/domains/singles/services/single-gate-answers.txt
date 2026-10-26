@@ -89,10 +89,10 @@ service true user-with
   publish:A
   unpublish:A
 service true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service true user-partial
   read:A
   update:403 You can't edit home.
@@ -249,10 +249,10 @@ service returns-true user-with
   publish:A
   unpublish:A
 service returns-true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true user-partial
   read:A
   update:403 You can't edit home.
@@ -729,10 +729,10 @@ service async-true user-with
   publish:A
   unpublish:A
 service async-true user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true user-partial
   read:A
   update:403 You can't edit home.
@@ -969,10 +969,10 @@ service signed-in user-with
   publish:A
   unpublish:A
 service signed-in user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in user-partial
   read:A
   update:403 You can't edit home.
