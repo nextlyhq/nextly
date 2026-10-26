@@ -190,3 +190,18 @@ export function loadedDialect(dialect: string | undefined): LoadedDialect {
 export function loadedRelations(dialect: string | undefined): AnyRelations {
   return loadedDialect(dialect).relations.relations;
 }
+
+/**
+ * The loaded dialect whose tables include `table`, for code handed a table
+ * rather than a dialect. Undefined when no loaded dialect holds it: a table
+ * of a dialect this process never loaded is not one it could have been handed
+ * by its own adapter.
+ */
+export function loadedDialectHolding(
+  table: unknown
+): LoadedDialect | undefined {
+  for (const found of loaded.values()) {
+    if (Object.values(found.tables).includes(table)) return found;
+  }
+  return undefined;
+}
