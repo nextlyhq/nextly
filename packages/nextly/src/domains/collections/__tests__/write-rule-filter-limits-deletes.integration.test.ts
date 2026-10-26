@@ -37,6 +37,9 @@ const OPEN_POSTS = "writefilter_open_posts";
 // A read rule that answers a filter of its own, over a different field, so
 // whether the caller may read an entry is decided by that entry's values.
 const TEAM_POSTS = "writefilter_team_posts";
+// Rules whose filter names a field the collection does not have, as a rule
+// written against a field since removed would.
+const GONE_POSTS = "writefilter_gone_posts";
 
 const AUTHOR = "writefilter-author";
 const OTHER = "writefilter-other";
@@ -44,6 +47,10 @@ const OTHER = "writefilter-other";
 /** "Only the caller's own": a filter over the entry's `owner`. */
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
   ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
+
+/** A filter over a field the collection does not declare. */
+const namesAGoneField = () =>
+  ({ retiredOwner: { equals: AUTHOR } }) as unknown as boolean;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -77,10 +84,15 @@ async function boot(): Promise<TestNextly> {
           text({ name: "team" }),
         ],
       }),
+      defineCollection({
+        slug: GONE_POSTS,
+        access: { read: namesAGoneField, delete: namesAGoneField },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
     ],
   });
   // A code rule only narrows a permission, so the author holds both.
-  const all = [POSTS, OPEN_POSTS, TEAM_POSTS];
+  const all = [POSTS, OPEN_POSTS, TEAM_POSTS, GONE_POSTS];
   await userWhoMay(current, AUTHOR, "read", all);
   await grantTo(current, AUTHOR, "delete", all);
   return current;
@@ -211,6 +223,23 @@ describe("a delete rule that answers a filter", () => {
     expect(await stillThere(t, TEAM_POSTS, String(unseen.item.id))).toBe(true);
   });
 
+  it("matches nothing with a filter it cannot build, answering the entry as missing", async () => {
+    // A filter naming a field the collection no longer has is the rule's
+    // fault, not the caller's: it deletes nothing, and is answered as the
+    // entry's absence rather than as an error naming the field.
+    const t = await boot();
+    const { own } = await seed(t, GONE_POSTS);
+
+    const refused = await errorOf(() =>
+      t.nextly.delete({ collection: GONE_POSTS, id: own, ...asAuthor })
+    );
+
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(refused.publicMessage).not.toContain("retiredOwner");
+    expect(await stillThere(t, GONE_POSTS, own)).toBe(true);
+  });
+
   it("limits a delete inside the caller's transaction to the matching entries", async () => {
     const t = await boot();
     const { own, others } = await seed(t, OPEN_POSTS);
@@ -251,5 +280,44 @@ describe("a delete rule that answers a filter", () => {
     expect(refusal.result?.success ?? false).toBe(false);
     expect(status).toBe(403);
     expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
+  });
+});
+
+describe("a delete rule's filter on a collection with languages", () => {
+  const LOCALIZED = "writefilter_localized_posts";
+
+  it("asks whether the caller may read the entry as a plain read, not in every language", async () => {
+    // A delete acts on every language, so its own rule is told all of them.
+    // Whether the caller may read the entry is a plain read's question, in
+    // the default language and its fallbacks: this read rule lets the caller
+    // read in one language, and an every-language read would refuse it.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: LOCALIZED,
+          localized: true,
+          access: {
+            read: ({ locales }: { locales: string[] }) => locales.length <= 1,
+            delete: ownEntries,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    await userWhoMay(current, AUTHOR, "read", [LOCALIZED]);
+    await grantTo(current, AUTHOR, "delete", [LOCALIZED]);
+    const { others } = await seed(current, LOCALIZED);
+    const t = current;
+
+    const refused = await errorOf(() =>
+      t.nextly.delete({ collection: LOCALIZED, id: others, ...asAuthor })
+    );
+
+    expect(refused.statusCode).toBe(403);
+    expect(await stillThere(t, LOCALIZED, others)).toBe(true);
   });
 });

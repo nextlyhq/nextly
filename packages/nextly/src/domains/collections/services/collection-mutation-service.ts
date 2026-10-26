@@ -11005,10 +11005,26 @@ export class CollectionMutationService extends BaseService {
     );
     const companion = await this.fileManager.loadCompanionSchema(
       collectionName,
-      options.executor
+      executor
     );
+    // A companion that is not ready yet, a collection still in its
+    // pre-migration state, keeps its translated values on the main table, so
+    // the filter reads them there. Resolved on the pool, or read from the
+    // verdict already resolved where the write holds a transaction.
+    const readiness = !companion
+      ? undefined
+      : executor
+        ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
+        : await resolveCompanionReadiness(this.adapter, {
+            companionTableName: companion.companionTableName,
+            mainTableName: companion.companionTableName.replace(
+              /_locales$/,
+              ""
+            ),
+            localizedColumns: companion.localizedFields.map(f => f.column),
+          });
     const localizedCtx = writeLocalizedContext(
-      companion,
+      readiness === "ready" ? companion : null,
       schema,
       options.locale ?? this.localization?.defaultLocale
     );

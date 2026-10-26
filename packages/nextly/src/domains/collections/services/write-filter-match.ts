@@ -20,8 +20,9 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { CompanionSchema } from "../../../domains/i18n/runtime/companion-io";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { LocalizedQueryContext } from "../../../services/collections/drizzle-condition";
-import type { WhereFilter } from "../../../services/collections/query-operators";
+import { consoleLogger } from "../../../shared/types";
 import {
   prepareFilterCondition,
   type DynamicSchema,
@@ -70,13 +71,9 @@ export async function prepareWriteMatch(
   params: { collectionName: string; filter: RuleFilter; read: ReadReach },
   sources: FilterConditionSources
 ): Promise<PreparedWriteMatch> {
+  const { collectionName } = params;
   const prepare = (filter: RuleFilter) =>
-    prepareFilterCondition(
-      // A rule's filter is a well-formed filter over the collection's own
-      // fields: the decision refuses any other, reserved keys included.
-      { collectionName: params.collectionName, filter: filter },
-      sources
-    );
+    preparedOrUnbuildable(collectionName, filter, sources);
   const write = await prepare(params.filter);
   const read =
     params.read.kind === "matching" ? await prepare(params.read.filter) : null;
@@ -85,9 +82,9 @@ export async function prepareWriteMatch(
   return {
     columns(schema, localizedCtx) {
       return {
-        writes: matchColumn(write, schema, localizedCtx),
+        writes: matchColumn(collectionName, write, schema, localizedCtx),
         reads: read
-          ? matchColumn(read, schema, localizedCtx)
+          ? matchColumn(collectionName, read, schema, localizedCtx)
           : readKind === "every"
             ? sql<number>`1`
             : sql<number>`0`,
@@ -96,16 +93,55 @@ export async function prepareWriteMatch(
   };
 }
 
-/** `1` where the row matches the prepared filter, `0` where it does not. */
+/**
+ * A rule's filter, its facts loaded, or `null` where they cannot be: a rule's
+ * filter is well formed (the decision refuses any other, reserved keys
+ * included) but may still name a field the collection does not have.
+ */
+async function preparedOrUnbuildable(
+  collectionName: string,
+  filter: RuleFilter,
+  sources: FilterConditionSources
+): Promise<PreparedFilterCondition | null> {
+  try {
+    return await prepareFilterCondition({ collectionName, filter }, sources);
+  } catch (error) {
+    reportUnbuildable(collectionName, error);
+    return null;
+  }
+}
+
+/**
+ * `1` where the row matches the prepared filter, `0` where it does not. A
+ * filter that cannot be built matches no row, as a read answers it: the rule's
+ * fault, never the caller's, so it is not reported to the caller as an error
+ * naming the field.
+ */
 function matchColumn(
-  prepared: PreparedFilterCondition,
+  collectionName: string,
+  prepared: PreparedFilterCondition | null,
   schema: DynamicSchema,
   localizedCtx: LocalizedQueryContext | null
 ): SQL<number> {
-  const condition = prepared.condition(schema, localizedCtx);
+  if (!prepared) return sql<number>`0`;
+  let condition: ReturnType<PreparedFilterCondition["condition"]>;
+  try {
+    condition = prepared.condition(schema, localizedCtx);
+  } catch (error) {
+    reportUnbuildable(collectionName, error);
+    return sql<number>`0`;
+  }
   // A filter that constrains nothing matches every row.
   if (!condition) return sql<number>`1`;
   return sql<number>`case when ${condition} then 1 else 0 end`;
+}
+
+/** Log a rule's filter that cannot be built, by its error's code alone. */
+function reportUnbuildable(collectionName: string, error: unknown): void {
+  consoleLogger.error("A write rule's filter could not be built", {
+    collectionName,
+    code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
+  });
 }
 
 /**

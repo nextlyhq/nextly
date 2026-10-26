@@ -19,6 +19,7 @@ import {
 } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
+import { askReadAsPlainRead } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -178,8 +179,10 @@ export class CollectionAccessService extends BaseService {
       return { denied: await this.refusalOf<T>(verdict, params, ask) };
     }
     // What the caller may read decides how an entry outside the filter is
-    // refused, so it is asked as the reads that apply a filter ask it.
-    const read = await ask("read");
+    // refused, so it is asked as the reads that apply a filter ask it, and
+    // as a plain read is: in the default language and its fallbacks, not
+    // every language the write acts in.
+    const read = await askReadAsPlainRead(ask);
     if (!read.allowed && read.refusal === "failed") {
       return {
         denied: this.accessUnreadable<T>(read.error, {
