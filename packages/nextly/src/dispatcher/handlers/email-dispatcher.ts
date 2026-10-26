@@ -35,6 +35,7 @@ import {
   overrideTemplateSchema,
   undoOwnerUpdateSchema,
 } from "../../domains/email/template-ownership-requests";
+import { templateVariablesSchema } from "../../domains/email/template-variables";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
@@ -234,7 +235,9 @@ const EMAIL_TEMPLATE_METHODS: Record<
   createTemplate: {
     execute: async (svc, p, body) => {
       const template = await svc.templateService.createTemplate(
-        body as Parameters<typeof svc.templateService.createTemplate>[0],
+        withCheckedVariables(body) as Parameters<
+          typeof svc.templateService.createTemplate
+        >[0],
         readAuthenticatedActor()
       );
       return respondMutation("Email template created.", template, {
@@ -252,7 +255,9 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p, body) => {
       const template = await svc.templateService.updateTemplate(
         p.templateId,
-        body as Parameters<typeof svc.templateService.updateTemplate>[1],
+        withCheckedVariables(body) as Parameters<
+          typeof svc.templateService.updateTemplate
+        >[1],
         readAuthenticatedActor()
       );
       return respondMutation("Email template updated.", template);
@@ -425,6 +430,24 @@ const EMAIL_TEMPLATE_METHODS: Record<
 };
 
 /** Parse a request body, turning a schema refusal into the validation envelope. */
+/** A template's declared variables, checked where a save gives them. */
+const variablesBodySchema = z.object({ variables: templateVariablesSchema });
+
+/**
+ * `body` with its declared variables checked and as accepted: today's
+ * `{ name, description, required }` and the typed declarations alike, with
+ * any unknown key dropped. A malformed declaration is refused.
+ */
+function withCheckedVariables(body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  const input = body as Record<string, unknown>;
+  if (input.variables === undefined) return input;
+  const { variables } = parseBody(variablesBodySchema, {
+    variables: input.variables,
+  });
+  return { ...input, variables };
+}
+
 function parseBody<S extends z.ZodTypeAny>(
   schema: S,
   body: unknown

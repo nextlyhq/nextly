@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
   CreateEmailTemplatePayload,
   EmailTemplateRecord,
+  EmailTemplateVariablePresentation,
   UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
 
@@ -22,6 +23,12 @@ export interface TemplateFormVariable {
   name: string;
   description: string;
   required: boolean;
+  /**
+   * The declaration's type, label, example and fields, carried through a
+   * save unchanged: the form edits what a variable says, not how the editor
+   * shows it.
+   */
+  presentation?: EmailTemplateVariablePresentation;
 }
 
 export interface TemplateFormAttachment {
@@ -68,6 +75,7 @@ const templateVariableSchema = z.object({
     ),
   description: z.string().max(255).optional().or(z.literal("")),
   required: z.boolean(),
+  presentation: z.custom<EmailTemplateVariablePresentation>().optional(),
 });
 
 /**
@@ -128,6 +136,12 @@ export function templateSchemaFor(isLayoutRow: boolean): z.ZodObject<{
         name: z.ZodString;
         description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
         required: z.ZodBoolean;
+        presentation: z.ZodOptional<
+          z.ZodCustom<
+            EmailTemplateVariablePresentation,
+            EmailTemplateVariablePresentation
+          >
+        >;
       },
       z.core.$strip
     >
@@ -216,6 +230,18 @@ export const USE_DEFAULT_LAYOUT = "__default_layout__";
 const orNull = (value: string): string | null => value || null;
 
 /** An optional list as the API takes it: empty is none. */
+/** A declaration's presentation, as the form carries it, when it has any. */
+function presentationOf(variable: EmailTemplateVariablePresentation): {
+  presentation?: EmailTemplateVariablePresentation;
+} {
+  const presentation: EmailTemplateVariablePresentation = {};
+  if (variable.type !== undefined) presentation.type = variable.type;
+  if (variable.label !== undefined) presentation.label = variable.label;
+  if (variable.example !== undefined) presentation.example = variable.example;
+  if (variable.fields !== undefined) presentation.fields = variable.fields;
+  return Object.keys(presentation).length > 0 ? { presentation } : {};
+}
+
 function listOrNull<T>(list: T[]): T[] | null {
   return list.length > 0 ? list : null;
 }
@@ -236,7 +262,12 @@ function payloadFields(
     layoutId: orNull(values.layoutId),
     fromOverride: orNull(values.fromOverride),
     replyTo: orNull(values.replyTo),
-    variables: listOrNull(values.variables),
+    variables: listOrNull(
+      values.variables.map(({ presentation, ...variable }) => ({
+        ...variable,
+        ...presentation,
+      }))
+    ),
     attachments: listOrNull(
       values.attachments.map(a => ({
         mediaId: a.mediaId,
@@ -312,6 +343,7 @@ export function templateToFormValues(
       name: v.name,
       description: v.description,
       required: v.required ?? false,
+      ...presentationOf(v),
     })),
     attachments: (template.attachments ?? []).map(a => ({
       mediaId: a.mediaId,

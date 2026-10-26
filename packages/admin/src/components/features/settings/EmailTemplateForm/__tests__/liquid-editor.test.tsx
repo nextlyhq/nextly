@@ -65,6 +65,15 @@ function type(view: EditorView, text: string) {
   });
 }
 
+/** The warning marks in the editor, by message. */
+function warnings(view: EditorView): string[] {
+  const found: string[] = [];
+  forEachDiagnostic(view.state, diagnostic => {
+    if (diagnostic.severity === "warning") found.push(diagnostic.message);
+  });
+  return found;
+}
+
 describe("the email editor", () => {
   it("is a named text field, editable unless it is read-only", () => {
     mountEditor();
@@ -214,6 +223,54 @@ describe("the email editor", () => {
         expect.arrayContaining([expect.stringMatching(/Mismatched tags/)])
       )
     );
+  });
+
+  it("warns where a variable would show blank, and lists it as no problem", async () => {
+    const onProblems = vi.fn();
+    const { view } = mountEditor({ value: "Hi {{ customer }}", onProblems });
+    await waitFor(() =>
+      expect(warnings(view())).toEqual([
+        expect.stringMatching(/\{\{customer\}\} has no test value/),
+      ])
+    );
+    // A warning doesn't stop a save, so the problem list stays empty.
+    expect(onProblems).toHaveBeenLastCalledWith([]);
+  });
+
+  it("warns of nothing with a fallback or a test value", async () => {
+    const onProblems = vi.fn();
+    const { view } = mountEditor({
+      value: 'Hi {{ customer | default: "there" }}, {{ userName }}',
+      onProblems,
+    });
+    await waitFor(() => expect(onProblems).toHaveBeenCalled());
+    expect(warnings(view())).toEqual([]);
+  });
+
+  it("checks again when the test data changes", async () => {
+    let view: EditorView | null = null;
+    const props = {
+      label: "Subject",
+      mode: "text" as const,
+      value: "Hi {{ customer }}",
+      onChange: () => {},
+      readOnly: false,
+      onCreateEditor: (created: EditorView) => {
+        view = created;
+      },
+    };
+    const { rerender } = render(
+      <LiquidEditor {...props} completion={COMPLETION} />
+    );
+    await waitFor(() => expect(warnings(view!)).toHaveLength(1));
+
+    rerender(
+      <LiquidEditor
+        {...props}
+        completion={{ ...COMPLETION, sample: { customer: "Ada" } }}
+      />
+    );
+    await waitFor(() => expect(warnings(view!)).toEqual([]));
   });
 
   it("marks no HTML in a text field", async () => {
