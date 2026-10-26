@@ -49,6 +49,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { useEntryBulkActions } from "./useEntryBulkActions";
 
 // ============================================================================
 // Types
@@ -215,6 +216,15 @@ export const EntryTable: ForwardRefExoticComponent<
 
   const [globalFilter, setGlobalFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Rows are selectable only when some bulk action is offered on them, and a
+  // row's Delete only with the delete permission. A selection kept from
+  // before the answer changed counts as none, so no bar or shortcut acts on
+  // rows the caller may no longer act on.
+  const offered = useEntryBulkActions(collection);
+  const selected = useMemo(
+    () => (offered.any ? selectedIds : []),
+    [offered.any, selectedIds]
+  );
 
   // -------------------------------------------------------------------------
   // Columns
@@ -275,17 +285,21 @@ export const EntryTable: ForwardRefExoticComponent<
 
   // Notify parent when selection changes.
   useEffect(() => {
-    onSelectionChange?.(selectedIds);
-  }, [selectedIds, onSelectionChange]);
+    onSelectionChange?.(selected);
+  }, [selected, onSelectionChange]);
 
+  // The list's select-all shortcut reaches rows through here, so it selects
+  // nothing where the checkboxes are not offered.
   useImperativeHandle(
     ref,
     () => ({
-      selectAll: () => setSelectedIds(entries.map(rowId)),
+      selectAll: () => {
+        if (offered.any) setSelectedIds(entries.map(rowId));
+      },
       clearSelection: () => setSelectedIds([]),
-      getSelectedIds: () => selectedIds,
+      getSelectedIds: () => selected,
     }),
-    [entries, selectedIds]
+    [entries, offered.any, selected]
   );
 
   // -------------------------------------------------------------------------
@@ -303,16 +317,20 @@ export const EntryTable: ForwardRefExoticComponent<
             icon: <Pencil className="h-4 w-4" />,
             onSelect: () => onEdit(id),
           },
-          {
-            id: "delete",
-            label: "Delete",
-            icon: <Trash2 className="h-4 w-4" />,
-            destructive: true,
-            onSelect: () => onDelete(id),
-          },
+          ...(offered.delete
+            ? [
+                {
+                  id: "delete",
+                  label: "Delete",
+                  icon: <Trash2 className="h-4 w-4" />,
+                  destructive: true,
+                  onSelect: () => onDelete(id),
+                },
+              ]
+            : []),
         ];
       },
-    [onEdit, onDelete]
+    [onEdit, onDelete, offered.delete]
   );
 
   // -------------------------------------------------------------------------
@@ -493,19 +511,19 @@ export const EntryTable: ForwardRefExoticComponent<
         ) : null
       }
       bulkBar={
-        selectedIds.length > 0 ? (
+        selected.length > 0 ? (
           <BulkActionBar
-            selectedCount={selectedIds.length}
+            selectedCount={selected.length}
             collection={collection}
-            onDelete={() => onBulkDelete(selectedIds)}
+            onDelete={() => onBulkDelete(selected)}
             onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selectedIds, data) : undefined
+              onBulkUpdate ? data => onBulkUpdate(selected, data) : undefined
             }
             onPublish={
-              onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
+              onBulkPublish ? () => onBulkPublish(selected) : undefined
             }
             onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
+              onBulkUnpublish ? () => onBulkUnpublish(selected) : undefined
             }
             isPublishing={isBulkPublishing}
             onClear={() => setSelectedIds([])}
@@ -517,7 +535,8 @@ export const EntryTable: ForwardRefExoticComponent<
       columns={columns}
       rows={entries}
       getRowId={rowId}
-      selection={selection}
+      // No selection removes the checkbox column, on every width.
+      selection={offered.any ? selection : undefined}
       rowActions={rowActions}
       sort={sort}
       onSortChange={onSortChange}
