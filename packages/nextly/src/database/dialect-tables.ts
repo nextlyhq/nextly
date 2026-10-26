@@ -21,9 +21,21 @@ import type * as PostgresTables from "../schemas/_dialect-bundles/postgres";
 import type * as PostgresRelations from "../schemas/_dialect-bundles/postgres.relations";
 import type * as SqliteTables from "../schemas/_dialect-bundles/sqlite";
 import type * as SqliteRelations from "../schemas/_dialect-bundles/sqlite.relations";
+import type * as MysqlAudit from "../schemas/audit/mysql";
+import type * as PostgresAudit from "../schemas/audit/postgres";
+import type * as SqliteAudit from "../schemas/audit/sqlite";
 import type { buildDynamicFieldGroupsMysql } from "../schemas/dynamic-field-groups/mysql";
 import type { buildDynamicFieldGroupsPg } from "../schemas/dynamic-field-groups/postgres";
 import type { buildDynamicFieldGroupsSqlite } from "../schemas/dynamic-field-groups/sqlite";
+import type * as MysqlJobs from "../schemas/jobs/mysql";
+import type * as PostgresJobs from "../schemas/jobs/postgres";
+import type * as SqliteJobs from "../schemas/jobs/sqlite";
+import type * as MysqlMedia from "../schemas/media/mysql";
+import type * as PostgresMedia from "../schemas/media/postgres";
+import type * as SqliteMedia from "../schemas/media/sqlite";
+import type * as MysqlUsers from "../schemas/users/mysql";
+import type * as PostgresUsers from "../schemas/users/postgres";
+import type * as SqliteUsers from "../schemas/users/sqlite";
 
 /** The dialects whose tables are loaded here. */
 type LoadableDialect = "postgresql" | "mysql" | "sqlite";
@@ -35,20 +47,33 @@ export type DialectTables =
   | typeof SqliteTables;
 
 /**
- * A dialect's tables, the relations defined over them, and its builders for
- * tables named at run time.
+ * A dialect's tables, the relations defined over them, its builders for
+ * tables named at run time, and the modules declaring the columns of the core
+ * tables a hook may extend.
  */
 export type LoadedDialect =
   | {
       dialect: "postgresql";
       tables: typeof PostgresTables;
       relations: typeof PostgresRelations;
+      columnModules: {
+        audit: typeof PostgresAudit;
+        jobs: typeof PostgresJobs;
+        media: typeof PostgresMedia;
+        users: typeof PostgresUsers;
+      };
       builders: { buildDynamicFieldGroups: typeof buildDynamicFieldGroupsPg };
     }
   | {
       dialect: "mysql";
       tables: typeof MysqlTables;
       relations: typeof MysqlRelations;
+      columnModules: {
+        audit: typeof MysqlAudit;
+        jobs: typeof MysqlJobs;
+        media: typeof MysqlMedia;
+        users: typeof MysqlUsers;
+      };
       builders: {
         buildDynamicFieldGroups: typeof buildDynamicFieldGroupsMysql;
       };
@@ -57,6 +82,12 @@ export type LoadedDialect =
       dialect: "sqlite";
       tables: typeof SqliteTables;
       relations: typeof SqliteRelations;
+      columnModules: {
+        audit: typeof SqliteAudit;
+        jobs: typeof SqliteJobs;
+        media: typeof SqliteMedia;
+        users: typeof SqliteUsers;
+      };
       builders: {
         buildDynamicFieldGroups: typeof buildDynamicFieldGroupsSqlite;
       };
@@ -94,37 +125,55 @@ function loadable(dialect: string | undefined): LoadableDialect | undefined {
 async function importDialect(dialect: LoadableDialect): Promise<LoadedDialect> {
   switch (dialect) {
     case "postgresql": {
-      const [tables, relations, fieldGroups] = await Promise.all([
-        import("../schemas/_dialect-bundles/postgres"),
-        import("../schemas/_dialect-bundles/postgres.relations"),
-        import("../schemas/dynamic-field-groups/postgres"),
-      ]);
+      const [tables, relations, fieldGroups, audit, jobs, media, users] =
+        await Promise.all([
+          import("../schemas/_dialect-bundles/postgres"),
+          import("../schemas/_dialect-bundles/postgres.relations"),
+          import("../schemas/dynamic-field-groups/postgres"),
+          import("../schemas/audit/postgres"),
+          import("../schemas/jobs/postgres"),
+          import("../schemas/media/postgres"),
+          import("../schemas/users/postgres"),
+        ]);
       const builders = {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsPg,
       };
-      return { dialect, tables, relations, builders };
+      const columnModules = { audit, jobs, media, users };
+      return { dialect, tables, relations, builders, columnModules };
     }
     case "mysql": {
-      const [tables, relations, fieldGroups] = await Promise.all([
-        import("../schemas/_dialect-bundles/mysql"),
-        import("../schemas/_dialect-bundles/mysql.relations"),
-        import("../schemas/dynamic-field-groups/mysql"),
-      ]);
+      const [tables, relations, fieldGroups, audit, jobs, media, users] =
+        await Promise.all([
+          import("../schemas/_dialect-bundles/mysql"),
+          import("../schemas/_dialect-bundles/mysql.relations"),
+          import("../schemas/dynamic-field-groups/mysql"),
+          import("../schemas/audit/mysql"),
+          import("../schemas/jobs/mysql"),
+          import("../schemas/media/mysql"),
+          import("../schemas/users/mysql"),
+        ]);
       const builders = {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsMysql,
       };
-      return { dialect, tables, relations, builders };
+      const columnModules = { audit, jobs, media, users };
+      return { dialect, tables, relations, builders, columnModules };
     }
     case "sqlite": {
-      const [tables, relations, fieldGroups] = await Promise.all([
-        import("../schemas/_dialect-bundles/sqlite"),
-        import("../schemas/_dialect-bundles/sqlite.relations"),
-        import("../schemas/dynamic-field-groups/sqlite"),
-      ]);
+      const [tables, relations, fieldGroups, audit, jobs, media, users] =
+        await Promise.all([
+          import("../schemas/_dialect-bundles/sqlite"),
+          import("../schemas/_dialect-bundles/sqlite.relations"),
+          import("../schemas/dynamic-field-groups/sqlite"),
+          import("../schemas/audit/sqlite"),
+          import("../schemas/jobs/sqlite"),
+          import("../schemas/media/sqlite"),
+          import("../schemas/users/sqlite"),
+        ]);
       const builders = {
         buildDynamicFieldGroups: fieldGroups.buildDynamicFieldGroupsSqlite,
       };
-      return { dialect, tables, relations, builders };
+      const columnModules = { audit, jobs, media, users };
+      return { dialect, tables, relations, builders, columnModules };
     }
   }
 }
