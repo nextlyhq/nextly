@@ -13,6 +13,8 @@ import userEvent from "@testing-library/user-event";
 import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
 import { WidgetSettingsSheet } from "../WidgetSettingsSheet";
 
 const mockBranding = vi.hoisted(() => ({
@@ -116,6 +118,46 @@ describe("the settings sheet with content settings", () => {
     mockBranding.value = {};
     open({ collection: "posts", by: "secret" });
     expect(screen.queryByText(/is no longer available/)).toBeNull();
+  });
+
+  it("offers a widget's card only the collections it can be asked of", async () => {
+    // A Breakdown divides by a choice field where there is no lifecycle:
+    // Posts has one (State), Pages has none.
+    const grouping: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "by",
+        type: "groupBy",
+        of: "collection",
+        label: "Group by",
+        defaultFrom: "collection",
+      },
+    ];
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Breakdown"
+        settings={grouping}
+        widget={
+          {
+            id: "core/breakdown",
+            title: "Breakdown",
+            archetype: "bars",
+            settings: grouping,
+            query: { op: "groupBy", status: "all" },
+          } as unknown as DashboardWidget
+        }
+        config={{ collection: "posts" }}
+        onDone={vi.fn()}
+      />
+    );
+    await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
+    // 🔴 Offered every collection, Pages would set the card to one it asks
+    // nothing of.
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Posts"]);
   });
 
   it("offers only the collections the server sent, and resets what depends on one when it changes", async () => {

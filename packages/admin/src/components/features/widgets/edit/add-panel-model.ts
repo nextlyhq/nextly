@@ -11,6 +11,8 @@
  * @module components/features/widgets/edit/add-panel-model
  */
 
+import type { PublishedContentSource } from "nextly/config";
+
 import type {
   AddPanelGroup,
   DashboardWidget,
@@ -19,6 +21,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { WIDTH_NAMES } from "../sizes";
+import { askableWith } from "../widget-as-asked";
 
 /** A group the panel shows: core's four, and the reader's own removed cards first. */
 export type AddPanelSection = "removed" | AddPanelGroup;
@@ -153,7 +156,7 @@ export function addPanelRows(input: {
    * The collections the reader may read, as the server published them: a widget offered per
    * collection gets one row for each.
    */
-  collections?: readonly { collection: string; label: string }[];
+  collections?: readonly PublishedContentSource[];
   /** Whether the Content group is shown; absent, `SHOW_CONTENT_GROUP` decides. */
   showContent?: boolean;
 }): AddPanelRow[] {
@@ -256,20 +259,27 @@ function widgetRowOf(
 }
 
 /**
- * A widget offered per collection, as one row for each collection the reader may read: each
- * adds a card set to that collection, and counts that collection's cards already placed.
+ * A widget offered per collection, as one row for each collection the reader may read and its
+ * card could be asked of: each adds a card set to that collection, and counts that collection's
+ * cards already placed. A collection the card would ask nothing of (a Breakdown where nothing
+ * divides the entries) gets no row, by the rule that draws such a card as not available.
  */
 function perCollectionRows(
   widgetId: string,
   facts: WidgetWidthFacts,
   widget: DashboardWidget | undefined,
   placements: readonly WidgetPlacement[],
-  collections: readonly { collection: string; label: string }[],
+  collections: readonly PublishedContentSource[],
   offered: ReadonlySet<string>
 ): AddPanelRow[] {
   const setting = widget?.settings?.find(s => s.type === "collection")?.name;
-  if (setting === undefined || !offered.has(widgetId)) return [];
-  return collections.map(({ collection, label }) => {
+  if (widget === undefined || setting === undefined || !offered.has(widgetId)) {
+    return [];
+  }
+  const askable = collections.filter(({ collection }) =>
+    askableWith(widget, { [setting]: collection }, collections)
+  );
+  return askable.map(({ collection, label }) => {
     const placed = placements.filter(
       p =>
         p.widgetId === widgetId &&

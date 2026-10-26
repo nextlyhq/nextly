@@ -22,14 +22,22 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 import { collectionSlugOf } from "./archetypes/more-exist";
 
 /**
- * Whether a query names what it reads. A card of a widget offered per
- * collection whose Collection setting is empty has nothing to ask: it is never
- * sent, and the card is drawn as not available.
+ * Whether a query can be asked as it stands: it names what it reads, and a
+ * grouped one names what it groups by. A card of a widget offered per
+ * collection whose Collection setting is empty has nothing to ask, and a
+ * Breakdown on a collection with nothing to divide by groups by nothing: each
+ * is never sent, and the card is drawn as not available. The add panel and the
+ * settings sheet ask the same of a widget set to a collection, so a widget is
+ * offered on exactly the collections it can be asked of.
  */
-export function sourcedQuery(
-  query: { source?: string } | undefined
+export function askableQuery(
+  query: { source?: string; op?: string; groupBy?: string } | undefined
 ): query is WidgetQuery {
-  return query !== undefined && query.source !== undefined;
+  return (
+    query !== undefined &&
+    query.source !== undefined &&
+    !(query.op === "groupBy" && query.groupBy === undefined)
+  );
 }
 
 /**
@@ -145,6 +153,25 @@ export function widgetAsAsked(
     queryContext(widget, sources)
   );
   return query === widget.query ? widget : { ...widget, query };
+}
+
+/**
+ * Whether a card of `widget` with `config` can be asked anything, as `widgetAsAsked` builds it:
+ * its query can be asked, or, for a card drawn from cells, at least one of them can. A widget
+ * that asks nothing of the dashboard's batch, a card core answers on the server, always can.
+ * What the add panel and the Collection picker ask of a widget set to each collection, so it
+ * is offered only where its card would draw.
+ */
+export function askableWith(
+  widget: DashboardWidget,
+  config: Record<string, unknown> | undefined,
+  sources?: readonly PublishedContentSource[]
+): boolean {
+  const asked = widgetAsAsked(widget, config, sources);
+  if (asked.archetype === "custom" && asked.cells?.length) {
+    return asked.cells.some(cell => askableQuery(cell.query));
+  }
+  return asked.query === undefined || askableQuery(asked.query);
 }
 
 /**

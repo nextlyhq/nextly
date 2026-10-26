@@ -46,6 +46,7 @@ const CORE_GROUPS = {
   "core/upcoming-releases": "overview",
   "core/recent-activity": "team",
   "core/count": "content",
+  "core/breakdown": "content",
   "core/note": "overview",
   "core/recent-entries": "content",
   "core/over-time": "content",

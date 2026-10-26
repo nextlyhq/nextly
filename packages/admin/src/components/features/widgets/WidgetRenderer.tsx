@@ -36,7 +36,7 @@ import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
 import type { SkeletonShape } from "./frame/states";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
-import { sourcedQuery } from "./widget-as-asked";
+import { askableQuery } from "./widget-as-asked";
 import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
 
 /**
@@ -289,7 +289,7 @@ function componentPropsFor(
     // The query as asked, which `definition` already is: the grid draws each card
     // from the same declaration the batch sent. One with no source yet was not
     // asked, so it is not handed on.
-    ...(sourcedQuery(definition.query) ? { query: definition.query } : {}),
+    ...(askableQuery(definition.query) ? { query: definition.query } : {}),
   };
 }
 

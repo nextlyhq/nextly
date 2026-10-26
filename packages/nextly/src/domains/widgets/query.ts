@@ -312,11 +312,21 @@ export type SourcelessWidgetQuery = Omit<WidgetQuery, "source"> & {
  * collection each card reads. A card whose Collection setting is empty asks
  * nothing.
  *
+ * A grouped one may leave its group key to the card's Group by setting as
+ * well: which field a collection divides by depends on the collection, so a
+ * widget offered per collection cannot always name it. Registration requires
+ * that setting where the key is left out.
+ *
  * @experimental While the content widgets are being built.
  */
 export type SettingSourcedQuerySpec = WidgetQuerySpec extends infer Spec
   ? Spec extends WidgetQuerySpec
-    ? Omit<Spec, "source"> & { source?: undefined }
+    ? Spec extends { op: "groupBy" }
+      ? Omit<Spec, "source" | "groupBy"> & {
+          source?: undefined;
+          groupBy?: string;
+        }
+      : Omit<Spec, "source"> & { source?: undefined }
     : never
   : never;
 

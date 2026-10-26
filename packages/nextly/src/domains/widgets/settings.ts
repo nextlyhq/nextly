@@ -187,6 +187,16 @@ export type ContentSetting =
       type: "groupBy";
       of: string;
       defaultValue?: string;
+      /**
+       * `"collection"`: when the card states no grouping, or one this reader
+       * may not use, group by what the collection most naturally divides by
+       * ({@link naturalGroupBy}): status where it has a lifecycle, else its
+       * first groupable choice field. For a widget offered per collection,
+       * whose collections need not share a field a static default could name.
+       *
+       * @experimental While the content widgets are being built.
+       */
+      defaultFrom?: "collection";
     });
 
 /**
@@ -601,11 +611,12 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, quick, ...rest } = setting as {
+  const { name, type, defaultValue, quick, defaultFrom, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
     quick?: unknown;
+    defaultFrom?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
@@ -624,20 +635,35 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  const flags = flagsProblem(type, quick, (rest as { rows?: unknown }).rows);
+  const flags = flagsProblem(
+    type,
+    quick,
+    (rest as { rows?: unknown }).rows,
+    defaultFrom
+  );
   if (flags !== undefined) return `setting "${name}" ${flags}`;
 
   return problemForType(type, rest, defaultValue, name);
 }
 
-/** Why a setting's `quick` or `rows` is unusable, or `undefined`. */
+/** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */
 function flagsProblem(
   type: AnyWidgetSetting["type"],
   quick: unknown,
-  rows: unknown
+  rows: unknown,
+  defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
     return `has quick ${describeValue(quick)}; expected true or false`;
+  }
+  // Refused rather than ignored: a misspelt value, or the flag on a setting
+  // it means nothing to, would otherwise leave a card grouped by nothing with
+  // no fault anywhere pointing at the declaration.
+  if (
+    defaultFrom !== undefined &&
+    (type !== "groupBy" || defaultFrom !== "collection")
+  ) {
+    return `has defaultFrom ${describeValue(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
   return rowsProblem(type, rows);
 }
@@ -883,6 +909,31 @@ export function resolveWidgetSettings(
 }
 
 /**
+ * The field a collection's entries most naturally divide by, or `undefined`
+ * when it has none: what a Group by setting stands for when the card leaves it
+ * to the collection.
+ *
+ * `status` on a collection with a draft and published lifecycle, since it is
+ * the one column every such collection shares and means the same thing on
+ * each. Otherwise the first field with choices that can be grouped by: a
+ * choice field's buckets are few and named, where a free-text column's are
+ * neither. Read from what the source publishes to this reader, which already
+ * leaves out every field a read rule could refuse, so no ruled field is ever
+ * the answer.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function naturalGroupBy(source: {
+  lifecycle: boolean;
+  fields: readonly (KnobField & { choices?: readonly unknown[] })[];
+}): string | undefined {
+  if (source.lifecycle) return "status";
+  return source.fields.find(
+    field => field.choices !== undefined && field.groupable !== false
+  )?.name;
+}
+
+/**
  * A field a collection offers this reader for a card's settings, as its
  * source publishes it.
  *
@@ -1044,7 +1095,8 @@ export interface KnobContext {
   fieldsOf?: (collection: string) => readonly KnobField[] | undefined;
   /**
    * The collection a slug names, as the server published it to this reader,
-   * or `undefined` when it is not known.
+   * or `undefined` when it is not known: what a setting whose default depends
+   * on the collection reads (`defaultFrom`).
    *
    * @experimental
    */
@@ -1314,14 +1366,41 @@ function fittingValue(
 ): unknown {
   const value = resolved[setting.name];
   const fields = readerFieldsFor(setting, resolved, ctx);
-  if (value === undefined || knob.fits === undefined || fields === undefined) {
-    return value;
+  // Unknown fields, or a knob naming none: every value fits, and the server
+  // judges the query.
+  const fits = (candidate: unknown) =>
+    knob.fits === undefined ||
+    fields === undefined ||
+    knob.fits(candidate, fields);
+  if (value !== undefined && fits(value)) return value;
+  // Unset (a static default would already be the resolved value) or not
+  // fitting: the default, held to the same test. A default taken from the
+  // collection is how an unset Group by gets a value at all, and a card
+  // converted from an older one stores only its collection.
+  const fallback = defaultFor(setting, resolved, ctx);
+  return fallback !== undefined && fits(fallback) ? fallback : undefined;
+}
+
+/**
+ * The value a setting falls back to: its declared default, or, for a Group by
+ * setting that takes its default from the collection, what that collection
+ * most naturally divides by. One reading, so the unset card and the card whose
+ * stored grouping a read rule withholds fall back to the same field.
+ */
+function defaultFor(
+  setting: AnyWidgetSetting,
+  resolved: Record<string, unknown>,
+  ctx: KnobContext | undefined
+): unknown {
+  const declared = declaredDefault(setting);
+  if (declared !== undefined) return declared;
+  if (setting.type !== "groupBy" || setting.defaultFrom !== "collection") {
+    return undefined;
   }
-  if (knob.fits(value, fields)) return value;
-  const fallback = declaredDefault(setting);
-  return fallback !== undefined && knob.fits(fallback, fields)
-    ? fallback
-    : undefined;
+  const collection = resolved[setting.of];
+  const source =
+    typeof collection === "string" ? ctx?.sourceOf?.(collection) : undefined;
+  return source === undefined ? undefined : naturalGroupBy(source);
 }
 
 /**
