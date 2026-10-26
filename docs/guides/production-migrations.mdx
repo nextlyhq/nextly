@@ -710,7 +710,7 @@ On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt l
 
 ### Upgrading an existing database
 
-`nextly upgrade` is a list of steps, each of which brings one part of an existing database up to date. It asks every step what it would change first. When none has anything, it prints `Already upgraded. Nothing to do.` and asks for nothing. Otherwise it asks for a backup, runs the steps that have work, and prints each step's count. Running it again changes nothing.
+`nextly upgrade` is a list of steps, each of which brings one part of an existing database up to date. It takes the steps in order: it counts what a step would change and, when that is more than nothing, runs it and prints its count, before it looks at the next step. So when a later step stops the upgrade, the earlier ones have already been applied; run it again once the cause is fixed, and it carries on. It asks for a backup before the first step that has work. When no step has anything, it prints `Already upgraded. Nothing to do.` and asks for nothing. Running it again after it finishes changes nothing.
 
 - **Move the migration records into `nextly_schema_events`.** A database from an early alpha keeps them in `nextly_migrations` and `nextly_migration_journal`; the step copies them across and drops the old tables.
 - **Hash passwords stored before this release.** A password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working. A value already in a password hasher's format is left alone. The step prints a count for each collection, Single and field group, never a value.

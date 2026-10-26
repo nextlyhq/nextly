@@ -212,7 +212,7 @@ export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
     .description(
-      "Bring an existing database up to date: move the migration records into nextly_schema_events, and hash passwords stored before this release"
+      "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
     )
     .option(
       "--confirm-backed-up",
