@@ -49,6 +49,7 @@ import {
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
+import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -389,7 +390,11 @@ export default function EditEntryPage({
    * resolves to nothing falls through to `EntryForm` and that branch has its
    * own claim.
    */
+  // A reader gets the custom view read-only too, through the same gates a
+  // colleague's claim hands it, with no claim made.
+  const customViewReader = useReadOnlyForReader(slug ?? "");
   const customViewLock = useDocumentLockSurface({
+    readOnlyForReader: customViewReader,
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,

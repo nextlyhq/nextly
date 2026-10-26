@@ -84,6 +84,11 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     error: populated.error,
   }),
 }));
+/** Whether the signed-in user may only read this collection. */
+let readOnlyForReader = false;
+vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
+  useReadOnlyForReader: () => readOnlyForReader,
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));
@@ -122,6 +127,7 @@ function claimRequest(): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  readOnlyForReader = false;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver,
@@ -237,6 +243,24 @@ describe("a custom collection edit view", () => {
       readOnly: true,
       actionsDisabled: true,
     });
+  });
+
+  it("makes no claim for a user who may only read, and hands the view a read-only page", () => {
+    // The server refuses such a user's claim, and its refusal would read as
+    // "could not check whether anyone else is editing" over editable fields.
+    withCustomView();
+    readOnlyForReader = true;
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(claimRequest()).toMatchObject({ enabled: false });
+    expect(customViewProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: false,
+    });
+    expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+      "Your access lets you view this, but not change it."
+    );
   });
 
   it("withholds nothing while the claim is this editor's own", () => {

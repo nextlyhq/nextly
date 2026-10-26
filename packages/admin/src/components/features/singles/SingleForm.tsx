@@ -101,6 +101,7 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -576,10 +577,14 @@ export function SingleForm({
    * The advisory claim, derived before the first write is defined because every
    * write has to be able to ask about it.
    */
+  // A user who may read this Single but not change it gets the same page,
+  // read-only, with no claim made on the document.
+  const readOnlyForReader = useReadOnlyForReader(schema.slug);
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
     entryId: document.id,
+    readOnlyForReader,
   });
 
   // System fields: title (system header) and slug (meta strip). Per the
@@ -616,6 +621,8 @@ export function SingleForm({
   // component creates, so a context read here would report no version on
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  // Changing the content is held for a reader as well.
+  const editsHeld = writesHeld || readOnlyForReader;
 
   //
   // The synchronous half of the same gate. `isSubmitting` is render state: it
@@ -656,7 +663,7 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (writesHeld) return submitHeld;
+      if (editsHeld) return submitHeld;
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
@@ -711,7 +718,7 @@ export function SingleForm({
       onSubmit,
       blankPasswordFields,
       busy,
-      writesHeld,
+      editsHeld,
       document.id,
       schema,
       locale,
@@ -924,7 +931,7 @@ export function SingleForm({
    * run against it.
    */
   const discardWorkingDraft = async () => {
-    if (writesHeld || busy || submissionLatch.current) {
+    if (editsHeld || busy || submissionLatch.current) {
       return;
     }
     submissionLatch.current = true;
@@ -961,7 +968,10 @@ export function SingleForm({
        localized single's default row and its translations can be in
        different publish states. */
     locale,
-    documentLocked: lock.readOnly,
+    // A colleague's claim, which withholds every write: a reader's read-only
+    // page withholds only the edits, through `canEdit`.
+    documentLocked: lock.actionsDisabled,
+    canEdit: !readOnlyForReader,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1107,7 +1117,12 @@ export function SingleForm({
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                                  isLinkAvailable={previewLink.isAvailable}
+                                  // Sharing a preview needs the permission to change
+                                  // the Single on the server, so a reader is not offered it.
+                                  isLinkAvailable={
+                                    previewLink.isAvailable &&
+                                    !readOnlyForReader
+                                  }
                                   {...(previewLink.shareDocument === undefined
                                     ? {}
                                     : {
@@ -1170,7 +1185,7 @@ export function SingleForm({
                                 {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
-                                  actionsDisabled={writesHeld}
+                                  actionsDisabled={editsHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
                                   railCollapsed={railCollapsed}
@@ -1203,7 +1218,7 @@ export function SingleForm({
 
                               {/* Rail (collapsible). */}
                               <SingleFormRail
-                                actionsDisabled={writesHeld}
+                                actionsDisabled={editsHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
                                 isDirty={isDirty}
