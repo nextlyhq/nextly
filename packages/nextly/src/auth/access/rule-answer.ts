@@ -5,7 +5,8 @@
  * publish and unpublish rules may instead answer a filter over the
  * collection's entries, which allows only the entries it matches. Anything
  * else refuses: `false`, `null`, `undefined`, a truthy value that is not
- * `true`, and a filter that is not well formed.
+ * `true`, and a filter that is not well formed, which includes one using
+ * `near` or `within`: no read can apply those to a rule's filter yet.
  *
  * The decision and every way in that still judges a rule's answer on its own
  * read the answer through {@link ruleAnswer}, so no two of them can come to
@@ -18,11 +19,21 @@ import {
   isPlainObject,
   type FilterProblem,
 } from "../../domains/collections/query/filter-shape";
+import {
+  GEO_OPERATORS,
+  type WhereFilter,
+} from "../../domains/collections/query/query-operators";
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 
-/** A filter over a collection's entries, as a rule answers it. */
-export type RuleFilter = Readonly<Record<string, unknown>>;
+import type { Decision } from "./decide";
+import { deviate } from "./deviations";
+
+/**
+ * A filter over a collection's entries, as a rule answers it: a `where` of
+ * the shape a read accepts, which {@link ruleAnswer} has checked.
+ */
+export type RuleFilter = WhereFilter;
 
 /** What a rule's answer means. */
 export type RuleAnswer =
@@ -44,10 +55,39 @@ const REFUSE: RuleAnswer = Object.freeze({ kind: "refuse" });
 export function ruleAnswer(value: unknown): RuleAnswer {
   if (value === true) return ALLOW;
   if (!isPlainObject(value)) return REFUSE;
-  const problems = filterShapeProblems(value);
+  const shape = filterShapeProblems(value);
+  const problems = shape.length > 0 ? shape : geoProblems(value, "where");
+  // A plain object with no shape problem is a `where` a read accepts.
   return problems.length === 0
-    ? { kind: "filter", filter: value }
+    ? { kind: "filter", filter: value as WhereFilter }
     : { kind: "malformed-filter", problems };
+}
+
+/**
+ * A `near` or a `within` in a well-formed filter, which a rule's filter may
+ * not use: a read applies its filter in SQL, which cannot express them, and a
+ * count has no rows to test them on. Walks the filter as its shape allows: a
+ * field's conditions, and the members of an `and` or an `or`.
+ */
+function geoProblems(
+  node: Readonly<Record<string, unknown>>,
+  path: string
+): FilterProblem[] {
+  return Object.entries(node).flatMap(([key, value]) => {
+    if ((key === "and" || key === "or") && Array.isArray(value)) {
+      return value.flatMap((member: unknown, i) =>
+        isPlainObject(member) ? geoProblems(member, `${path}.${key}[${i}]`) : []
+      );
+    }
+    if (!isPlainObject(value)) return [];
+    return Object.keys(value)
+      .filter(operator => GEO_OPERATORS.has(operator))
+      .map(operator => ({
+        path: `${path}.${key}.${operator}`,
+        code: "geo-in-rule-filter",
+        message: `${operator} cannot be used in a rule's filter yet`,
+      }));
+  });
 }
 
 /** The actions whose rule may answer with a filter, on a collection. */
@@ -110,6 +150,53 @@ export function reportRuleFilterMisuse(
       logContext: { reason: "rule-filter-misuse", slug, action, message },
     });
   }
+}
+
+/**
+ * A collection read rule's well-formed filter, at a way in that does not
+ * apply it and so refuses the read. Where the decision allows the entries the
+ * filter matches (`decisionAllows`: the caller may read the collection but
+ * for the rule), the difference is recorded as the deviation it is while a
+ * test listens. Any other answer is no such difference.
+ */
+export async function noteFilterNotApplied(
+  kind: "collection" | "single",
+  action: string,
+  answer: RuleAnswer,
+  decisionAllows: boolean
+): Promise<void> {
+  if (answer.kind !== "filter" || action !== "read") return;
+  if (!mayAnswerFilter(kind, action)) return;
+  await deviate("filter-not-applied", false, () => decisionAllows);
+}
+
+/**
+ * Whether a decision lets the caller read at least some entries: every
+ * entry, or for a read, those a rule's filter matches. What a way in's yes or
+ * no is compared with, as "may this caller read the collection" means yes,
+ * some entries.
+ */
+export function allowsSome(decision: Decision, action: string): boolean {
+  if (decision.allowed) return true;
+  return decision.reason === "only-matching-entries" && action === "read";
+}
+
+/**
+ * A decision as a way in that applies no rule's filter answers it: allowed
+ * only when the decision allows every entry. A read the decision allows only
+ * for the entries a filter matches is refused there, and recorded as the
+ * deviation it is. A write rule's filter is not applied yet anywhere, so it
+ * refuses as the decision's answer.
+ */
+export async function allowedUnfiltered(
+  decision: Decision,
+  action: string
+): Promise<boolean> {
+  if (decision.allowed) return true;
+  if (decision.reason !== "only-matching-entries" || action !== "read") {
+    return false;
+  }
+  return deviate("filter-not-applied", false, () => true);
 }
 
 /** Forgets what has been reported, so a test can watch the first report. */

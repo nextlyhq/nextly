@@ -57,6 +57,7 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
+import { allowsSome } from "./rule-answer";
 import { withRuleLanguage, type RuleLanguage } from "./rule-language";
 
 /** Where a route gate reads the rules apps declare; absent without the service. */
@@ -471,7 +472,10 @@ async function decidedOne(
     kind: "collection",
     slug: resource,
   };
-  return (await decide(actor, action as AccessOperation, target)).allowed;
+  return allowsSome(
+    await decide(actor, action as AccessOperation, target),
+    action
+  );
 }
 
 /**

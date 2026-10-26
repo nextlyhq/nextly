@@ -32,6 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -1780,6 +1781,34 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * The coarse collection-level read gate for a read that applies a read
+   * rule's filter: a listing, and the counts and aggregates built on the same
+   * conditions. As {@link denyCollectionRead}, but a rule's filter is handed
+   * back to limit the read to the entries it matches, where that gate
+   * refuses it.
+   */
+  private filteredCollectionRead<T>(params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<
+    | { readonly denied: CollectionServiceResult<T> }
+    | { readonly denied: null; readonly filter?: RuleFilter }
+  > {
+    return this.accessService.checkCollectionRead<T>({
+      collectionName: params.collectionName,
+      // A trusted read is judged for nobody, whoever it names.
+      user: params.overrideAccess ? undefined : params.user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own read grant, as for every read.
+      authenticatedScope: params.authenticatedScope,
+    });
+  }
+
+  /**
    * In which lifecycle state this caller may see rows.
    *
    * One answer for every read path — a listing, its total, and a read by id
@@ -2049,6 +2078,14 @@ export class CollectionQueryService extends BaseService {
     /** Component resolutions already made for this same request. */
     resolvedComponentTables?: Map<string, string>;
     resolvedComponentTypeColumns?: Map<string, string>;
+    /**
+     * The filter the caller's read rule answered, which limits the read to
+     * the entries it matches. A condition of its own, added after the read
+     * hooks settled `where`, so no hook can drop it, and not judged by the
+     * hidden-field check: it is the rule author's predicate, not the
+     * caller's.
+     */
+    ruleFilter?: RuleFilter;
   }): Promise<{
     /** The accumulated WHERE terms, in the order they were added. */
     conditions: SQLWrapper[];
@@ -2174,6 +2211,15 @@ export class CollectionQueryService extends BaseService {
     });
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
+    if (params.ruleFilter) {
+      const limited = await this.resolveFilterConditions({
+        collectionName: params.collectionName,
+        where: params.ruleFilter,
+        schema,
+        localizedCtx,
+      });
+      conditions.push(...limited.conditions);
+    }
 
     return {
       conditions,
@@ -2995,18 +3041,12 @@ export class CollectionQueryService extends BaseService {
       // When overrideAccess is true, skip all access checks even if user is provided
       const accessUser = params.overrideAccess ? undefined : params.user;
 
-      // 1. Check collection-level access FIRST
-      const accessDenied = await this.denyCollectionRead<
-        PaginatedResponse<unknown>
-      >({
-        collectionName: params.collectionName,
-        accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) {
-        return accessDenied;
+      // 1. Check collection-level access FIRST. A read rule that answered a
+      // filter limits the page to the entries it matches.
+      const access =
+        await this.filteredCollectionRead<PaginatedResponse<unknown>>(params);
+      if (access.denied) {
+        return access.denied;
       }
 
       const schema = await this.fileManager.loadDynamicSchema(
@@ -3112,6 +3152,7 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         // This path has rows to evaluate them over.
         extractGeo: true,
+        ruleFilter: access.filter,
       });
       const hasGeoFilters = geoFilters.length > 0;
 
@@ -3818,17 +3859,11 @@ export class CollectionQueryService extends BaseService {
     // and a count that authorized differently from the list it summarises is
     // exactly the disagreement this service is being shaped to make
     // impossible. No entry id, because an aggregate names no single row.
-    const accessDenied = await this.denyCollectionRead<TData>({
-      collectionName: params.collectionName,
-      accessUser,
-      overrideAccess: params.overrideAccess,
-      routeAuthorized: params.routeAuthorized,
-      // Same scope judgement as listEntries, so a read cannot describe rows
-      // the key itself is not allowed to list.
-      authenticatedScope: params.authenticatedScope,
-    });
-    if (accessDenied) {
-      return { allowed: false as const, denied: accessDenied };
+    // Same caller, scope and route judgement as listEntries, so a read cannot
+    // describe rows the caller itself is not allowed to list.
+    const access = await this.filteredCollectionRead<TData>(params);
+    if (access.denied) {
+      return { allowed: false as const, denied: access.denied };
     }
 
     // A count is a cleaner oracle than a listing, not a lesser one: "how many
@@ -3909,6 +3944,8 @@ export class CollectionQueryService extends BaseService {
       // Resolved once for this request by the caller; see the parameters.
       resolvedComponentTables: params.resolvedComponentTables,
       resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+      // The read rule's filter, so an aggregate counts what the page lists.
+      ruleFilter: access.filter,
     });
 
     return {

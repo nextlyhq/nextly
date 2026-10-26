@@ -46,6 +46,32 @@ describe("ruleAnswer", () => {
       answer.kind === "malformed-filter" ? answer.problems.length : 0
     ).toBeGreaterThan(0);
   });
+
+  it.each([
+    ["near", { place: { near: "-74.006,40.7128,10000" } }],
+    ["within", { place: { within: "-74.006,40.7128,5000" } }],
+    [
+      "near inside an or",
+      { or: [OWN, { place: { near: "-74.006,40.7128,10000" } }] },
+    ],
+  ])(
+    "reads a filter using a geo operator as not well formed: %s",
+    (_name, value) => {
+      // No read can apply one: it is not expressed in SQL, and a count has no
+      // rows to test it on.
+      const answer = ruleAnswer(value);
+      expect(answer.kind).toBe("malformed-filter");
+      expect(
+        answer.kind === "malformed-filter"
+          ? answer.problems.map(p => p.code)
+          : []
+      ).toContain("geo-in-rule-filter");
+    }
+  );
+
+  it("does not mistake a field named like a geo operator for one", () => {
+    expect(ruleAnswer({ near: { equals: "x" } }).kind).toBe("filter");
+  });
 });
 
 describe("mayAnswerFilter", () => {
