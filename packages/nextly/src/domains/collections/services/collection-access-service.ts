@@ -42,7 +42,7 @@ import type { ReadReach } from "./write-filter-match";
  * The writes that limit themselves to the entries a write rule's filter
  * matches, by matching the entry they change against it under its lock.
  */
-export type FilteredWrite = "delete";
+export type FilteredWrite = "delete" | "update" | "publish" | "unpublish";
 
 /** What the collection gate is asked about a caller and an operation. */
 interface CollectionAccessParams {
@@ -202,7 +202,12 @@ export class CollectionAccessService extends BaseService {
    */
   async refusalOutsideFilter<T>(
     params: CollectionAccessParams,
-    readsEntry: boolean
+    readsEntry: boolean,
+    /**
+     * The write would have moved the entry out of the filter: the entry was
+     * inside it, so the caller could see it, and is told in words.
+     */
+    afterWrite = false
   ): Promise<CollectionServiceResult<T>> {
     const { collectionName, operation, executor } = params;
     if (!readsEntry) {
@@ -218,7 +223,9 @@ export class CollectionAccessService extends BaseService {
       unauthenticated: false,
       namesOne: true,
       executor,
-      reason: `the entry is outside the caller's ${operation} filter`,
+      reason: afterWrite
+        ? `the ${operation} would move the entry outside the caller's ${operation} filter`
+        : `the entry is outside the caller's ${operation} filter`,
     });
   }
 

@@ -722,7 +722,12 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  * entry inside the filter and its twin outside it, so its answer can show
  * that the one was changed and the other refused and left as it was.
  */
-export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>(["delete"]);
+export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>([
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
 
 /** Whether a rule answers its collection's writes with a filter. */
 export function isFilterRule(rule: Rule): boolean {

@@ -53,11 +53,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import {
-  allowsSome,
-  mayAnswerFilter,
-  type RuleFilter,
-} from "./rule-answer";
+import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -141,13 +137,16 @@ const isLifecycle = (action: AccessOperation) =>
 
 /**
  * The actions whose rule's filter the gate hands to an asker that applies it:
- * a read, which lists only the matching entries, and a delete, which matches
- * the entry it removes against the filter first. A filter from any other
- * action's rule is not applied yet, so it refuses.
+ * a read, which lists only the matching entries, and a write that matches the
+ * entry it changes against the filter first, and an update after it too. A
+ * create has no entry to match, so its rule's filter refuses.
  */
 const FILTER_APPLIED: ReadonlySet<AccessOperation> = new Set<AccessOperation>([
   "read",
+  "update",
   "delete",
+  "publish",
+  "unpublish",
 ]);
 
 /**
@@ -612,7 +611,10 @@ async function grantJudgedVerdict(
     // A key without the grant is refused before its rule is read, as today
     // and as the decision does: it lacks the permission either way.
     if (!slugHolds) return INSUFFICIENT;
-    return verdictOf(outcomeAllows(await askRule(actor, q.action, target)));
+    const outcome = await askRule(actor, q.action, target);
+    const filter = appliedFilterOf(target, q.action, outcome);
+    if (filter) return onlyMatching(q, filter, true);
+    return verdictOf(outcomeAllows(outcome));
   }
   const answer = judge(
     actor,
