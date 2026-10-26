@@ -260,4 +260,54 @@ describe("carryStoredPasswords", () => {
     expect(lines[0]?.pw).toBeUndefined();
     expect(lines[1]?.pw).toBe(HASH_B);
   });
+
+  it("gives rows that carry ids none of the passwords of stored rows that carry none", () => {
+    const fields = [
+      {
+        name: "lines",
+        type: "repeater",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "pw", type: "password" },
+        ],
+      },
+    ];
+    // Stored without ids; sent with ids, a new row ahead of the old one.
+    const data: Record<string, unknown> = {
+      lines: [
+        { id: "n", label: "new" },
+        { id: "a", label: "a" },
+      ],
+    };
+
+    carryStoredPasswords(
+      data,
+      { lines: [{ label: "a", pw: HASH_A }] },
+      fields,
+      NO_FIELD_GROUPS
+    );
+
+    const lines = data.lines as Array<Record<string, unknown>>;
+    expect(lines[0]?.pw).toBeUndefined();
+  });
+
+  it("treats a password sent as undefined as left out", () => {
+    const fields = [
+      {
+        name: "box",
+        type: "group",
+        fields: [{ name: "pw", type: "password" }],
+      },
+    ];
+    const data: Record<string, unknown> = { box: { pw: undefined } };
+
+    carryStoredPasswords(
+      data,
+      { box: { pw: HASH_A } },
+      fields,
+      NO_FIELD_GROUPS
+    );
+
+    expect((data.box as Record<string, unknown>).pw).toBe(HASH_A);
+  });
 });
