@@ -27,7 +27,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
-| `nextly upgrade` | Run once after upgrading Nextly. Brings an existing database up to date in steps: it moves old migration records into `nextly_schema_events`, and hashes passwords stored before this release. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
+| `nextly upgrade` | Run after upgrading Nextly, once every instance serves the new release. Brings an existing database up to date in steps: it moves old migration records into `nextly_schema_events`, and hashes passwords stored before this release. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
 | `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
@@ -716,6 +716,8 @@ On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt l
 - **Hash passwords stored before this release.** A password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working. A value already in a password hasher's format is left alone. The step prints a count for each collection, Single and field group, never a value.
 
 `nextly migrate` prints how many passwords are not yet hashed, and names `nextly upgrade`.
+
+Run `nextly upgrade` once the new release serves every instance. An instance still running the earlier release can store a password as it was written after the step has passed its row, so if you ran it during a rollout, run it again after the last earlier instance has stopped. A run that finds nothing left says so.
 
 ### Core tables missing after an upgrade
 

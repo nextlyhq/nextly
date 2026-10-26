@@ -3,10 +3,10 @@
  *
  * The upgrade is a list of steps (`upgrade-steps/index.ts`), each idempotent:
  * moving the migration records into `nextly_schema_events`, then hashing the
- * passwords stored before this release. It asks every step how much it would
- * change first, says there is nothing to do only when no step has anything,
- * asks for a backup only when one does, and then runs just the steps with
- * work, reporting each one's count. The orchestration (`runUpgrade`) is a
+ * passwords stored before this release. Each step in turn says how much it
+ * would change and, when that is above 0, runs and reports its count; the
+ * backup is confirmed before the first step with work, and the upgrade says
+ * there is nothing to do only when no step had anything. The orchestration (`runUpgrade`) is a
  * plain async function taking an adapter-like dependency so it is testable
  * without the CLI shell.
  *
@@ -96,27 +96,32 @@ export async function runUpgrade(
   const steps = deps.steps ?? UPGRADE_STEPS;
 
   await withMigrateLock(db, dialect, async () => {
-    // Every step is asked before any runs, so a step that cannot proceed
-    // stops the upgrade before another has written anything.
-    const work: Array<{ step: UpgradeStep; pending: number }> = [];
+    // Each step is brought up to date before the next is asked, so a step
+    // reads what the steps before it have repaired. The backup is confirmed
+    // once, before the first step that has work.
+    const idle: string[] = [];
+    let confirmed = false;
     for (const step of steps) {
-      work.push({ step, pending: await step.pending(context) });
-    }
-    if (work.every(({ pending }) => pending === 0)) {
-      context.log("Already upgraded. Nothing to do.");
-      return;
-    }
-
-    await confirmBackup(options, deps);
-
-    for (const { step, pending } of work) {
+      const pending = await step.pending(context);
       if (pending === 0) {
-        context.log(`${step.title}: nothing to do`);
+        idle.push(step.title);
         continue;
+      }
+      if (!confirmed) {
+        await confirmBackup(options, deps);
+        confirmed = true;
+      }
+      for (const title of idle.splice(0)) {
+        context.log(`${title}: nothing to do`);
       }
       const changed = await step.run(context);
       context.log(`${step.title}: ${String(changed)}`);
     }
+    if (!confirmed) {
+      context.log("Already upgraded. Nothing to do.");
+      return;
+    }
+    for (const title of idle) context.log(`${title}: nothing to do`);
 
     context.log(
       "Done. You can now run `pnpm run dev` or `pnpm nextly migrate`."

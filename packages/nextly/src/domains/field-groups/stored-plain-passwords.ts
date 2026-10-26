@@ -27,6 +27,7 @@ import { isPasswordHash } from "../../auth/password";
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SchemaRegistry } from "../../database/schema-registry";
 import { registerEntityRuntimeTables } from "../../di/register-runtime-tables";
+import { NextlyError } from "../../errors";
 import {
   hashStoredPlainPasswords,
   reachesPasswordField,
@@ -108,6 +109,8 @@ const whereKey = (key: readonly string[], row: Record<string, unknown>) =>
 /** Where the passwords are read from and written to. */
 export interface StoredPasswordsSource {
   adapter: DrizzleAdapter;
+  /** Rows read per page; 500 unless a test reads smaller pages. */
+  pageSize?: number;
   /** The resolver's registry, on which each entity's tables are registered. */
   registry: SchemaRegistry;
   logger: Logger;
@@ -287,19 +290,23 @@ async function visitTable(
   stored: StoredTable,
   apply: boolean
 ): Promise<number> {
+  const pageSize = source.pageSize ?? PAGE_SIZE;
   const columns = [
     ...stored.key,
     ...stored.containers.map(field => field.name),
   ];
   let count = 0;
-  for (let offset = 0; ; offset += PAGE_SIZE) {
+  let after: Record<string, unknown> | undefined;
+  for (;;) {
+    // Paged by the rows' key, from the last row read, so a later page never
+    // walks past the earlier ones.
     const rows = await source.adapter.select<Record<string, unknown>>(
       stored.table,
       {
         columns,
+        ...(after ? { where: afterKey(stored.key, after) } : {}),
         orderBy: stored.key.map(column => ({ column })),
-        limit: PAGE_SIZE,
-        offset,
+        limit: pageSize,
       }
     );
     for (const row of rows) {
@@ -312,38 +319,79 @@ async function visitTable(
       if (found === 0) continue;
       count += apply ? await hashRow(source, entity, stored, row) : found;
     }
-    if (rows.length < PAGE_SIZE) return count;
+    if (rows.length < pageSize) return count;
+    after = rows[rows.length - 1];
   }
 }
 
 /**
- * Hash one row's passwords, re-read in a transaction of its own, so a value
- * written since the page was read is what is hashed and nothing written in
- * between is lost.
+ * The rows whose key sorts after `row`'s, by the key's columns in order: for
+ * a companion's `(_parent, _locale)`, a later parent, or the same parent in a
+ * later language.
  */
-function hashRow(
+function afterKey(
+  key: readonly string[],
+  row: Record<string, unknown>
+): WhereClause {
+  const value = (column: string) => row[column] as SqlParam;
+  return {
+    or: key.map((column, index) => ({
+      and: [
+        ...key.slice(0, index).map(earlier => ({
+          column: earlier,
+          op: "=" as const,
+          value: value(earlier),
+        })),
+        { column, op: ">" as const, value: value(column) },
+      ],
+    })),
+  };
+}
+
+/**
+ * Hash one row's passwords, re-read under a row lock in a transaction of its
+ * own: a write made since the page was read is what is hashed, and one made
+ * while the hashes are made waits rather than being overwritten.
+ */
+async function hashRow(
   source: StoredPasswordsSource,
   entity: StoredEntity,
   stored: StoredTable,
   row: Record<string, unknown>
 ): Promise<number> {
   const where = whereKey(stored.key, row);
-  return source.adapter.transaction(async tx => {
-    const [current] = await tx.select<Record<string, unknown>>(stored.table, {
-      columns: [...stored.key, ...stored.containers.map(field => field.name)],
-      where,
+  try {
+    return await source.adapter.transaction(async tx => {
+      const [current] = await tx.select<Record<string, unknown>>(stored.table, {
+        columns: [...stored.key, ...stored.containers.map(field => field.name)],
+        where,
+        forUpdate: true,
+      });
+      if (!current) return 0;
+      const data = containersIn(stored, current);
+      const hashed = await hashStoredPlainPasswords(
+        data,
+        entity.fields,
+        entity.reach,
+        isHashed
+      );
+      if (hashed > 0) await tx.update(stored.table, data, where);
+      return hashed;
     });
-    if (!current) return 0;
-    const data = containersIn(stored, current);
-    const hashed = await hashStoredPlainPasswords(
-      data,
-      entity.fields,
-      entity.reach,
-      isHashed
-    );
-    if (hashed > 0) await tx.update(stored.table, data, where);
-    return hashed;
-  });
+  } catch (error) {
+    // The database's error can quote the statement's parameters, which hold
+    // the new hashes, so it is reported by entity and table, never by its
+    // text or its cause.
+    throw NextlyError.internal({
+      logContext: {
+        reason: "stored-password-hash-failed",
+        kind: entity.kind,
+        slug: entity.slug,
+        table: stored.table,
+        errorName: error instanceof Error ? error.name : typeof error,
+      },
+    });
+  }
 }
 
 /** A row's container values, by field name, as the walk reads an entry. */

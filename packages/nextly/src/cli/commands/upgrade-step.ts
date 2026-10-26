@@ -3,9 +3,10 @@
  *
  * `nextly upgrade` is a list of steps (see `upgrade-steps/index.ts`), each of
  * which brings one part of an existing database up to date: it counts what it
- * would change, and changes it. The upgrade asks every step first, so it says
- * there is nothing to do only when no step has anything, asks for a backup
- * only when one does, and then runs just the steps with work.
+ * would change, and changes it. The steps run in order, each counted and run
+ * before the next is counted, so a step may read what an earlier one repairs.
+ * The upgrade asks for a backup before the first step with work, and says
+ * there is nothing to do only when no step had anything.
  *
  * A step is idempotent: run again after it finished, its count is 0. It
  * reports counts and never a stored value.
@@ -59,8 +60,8 @@ export interface UpgradeStep {
   title: string;
   /**
    * How many things the step would change now, or 0 when it has nothing to
-   * do. It only reads. It may throw to stop the upgrade before any step has
-   * written anything.
+   * do. It only reads, and runs after every earlier step has run. It may
+   * throw to stop the upgrade before this step writes anything.
    */
   pending: (context: UpgradeStepContext) => Promise<number>;
   /**
