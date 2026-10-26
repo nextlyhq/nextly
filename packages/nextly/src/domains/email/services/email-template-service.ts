@@ -36,7 +36,6 @@ import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type {
   EmailTemplateInsert,
   EmailTemplateRecord,
-  EmailTemplateVariable,
   EmailTemplateVersion,
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -355,6 +354,11 @@ export interface OwnerUpdateUndo {
    * so Undo makes it written again; null for a coded one.
    */
   blocks?: WrittenDocument | null;
+  /**
+   * @experimental The digest the override was based on before the review, so
+   * Undo puts it back as it was: a written owner's is taken over its blocks.
+   */
+  baseDigest?: string | null;
   /** The owner's version the override was based on before. */
   base: EmailTemplateVersion;
   /**
@@ -1531,8 +1535,17 @@ export class EmailTemplateService extends BaseService {
     const converted =
       updateData.format !== undefined &&
       updateData.format !== storedFormat(existing).format;
+    // Blocks rewritten to write the same HTML are still the site's own: the
+    // owner's version is known by its blocks, not by what they write.
+    const rewritten =
+      updateData.blocks !== undefined &&
+      !sameStoredValue(
+        updateData.blocks ?? null,
+        storedFormat(existing).blocks
+      );
     return (
       converted ||
+      rewritten ||
       [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
         field =>
           updateData[field] !== undefined &&
@@ -1715,7 +1728,13 @@ export class EmailTemplateService extends BaseService {
       baseDigest: null,
       updatedAt: new Date(),
     });
-    await this.assertWritten(id, entry.version, null, record.slug);
+    await this.assertWritten(
+      id,
+      entry.version,
+      null,
+      record.slug,
+      entry.blocks ?? null
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1852,6 +1871,7 @@ export class EmailTemplateService extends BaseService {
       undo: {
         version: mine,
         blocks: record.blocks,
+        baseDigest: row.baseDigest ?? null,
         base,
         applied: storedDigest(merged, blocks),
         appliedBase: entry.digest,
@@ -1888,7 +1908,7 @@ export class EmailTemplateService extends BaseService {
       row,
       record,
       version,
-      versionDigest(base),
+      undo.baseDigest ?? versionDigest(base),
       { baseVersion: { ...base, details: row.baseVersion?.details } },
       undo.blocks
     );
@@ -1927,7 +1947,9 @@ export class EmailTemplateService extends BaseService {
       same(t.description, row.description ?? null),
       same(t.overridden, row.overridden ?? null),
       same(t.baseDigest, row.baseDigest ?? null),
-      this.sameVariables(row.variables ?? null),
+      same(t.format, row.format ?? null),
+      this.sameJson(t.blocks, row.blocks ?? null),
+      this.sameJson(t.variables, row.variables ?? null),
       // Every save moves it, to the second on SQLite and MySQL.
       row.updatedAt ? eq(t.updatedAt, row.updatedAt) : isNull(t.updatedAt)
     );
@@ -1938,13 +1960,12 @@ export class EmailTemplateService extends BaseService {
    * PostgreSQL, JSON equality on MySQL (the text cast to JSON), and the stored
    * text on SQLite, which drizzle writes with `JSON.stringify`.
    */
-  private sameVariables(variables: EmailTemplateVariable[] | null) {
-    const column = this.emailTemplates.variables;
-    if (variables === null) return isNull(column);
+  private sameJson(column: Column, value: unknown) {
+    if (value === null) return isNull(column);
     if (this.dialect === "mysql") {
-      return sql`${column} = CAST(${JSON.stringify(variables)} AS JSON)`;
+      return sql`${column} = CAST(${JSON.stringify(value)} AS JSON)`;
     }
-    return eq(column, variables);
+    return eq(column, value);
   }
 
   /**
@@ -1970,11 +1991,15 @@ export class EmailTemplateService extends BaseService {
     id: string,
     version: EmailTemplateVersion,
     baseDigest: string | null,
-    slug: string
+    slug: string,
+    blocks: WrittenDocument | null = null
   ): Promise<void> {
     const after = await this.getRow(id);
+    // With the blocks: a save of other blocks that write the same HTML is
+    // still a save in between.
     if (
-      versionDigest(versionOf(after)) !== versionDigest(version) ||
+      storedDigest(versionOf(after), storedFormat(after).blocks) !==
+        storedDigest(version, blocks) ||
       after.baseDigest !== baseDigest
     ) {
       throw changedSince("saved", id, slug);
@@ -2007,7 +2032,13 @@ export class EmailTemplateService extends BaseService {
         updatedAt: new Date(),
       })
       .where(this.unchanged(row));
-    await this.assertWritten(row.id, version, baseDigest, record.slug);
+    await this.assertWritten(
+      row.id,
+      version,
+      baseDigest,
+      record.slug,
+      format.blocks
+    );
     await afterSave(await this.getTemplate(row.id));
   }
 

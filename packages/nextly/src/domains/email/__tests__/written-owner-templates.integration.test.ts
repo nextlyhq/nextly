@@ -3,7 +3,15 @@
  * reset, taken over, overridden, and an owner's update to it reviewed as a
  * whole (the site's version or the plugin's).
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import type { EmailTemplateService } from "../services/email-template-service";
@@ -305,6 +313,72 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         format: "written",
         blocks: MINE,
         htmlContent: compileWrittenHtml(MINE),
+      });
+    });
+
+    it("is the site's once it rewrites the blocks, even to the same HTML, and the next boot keeps them", async () => {
+      const first = await boot(V1);
+      const { id } = await paidTemplate(first);
+      await first.updateTemplate(id, { blocks: splitRuns(V1) });
+      expect(await first.getTemplate(id)).toMatchObject({
+        overridden: true,
+        // The control: the rewrite changed the blocks, not the HTML.
+        htmlContent: compileWrittenHtml(V1),
+      });
+
+      const next = await boot(V1);
+      expect(await next.getTemplate(id)).toMatchObject({
+        blocks: splitRuns(V1),
+        overridden: true,
+      });
+    });
+
+    it("refuses to keep its blocks over a save made since the review was checked", async () => {
+      // Every write in the same second, as on MySQL and SQLite.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
+      try {
+        const id = await overridden();
+        const service = await boot(V2);
+        const comparison = await service.compareTemplate(id);
+        const rows = service as unknown as {
+          getRow(id: string): Promise<unknown>;
+        };
+        const stale = await rows.getRow(id);
+        await service.updateTemplate(id, { blocks: splitRuns(MINE) });
+        // As if the review was checked just before that save.
+        vi.spyOn(rows, "getRow").mockResolvedValueOnce(stale);
+
+        await expect(
+          service.applyOwnerUpdate(
+            id,
+            { [WHOLE_TEMPLATE]: { use: "mine" } },
+            comparison.review
+          )
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(await service.getTemplate(id)).toMatchObject({
+          blocks: splitRuns(MINE),
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("is based on the version it started from again on undo, so a plugin rolled back to it offers nothing", async () => {
+      const id = await overridden();
+      const service = await boot(V2);
+      const { undo } = await service.applyOwnerUpdate(
+        id,
+        { [WHOLE_TEMPLATE]: { use: "theirs" } },
+        (await service.compareTemplate(id)).review
+      );
+      await service.undoOwnerUpdate(id, undo);
+
+      const rolledBack = await boot(V1);
+      expect(await rolledBack.getTemplate(id)).toMatchObject({
+        blocks: MINE,
+        overridden: true,
+        ownerChanged: false,
       });
     });
 
