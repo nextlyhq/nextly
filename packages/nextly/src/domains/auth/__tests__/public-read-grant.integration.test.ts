@@ -120,6 +120,17 @@ async function boot(
               access: { read: ({ locale }) => locale === undefined },
               fields,
             }),
+            // Creatable by a visitor only where English is read with every
+            // language beside it, as duplicating an entry asks its create.
+            defineCollection({
+              slug: "duplicable",
+              localized: true,
+              access: {
+                create: ({ locale, locales }) =>
+                  locale === "en" && locales.length > 1,
+              },
+              fields,
+            }),
             // Stored once for every language; its rule counts its askings.
             defineCollection({
               slug: "counted",
@@ -288,6 +299,52 @@ describe.each(getConfiguredTestDialects())(
       expect(await publicHolds(nextly)).toContain("read-everylang");
       expect(await publicHolds(nextly)).toContain("read-overview");
       expect(await publicHolds(nextly)).toContain("read-germanonly");
+      // A write a rule opens in a read's languages is named too.
+      expect(listing()).toContain("create-duplicable");
+    });
+
+    it("has an owner's addition of a Public permission wait for a grant in progress, and add it once", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const id = (await services(nextly).roles.findRoleIdBySlug(
+        PUBLIC_ROLE_SLUG
+      ))!.id;
+      let entered!: () => void;
+      const inside = new Promise<void>(resolve => (entered = resolve));
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      const grant = services(nextly).rolePermissions.addRolePermissionsOnce(
+        id,
+        [],
+        async () => {
+          entered();
+          await released;
+          return [];
+        }
+      );
+      await inside;
+
+      const permissions = services(nextly).rolePermissions;
+      let added = false;
+      const addition = permissions
+        .addPermissionToRole(id, { action: "read", resource: "closed" })
+        .then(() => {
+          added = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const addedWhileGranting = added;
+      release();
+      await Promise.all([grant, addition]);
+      // Added again, it is held once and nothing fails.
+      await permissions.addPermissionToRole(id, {
+        action: "read",
+        resource: "closed",
+      });
+
+      expect(addedWhileGranting).toBe(false);
+      expect(
+        (await publicHolds(nextly)).filter(p => p === "read-closed")
+      ).toHaveLength(1);
     });
 
     it("has an owner's removal of a Public permission wait for a grant in progress", async () => {

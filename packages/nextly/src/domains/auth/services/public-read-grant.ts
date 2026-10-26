@@ -167,32 +167,34 @@ async function askIn(
 }
 
 /**
- * Every set of languages a visitor's request for `action` can tell a rule, as
- * the request paths work them out: for a read, each language or every
- * translation asked for, with the configured fallback, none, or any language
- * named as the fallback, as a plain read or one that also reads each
- * language's translation state; for a write, each language or every one; and
- * every language at once, as a delete is told. Each distinct set the rule is
- * told, once. A site without languages has one: none.
+ * Every set of languages a visitor's request can tell a rule of `target`, as
+ * the request paths work them out: a read's, for each language, the default
+ * or every translation asked for, with the configured fallback, none, or any
+ * language named as the fallback, as a plain read or one that also reads each
+ * language's translation state; a write's, for each language or every one;
+ * and every language at once, as a delete is told. Each distinct set the rule
+ * is told, once. A site without languages has one: none.
  */
 function languageContexts(
-  target: AccessTarget,
-  action: Action
+  target: AccessTarget
 ): Array<RuleLanguage | undefined> {
   const codes = everyLanguage().locales;
   if (codes.length === 0) return [undefined];
-  const contexts =
-    action === "read"
-      ? [...codes, EVERY_TRANSLATION].flatMap(requested =>
-          [undefined, false as const, ...codes].flatMap(fallback =>
-            [{}, { translationStatus: true }].map(asked =>
-              registeredReadLanguagesFor(requested, fallback, asked)
-            )
-          )
+  // Read and write languages for every action: an operation is not told its
+  // own kind alone (duplicating an entry asks `create` in a read's
+  // languages), so each action is asked in all of them.
+  const contexts = [
+    ...[undefined, ...codes, EVERY_TRANSLATION].flatMap(requested =>
+      [undefined, false as const, ...codes].flatMap(fallback =>
+        [{}, { translationStatus: true }].map(asked =>
+          registeredReadLanguagesFor(requested, fallback, asked)
         )
-      : [...codes, EVERY_LOCALE].map(requested =>
-          registeredWriteLanguagesFor(requested)
-        );
+      )
+    ),
+    ...[...codes, EVERY_LOCALE].map(requested =>
+      registeredWriteLanguagesFor(requested)
+    ),
+  ];
   const distinct = new Map<string, RuleLanguage>();
   for (const asked of [...contexts, everyLanguage()]) {
     // As the rule is told it: content the same in every language is told
@@ -215,9 +217,7 @@ function languageContexts(
  */
 async function ask(target: AccessTarget, action: Action): Promise<Answer> {
   const answers = await Promise.all(
-    languageContexts(target, action).map(language =>
-      askIn(target, action, language)
-    )
+    languageContexts(target).map(language => askIn(target, action, language))
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;

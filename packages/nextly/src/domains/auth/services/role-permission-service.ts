@@ -95,20 +95,17 @@ export class RolePermissionService extends BaseService {
       permissionId = String(existing.id);
       await this.healReversedSlug(permissionId, String(existing.slug), perm);
 
-      const id = randomUUID();
-      const rolePermissionData: RolePermissionInsertData = {
-        id,
-        roleId,
-        permissionId,
-      };
-      const insert = (this.db as RBACDatabaseInstance)
-        .insert(this.tables.rolePermissions)
-        .values(rolePermissionData);
-      if (typeof insert.onConflictDoNothing === "function") {
-        await insert.onConflictDoNothing();
-      } else {
-        await insert;
-      }
+      // Under the lock on the role's row that every other writer of its
+      // permissions takes, and only where the role does not hold it yet: a
+      // plain insert of an assignment the role holds fails on MySQL, which
+      // has no conflict clause to fall back on.
+      const assigned = permissionId;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        if (!(await this.heldIn(tx, roleId)).has(assigned)) {
+          await this.insertAssignments(tx, roleId, [assigned]);
+        }
+      });
     } else {
       const newPermId = randomUUID();
       const rolePermId = randomUUID();
