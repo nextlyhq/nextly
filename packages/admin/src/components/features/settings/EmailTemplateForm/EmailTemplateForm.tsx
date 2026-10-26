@@ -18,7 +18,7 @@ import { BodyEditor } from "./BodyEditor";
 import { DataRail } from "./DataRail";
 import { DetailsPanel } from "./DetailsPanel";
 import { EnvelopeBar } from "./EnvelopeBar";
-import { InboxStrip } from "./InboxStrip";
+import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
 import {
@@ -77,8 +77,8 @@ function ContentColumn({
   acts: OwnershipActs;
   isPending: boolean;
   isLayoutRow: boolean;
-  /** The inbox line as rendered from the draft: subject, preview text, From. */
-  inbox: { subject: string; preheader: string; from: string | null };
+  /** The inbox line as rendered from the draft, or null before the first render. */
+  inbox: { subject: string; preheader: string; from: string | null } | null;
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
     "control" | "isPending" | "readOnly" | "liquid"
@@ -105,10 +105,7 @@ function ContentColumn({
       />
       {isLayoutRow ? null : (
         <InboxStrip
-          // Rendered from the draft once it has been; as written until then.
-          from={inbox.from ?? fromOverride}
-          subject={inbox.subject || subject}
-          preheader={inbox.preheader || preheader}
+          {...shownInboxLine({ subject, preheader, from: fromOverride }, inbox)}
         />
       )}
       <div
@@ -337,11 +334,15 @@ export function EmailTemplateForm({
               acts={acts}
               isPending={isPending}
               isLayoutRow={isLayoutRow}
-              inbox={{
-                subject: derived.previewSubject,
-                preheader: derived.previewPreheader,
-                from: derived.previewFrom,
-              }}
+              inbox={
+                derived.hasPreview
+                  ? {
+                      subject: derived.previewSubject,
+                      preheader: derived.previewPreheader,
+                      from: derived.previewFrom,
+                    }
+                  : null
+              }
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,

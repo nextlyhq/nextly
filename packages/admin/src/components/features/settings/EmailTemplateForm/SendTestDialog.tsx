@@ -79,7 +79,12 @@ export function SendTestDialog({
   // A test goes to the signed-in user's own address, and only there: the
   // server picks it, so the dialog only says where it will arrive, and who
   // will deliver it.
-  const target = useSendTestTarget(templateId, { enabled: open });
+  // Through the provider the draft chose, as the send will use it.
+  const target = useSendTestTarget(
+    templateId,
+    open ? draftOf().providerId : undefined,
+    { enabled: open }
+  );
   const { user } = useDashboardUser();
   const address = target.data?.to ?? user?.email;
 

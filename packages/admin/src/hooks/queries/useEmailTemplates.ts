@@ -103,8 +103,15 @@ export const emailTemplateKeys = {
     Record<string, unknown>,
   ] => [...emailTemplateKeys.all(), "draftPreview", template, data] as const,
   /** Where a test of the template would go, and who would deliver it. */
-  testTarget: (id: string): readonly ["emailTemplates", "testTarget", string] =>
-    [...emailTemplateKeys.all(), "testTarget", id] as const,
+  testTarget: (
+    id: string,
+    providerId: string | null | undefined
+  ): readonly [
+    "emailTemplates",
+    "testTarget",
+    string,
+    string | null | undefined,
+  ] => [...emailTemplateKeys.all(), "testTarget", id, providerId] as const,
   /** Whether the template is kept on its first engine, and why. */
   engine: (id: string): readonly ["emailTemplates", "engine", string] =>
     [...emailTemplateKeys.all(), "engine", id] as const,
@@ -318,11 +325,12 @@ export function useSendTestEmailTemplate(): UseMutationResult<
  */
 export function useSendTestTarget(
   templateId: string,
+  providerId: string | null | undefined,
   options?: { enabled?: boolean }
 ): UseQueryResult<SendTestTarget, Error> {
   return useQuery<SendTestTarget, Error>({
-    queryKey: emailTemplateKeys.testTarget(templateId),
-    queryFn: () => getSendTestTarget(templateId),
+    queryKey: emailTemplateKeys.testTarget(templateId, providerId),
+    queryFn: () => getSendTestTarget(templateId, providerId),
     enabled: (options?.enabled ?? true) && Boolean(templateId),
     staleTime: 0,
     retry: false,

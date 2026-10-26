@@ -267,6 +267,7 @@ export function testDraftOf(values: TemplateFormValues): TemplateTestDraft {
     fromOverride: fields.fromOverride,
     replyTo: fields.replyTo,
     providerId: fields.providerId,
+    attachments: fields.attachments,
   };
 }
 
