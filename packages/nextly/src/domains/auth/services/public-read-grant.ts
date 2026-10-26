@@ -184,16 +184,26 @@ async function ask(target: AccessTarget, action: Action): Promise<Answer> {
     action === "read"
       ? registeredReadLanguagesFor
       : registeredWriteLanguagesFor;
-  // Each language a visitor may ask in, and every language at once, as a
-  // read of every translation, a translation overview, a write to every
-  // language or a delete is asked.
-  const answers = await Promise.all(
+  // Each language a visitor may ask in; for a read, each one again as a
+  // translation overview or a language filter asks it, told every language
+  // as well; and every language at once, as a read of every translation, a
+  // write to every language or a delete is asked.
+  const contexts =
     codes.length === 0
-      ? [askIn(target, action, undefined)]
+      ? [undefined]
       : [
-          ...codes.map(code => askIn(target, action, languageFor(code))),
-          askIn(target, action, everyLanguage()),
-        ]
+          ...codes.map(code => languageFor(code)),
+          ...(action === "read"
+            ? codes.map(code =>
+                registeredReadLanguagesFor(code, undefined, {
+                  translationStatus: true,
+                })
+              )
+            : []),
+          everyLanguage(),
+        ];
+  const answers = await Promise.all(
+    contexts.map(language => askIn(target, action, language))
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;
