@@ -222,6 +222,35 @@ describe("findUnconfinedVariants", () => {
     );
   });
 
+  it("sees the marker wherever it sits in the compound", () => {
+    // The class can follow a type selector (`html.dark`) or chain onto
+    // another class (`.a.dark`): both name an element carrying `.dark`, and
+    // a compound-initial-only check would let both through the gate.
+    expect(findUnconfinedVariants("html.dark .nextly-admin .a{color:red}"))
+      .toEqual(["html.dark .nextly-admin .a"]);
+    expect(findUnconfinedVariants(".a.dark .nextly-admin .x{color:red}")).toEqual(
+      [".a.dark .nextly-admin .x"]
+    );
+    expect(
+      findUnconfinedVariants(
+        ".nextly-admin .a:where(html.dark, html.dark *){color:red}"
+      )
+    ).toHaveLength(1);
+  });
+
+  it("splits combinators written without spaces, as the minifier writes them", () => {
+    // The release gate reads the minified sheet, where `a > b` is `a>b`; a
+    // whitespace-only split leaves `.dark>.nextly-admin` as one compound the
+    // scope check accepts while the marker in front of it goes unseen.
+    expect(findUnconfinedVariants(".dark>.nextly-admin .a{color:red}")).toEqual(
+      [".dark>.nextly-admin .a"]
+    );
+    // A marker AFTER the scope, child step, is still an in-admin marker.
+    expect(
+      findUnconfinedVariants(".nextly-admin>.group:hover .a{color:red}")
+    ).toEqual([]);
+  });
+
   it("passes the scope's own dark token block", () => {
     // `.dark` ON the wrapper is the admin's dark theme, not an ancestor
     // reference.

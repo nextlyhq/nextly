@@ -427,13 +427,16 @@ export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
  * `dark:` matches `.dark` on any ancestor, and `group-*:`/`peer-*:` match a
  * `.group`/`.peer` marker, optionally named (`group\/item`).
  *
- * A compound is a marker reference when the class is exactly the marker at an
- * identifier boundary — `.dark-mode` and the utility class `.dark\:x` are
- * different classes, not references — and the wrapper carrying the class
- * (`.nextly-admin.dark`, the scoped dark token block) is the scope itself,
- * not an ancestor outside it.
+ * A compound references the marker when it carries the class anywhere in it
+ * — `html.dark` and a chained `.a.dark` both require an element with the
+ * class, wherever in the compound it sits — at an identifier boundary, and
+ * not behind an escape (`.foo\.dark` and the utility class `.dark\:x` are
+ * different classes, not references). The wrapper carrying the class
+ * (`.nextly-admin.dark`, the scoped dark token block) is caught by the
+ * scope-first ordering in the caller, not by this pattern.
  */
-const VARIANT_MARKER_RE = /^\.(dark|group|peer)((?:\\\/[\w-]+)?)(?![\w\\-])/;
+const VARIANT_MARKER_RE =
+  /(?<!\\)\.(dark|group|peer)((?:\\\/[\w-]+)?)(?![\w\\-])/;
 
 /** Whether a compound carries the scope class (`.nextly-admin.dark` does). */
 function hasScopeClass(compound, scope) {
@@ -445,7 +448,14 @@ function hasScopeClass(compound, scope) {
   return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`).test(literal);
 }
 
-/** Split an item into compounds at top-level whitespace only. */
+/**
+ * Split an item into compounds at top-level whitespace and combinators.
+ *
+ * Combinators matter because the release gate reads the minified sheet,
+ * where `a > b` is written `a>b` and a whitespace-only split would leave
+ * `.dark>.nextly-admin` as one compound — one the scope check would accept
+ * while the `.dark` marker in front of it goes unseen.
+ */
 function splitCompounds(item) {
   const compounds = [];
   let current = "";
@@ -453,7 +463,8 @@ function splitCompounds(item) {
   for (const ch of item) {
     if (ch === "(" || ch === "[") depth++;
     else if (ch === ")" || ch === "]") depth--;
-    if (depth === 0 && /\s/.test(ch)) {
+    // `[class~="x"]` keeps its `~`: it sits inside the brackets' depth.
+    if (depth === 0 && (/\s/.test(ch) || ch === ">" || ch === "+" || ch === "~")) {
       if (current.trim()) compounds.push(current.trim());
       current = "";
     } else {
