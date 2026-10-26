@@ -287,7 +287,7 @@ describe("related-row collection access — rule context (integration)", () => {
     permissions,
   }: {
     permissions: string[];
-  }): boolean => permissions.includes("pages:read");
+  }): boolean => permissions.includes("read-pages");
 
   async function bootWithRole(): Promise<{
     handler: CollectionsHandler;
@@ -608,17 +608,17 @@ describe("related-row collection access — anonymous readers (integration)", ()
 
 describe("related-row collection access — API-key rule spelling (integration)", () => {
   it("shows a key's rule the same permission spelling a direct read shows it", async () => {
-    // A rule reads `resource:action`; the key's scope stores `action-resource`.
-    // The direct api-key gate converts before handing the rule its context, and
-    // the relationship path must convert the same way — a copy of the stored
-    // list makes the same row readable by name and absent by reference.
+    // A rule reads the key's own permissions, as stored (`read-pages`). The
+    // direct api-key gate hands the rule the key's scope, and the relationship
+    // path must hand the same one — a different list makes the same row
+    // readable by name and absent by reference.
     current = await createTestNextly({
       collections: [
         defineCollection({
           slug: "pages",
           access: {
             read: ({ permissions }: { permissions: string[] }) =>
-              permissions.includes("pages:read"),
+              permissions.includes("read-pages"),
           },
           fields: [text({ name: "title" })],
         }),

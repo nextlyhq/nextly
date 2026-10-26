@@ -1238,12 +1238,12 @@ service permission-spelling visitor
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service permission-spelling user-with
-  create:A
-  read:A
-  update:A
-  delete:A
-  publish:A
-  unpublish:A
+  create:403 You can't create posts.
+  read:403 You can't see posts.
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
+  publish:403 You can't publish posts.
+  unpublish:403 You can't unpublish posts.
 service permission-spelling user-without
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1253,11 +1253,11 @@ service permission-spelling user-without
   unpublish:403 You can't unpublish posts.
 service permission-spelling user-partial
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
-  publish:A
-  unpublish:A
+  publish:403 You can't publish posts.
+  unpublish:403 You can't unpublish posts.
 service permission-spelling super-admin
   create:A
   read:A
@@ -1281,18 +1281,18 @@ service permission-spelling super-admin-claimed
   unpublish:A
 service permission-spelling super-admin-claimed-key
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service permission-spelling key-with
-  create:A
-  read:A
-  update:A
-  delete:A
-  publish:A
-  unpublish:A
+  create:403 You can't create posts.
+  read:403 You can't see posts.
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
+  publish:403 You can't publish posts.
+  unpublish:403 You can't unpublish posts.
 service permission-spelling key-without
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1302,11 +1302,11 @@ service permission-spelling key-without
   unpublish:403 You can't unpublish posts.
 service permission-spelling key-partial
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
-  publish:A
-  unpublish:A
+  publish:403 You can't publish posts.
+  unpublish:403 You can't unpublish posts.
 service permission-spelling key-slugs-only
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1316,28 +1316,28 @@ service permission-spelling key-slugs-only
   unpublish:403 You can't unpublish posts.
 service permission-spelling key-made-by-super-admin
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service permission-spelling key-custom-slugs
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service permission-spelling key-own-roles
-  create:A
-  read:A
-  update:A
-  delete:A
-  publish:A
-  unpublish:A
+  create:403 You can't create posts.
+  read:403 You can't see posts.
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
+  publish:403 You can't publish posts.
+  unpublish:403 You can't unpublish posts.
 service permission-spelling key-in-the-request
   create:403 You can't create posts.
-  read:A
+  read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
   publish:403 You can't publish posts.

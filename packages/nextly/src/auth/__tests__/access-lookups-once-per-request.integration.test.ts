@@ -73,7 +73,7 @@ const ACCESS_TABLES = new Set([
 ]);
 
 const holdsRead = ({ permissions }: { permissions: string[] }) =>
-  permissions.includes("notes:read");
+  permissions.includes("read-notes");
 
 /** A collection whose read rule and field rule both read the permissions. */
 const notes = defineCollection({

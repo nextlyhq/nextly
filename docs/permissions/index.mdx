@@ -56,10 +56,9 @@ A rule is given the caller's `permissions` spelled as the Roles screen spells th
 permission check refuses them. A super-admin is admitted before any collection or Single
 rule runs; field rules still apply to them.
 
-Rules were once given the other spelling, `posts:update`. For one release the list still
-carries it, after the Roles screen's, so a rule written that way keeps working; Nextly logs
-a warning, once per rule, naming the spelling to use instead. It stops being accepted in a
-later release.
+Rules were once given the other spelling, `posts:update`. That spelling is no longer in
+the list, so a rule checking it does not allow; check `update-posts`, as the Roles screen
+spells it.
 
 **Don't check a role's name in a rule.** `roles.includes("editor")` refuses a role an admin
 created that holds `update-posts`, and every API key whose roles carry none of the names you
