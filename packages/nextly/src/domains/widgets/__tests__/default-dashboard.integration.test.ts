@@ -21,6 +21,7 @@ vi.mock("../../../auth/middleware", async importOriginal => ({
   requireAuthentication: vi.fn(),
 }));
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { getWidgetLayout } from "../../../api/widget-layout";
 import { requireAuthentication } from "../../../auth/middleware";
 import { defineCollection, text } from "../../../config";
@@ -113,6 +114,9 @@ describe.each(getConfiguredTestDialects())(
       const admin = await account(current, "admin@example.com");
       const editor = await account(current, "editor@example.com");
       readerId = await account(current, "reader@example.com");
+      // A code rule only narrows the permission, so the reader holds read on
+      // the notes the rule admits them to.
+      await grantTo(current, readerId, "read", ["dd_notes"]);
       await refreshCollectionWidgets();
 
       // Before any release exists, Upcoming releases waits for one.

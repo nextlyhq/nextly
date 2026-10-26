@@ -18,6 +18,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
@@ -149,6 +150,9 @@ describe.each(getConfiguredTestDialects())(
       // The first account of an instance is its super admin.
       admin = await account("cv-admin@example.com");
       editor = await account("cv-editor@example.com");
+      // A code rule only narrows the permission, so the editor holds read on
+      // the posts their rule admits everyone to.
+      await grantTo(handle, editor, "read", [POSTS]);
     }, 120_000);
 
     afterAll(async () => {
