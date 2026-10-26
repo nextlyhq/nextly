@@ -855,7 +855,7 @@ export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
  * What a refused read of permissions names, whichever of the grants it
  * accepts the caller lacked.
  */
-const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.target;
+const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.names;
 
 /**
  * Centralized permission resolver for all API service endpoints.

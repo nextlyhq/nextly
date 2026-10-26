@@ -24,6 +24,8 @@ vi.mock("./middleware", async importOriginal => {
   };
 });
 
+import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+
 import {
   authorizeListRead,
   LIST_READ_GATES,
@@ -64,5 +66,18 @@ describe("a gate is checked the way it says, on both sides", () => {
       ["requireAnyPermission", [req, grants, target]],
       ["authorizeCallerForAny", [auth, grants, target]],
     ]);
+  });
+});
+
+describe("the gates the system read policy declares are its own", () => {
+  // 🔴 A copy here would let REST's lists and counts, and the checked Direct
+  // API, come to admit different callers after a change to one of them.
+  it.each([
+    ["users", SYSTEM_READ_POLICY.users.read],
+    ["roles", SYSTEM_READ_POLICY.roles.read],
+    ["permissions", SYSTEM_READ_POLICY.permissions.list],
+    ["media", SYSTEM_READ_POLICY.media.read],
+  ] as const)("%s", (list, grant) => {
+    expect(LIST_READ_GATES[list]).toBe(grant);
   });
 });

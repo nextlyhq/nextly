@@ -8,18 +8,28 @@
  * stopped admitting, which leaks how many rows sit behind a list the caller may
  * not open.
  *
- * So each gate is a value, and the value says HOW it is checked as well as
- * what it asks: `one` goes through the single-grant check, `any` through the
- * any-of check. The two differ for an API key (the single check also asks the
- * entity's own rule), so the route and the count must take the same path, not
- * merely ask the same grants. {@link requireListRead} reads a gate for a route
- * and {@link authorizeListRead} for a caller a gate has already authenticated;
- * both dispatch on `check` alike.
+ * So each gate is a value, a `RouteGrant`: one permission, checked through the
+ * single-grant check, or `anyOf` several, checked through the any-of check and
+ * naming `names` when it refuses. The two differ for an API key (the single
+ * check also asks the entity's own rule), so the route and the count must take
+ * the same path, not merely ask the same grants. {@link requireListRead} reads
+ * a gate for a route and {@link authorizeListRead} for a caller a gate has
+ * already authenticated; both dispatch on its shape as the Direct API's
+ * `authorizeChecked` does.
+ *
+ * The users, roles, permissions and media gates ARE the system read policy's
+ * (`SYSTEM_READ_POLICY`), the one the checked Direct API reads, so REST's
+ * lists, the dashboard's counts and the Direct API cannot come to admit
+ * different callers.
  *
  * @module auth/list-read-gates
  */
 
 import { apiKeyPermissionsFor } from "../domains/auth/api-key-policy";
+import {
+  SYSTEM_READ_POLICY,
+  type RouteGrant,
+} from "../domains/auth/system-write-policy";
 
 import {
   authorizeCaller,
@@ -29,52 +39,36 @@ import {
   requirePermission,
   type AuthContext,
   type ErrorResponse,
-  type RefusalTarget,
 } from "./middleware";
 import { toNextlyAuthError } from "./middleware/to-nextly-error";
 
-/** A grant a list may ask for, as the route guards spell it. */
-export interface ListGrant {
-  readonly action: string;
-  readonly resource: string;
-}
-
 /** What a list asks of a caller, and which check asks it. */
-export type ListReadGate =
-  | { readonly check: "one"; readonly grant: ListGrant }
-  | {
-      readonly check: "any";
-      readonly grants: readonly ListGrant[];
-      /** What a refusal names, where it is not what the grants are about. */
-      readonly target?: RefusalTarget;
-    };
+export type ListReadGate = RouteGrant;
 
 /**
  * The gate of each list.
  *
- * - `permissions` admits `read-roles` (the role form's permission matrix reads
- *   it) and names the reading of permissions when it refuses; `read-permissions`
- *   alone does not open it.
- * - `fieldGroups` admits either settings grant, as every field-group read does.
+ * - `users`, `roles`, `permissions` and `media` are the system read policy's
+ *   list reads: `permissions` admits `read-roles` (the role form's permission
+ *   matrix reads it) and names the reading of permissions when it refuses.
+ * - `fieldGroups` is the settings-gated field-group list's. The read policy
+ *   has none to share: the Direct API reads field groups as the builder's
+ *   palette does, open to any signed-in caller, and the dashboard counts them
+ *   only for a caller the settings-gated list admits.
  * - `apiKeys` takes the API-key read policy from where the key endpoints take it.
  */
 export const LIST_READ_GATES = {
-  users: { check: "one", grant: { action: "read", resource: "users" } },
-  roles: { check: "one", grant: { action: "read", resource: "roles" } },
-  permissions: {
-    check: "any",
-    grants: [{ action: "read", resource: "roles" }],
-    target: { action: "read", resource: "permissions" },
-  },
-  media: { check: "one", grant: { action: "read", resource: "media" } },
+  users: SYSTEM_READ_POLICY.users.read,
+  roles: SYSTEM_READ_POLICY.roles.read,
+  permissions: SYSTEM_READ_POLICY.permissions.list,
+  media: SYSTEM_READ_POLICY.media.read,
   fieldGroups: {
-    check: "any",
-    grants: [
+    anyOf: [
       { action: "read", resource: "settings" },
       { action: "manage", resource: "settings" },
     ],
   },
-  apiKeys: { check: "any", grants: apiKeyPermissionsFor("read") },
+  apiKeys: { anyOf: apiKeyPermissionsFor("read") },
 } as const satisfies Record<string, ListReadGate>;
 
 /** A list with a gate here. */
@@ -92,10 +86,10 @@ export function requireListRead(
   req: Request,
   gate: ListReadGate
 ): Promise<AuthContext | ErrorResponse> {
-  if (gate.check === "one") {
-    return requirePermission(req, gate.grant.action, gate.grant.resource);
+  if ("anyOf" in gate) {
+    return requireAnyPermission(req, [...gate.anyOf], gate.names);
   }
-  return requireAnyPermission(req, [...gate.grants], gate.target);
+  return requirePermission(req, gate.action, gate.resource);
 }
 
 /**
@@ -116,8 +110,8 @@ export function authorizeListRead(
   auth: AuthContext,
   gate: ListReadGate
 ): Promise<AuthContext | ErrorResponse> {
-  if (gate.check === "one") {
-    return authorizeCaller(auth, gate.grant.action, gate.grant.resource);
+  if ("anyOf" in gate) {
+    return authorizeCallerForAny(auth, [...gate.anyOf], gate.names);
   }
-  return authorizeCallerForAny(auth, [...gate.grants], gate.target);
+  return authorizeCaller(auth, gate.action, gate.resource);
 }

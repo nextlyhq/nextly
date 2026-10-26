@@ -31,6 +31,6 @@
 
 Each system list and its dashboard count read who may see that list from one definition.
 
-The users, roles, permissions, media, field-group and API-key lists each declare their read gate once, in `auth/list-read-gates`, and say how it is checked as well as what it asks. The list routes and the dashboard summary's counts both read those gates and check them the same way, so a count can no longer be given to a caller its list refuses, or kept from one it admits, after a change to only one of them. The API-key list's reach (every user's keys) is declared there too, and the key count covers what the list shows.
+The users, roles, permissions, media, field-group and API-key lists each declare their read gate once, in `auth/list-read-gates`, and say how it is checked as well as what it asks. The users, roles, permissions and media gates are the system read policy's own, the one the checked Direct API reads, so the REST lists, the dashboard's counts and the Direct API admit the same callers. The list routes and the dashboard summary's counts both read those gates and check them the same way, so a count can no longer be given to a caller its list refuses, or kept from one it admits, after a change to only one of them. The API-key list's reach (every user's keys) is declared there too, and the key count covers what the list shows.
 
 No caller's answer changes. The permissions count is now checked through the any-of check the permissions list uses, rather than the single-grant check. For an API key and for a session the two agree on `read-roles`.
