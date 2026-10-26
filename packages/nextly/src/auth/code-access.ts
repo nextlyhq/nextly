@@ -46,6 +46,12 @@ export interface ReadAccessCaller {
   grants?: readonly GrantedPermission[];
   /** Role slugs, already normalized (session roles arrive as ids). */
   roles: string[];
+  /**
+   * Whether an API key carries its maker's super-admin authority, as
+   * authentication found it for the key's scope. Absent for a session, and
+   * for a key whose scope was built by hand or narrowed.
+   */
+  keyHoldsSuperAdmin?: boolean;
 }
 
 /**

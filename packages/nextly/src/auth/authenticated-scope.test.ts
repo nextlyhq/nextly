@@ -15,8 +15,10 @@ import { readAuthenticatedScope } from "../dispatcher/helpers/authenticated-acto
 import {
   apiKeyScope,
   apiKeyScopeAllows,
+  apiKeyScopeFrom,
   narrowScope,
   scopeGrants,
+  scopeHoldsSuperAdmin,
 } from "./authenticated-scope";
 
 describe("apiKeyScopeAllows", () => {
@@ -149,5 +151,43 @@ describe("scopeGrants", () => {
         permissions: ["read-posts"],
       })
     ).toBeUndefined();
+  });
+});
+
+describe("a key's super-admin authority on its scope", () => {
+  const grants = [{ slug: "read-posts", action: "read", resource: "posts" }];
+
+  it("is carried by the scope made from an authenticated key that holds it, with or without rows", () => {
+    expect(
+      scopeHoldsSuperAdmin(
+        apiKeyScopeFrom({ grants, roles: [], keyHoldsSuperAdmin: true })
+      )
+    ).toBe(true);
+    expect(
+      scopeHoldsSuperAdmin(
+        apiKeyScopeFrom({
+          permissions: ["read-posts"],
+          keyHoldsSuperAdmin: true,
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("is carried by no narrowed or copied scope, nor one built without it", () => {
+    const withRows = apiKeyScopeFrom({ grants, keyHoldsSuperAdmin: true });
+    const withoutRows = apiKeyScopeFrom({
+      permissions: ["read-posts"],
+      keyHoldsSuperAdmin: true,
+    });
+    // Narrowed to keep everything: the grants are the same, the authority
+    // is not, through either way a scope is narrowed.
+    expect(scopeHoldsSuperAdmin(narrowScope(withRows, () => true))).toBe(false);
+    expect(scopeHoldsSuperAdmin(narrowScope(withoutRows, () => true))).toBe(
+      false
+    );
+    expect(scopeHoldsSuperAdmin({ ...withRows })).toBe(false);
+    expect(scopeHoldsSuperAdmin(apiKeyScope(grants))).toBe(false);
+    expect(scopeHoldsSuperAdmin(apiKeyScopeFrom({ grants }))).toBe(false);
+    expect(scopeHoldsSuperAdmin(undefined)).toBe(false);
   });
 });

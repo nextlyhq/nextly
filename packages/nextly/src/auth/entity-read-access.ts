@@ -18,7 +18,7 @@ import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { readsEntity } from "./access/entity-read";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
-import { scopeGrants } from "./authenticated-scope";
+import { scopeGrants, scopeHoldsSuperAdmin } from "./authenticated-scope";
 import {
   codeAccessAllows,
   getRBACService,
@@ -65,6 +65,9 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
       // on its owner's roles is the same defect as one judged on its owner's
       // permissions, in the direction that denies.
       roles: [...(scope.roles ?? caller.user.roles ?? [])],
+      // Present only where the key carries it, so every other key's caller
+      // is as it was.
+      ...(scopeHoldsSuperAdmin(scope) ? { keyHoldsSuperAdmin: true } : {}),
     };
   }
   return {

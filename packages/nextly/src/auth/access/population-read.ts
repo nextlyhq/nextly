@@ -15,6 +15,7 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import type { Principal } from "../../plugins/principals/types";
 import {
   apiKeyScopeAllows,
+  scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
   type AuthenticatedScope,
@@ -22,7 +23,7 @@ import {
 import { codeAccessAllows } from "../code-access";
 import { readAccessCaller } from "../entity-read-access";
 
-import { holdsPermission, type Actor } from "./actor";
+import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
 import { decide, declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
@@ -68,6 +69,7 @@ function keyActorOf(
     userId: user.id,
     grants: slugGrants(scope.permissions),
     roles: scope.roles ?? user.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(scope),
   });
 }
 
@@ -98,6 +100,9 @@ async function keyReads(
   rbac: RBACAccessControlService | undefined
 ): Promise<boolean> {
   const actor = keyActorOf(scope, user);
+  // A key carrying its maker's super-admin authority reads every related row
+  // a super-admin's session does.
+  if (isSuperAdmin(actor)) return true;
   // The key's own stored slug is asked first, today as before.
   const slugAllows = apiKeyScopeAllows(scope, "read", target.slug) !== false;
   if (!rbac) {

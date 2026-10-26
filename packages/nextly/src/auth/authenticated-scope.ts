@@ -84,6 +84,27 @@ export interface AuthenticatedScope {
   readonly roles?: readonly string[];
 }
 
+/**
+ * The scopes authentication made for a full-access key whose maker is an
+ * active super-admin: the only scopes that carry super-admin authority.
+ *
+ * Kept here rather than as a field of the scope, because a scope is public
+ * and can be built by hand: a field would be forged as easily as written. A
+ * scope built by hand, a narrowed copy and a spread copy are each a different
+ * object, so none of them carries the authority, as a narrower scope must not.
+ */
+const SUPER_ADMIN_SCOPES = new WeakSet<AuthenticatedScope>();
+
+/**
+ * Whether `scope` carries super-admin authority: authentication made it for a
+ * full-access key whose maker was an active super-admin for the request.
+ */
+export function scopeHoldsSuperAdmin(
+  scope: AuthenticatedScope | undefined
+): boolean {
+  return scope !== undefined && SUPER_ADMIN_SCOPES.has(scope);
+}
+
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */
 function freezeScope(scope: AuthenticatedScope): AuthenticatedScope {
   Object.freeze(scope.permissions);
@@ -133,16 +154,26 @@ export function apiKeyScopeFrom(caller: {
   // turns a missing field into a 500 on every request that shape reaches.
   // An absent role list is the same as an empty one to every reader.
   roles?: readonly string[];
+  /**
+   * Whether authentication found the key to carry super-admin authority. Only
+   * the internal caller shapes carry it, so a scope built from anything else
+   * carries none.
+   */
+  keyHoldsSuperAdmin?: boolean;
 }): AuthenticatedScope {
-  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
-  // No rows, so `grants` is left ABSENT rather than empty: absent means "this
-  // scope never had them", which `scopeGrants` answers honestly, and
-  // an empty array would mean "this key holds nothing" and deny everything.
-  return freezeScope({
-    actorType: "apiKey",
-    permissions: [...(caller.permissions ?? [])],
-    ...(caller.roles ? { roles: [...caller.roles] } : {}),
-  });
+  const scope = caller.grants
+    ? apiKeyScope(caller.grants, caller.roles)
+    : // No rows, so `grants` is left ABSENT rather than empty: absent means
+      // "this scope never had them", which `scopeGrants` answers honestly,
+      // and an empty array would mean "this key holds nothing" and deny
+      // everything.
+      freezeScope({
+        actorType: "apiKey",
+        permissions: [...(caller.permissions ?? [])],
+        ...(caller.roles ? { roles: [...caller.roles] } : {}),
+      });
+  if (caller.keyHoldsSuperAdmin === true) SUPER_ADMIN_SCOPES.add(scope);
+  return scope;
 }
 
 /**
@@ -320,6 +351,9 @@ export async function apiKeyWriteAllowed(
   rbac: CodeAccessSource | undefined
 ): Promise<boolean | null> {
   if (scope?.actorType !== "apiKey") return null;
+  // A key carrying its maker's super-admin authority holds every permission
+  // and passes every rule, as a super-admin's session does.
+  if (scopeHoldsSuperAdmin(scope)) return true;
   if (!scope.permissions.includes(permissionSlug(operation, resource)))
     return false;
   const target = rbac?.getRegisteredTarget(resource);

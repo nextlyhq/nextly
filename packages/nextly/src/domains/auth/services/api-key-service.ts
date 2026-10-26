@@ -431,6 +431,26 @@ interface ApiKeyRow {
  */
 const LAST_USE_RESOLUTION_MS = 60_000;
 
+/**
+ * Whether a key acts with super-admin authority for this request: only a
+ * full-access key, and only while the person who made it holds the
+ * super-admin role, directly or through an inherited one.
+ *
+ * Asked for each request, as the maker's own sessions ask it, so the key
+ * loses the authority when its maker does: a role removed or expired, or a
+ * changed role version, is seen within the bound their sessions follow, and
+ * a deactivated maker's key is refused before this is asked. Never read from
+ * the grants cached for the key, which may outlast the maker's role. A
+ * lookup that fails answers no.
+ */
+export async function keyHoldsSuperAdmin(
+  tokenType: ApiKeyTokenType,
+  userId: string
+): Promise<boolean> {
+  if (tokenType !== "full-access") return false;
+  return isSuperAdmin(userId);
+}
+
 export class ApiKeyService extends BaseService {
   private apiKeysTable:
     | typeof apiKeysPg

@@ -87,12 +87,14 @@ const callers = {
     keyId: "k1",
     userId: "u3",
     roles: ["super-admin"],
+    superAdmin: false,
     permissions: every("posts"),
   }),
   "key-without": keyActor({
     keyId: "k2",
     userId: "u3",
     roles: ["super-admin"],
+    superAdmin: false,
     permissions: [],
   }),
 } satisfies Record<string, Actor>;
@@ -697,10 +699,38 @@ describe("something no rule can name", () => {
       keyId: "k3",
       userId: "u11",
       roles: ["super-admin"],
+      superAdmin: false,
       permissions: [settingsGrant],
     });
     expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
     expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+  });
+
+  it("gives a key carrying its maker's super-admin authority every permission and every rule", async () => {
+    const carrying = (superAdmin: boolean) =>
+      keyActor({
+        keyId: "k4",
+        userId: "u11",
+        roles: [],
+        superAdmin,
+        permissions: [],
+      });
+    const refusing: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: () => false },
+    };
+    expect(decidePermission(carrying(true), "export", "settings").allowed).toBe(
+      true
+    );
+    expect((await decide(carrying(true), "read", refusing)).allowed).toBe(true);
+    // The control: the same key without it holds nothing.
+    expect(
+      decidePermission(carrying(false), "export", "settings").allowed
+    ).toBe(false);
+    expect((await decide(carrying(false), "read", refusing)).allowed).toBe(
+      false
+    );
   });
 
   it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {

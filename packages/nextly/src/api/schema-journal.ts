@@ -9,7 +9,7 @@
  * Auth: a super-admin, as their actor decides it. Schema applies are
  * admin-level operations, and their audit log is gated the same way: a
  * session is judged by the person's roles, and an API key by its own actor,
- * so a key is refused whatever role its maker holds.
+ * so only a full-access key whose maker is an active super-admin reads it.
  *
  * Wire shape: `respondData` with body `{ rows, hasMore }`. Pagination is
  * cursor-style (caller passes `before=<ISO>` to "load more"); there is no
@@ -68,6 +68,7 @@ function holdsSuperAdmin(auth: AuthContext): Promise<boolean> {
       userId: auth.userId,
       grants: auth.grants ?? [],
       roles: auth.roles,
+      superAdmin: auth.keyHoldsSuperAdmin === true,
     });
     return Promise.resolve(isSuperAdmin(key));
   }
@@ -93,8 +94,9 @@ async function getAdapter(): Promise<AdapterLike> {
  * Errors:
  *   - 400 NEXTLY_VALIDATION when `limit` or `before` is malformed.
  *   - 401 unauthorized when no session cookie is present.
- *   - 403 NEXTLY_FORBIDDEN when the caller is not a super-admin, and for
- *     every API key.
+ *   - 403 NEXTLY_FORBIDDEN when the caller holds no super-admin authority:
+ *     a session that is no super-admin's, or any key but a super-admin's
+ *     full-access one.
  *   - 500 NEXTLY_INTERNAL when the DB query fails.
  */
 export const getSchemaJournal = withErrorHandler(async (req: Request) => {

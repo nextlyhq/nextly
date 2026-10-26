@@ -15,7 +15,7 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import { scopeRowsAgree, slugGrants } from "../authenticated-scope";
 import { codeAccessAllows, type ReadAccessCaller } from "../code-access";
 
-import { holdsPermission, type Actor } from "./actor";
+import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
 import { decide, declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
@@ -51,6 +51,7 @@ function keyActorOf(caller: ReadAccessCaller): Actor {
       ? (caller.grants ?? [])
       : slugGrants(caller.permissions),
     roles: caller.roles,
+    superAdmin: caller.keyHoldsSuperAdmin === true,
   });
 }
 
@@ -62,6 +63,9 @@ async function keyReads(
 ): Promise<boolean> {
   const target = targetOf(slug, rbac);
   const actor = keyActorOf(caller);
+  // A key carrying its maker's super-admin authority reads every entity a
+  // super-admin's session does.
+  if (isSuperAdmin(actor)) return true;
   // Judged on its own stored slugs, today as before: the grant decides, and
   // a registered rule must answer `true`.
   const slugAllows = caller.permissions.includes(`read-${slug}`);

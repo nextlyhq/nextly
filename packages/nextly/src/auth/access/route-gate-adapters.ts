@@ -29,6 +29,7 @@ import {
 } from "../../services/lib/permissions";
 import {
   apiKeyScopeFrom,
+  scopeHoldsSuperAdmin,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { getRBACService, type ReadAccessCaller } from "../code-access";
@@ -126,13 +127,17 @@ function callerOf(auth: AuthContext): GateCaller {
     : { userId: auth.userId };
 }
 
-/** The key's actor, from what authentication resolved; it makes no query. */
+/**
+ * The key's actor, from what authentication resolved; it makes no query. Its
+ * super-admin authority is the scope's, which only authentication gives.
+ */
 function keyActorOf(caller: GateCaller, key: AuthenticatedScope): KeyActor {
   return actorForKey({
     keyId: caller.keyId ?? "",
     userId: caller.userId,
     grants: key.grants ?? [],
     roles: key.roles ?? caller.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(key),
   });
 }
 
@@ -249,8 +254,14 @@ export async function routeGateCapabilities(
   languageOf: (operation: string) => RuleLanguage
 ): Promise<RouteCapabilities> {
   const answer = () => entityCapabilities(caller, entities, rules, languageOf);
-  // A key never carries super-admin authority through the gates.
-  if (caller.key) return { isSuperAdmin: false, entities: await answer() };
+  // A key carries super-admin authority only as authentication gave it: a
+  // full-access key whose maker is an active super-admin.
+  if (caller.key) {
+    return {
+      isSuperAdmin: scopeHoldsSuperAdmin(caller.key),
+      entities: await answer(),
+    };
+  }
   return withHeldPermissions(caller.userId, async held => ({
     isSuperAdmin: held.superAdmin,
     entities: await answer(),
@@ -350,6 +361,9 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
+    // A key carrying its maker's super-admin authority holds every
+    // permission, as a super-admin's session does.
+    if (isSuperAdmin(actor)) return verdictOf(true);
     const today = caller.key.permissions.includes(
       permissionSlug(action, resource)
     );
@@ -546,7 +560,11 @@ async function heldPermission(
       userId: caller.userId,
       grants: caller.grants ?? [],
       roles: caller.roles,
+      superAdmin: caller.keyHoldsSuperAdmin === true,
     });
+    // A key carrying its maker's super-admin authority holds every
+    // permission, as a super-admin's session does.
+    if (isSuperAdmin(actor)) return true;
     const today = caller.permissions.includes(slug);
     // Three steps from today's answer to the decision's, each named apart:
     // the grant rather than the stored slug, then a system resource's
@@ -632,6 +650,9 @@ export async function schemaListed<T extends ListedCollection>(
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    // A key carrying its maker's super-admin authority is shown every one,
+    // as a super-admin's session is.
+    if (isSuperAdmin(actor)) return [...collections];
     return keptWhere(collections, slug =>
       readByPermission(
         actor,

@@ -16,6 +16,7 @@ import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
+  scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
   type AuthenticatedScope,
@@ -24,6 +25,7 @@ import { effectiveCallerScope } from "../caller-scope";
 
 import {
   holdsPermission,
+  isSuperAdmin,
   type Actor,
   type KeyActor,
   type UserActor,
@@ -317,6 +319,9 @@ async function keyVerdict(
 ): Promise<GateVerdict> {
   const rows = scopeRowsAgree(scope);
   const actor = keyActorOf(scope, user);
+  // A key carrying its maker's super-admin authority passes every collection
+  // and Single rule, as the decision gives a super-admin.
+  if (isSuperAdmin(actor)) return ALLOWED;
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
   // unless the grant was stored under a slug of its own.
@@ -341,6 +346,7 @@ function keyActorOf(
         userId: user.id,
         grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
+        superAdmin: scopeHoldsSuperAdmin(scope),
       });
 }
 
