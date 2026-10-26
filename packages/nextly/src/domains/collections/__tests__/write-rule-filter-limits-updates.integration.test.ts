@@ -142,6 +142,45 @@ const update = (
   data: Record<string, unknown>
 ) => t.nextly.update({ collection, id, data, ...asAuthor } as never);
 
+type Updated = Awaited<
+  ReturnType<CollectionEntryService["updateEntryInTransaction"]>
+>;
+type Settled = { result?: Updated; error?: unknown };
+
+/**
+ * An update of an `OPEN_POSTS` entry inside the caller's own transaction, the
+ * way a plugin service writes, settled as its result or its error.
+ */
+const updateInTransaction = (
+  t: TestNextly,
+  entryId: string,
+  data: Record<string, unknown>
+): Promise<Settled> => {
+  const entries = t
+    .getService("collectionsHandler")
+    .getEntryService() as CollectionEntryService;
+  return t.adapter
+    .transaction<Updated>(tx =>
+      entries.updateEntryInTransaction(
+        tx,
+        { collectionName: OPEN_POSTS, entryId, user: { id: AUTHOR } },
+        data
+      )
+    )
+    .then(
+      (result): Settled => ({ result }),
+      (error: unknown): Settled => ({ error })
+    );
+};
+
+/**
+ * The status a refusal reached the caller with, either way it can: a
+ * returned failure or a thrown one.
+ */
+const statusOf = (settled: Settled): number | undefined =>
+  settled.result?.statusCode ??
+  (NextlyError.is(settled.error) ? settled.error.statusCode : undefined);
+
 describe("an update rule that answers a filter", () => {
   it("changes an entry the filter matches", async () => {
     const t = await boot();
@@ -199,39 +238,32 @@ describe("an update rule that answers a filter", () => {
     const t = await boot();
     const { own, others } = await seed(t, OPEN_POSTS);
     const othersBefore = await stored(t, OPEN_POSTS, others);
-    const entries = t
-      .getService("collectionsHandler")
-      .getEntryService() as CollectionEntryService;
-    type Updated = Awaited<
-      ReturnType<CollectionEntryService["updateEntryInTransaction"]>
-    >;
-    const write = (entryId: string, data: Record<string, unknown>) =>
-      t.adapter
-        .transaction<Updated>(tx =>
-          entries.updateEntryInTransaction(
-            tx,
-            { collectionName: OPEN_POSTS, entryId, user: { id: AUTHOR } },
-            data
-          )
-        )
-        .then(
-          (result): { result?: Updated; error?: unknown } => ({ result }),
-          (error: unknown): { result?: Updated; error?: unknown } => ({ error })
-        );
 
-    const changed = await write(own, { title: "renamed" });
-    const refused = await write(others, { title: "renamed" });
+    const changed = await updateInTransaction(t, own, { title: "renamed" });
+    const refused = await updateInTransaction(t, others, { title: "renamed" });
 
     expect(changed.result?.success).toBe(true);
     expect((await stored(t, OPEN_POSTS, own))?.title).toBe("renamed");
-    // Refused either way it reaches the caller: a returned failure or a
-    // thrown one, each a 403 for an entry the caller may read.
-    const status =
-      refused.result?.statusCode ??
-      (NextlyError.is(refused.error) ? refused.error.statusCode : undefined);
     expect(refused.result?.success ?? false).toBe(false);
-    expect(status).toBe(403);
+    expect(statusOf(refused)).toBe(403);
     expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
+  });
+
+  it("refuses an update inside the caller's transaction that would move the entry out of the filter", async () => {
+    // Matched after the write, inside the same transaction: the author's own
+    // post handed to someone else is refused and the transaction undone.
+    const t = await boot();
+    const { own } = await seed(t, OPEN_POSTS);
+    const before = await stored(t, OPEN_POSTS, own);
+
+    const refused = await updateInTransaction(t, own, {
+      title: "given away",
+      owner: OTHER,
+    });
+
+    expect(refused.result?.success ?? false).toBe(false);
+    expect(statusOf(refused)).toBe(403);
+    expect(await stored(t, OPEN_POSTS, own)).toEqual(before);
   });
 });
 
