@@ -1,13 +1,25 @@
+no-service user-without read collection async-filter at direct  403 - other  | 
+no-service user-without read collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c async filter.
+no-service user-without read collection malformed-filter at direct  403 - other  | 
+no-service user-without read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c malformed filter.
 no-service user-without read collection none at direct  403 - other  | 
 no-service user-without read collection none at rest  403 FORBIDDEN error  missing=same  | You can't see this c none.
+no-service user-without read collection returns-empty-in at direct  403 - other  | 
+no-service user-without read collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns empty in.
 no-service user-without read collection returns-false at direct  403 - other  | 
 no-service user-without read collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns false.
+no-service user-without read collection returns-filter at direct  403 - other  | 
+no-service user-without read collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns filter.
 no-service user-without read collection returns-null at direct  403 - other  | 
 no-service user-without read collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns null.
 no-service user-without read collection returns-true at direct  403 - other  | 
 no-service user-without read collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't see this c returns true.
+no-service user-without read single async-filter at rest  403 FORBIDDEN error  | You can't see S Async Filter.
+no-service user-without read single malformed-filter at rest  403 FORBIDDEN error  | You can't see S Malformed Filter.
 no-service user-without read single none at rest  403 FORBIDDEN error  | You can't see S None.
+no-service user-without read single returns-empty-in at rest  403 FORBIDDEN error  | You can't see S Returns Empty In.
 no-service user-without read single returns-false at rest  403 FORBIDDEN error  | You can't see S Returns False.
+no-service user-without read single returns-filter at rest  403 FORBIDDEN error  | You can't see S Returns Filter.
 no-service user-without read single returns-null at rest  403 FORBIDDEN error  | You can't see S Returns Null.
 no-service user-without read single returns-true at rest  403 FORBIDDEN error  | You can't see S Returns True.
 service custom-role count collection async-false at direct  403 FORBIDDEN thrown  | You can't see c async falses.
