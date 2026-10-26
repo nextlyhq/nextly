@@ -16,7 +16,10 @@
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
 import { PermissionService } from "../domains/auth/services/permission-service";
-import { seedPublicReadGrants } from "../domains/auth/services/public-read-grant";
+import {
+  permissionIdsBySlug,
+  seedPublicReadGrants,
+} from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
   seedPublicRole,
@@ -30,7 +33,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
-import { SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
+import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -278,24 +281,12 @@ function seedPublicRoleReads(): Promise<void> {
         access: rbac.getRegisteredTarget(target.slug)?.access,
       }));
     },
-    permissionIds: async () => {
-      // One read of every permission, orphaned ones included, so a grant on
-      // one is still recognised as made.
-      const { data } = await new PermissionService(
-        adapter,
-        logger
-      ).listPermissions({ page: 1, limit: 10000, includeOrphaned: true });
-      return new Map(
-        data.map(({ id, action, resource }) => [
-          `${action}-${resource}`,
-          String(id),
-        ])
-      );
-    },
+    permissionIds: () =>
+      permissionIdsBySlug(new PermissionService(adapter, logger)),
     publicHolds: async roleId =>
       new Set(
         (await grants().listRolePermissions(roleId)).map(
-          ({ action, resource }) => `${action}-${resource}`
+          ({ action, resource }) => permissionSlug(action, resource)
         )
       ),
     grantRead: (roleId, resource) =>

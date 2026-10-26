@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Logger } from "../../../services/shared";
 
-import { seedPublicReadGrants } from "./public-read-grant";
+import { permissionIdsBySlug, seedPublicReadGrants } from "./public-read-grant";
 
 const quiet = {
   debug() {},
@@ -120,5 +120,27 @@ describe("seedPublicReadGrants", () => {
     await seedPublicReadGrants(next.seeding);
 
     expect(next.granted).toEqual(["posts"]);
+  });
+});
+
+describe("permissionIdsBySlug", () => {
+  it("reads every page of permissions", async () => {
+    const pages = [
+      [{ id: "p-1", action: "read", resource: "posts" }],
+      [{ id: "p-2", action: "read", resource: "pages" }],
+    ];
+    const ids = await permissionIdsBySlug({
+      listPermissions: async ({ page }) => ({
+        data: pages[page - 1],
+        meta: { totalPages: pages.length },
+      }),
+    });
+
+    expect(ids).toEqual(
+      new Map([
+        ["read-posts", "p-1"],
+        ["read-pages", "p-2"],
+      ])
+    );
   });
 });

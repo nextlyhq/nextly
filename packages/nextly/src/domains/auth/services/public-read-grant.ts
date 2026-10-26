@@ -82,6 +82,35 @@ interface PublicReadGrantSeeding {
   logger: Logger;
 }
 
+/**
+ * Every permission's id, by its slug, orphaned ones included so a grant on
+ * one is still recognised as made: read page by page, to the last.
+ */
+export async function permissionIdsBySlug(permissions: {
+  listPermissions(options: {
+    page: number;
+    limit: number;
+    includeOrphaned: boolean;
+  }): Promise<{
+    data: Array<{ id: string; action: string; resource: string }>;
+    meta: { totalPages: number };
+  }>;
+}): Promise<Map<string, string>> {
+  const ids = new Map<string, string>();
+  for (let page = 1, pages = 1; page <= pages; page++) {
+    const { data, meta } = await permissions.listPermissions({
+      page,
+      limit: 1000,
+      includeOrphaned: true,
+    });
+    for (const { id, action, resource } of data) {
+      ids.set(permissionSlug(action, resource), String(id));
+    }
+    pages = meta.totalPages;
+  }
+  return ids;
+}
+
 const NO_ANSWER = Symbol("no-answer");
 
 /**
