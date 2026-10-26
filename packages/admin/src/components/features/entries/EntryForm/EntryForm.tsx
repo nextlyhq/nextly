@@ -691,9 +691,9 @@ export function EntryForm({
      * the reading describes work against a document nobody is tending. The
      * shared predicate states the rule once for both editors.
      */
-    // Nor is a reader's form recorded: it cannot change the document.
-    enabled:
-      !readOnlyForReader && mayRecordRecovery(isSubmitting, viewingVersion),
+    // Nor is a reader's form recorded, which cannot change the document, nor
+    // one whose language's answer is on its way, which may not yet.
+    enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
   });

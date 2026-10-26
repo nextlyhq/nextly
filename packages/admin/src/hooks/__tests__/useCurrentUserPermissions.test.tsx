@@ -1108,6 +1108,45 @@ describe("returning to a language another has answered since", () => {
   });
 });
 
+describe("switching language after a change to access", () => {
+  it("keeps no invalidated answer on screen for the next language", async () => {
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // A change to roles invalidates the answer; its refresh is held back.
+    server.capabilitiesGate = new Promise(() => {});
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() =>
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=en")
+      ).toHaveLength(2)
+    );
+
+    // On to French, whose answer is held back too: the English answer, which
+    // may no longer describe the user's access, is no placeholder for it.
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "fr";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=fr")
+    );
+    expect(result.current.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+      isLoading: true,
+    });
+  });
+});
+
 describe("invalidateCurrentUserAccess", () => {
   it("asks for both the permissions and the capabilities again", async () => {
     const client = newClient();

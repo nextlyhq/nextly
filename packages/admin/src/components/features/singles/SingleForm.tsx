@@ -931,8 +931,9 @@ export function SingleForm({
     // rule, and the entry editor records on exactly the same terms. A
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
-    // Nor is a reader's form recorded: it cannot change the document.
-    enabled: !readOnlyForReader && mayRecordRecovery(busy, viewingVersion),
+    // Nor is a reader's form recorded, which cannot change the document, nor
+    // one whose language's answer is on its way, which may not yet.
+    enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
   });

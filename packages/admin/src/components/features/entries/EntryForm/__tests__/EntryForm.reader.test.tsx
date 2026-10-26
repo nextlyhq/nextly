@@ -209,6 +209,11 @@ describe("the entry editor while a language switch's answer is on its way", () =
       actionsDisabled: true,
     });
     expect(lastOptions(hooks.versionAwareToolbarSlots)[1]).toBe(true);
+    // Nor is the form recorded, whose saves may not be allowed in the new
+    // language.
+    expect(lastOptions(hooks.useDocumentAutosave)[0]).toMatchObject({
+      enabled: false,
+    });
   });
 
   it("is not a reader's page meanwhile: its recovery point stays", () => {

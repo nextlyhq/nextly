@@ -8,6 +8,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { NoAccessPage } from "@admin/components/shared/no-access-page";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useRouter } from "@admin/hooks/useRouter";
 import {
   DEFAULT_MARK_PATHS,
   DEFAULT_MARK_VIEWBOX,
@@ -57,7 +58,9 @@ interface PermissionGuardProps {
  * answer as on a first visit, never opened on the old one's word. Each
  * settled answer decides what is open: the entity it opens, or nothing once it
  * refuses, so a page refused in one language is not reopened on the way to
- * the next.
+ * the next. The page is the route's own, its address with the entity it asks,
+ * so another route asking the same of the same entity (another entry, its
+ * history) is not taken for it.
  */
 function useOpenThroughSwitch(
   entity: EntityAccess | undefined,
@@ -65,7 +68,10 @@ function useOpenThroughSwitch(
   hasAnswer: boolean,
   hasAccess: boolean
 ): { switching: boolean; keepsPage: boolean } {
-  const entityKey = entity ? `${entity.slug}:${entity.action}` : null;
+  const { pathname } = useRouter();
+  const entityKey = entity
+    ? `${pathname} ${entity.slug}:${entity.action}`
+    : null;
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   const switching = entity !== undefined && content.isPlaceholder;
   const settledOpen = hasAccess ? entityKey : null;

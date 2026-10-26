@@ -301,20 +301,23 @@ type CurrentUserPermissions = AnswerState & {
 };
 
 /**
- * The capabilities answer last received in any language, held on screen while
- * another language's is asked. A component mounted during the switch (an
- * editor mounted again for the document in the new language) has no previous
- * answer of its own; this one puts it on the same footing as one that stayed
- * mounted: a placeholder, which grants nothing (see `isPlaceholder`).
+ * The capabilities answer last received in any language that still holds,
+ * kept on screen while another language's is asked: a placeholder, which
+ * grants nothing (see `isPlaceholder`). Taken from the cache rather than from
+ * the component asking, since one mounted during the switch (an editor mounted
+ * again for the document in the new language) has no previous answer of its
+ * own. An answer a change has invalidated may no longer describe the caller's
+ * access, so it is never one: the page waits instead.
  */
 function latestAnswerHeld<T>(client: QueryClient): T | undefined {
   let latest: { data: T; at: number } | undefined;
   for (const query of client
     .getQueryCache()
     .findAll({ queryKey: CURRENT_USER_CAPABILITIES_KEY })) {
-    const { data, dataUpdatedAt } = query.state;
+    const { data, dataUpdatedAt, isInvalidated } = query.state;
     if (
       data !== undefined &&
+      !isInvalidated &&
       (latest === undefined || dataUpdatedAt > latest.at)
     ) {
       latest = { data: data as T, at: dataUpdatedAt };
@@ -567,7 +570,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     enabled: isPrivateRoute,
     // The language moved from keeps the page mounted while the new one is
     // asked; it counts as no answer (see `isPlaceholder`).
-    placeholderData: previous => previous ?? latestAnswerHeld(queryClient),
+    placeholderData: () => latestAnswerHeld(queryClient),
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
     // A failed answer is asked again on the schedule below and on focus, not
