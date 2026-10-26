@@ -11,6 +11,10 @@ import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
@@ -26,6 +30,7 @@ import {
   routeGateVerdict,
 } from "../access/route-gate-adapters";
 import {
+  askReadAsPlainRead,
   everyLanguage,
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
@@ -477,6 +482,15 @@ export async function authorizeCaller(
   // always has, rather than being answered as a refusal.
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
+    // A caller naming one entry it may not read is answered exactly as if the
+    // entry did not exist, whatever it asked to do: a 403 would confirm the
+    // entry is there. A caller who may read it is told what it may not do.
+    if (
+      scope === "one" &&
+      !(await mayReadNamed(authResult, action, resource))
+    ) {
+      return entryAnsweredAsMissing(action, resource);
+    }
     return {
       ...createErrorResponse(
         403,
@@ -489,6 +503,47 @@ export async function authorizeCaller(
     };
   }
   return authResult;
+}
+
+/**
+ * Whether the caller may read `resource`, asked once it was refused `action`
+ * on one entry of it. A refused read is its own answer; any other action asks
+ * the read of the same one decision, as a plain read would be asked: in the
+ * default language and its fallbacks. A caller who may read the entry there
+ * can see it exists, whatever language the refused request was in.
+ */
+async function mayReadNamed(
+  authResult: AuthContext,
+  action: string,
+  resource: string
+): Promise<boolean> {
+  if (action === "read") return false;
+  const read = await askReadAsPlainRead(asked =>
+    routeGateVerdict(authResult, asked, resource, getRBACService())
+  );
+  if (!read.allowed && read.refusal === "failed") throw read.error;
+  return read.allowed;
+}
+
+/**
+ * The answer a request naming one entry gets from a caller who may not read
+ * it: what a missing entry gets, `NOT_FOUND` in the generic words, so the two
+ * cannot be told apart. Which check refused goes to the log.
+ */
+function entryAnsweredAsMissing(
+  action: string,
+  resource: string
+): ErrorResponse {
+  return {
+    ...createErrorResponse(
+      NEXTLY_ERROR_STATUS.NOT_FOUND,
+      "Not Found",
+      genericPublicMessage("NOT_FOUND"),
+      undefined,
+      "NOT_FOUND"
+    ),
+    reason: `the caller may not read ${resource}, so the entry its ${action} names is answered as missing`,
+  };
 }
 
 /**
@@ -740,6 +795,12 @@ export function requestLanguage(
 export interface RouteOperation {
   method: string;
   params: Readonly<Record<string, string>>;
+  /**
+   * The request names one document that has no entry id in its parameters:
+   * a Single's own. A request naming one entry, by id or so, is refused about
+   * it, and a caller who may not read it is answered as if it were missing.
+   */
+  namesOne?: boolean;
 }
 
 /**
@@ -780,7 +841,7 @@ export async function requireCollectionAccess(
       action,
       collectionSlug,
       // A route naming one entry is refused about that entry.
-      operation?.params.entryId ? "one" : "all"
+      operation?.params.entryId || operation?.namesOne ? "one" : "all"
     )
   );
 }

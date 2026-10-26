@@ -14,11 +14,15 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
+import { askReadAsPlainRead } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
 import { isSuperAdminContext } from "../../../services/access";
@@ -119,32 +123,47 @@ export class CollectionAccessService extends BaseService {
     // through a transaction would otherwise be judged on the key OWNER's roles
     // while the identical write through `createEntry` was held to the key's own
     // grants. An explicit argument still wins, so a caller may narrow.
-    const verdict = await collectionGateVerdict({
-      slug: collectionName,
-      action: operation,
-      user,
-      routeAuthorized,
-      scope: effectiveCallerScope(authenticatedScope),
-      principal: currentPrincipal(),
-      executor,
-      rules: this.rbacAccessControlService,
-      // On this service's own database, with its dialect's tables. Without
-      // them the check reads through the global container and the process's
-      // configured dialect, which a setup with no access-control service may
-      // not have set, or may have set for another instance.
-      permissionWithoutService: () =>
-        hasPermission(
-          user?.id ?? "",
-          operation,
-          collectionName,
-          executor ?? this.db,
-          this.dialect
-        ),
-    });
+    const ask = (action: AccessOperation) =>
+      collectionGateVerdict({
+        slug: collectionName,
+        action,
+        user,
+        routeAuthorized,
+        scope: effectiveCallerScope(authenticatedScope),
+        principal: currentPrincipal(),
+        executor,
+        rules: this.rbacAccessControlService,
+        // On this service's own database, with its dialect's tables. Without
+        // them the check reads through the global container and the process's
+        // configured dialect, which a setup with no access-control service may
+        // not have set, or may have set for another instance.
+        permissionWithoutService: () =>
+          hasPermission(
+            user?.id ?? "",
+            action,
+            collectionName,
+            executor ?? this.db,
+            this.dialect
+          ),
+      });
+    const verdict = await ask(operation);
     if (verdict.allowed) return null;
+    // A caller refused about one entry is asked whether it may read it: one
+    // it may not read is answered exactly as a missing entry is, so the
+    // refusal does not confirm the entry exists. A caller with no identity is
+    // left to the sign-in answer, which comes before this one.
+    const namesOne =
+      params.entryId !== undefined &&
+      user !== undefined &&
+      verdict.refusal === "insufficient";
+    const read =
+      namesOne && operation !== "read"
+        ? await askReadAsPlainRead(ask)
+        : verdict;
+    const refused = !read.allowed && read.refusal === "failed" ? read : verdict;
 
-    if (verdict.refusal === "failed") {
-      const error = verdict.error;
+    if (refused.refusal === "failed") {
+      const error = refused.error;
       this.logger.error("RBAC access check failed", {
         collectionName,
         operation,
@@ -159,6 +178,16 @@ export class CollectionAccessService extends BaseService {
         message: "Failed to verify RBAC permissions",
         data: null as unknown as T,
         ...errorEnvelopeFields(error),
+      };
+    }
+    if (namesOne && !read.allowed) {
+      return {
+        success: false,
+        statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
+        code: "NOT_FOUND",
+        message: genericPublicMessage("NOT_FOUND"),
+        refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
+        data: null as unknown as T,
       };
     }
     // The caller is told what was refused in the site's words. Which check

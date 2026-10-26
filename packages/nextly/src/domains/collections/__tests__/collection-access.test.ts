@@ -238,9 +238,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
-      // A read of one entry is refused as that entry.
-      expect(result.message).toBe("You can't see this entry.");
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // A caller who may not read the one entry it names is answered as if it
+      // were missing, so the refusal does not confirm it exists.
+      expect(result.message).toBe("Not found.");
     });
 
     it("names a Schema Builder collection by the label its registry holds", async () => {
@@ -330,6 +331,25 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   // ── Collection-level access: update ───────────────────────────────────
 
   describe("update access control", () => {
+    it("refuses an update in words, to a caller who may read the entry", async () => {
+      // The other half of the rule: one it may read, the caller is told what
+      // it may not do, since the entry's existence is no secret to it.
+      const rbac = createMockRbacAccessControlService();
+      callerMay("read");
+      const { service, selectData } = buildService({
+        rbacAccessControlService: rbac,
+      });
+      selectData.rows = [createSampleEntry()];
+
+      const result = await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { title: "Updated" }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(result.message).toBe("You can't edit this entry.");
+    });
+
     it("should deny updateEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
       // First call: for the getEntry check pass (we need the entry to exist)
@@ -350,8 +370,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
-      expect(result.message).toBe("You can't edit this entry.");
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      expect(result.message).toBe("Not found.");
     });
   });
 
@@ -396,8 +416,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
-      expect(result.message).toBe("You can't delete this entry.");
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      expect(result.message).toBe("Not found.");
     });
   });
 
@@ -1061,6 +1081,6 @@ describe("publish-transition access control", () => {
     );
 
     // The gate ran and denied — the super-admin bypass did not fire.
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
   });
 });

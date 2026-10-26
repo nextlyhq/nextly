@@ -924,6 +924,8 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        // A Single is its one document, named by its slug.
+        namesOne: true,
       });
     }
     if (method === "getSingleSchema") {

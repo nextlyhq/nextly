@@ -9,10 +9,10 @@ service none user-with
   publish:A
   unpublish:A
 service none user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service none user-partial
   read:A
   update:403 You can't edit home.
@@ -44,10 +44,10 @@ service none key-with
   publish:A
   unpublish:A
 service none key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service none key-partial
   read:A
   update:403 You can't edit home.
@@ -124,10 +124,10 @@ service true key-with
   publish:A
   unpublish:A
 service true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service true key-partial
   read:A
   update:403 You can't edit home.
@@ -164,20 +164,20 @@ service false visitor
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service false user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false super-admin
   read:A
   update:A
@@ -194,50 +194,50 @@ service false super-admin-claimed
   publish:A
   unpublish:A
 service false super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service false key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-true visitor
   read:A
   update:A
@@ -284,10 +284,10 @@ service returns-true key-with
   publish:A
   unpublish:A
 service returns-true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-true key-partial
   read:A
   update:403 You can't edit home.
@@ -324,20 +324,20 @@ service returns-false visitor
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service returns-false user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false super-admin
   read:A
   update:A
@@ -354,70 +354,70 @@ service returns-false super-admin-claimed
   publish:A
   unpublish:A
 service returns-false super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-false key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null visitor
   read:403 You can't see home.
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service returns-null user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null super-admin
   read:A
   update:A
@@ -434,70 +434,70 @@ service returns-null super-admin-claimed
   publish:A
   unpublish:A
 service returns-null super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-null key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined visitor
   read:403 You can't see home.
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service returns-undefined user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined super-admin
   read:A
   update:A
@@ -514,70 +514,70 @@ service returns-undefined super-admin-claimed
   publish:A
   unpublish:A
 service returns-undefined super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-undefined key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy visitor
   read:403 You can't see home.
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service returns-truthy user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy super-admin
   read:A
   update:A
@@ -594,70 +594,70 @@ service returns-truthy super-admin-claimed
   publish:A
   unpublish:A
 service returns-truthy super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service returns-truthy key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws visitor
   read:403 You can't see home.
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service throws user-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws super-admin
   read:A
   update:A
@@ -674,50 +674,50 @@ service throws super-admin-claimed
   publish:A
   unpublish:A
 service throws super-admin-claimed-key
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-with
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-custom-slugs
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service throws key-in-the-request
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service async-true visitor
   read:A
   update:A
@@ -764,10 +764,10 @@ service async-true key-with
   publish:A
   unpublish:A
 service async-true key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service async-true key-partial
   read:A
   update:403 You can't edit home.
@@ -809,15 +809,15 @@ service role-name user-with
   publish:A
   unpublish:A
 service role-name user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service role-name user-partial
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service role-name super-admin
   read:A
   update:A
@@ -844,10 +844,10 @@ service role-name key-with
   publish:A
   unpublish:A
 service role-name key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service role-name key-partial
   read:A
   update:403 You can't edit home.
@@ -859,20 +859,20 @@ service role-name key-slugs-only
   publish:A
   unpublish:A
 service role-name key-made-by-super-admin
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service role-name key-custom-slugs
   read:A
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service role-name key-own-roles
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service role-name key-in-the-request
   read:A
   update:403 You can't edit home.
@@ -889,10 +889,10 @@ service permission-spelling user-with
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service permission-spelling user-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service permission-spelling user-partial
   read:403 You can't see home.
   update:403 You can't edit home.
@@ -924,20 +924,20 @@ service permission-spelling key-with
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service permission-spelling key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service permission-spelling key-partial
   read:403 You can't see home.
   update:403 You can't edit home.
   publish:403 You can't publish home.
   unpublish:403 You can't unpublish home.
 service permission-spelling key-slugs-only
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service permission-spelling key-made-by-super-admin
   read:403 You can't see home.
   update:403 You can't edit home.
@@ -1004,10 +1004,10 @@ service signed-in key-with
   publish:A
   unpublish:A
 service signed-in key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 service signed-in key-partial
   read:A
   update:403 You can't edit home.
@@ -1084,10 +1084,10 @@ no-service none key-with
   publish:A
   unpublish:A
 no-service none key-without
-  read:403 You can't see home.
-  update:403 You can't edit home.
-  publish:403 You can't publish home.
-  unpublish:403 You can't unpublish home.
+  read:404 Not found.
+  update:404 Not found.
+  publish:404 Not found.
+  unpublish:404 Not found.
 no-service none key-partial
   read:A
   update:403 You can't edit home.

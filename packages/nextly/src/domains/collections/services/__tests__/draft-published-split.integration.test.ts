@@ -832,7 +832,8 @@ describe("draft/published split — promote on publish (integration)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // Live content unchanged, the working draft still present.
     const [live] = await handle.adapter.select<LiveRow>(TABLE);

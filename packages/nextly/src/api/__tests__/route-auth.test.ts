@@ -116,6 +116,22 @@ describe("route-auth wrappers", () => {
     });
   });
 
+  it("answers a named entry the caller may not read as missing, not as an error", async () => {
+    // The gate answers it 404; converted, it must read as a missing entry
+    // does, never as an internal error.
+    middleware.requireCollectionAccess.mockResolvedValue({
+      ...errorResponse(404),
+      error: "Not found.",
+    });
+    await expect(
+      requireRouteCollectionAccess(request, "update", "posts")
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      statusCode: 404,
+      publicMessage: "Not found.",
+    });
+  });
+
   it("answers an unavailable key service as unavailable, not as a refusal", async () => {
     middleware.requireAuthentication.mockResolvedValue(errorResponse(503));
     await expect(requireRouteAuthentication(request)).rejects.toMatchObject({
