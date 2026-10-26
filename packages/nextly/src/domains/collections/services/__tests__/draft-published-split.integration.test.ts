@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../../__tests__/fixtures/permission-holders";
+import {
   date,
   defineCollection,
   defineFieldGroup,
@@ -58,6 +62,21 @@ async function boot(): Promise<CollectionEntryService> {
 }
 
 type LiveRow = { id: string; title: string; body: string; status: string };
+
+/**
+ * Stores `id` as a user holding each of `actions` on the collection. A code
+ * rule only narrows the permission, so a signed-in caller the rules admit
+ * holds the permission for what it does.
+ */
+async function holderOf(
+  t: TestNextly,
+  id: string,
+  actions: readonly [string, ...string[]]
+): Promise<void> {
+  const [first, ...rest] = actions;
+  await userWhoMay(t, id, first, [COLLECTION]);
+  for (const action of rest) await grantTo(t, id, action, [COLLECTION]);
+}
 type VersionRow = {
   snapshot: { title?: string; body?: string };
   status: string;
@@ -335,6 +354,7 @@ describe("draft/published split — updateEntry (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor-1", ["read", "update"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -449,6 +469,7 @@ describe("draft/published split — discard working draft (integration)", () => 
         }),
       ],
     });
+    await holderOf(handle, "editor-1", ["read", "update"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -600,6 +621,7 @@ describe("draft/published split — discard working draft (integration)", () => 
         }),
       ],
     });
+    await holderOf(handle, "editor-1", ["read", "update"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -1152,6 +1174,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor", ["read", "update", "publish"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -1241,6 +1264,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor", ["read", "update", "publish"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -1315,6 +1339,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor", ["read", "update", "publish"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -1403,6 +1428,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor", ["read", "update", "publish"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -1489,6 +1515,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         }),
       ],
     });
+    await holderOf(handle, "editor", ["read", "update", "publish"]);
     const entries = handle
       .getService("collectionsHandler")
       .getEntryService() as CollectionEntryService;

@@ -19,6 +19,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
@@ -742,6 +746,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    // Both publishers. A publish needs `publish-prefs` and `update-prefs`, and
+    // a rule only narrows a permission, so each holds both and the field rule
+    // on `guarded` is what tells them apart.
+    for (const publisher of [BOSS, CLERK]) {
+      await userWhoMay(current, publisher.id, "publish", [SLUG]);
+      await grantTo(current, publisher.id, "update", [SLUG]);
+    }
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;

@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -141,6 +142,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "user-1", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -179,6 +183,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "user-1", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -546,6 +553,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "editor", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -605,6 +615,9 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the caller holds update on
+    // posts.
+    await userWhoMay(current, "editor", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(

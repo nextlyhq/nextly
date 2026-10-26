@@ -18,6 +18,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
@@ -127,6 +128,22 @@ async function created(
   return id;
 }
 
+/**
+ * A plain author, who holds read, update, publish and unpublish on
+ * `collection`. A code rule only narrows the permission, so the open rules
+ * admit the author only once they hold it.
+ */
+async function permittedAuthor(
+  t: TestNextly,
+  collection: "stories" | "guides"
+): Promise<string> {
+  const author = await seedPlainAuthor(t);
+  for (const action of ["read", "update", "publish", "unpublish"]) {
+    await grantTo(t, author, action, [collection]);
+  }
+  return author;
+}
+
 /** A release holding each document under its action, added by `author`. */
 async function releaseOf(
   t: TestNextly,
@@ -179,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
     it("keeps a protected relationship to a target taken down since as unchanged", async () => {
       const t = await boot(dialect);
       await seedStories(t);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t, "stories");
       const topic = await created(t, "topics", {
         title: "Weather",
         name: "weather",
@@ -228,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps a protected translation the pending change did not touch as unchanged", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t, "guides");
       const going = await created(t, "guides", {
         title: "Draft",
         guarded: "Kept",
