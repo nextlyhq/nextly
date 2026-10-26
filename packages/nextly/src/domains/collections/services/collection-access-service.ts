@@ -12,9 +12,11 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { collectionGateVerdict } from "../../../auth/access/gate-adapters";
+import {
+  answerForRefusal,
+  collectionGateVerdict,
+} from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
-import { askReadAsPlainRead } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -148,47 +150,25 @@ export class CollectionAccessService extends BaseService {
       });
     const verdict = await ask(operation);
     if (verdict.allowed) return null;
-    // A caller refused about one entry is asked whether it may read it: one
-    // it may not read is answered exactly as a missing entry is, so the
-    // refusal does not confirm the entry exists. A caller with no identity is
-    // left to the sign-in answer, which comes before this one.
-    const namesOne =
-      params.entryId !== undefined &&
-      user !== undefined &&
-      verdict.refusal === "insufficient";
-    const read =
-      namesOne && operation !== "read"
-        ? await askReadAsPlainRead(ask)
-        : verdict;
-    const refused = !read.allowed && read.refusal === "failed" ? read : verdict;
+    // A caller naming one entry it may not read is answered as if the entry
+    // were missing. A caller with no identity is left to the sign-in answer,
+    // which comes before this one.
+    const answer = await answerForRefusal(
+      verdict,
+      operation,
+      params.entryId !== undefined && user !== undefined,
+      ask
+    );
 
-    if (refused.refusal === "failed") {
-      const error = refused.error;
-      this.logger.error("RBAC access check failed", {
+    if (answer.answer === "failed") {
+      return this.accessUnreadable<T>(answer.error, {
         collectionName,
         operation,
         userId: user?.id,
-        error: error instanceof Error ? error.message : String(error),
       });
-      // Fail-secure: deny on unexpected RBAC errors. A typed refusal keeps
-      // its own code and status (a busy database is DATABASE_BUSY, 503).
-      return {
-        success: false,
-        statusCode: 500,
-        message: "Failed to verify RBAC permissions",
-        data: null as unknown as T,
-        ...errorEnvelopeFields(error),
-      };
     }
-    if (namesOne && !read.allowed) {
-      return {
-        success: false,
-        statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
-        code: "NOT_FOUND",
-        message: genericPublicMessage("NOT_FOUND"),
-        refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
-        data: null as unknown as T,
-      };
+    if (answer.answer === "missing") {
+      return answeredAsMissing<T>(collectionName, operation);
     }
     // The caller is told what was refused in the site's words. Which check
     // refused rides along for the server's log, written where the refusal
@@ -212,4 +192,45 @@ export class CollectionAccessService extends BaseService {
       data: null as unknown as T,
     };
   }
+
+  /**
+   * The answer when the caller's access could not be read. Fail-secure: the
+   * request is refused, and a typed failure keeps its own code and status (a
+   * busy database is DATABASE_BUSY, 503).
+   */
+  private accessUnreadable<T>(
+    error: unknown,
+    context: { collectionName: string; operation: string; userId?: string }
+  ): CollectionServiceResult<T> {
+    this.logger.error("RBAC access check failed", {
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      success: false,
+      statusCode: 500,
+      message: "Failed to verify RBAC permissions",
+      data: null,
+      ...errorEnvelopeFields(error),
+    };
+  }
+}
+
+/**
+ * The answer to a caller naming one entry it may not read: exactly what a
+ * missing entry gets, NOT_FOUND in the generic words. Which check refused
+ * rides along for the server's log.
+ */
+function answeredAsMissing<T>(
+  collectionName: string,
+  operation: string
+): CollectionServiceResult<T> {
+  return {
+    success: false,
+    statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
+    code: "NOT_FOUND",
+    message: genericPublicMessage("NOT_FOUND"),
+    refusalReason: `the caller may not read ${collectionName}, so the entry its ${operation} names is answered as missing`,
+    data: null,
+  };
 }

@@ -21,6 +21,7 @@ import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import { answerForRefusal } from "../access/gate-adapters";
 import {
   refusalMessageFor,
   type RefusalScope,
@@ -30,7 +31,6 @@ import {
   routeGateVerdict,
 } from "../access/route-gate-adapters";
 import {
-  askReadAsPlainRead,
   everyLanguage,
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
@@ -477,18 +477,21 @@ export async function authorizeCaller(
     resource,
     getRBACService()
   );
-  // A caller whose access could not be read is not a caller without the
-  // permission: the read's error goes to the route's error handling, as it
-  // always has, rather than being answered as a refusal.
-  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
     // entry is there. A caller who may read it is told what it may not do.
-    if (
-      scope === "one" &&
-      !(await mayReadNamed(authResult, action, resource))
-    ) {
+    const answer = await answerForRefusal(
+      verdict,
+      action,
+      scope === "one",
+      asked => routeGateVerdict(authResult, asked, resource, getRBACService())
+    );
+    // A caller whose access could not be read is not a caller without the
+    // permission: the read's error goes to the route's error handling, as it
+    // always has, rather than being answered as a refusal.
+    if (answer.answer === "failed") throw answer.error;
+    if (answer.answer === "missing") {
       return entryAnsweredAsMissing(action, resource);
     }
     return {
@@ -503,26 +506,6 @@ export async function authorizeCaller(
     };
   }
   return authResult;
-}
-
-/**
- * Whether the caller may read `resource`, asked once it was refused `action`
- * on one entry of it. A refused read is its own answer; any other action asks
- * the read of the same one decision, as a plain read would be asked: in the
- * default language and its fallbacks. A caller who may read the entry there
- * can see it exists, whatever language the refused request was in.
- */
-async function mayReadNamed(
-  authResult: AuthContext,
-  action: string,
-  resource: string
-): Promise<boolean> {
-  if (action === "read") return false;
-  const read = await askReadAsPlainRead(asked =>
-    routeGateVerdict(authResult, asked, resource, getRBACService())
-  );
-  if (!read.allowed && read.refusal === "failed") throw read.error;
-  return read.allowed;
 }
 
 /**

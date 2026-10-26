@@ -21,9 +21,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
-import { singleGateVerdict } from "../../../auth/access/gate-adapters";
+import {
+  answerForRefusal,
+  singleGateVerdict,
+} from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
-import { askReadAsPlainRead } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
@@ -326,17 +328,18 @@ export async function checkSingleAccess(params: {
     });
   const verdict = await ask(operation);
   if (verdict.allowed) return null;
-  // A Single is its one document: a caller refused about it is asked whether
-  // it may read it, and one it may not read is answered as a missing Single
-  // is, so the refusal does not confirm what the caller may not see. A caller
-  // with no identity is left to the sign-in answer, which comes before this.
-  const namesOne = user !== undefined && verdict.refusal === "insufficient";
-  const read =
-    namesOne && operation !== "read" ? await askReadAsPlainRead(ask) : verdict;
-  const refused = !read.allowed && read.refusal === "failed" ? read : verdict;
+  // A Single is its one document: a caller who may not read it is answered
+  // as a missing Single is. A caller with no identity is left to the sign-in
+  // answer, which comes before this one.
+  const answer = await answerForRefusal(
+    verdict,
+    operation,
+    user !== undefined,
+    ask
+  );
 
-  if (refused.refusal === "failed") {
-    const error = refused.error;
+  if (answer.answer === "failed") {
+    const error = answer.error;
     logger.error("RBAC access check failed for Single", {
       slug,
       operation,
@@ -352,7 +355,7 @@ export async function checkSingleAccess(params: {
       ...errorEnvelopeFields(error),
     };
   }
-  if (namesOne && !read.allowed) {
+  if (answer.answer === "missing") {
     return {
       success: false,
       statusCode: NEXTLY_ERROR_STATUS.NOT_FOUND,
