@@ -235,6 +235,7 @@ for (const dialect of getConfiguredTestDialects()) {
         subject: "Hello",
         htmlContent: "<p>Hi</p>",
         plainTextContent: null,
+        preheader: null,
         useLayout: false,
         kind: "template" as const,
         layoutId: null,
