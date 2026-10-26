@@ -1,42 +1,30 @@
-import { useQuery } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
-import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
+import { LOCALE_PARAM } from "../constants/search-params";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   AdminCapabilities,
+  CapabilitiesResponse,
   CollectionCapabilities,
   UserPermissionsResponse,
 } from "../types/permissions";
 
+import {
+  CURRENT_USER_CAPABILITIES_KEY,
+  CURRENT_USER_PERMISSIONS_KEY,
+  currentUserCapabilitiesKey,
+  invalidateCurrentUserAccess,
+} from "./current-user-access";
+import { useLocaleParam } from "./useLocaleParam";
 import { useRouter } from "./useRouter";
 
-/**
- * System resources that are NOT dynamic collections.
- * Permissions for these resources map to dedicated capability flags
- * rather than per-collection capabilities.
- */
-/**
- * Built-in resources, derived from the single admin definition.
- *
- * Was a hand-kept copy; see `constants/permissions` for why there is now one.
- */
-export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
-
-/**
- * Build AdminCapabilities from a flat list of permission slugs.
- *
- * Permission slugs follow the format "{action}-{resource}"
- * (e.g., "read-users", "create-posts", "manage-settings").
- */
-/**
- * The capability shape the admin actually runs on, from a permission list.
- *
- * Exported so a test can derive it the way the product does. A hand-built
- * `AdminCapabilities` literal in a test asserts against a shape nothing
- * produces, and would go on passing after this function stopped setting a flag
- * the test still sets for itself.
- */
 /** The flags derived purely from which permission slugs are held. */
 type SystemCapabilities = Omit<
   AdminCapabilities,
@@ -86,12 +74,31 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
 };
 
 /**
+ * Every action on every collection and Single: what the server's answer gives
+ * a super-admin, including an entity added since it was asked.
+ */
+const EVERY_ENTITY: Record<string, CollectionCapabilities> = new Proxy(
+  {},
+  {
+    get: () => ({
+      canRead: true,
+      canCreate: true,
+      canUpdate: true,
+      canDelete: true,
+      canPublish: true,
+      canUnpublish: true,
+    }),
+  }
+);
+
+/**
  * Everything, for a super-admin.
  *
  * Named rather than returned inline: it is a fifth of `buildCapabilities` and
  * has nothing to do with the permission parsing that follows it, so keeping it
  * in the function made the interesting half harder to read. Frozen so a caller
- * cannot mutate the shared object into a narrower one for everybody.
+ * cannot mutate the shared object into a narrower one for everybody. The
+ * collections in it are replaced by the server's answer about them.
  */
 const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   isSuperAdmin: true,
@@ -102,17 +109,7 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   canViewSettings: true,
   canViewWebhooks: true,
   canViewReleases: true,
-  collections: new Proxy(
-    {},
-    {
-      get: () => ({
-        canRead: true,
-        canCreate: true,
-        canUpdate: true,
-        canDelete: true,
-      }),
-    }
-  ),
+  collections: EVERY_ENTITY,
   canManageUsers: true,
   canManageRoles: true,
   canManageMedia: true,
@@ -121,46 +118,62 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
   canManageEmailTemplates: true,
 });
 
+/**
+ * What the user may do with each collection and Single, as the server's
+ * answer states it. No answer yet means nothing is known, so nothing is
+ * offered: the map stays empty rather than guessed from permission slugs,
+ * which cannot see a collection's code rules.
+ */
+function collectionsFrom(
+  answer: CapabilitiesResponse | undefined
+): Record<string, CollectionCapabilities> {
+  const collections: Record<string, CollectionCapabilities> = {};
+  for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
+    collections[slug] = {
+      canRead: entity.read,
+      canCreate: entity.create ?? false,
+      canUpdate: entity.update,
+      canDelete: entity.delete ?? false,
+      canPublish: entity.publish,
+      canUnpublish: entity.unpublish,
+    };
+  }
+  return collections;
+}
+
+/**
+ * The capabilities the admin runs on: the collection and Single answers from
+ * the server's `answer`, and the system flags from the permission slugs, which
+ * also name resources the answer does not (webhooks, releases, the settings
+ * panels).
+ *
+ * Exported so a test can derive it the way the product does. A hand-built
+ * `AdminCapabilities` literal in a test asserts against a shape nothing
+ * produces, and would go on passing after this function stopped setting a flag
+ * the test still sets for itself.
+ */
 export function buildCapabilities(
   permissions: string[],
-  isSuperAdmin: boolean
+  isSuperAdmin: boolean,
+  answer: CapabilitiesResponse | undefined
 ): AdminCapabilities {
-  // Super-admin gets everything.
-  if (isSuperAdmin) return SUPER_ADMIN_CAPABILITIES;
+  // What may be done with each collection and Single is the server's answer
+  // alone, its own super-admin verdict included. The permission list is a
+  // separate request, and a super-admin standing it still reports after the
+  // answer stopped giving one must not grant every entity.
+  const collections = answer?.isSuperAdmin
+    ? EVERY_ENTITY
+    : collectionsFrom(answer);
+  const canViewCollections =
+    answer?.isSuperAdmin === true ||
+    Object.values(collections).some(c => c.canRead);
 
-  const permSet = new Set(permissions);
-  const collections: Record<string, CollectionCapabilities> = {};
-
-  // Parse permissions to build per-collection capabilities
-  for (const perm of permissions) {
-    // Match "action-resource" format, where resource can contain hyphens
-    const dashIdx = perm.indexOf("-");
-    if (dashIdx === -1) continue;
-
-    const action = perm.slice(0, dashIdx);
-    const resource = perm.slice(dashIdx + 1);
-
-    // Skip system resources — they map to dedicated flags
-    if (SYSTEM_RESOURCES.has(resource)) continue;
-
-    // Build collection capabilities
-    if (!collections[resource]) {
-      collections[resource] = {
-        canRead: false,
-        canCreate: false,
-        canUpdate: false,
-        canDelete: false,
-      };
-    }
-
-    if (action === "read") collections[resource].canRead = true;
-    if (action === "create") collections[resource].canCreate = true;
-    if (action === "update") collections[resource].canUpdate = true;
-    if (action === "delete") collections[resource].canDelete = true;
+  // Super-admin gets every system section.
+  if (isSuperAdmin) {
+    return { ...SUPER_ADMIN_CAPABILITIES, canViewCollections, collections };
   }
 
-  // Check if user can view any collection
-  const canViewCollections = Object.values(collections).some(c => c.canRead);
+  const permSet = new Set(permissions);
 
   const holdsAny = (slugs: readonly string[]): boolean =>
     slugs.some(slug => permSet.has(slug));
@@ -183,48 +196,218 @@ export function buildCapabilities(
   };
 }
 
-/** Default capabilities (no access) shown while loading */
-const EMPTY_CAPABILITIES: AdminCapabilities = {
-  isSuperAdmin: false,
-  canViewCollections: false,
-  canViewUsers: false,
-  canViewRoles: false,
-  canViewMedia: false,
-  canViewSettings: false,
-  canViewWebhooks: false,
-  canViewReleases: false,
-  collections: {},
-  canManageUsers: false,
-  canManageRoles: false,
-  canManageMedia: false,
-  canManageSettings: false,
-  canManageEmailProviders: false,
-  canManageEmailTemplates: false,
+/**
+ * How often both answers are asked again while the content answer is
+ * missing. That answer carries the end of the soonest role assignment, so
+ * without it no end is known and the permission list beside it would
+ * otherwise be kept past an end nobody could see coming.
+ */
+const UNANSWERED_RECHECK_MS = 60_000;
+
+/** The longest delay a browser timer holds without overflowing. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * The shortest wait before asking again about an answer fetched after its own
+ * end, as a server clock behind this one gives.
+ */
+const MIN_RECHECK_MS = 1_000;
+
+/** The capability flag each action is answered by. */
+const CAPABILITY_OF_ACTION = {
+  read: "canRead",
+  create: "canCreate",
+  update: "canUpdate",
+  delete: "canDelete",
+  publish: "canPublish",
+  unpublish: "canUnpublish",
+} as const satisfies Record<string, keyof CollectionCapabilities>;
+
+/** Where an answer the hook asks for stands. */
+type AnswerState = {
+  isLoading: boolean;
+  error: Error | null;
+  /**
+   * Whether a current answer is in hand. A failed first request leaves it
+   * empty, which reads exactly like a user who may do nothing, so a guard
+   * must ask this before treating "not allowed" as a refusal. A failed
+   * refresh keeps the last answer, which still counts until the role
+   * assignment it was given for ends.
+   */
+  hasAnswer: boolean;
 };
 
 /** What {@link useCurrentUserPermissions} returns. */
-type CurrentUserPermissions = {
+type CurrentUserPermissions = AnswerState & {
   capabilities: AdminCapabilities;
   permissions: string[];
   roles: string[];
   isSuperAdmin: boolean;
-  isLoading: boolean;
-  error: Error | null;
   /**
-   * Whether any answer has arrived. A failed first request leaves the
-   * capabilities empty, which reads exactly like a user who holds nothing,
-   * so a guard must ask this before treating "no permission" as a refusal.
-   * A failed refresh keeps the last answer, which still counts.
+   * Where the server's answer about collections and Singles stands, apart
+   * from the permission list the other fields describe: a content-registry
+   * failure leaves the system sections, which the permission list decides,
+   * as they were.
    */
-  hasAnswer: boolean;
-  /** Ask for the permissions again, after a failure. */
+  content: AnswerState;
+  /** Ask for the permissions and capabilities again, after a failure. */
   retry: () => void;
   hasPermission: (slug: string) => boolean;
   canAccessCollection: (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete"
+    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ) => boolean;
 };
+
+/** Whether the content answer has failed and has never answered. */
+function contentUnanswered(
+  queryClient: ReturnType<typeof useQueryClient>,
+  key: readonly unknown[]
+): boolean {
+  return unansweredAfterFailure(queryClient.getQueryState(key));
+}
+
+/**
+ * Whether a query's last request failed with no answer that counts: none
+ * ever arrived, or the one kept was invalidated by a change. Either way it is
+ * asked again on the schedule, which a kept answer would otherwise stop.
+ */
+function unansweredAfterFailure(
+  state: { data?: unknown; error: unknown; isInvalidated: boolean } | undefined
+): boolean {
+  return (
+    state !== undefined &&
+    (state.data === undefined || state.isInvalidated) &&
+    state.error != null
+  );
+}
+
+/**
+ * When a refresh for a reached end was last asked, per query client: every
+ * mounted caller of the hook decides the same step at the same moment, and the
+ * first to act asks for all of them, so they do not replace one another's
+ * requests or each ask the whole matrix again.
+ */
+const deadlineAsks = new WeakMap<QueryClient, number>();
+
+/** What the deadline effect does now, for the answers and ends it has. */
+type DeadlineStep =
+  | { kind: "ask-both"; since: number }
+  | { kind: "ask-stale"; list: boolean; answer: boolean }
+  | { kind: "wait"; at: number; since: number; atEnd: boolean }
+  | { kind: "none" };
+
+/**
+ * The deadline effect's decision, apart from the timers and requests that
+ * carry it out:
+ *
+ * - an end has passed and an answer is from before it: ask both again, unless
+ *   a refresh for that end was already asked after it, in which case ask only
+ *   the halves still from before it;
+ * - otherwise wait for the next end to come, or, for an answer the server
+ *   gave after its own end, check again at most once a second.
+ */
+/** What the deadline effect knows when it decides. */
+interface DeadlineState {
+  ends: readonly number[];
+  validUntil: number | null;
+  answeredAt: number;
+  permissionsAnsweredAt: number;
+  askedAt: number | null;
+  now: number;
+}
+
+function nextDeadlineStep(state: DeadlineState): DeadlineStep {
+  return passedEndStep(state) ?? waitingStep(state);
+}
+
+/**
+ * An end has passed and an answer is from before it: ask both again, unless a
+ * refresh for that end was already asked after it, in which case ask only the
+ * halves still from before it. Null when no answer is from before a passed end.
+ */
+function passedEndStep(state: DeadlineState): DeadlineStep | null {
+  const passed = latestPassed(state.ends, state.now);
+  if (passed === null) return null;
+  const list = state.permissionsAnsweredAt < passed;
+  const answer = state.answeredAt < passed;
+  if (!list && !answer) return null;
+  return state.askedAt === null || state.askedAt < passed
+    ? { kind: "ask-both", since: passed }
+    : { kind: "ask-stale", list, answer };
+}
+
+/**
+ * The next end to come, or, for an answer the server gave after its own end,
+ * a check at most once a second, whichever is sooner.
+ */
+function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
+  const next = Math.min(...ends.filter(end => end > now));
+  const recheck =
+    validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
+  if (recheck < next) {
+    return { kind: "wait", at: recheck, since: now, atEnd: false };
+  }
+  return next === Infinity
+    ? { kind: "none" }
+    : { kind: "wait", at: next, since: next, atEnd: true };
+}
+
+/** An end an answer named, and when that answer was given. */
+interface NamedEnd {
+  end: number;
+  namedAt: number;
+}
+
+/**
+ * A request's answer, stamped with when it was asked. That moment, not when
+ * the answer arrived, says whether the answer could have seen an end: one
+ * asked before an end and delivered after it still describes the role before.
+ */
+async function askedNow<T>(
+  request: () => Promise<T>
+): Promise<T & { askedAt: number }> {
+  const askedAt = Date.now();
+  return { ...(await request()), askedAt };
+}
+
+/** When an answer was asked; one with no stamp counts as asked long ago. */
+const askedAtOf = (data: { askedAt?: number } | undefined): number =>
+  data?.askedAt ?? 0;
+
+/** The latest of `ends` that has passed by `now`, or null. */
+function latestPassed(ends: readonly number[], now: number): number | null {
+  const passed = ends.filter(end => end <= now);
+  return passed.length === 0 ? null : Math.max(...passed);
+}
+
+/**
+ * Where one query's answer stands, once it may no longer hold: an answer that
+ * arrived before `endedAt`, the end of the role assignment it was given for,
+ * no longer counts, and nor does one a change to roles, permissions,
+ * assignments or the schema has `invalidated`, until a newer one arrives.
+ */
+function answerState(
+  query: Pick<
+    UseQueryResult<{ askedAt?: number }>,
+    "data" | "error" | "isFetching" | "isPending"
+  >,
+  endedAt: number | null,
+  invalidated: boolean
+): AnswerState {
+  const unusable =
+    invalidated || (endedAt !== null && askedAtOf(query.data) < endedAt);
+  return {
+    // An answer that no longer holds is waited on until a current one or an
+    // error arrives, before as well as during its refresh: neither the old
+    // answer nor its absence is a decision to show.
+    isLoading:
+      query.isPending ||
+      (unusable && (query.isFetching || query.error === null)),
+    error: query.error,
+    hasAnswer: query.data !== undefined && !unusable,
+  };
+}
 
 /**
  * Hook to fetch and cache the current user's resolved permissions.
@@ -233,19 +416,19 @@ type CurrentUserPermissions = {
  * sidebar filtering, route guards, and action visibility.
  *
  * - Super-admin users get all capabilities as `true` (short-circuit).
- * - Other users get capabilities computed from their resolved permission slugs.
- * - Cached via TanStack Query with 5-minute stale time (global default).
+ * - The system flags come from the user's permission slugs; what the user may
+ *   do with each collection and Single comes from the server's answer.
  *
  * @example
  * ```tsx
- * const { capabilities, isLoading, hasPermission } = useCurrentUserPermissions();
+ * const { capabilities, isLoading, canAccessCollection } = useCurrentUserPermissions();
  *
  * if (capabilities.canViewUsers) {
  *   // Show users nav item
  * }
  *
- * if (hasPermission('read-posts')) {
- *   // Show posts section
+ * if (canAccessCollection("posts", "create")) {
+ *   // Offer a new post
  * }
  * ```
  */
@@ -258,28 +441,238 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // to operators.
   const { route } = useRouter();
   const isPrivateRoute = route?.routeType === "private";
+  const queryClient = useQueryClient();
+  // The content language on screen: a rule can answer by language, so the
+  // answer is asked for, and kept, per language, as the screen's own
+  // requests are sent.
+  const locale = useLocaleParam(LOCALE_PARAM);
+  // One key per language, kept stable so the effects below that ask about
+  // it run when the language changes and not on every render.
+  const capabilitiesKey = useMemo(
+    () => currentUserCapabilitiesKey(locale),
+    [locale]
+  );
 
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
-  const { data, isLoading, isPending, error, refetch } =
-    useQuery<UserPermissionsResponse>({
-      queryKey: ["currentUserPermissions"],
-      queryFn: () =>
-        protectedApi.get<UserPermissionsResponse>("/me/permissions"),
-      enabled: isPrivateRoute,
-      staleTime: 0,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
+  const permissionsQuery = useQuery<
+    UserPermissionsResponse & { askedAt: number }
+  >({
+    queryKey: CURRENT_USER_PERMISSIONS_KEY,
+    queryFn: () =>
+      askedNow(() =>
+        protectedApi.get<UserPermissionsResponse>("/me/permissions")
+      ),
+    enabled: isPrivateRoute,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    // Asked again on the schedule when its own refresh failed with no answer
+    // that counts, and while the content answer has none, whose end it
+    // would otherwise be told.
+    refetchInterval: query =>
+      unansweredAfterFailure(query.state) ||
+      contentUnanswered(queryClient, capabilitiesKey)
+        ? UNANSWERED_RECHECK_MS
+        : false,
+  });
+  const { data, refetch } = permissionsQuery;
+
+  // What the server decides the user may do with each collection and Single,
+  // code rules included. One answer covers every entity, so it is costly to
+  // compute and is shared by every caller of this hook: it is asked again
+  // only on focus, when a role assignment ends, and when the admin changes
+  // roles, permissions, role assignments or the schema, not each time
+  // another component mounts.
+  const answer = useQuery<CapabilitiesResponse & { askedAt: number }>({
+    queryKey: capabilitiesKey,
+    queryFn: () =>
+      askedNow(() =>
+        protectedApi.get<CapabilitiesResponse>(
+          locale === undefined
+            ? "/me/capabilities"
+            : `/me/capabilities?locale=${encodeURIComponent(locale)}`
+        )
+      ),
+    enabled: isPrivateRoute,
+    staleTime: Infinity,
+    refetchOnWindowFocus: "always",
+    // A failed answer is asked again on the schedule below and on focus, not
+    // by each caller that mounts: while the content registry is degraded,
+    // every mount would otherwise ask the whole matrix again.
+    retryOnMount: false,
+    refetchInterval: query =>
+      unansweredAfterFailure(query.state) ? UNANSWERED_RECHECK_MS : false,
+  });
+  const refetchAnswer = answer.refetch;
+  // A fresh answer in one language is newer than every other language's
+  // cached one, which may be from before a change to roles or rules. Those
+  // are marked stale without being fetched, so returning to a language asks
+  // again rather than restoring its older answer.
+  const languageAnsweredAt = answer.dataUpdatedAt;
+  // The answer a language already had when the screen moved to it is not
+  // news: only one that arrived after that is newer than the other
+  // languages', and only that one marks them.
+  const seenAnswer = useRef<{ key: string; at: number } | null>(null);
+  useEffect(() => {
+    const shown = JSON.stringify(capabilitiesKey);
+    if (seenAnswer.current?.key !== shown) {
+      seenAnswer.current = { key: shown, at: languageAnsweredAt };
+      if (languageAnsweredAt !== 0) return;
+    }
+    if (languageAnsweredAt <= seenAnswer.current.at) return;
+    seenAnswer.current.at = languageAnsweredAt;
+    const others = {
+      queryKey: CURRENT_USER_CAPABILITIES_KEY,
+      predicate: (query: { queryKey: readonly unknown[] }) =>
+        JSON.stringify(query.queryKey) !== shown,
+    };
+    // A request still under way for another language was asked before this
+    // answer, so it is cancelled rather than let to clear the mark when it
+    // lands with what it saw.
+    void queryClient
+      .cancelQueries(others)
+      .then(() =>
+        queryClient.invalidateQueries({ ...others, refetchType: "none" })
+      );
+  }, [languageAnsweredAt, queryClient, capabilitiesKey]);
+
+  // The answer stops holding when the soonest role assignment ends, and so
+  // does the permission list beside it. Then both are asked again, and until
+  // a fresh answer arrives neither counts: a failed refresh must not leave
+  // the admin offering what an ended role allowed.
+  const validUntil = answer.data?.validUntil ?? null;
+  const answeredAt = askedAtOf(answer.data);
+  // Every end an answer has named, kept apart from the answer that named it:
+  // an answer given after an end can drop it (with null, once the ending
+  // assignment is gone) before that end's timer has run, and the other
+  // request's answer from before it must still not count. An end is retired
+  // only by an answer that no longer names it, newer than the one that did,
+  // and arriving while the end is still to come: such an answer says no such
+  // end remains, the assignment having been removed or extended. One arriving
+  // after the end may have been processed after it too, so the end stands
+  // and is acted on. An older answer, such as another language's restored
+  // from the cache, retires nothing. Kept in the render that first sees it,
+  // so no ordering of responses and timers can lose one.
+  const [ends, setEnds] = useState<readonly NamedEnd[]>([]);
+  const namedEnds = useMemo(() => {
+    const now = Date.now();
+    const kept = ends.filter(
+      ({ end, namedAt }) =>
+        end === validUntil || end <= now || answeredAt <= namedAt
+    );
+    return validUntil === null || kept.some(({ end }) => end === validUntil)
+      ? kept
+      : [...kept, { end: validUntil, namedAt: answeredAt }];
+  }, [ends, validUntil, answeredAt]);
+  if (
+    namedEnds.length !== ends.length ||
+    namedEnds.some((named, index) => named !== ends[index])
+  ) {
+    setEnds(namedEnds);
+  }
+  const knownEnds = useMemo(() => namedEnds.map(({ end }) => end), [namedEnds]);
+  // The latest end that has passed, read at render, so an answer already past
+  // its end when this mounts never counts, not even until a timer fires.
+  const endedAt = latestPassed(knownEnds, Date.now());
+  const permissionsAnsweredAt = askedAtOf(data);
+  const [, setEndsReached] = useState(0);
+  useEffect(() => {
+    // `since`: the moment the step was due. Another caller that asked after it
+    // has asked for this one too. `atEnd`: an end has come, rather than a
+    // recheck of an answer the server gave after its own end.
+    const askAgain = (since: number, atEnd: boolean): void => {
+      setEndsReached(reached => reached + 1);
+      const last = deadlineAsks.get(queryClient);
+      if (last !== undefined && last >= since) return;
+      deadlineAsks.set(queryClient, Date.now());
+      if (atEnd) {
+        // Both answers are invalidated in the shared cache, so every caller,
+        // one mounted after the end included, refuses them until a newer
+        // answer arrives. The refresh replaces any already under way, which
+        // may have been asked before the end.
+        invalidateCurrentUserAccess(queryClient);
+        return;
+      }
+      void refetch();
+      void refetchAnswer();
+    };
+    const step = nextDeadlineStep({
+      ends: knownEnds,
+      validUntil,
+      answeredAt,
+      permissionsAnsweredAt,
+      askedAt: deadlineAsks.get(queryClient) ?? null,
+      now: Date.now(),
     });
+    if (step.kind === "ask-both") {
+      askAgain(step.since, true);
+      return undefined;
+    }
+    if (step.kind === "ask-stale") {
+      // Only a half not already being asked, so one half landing first does
+      // not restart the other.
+      const idle = (key: readonly unknown[]): boolean =>
+        queryClient.isFetching({ queryKey: key, exact: true }) === 0;
+      if (step.list && idle(CURRENT_USER_PERMISSIONS_KEY)) void refetch();
+      if (step.answer && idle(capabilitiesKey)) void refetchAnswer();
+      return undefined;
+    }
+    if (step.kind === "none") return undefined;
+    const { at, since, atEnd } = step;
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = (): void => {
+      const remaining = at - Date.now();
+      // Timers overflow past about 24.8 days, so a later end is waited for in
+      // steps rather than asked about early.
+      if (remaining > MAX_TIMER_MS) {
+        timer = setTimeout(arm, MAX_TIMER_MS);
+        return;
+      }
+      timer = setTimeout(() => askAgain(since, atEnd), Math.max(remaining, 0));
+    };
+    arm();
+    return () => clearTimeout(timer);
+  }, [
+    knownEnds,
+    validUntil,
+    answeredAt,
+    permissionsAnsweredAt,
+    refetch,
+    refetchAnswer,
+    queryClient,
+    capabilitiesKey,
+  ]);
 
-  const permissions = data?.permissions ?? [];
-  const isSuperAdmin = data?.isSuperAdmin ?? false;
-  const roles = data?.roles ?? [];
+  // A change the admin made invalidates both answers; the old ones stop
+  // counting then, not once a refresh succeeds, since a refresh that fails
+  // would otherwise leave them in place indefinitely.
+  const invalidated = (key: readonly unknown[]): boolean =>
+    queryClient.getQueryState(key)?.isInvalidated === true;
+  const permissionsState = answerState(
+    permissionsQuery,
+    endedAt,
+    invalidated(CURRENT_USER_PERMISSIONS_KEY)
+  );
+  const content = answerState(answer, endedAt, invalidated(capabilitiesKey));
 
-  const capabilities = data
-    ? buildCapabilities(permissions, isSuperAdmin)
-    : EMPTY_CAPABILITIES;
+  const permissions = permissionsState.hasAnswer
+    ? (data?.permissions ?? [])
+    : [];
+  const isSuperAdmin = permissionsState.hasAnswer
+    ? (data?.isSuperAdmin ?? false)
+    : false;
+  const roles = permissionsState.hasAnswer ? (data?.roles ?? []) : [];
+
+  // Each answer decides its own half: the permission list the system flags,
+  // and the content answer every collection and Single, so a failure of one
+  // takes nothing the other answered offline.
+  const capabilities = buildCapabilities(
+    permissions,
+    isSuperAdmin,
+    content.hasAnswer ? answer.data : undefined
+  );
 
   /**
    * Check if the current user has a specific permission by slug.
@@ -291,15 +684,16 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   };
 
   /**
-   * Check if the current user can perform an action on a collection.
-   * Useful for dynamic collection permission checks.
+   * Whether the current user may perform an action on a collection or
+   * Single, as the server answers it, a super-admin's answer included.
    */
   const canAccessCollection = (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete"
+    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
   ): boolean => {
-    if (isSuperAdmin) return true;
-    return permissions.includes(`${action}-${collectionSlug}`);
+    const entity = capabilities.collections[collectionSlug];
+    if (!entity) return false;
+    return entity[CAPABILITY_OF_ACTION[action]];
   };
 
   return {
@@ -307,18 +701,11 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     permissions,
     roles,
     isSuperAdmin,
-    isLoading: isLoading || isPending,
-    error,
-    /**
-     * Whether any answer has arrived. A failed first request leaves the
-     * capabilities empty, which reads exactly like a user who holds nothing,
-     * so a guard must ask this before treating "no permission" as a refusal.
-     * A failed refresh keeps the last answer, which still counts.
-     */
-    hasAnswer: data !== undefined,
-    /** Ask for the permissions again, after a failure. */
+    ...permissionsState,
+    content,
     retry: (): void => {
       void refetch();
+      void refetchAnswer();
     },
     hasPermission,
     canAccessCollection,

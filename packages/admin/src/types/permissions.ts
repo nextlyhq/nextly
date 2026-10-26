@@ -6,13 +6,16 @@
  */
 
 /**
- * Per-collection CRUD capabilities.
+ * What the current user may do with one collection or Single, as the server
+ * decides it. A Single has no create or delete, so those are false for one.
  */
 export interface CollectionCapabilities {
   canRead: boolean;
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
+  canPublish: boolean;
+  canUnpublish: boolean;
 }
 
 /**
@@ -49,7 +52,8 @@ export interface AdminCapabilities {
    */
   canViewReleases: boolean;
 
-  // Per-collection visibility (keyed by collection slug)
+  // Per-collection and per-Single capabilities, keyed by slug, as the server
+  // answers them
   collections: Record<string, CollectionCapabilities>;
 
   // Action permissions
@@ -65,6 +69,30 @@ export interface AdminCapabilities {
   canManageEmailProviders: boolean;
   /** Has 'manage-email-templates' */
   canManageEmailTemplates: boolean;
+}
+
+/** What the server says the user may do with one collection or Single. */
+export interface EntityCapabilitiesAnswer {
+  kind: "collection" | "single";
+  read: boolean;
+  update: boolean;
+  publish: boolean;
+  unpublish: boolean;
+  /** Collections only. */
+  create?: boolean;
+  /** Collections only. */
+  delete?: boolean;
+}
+
+/**
+ * Response shape from GET /api/me/capabilities: what the signed-in user may
+ * do with each collection and Single, decided by the server's own route gates.
+ */
+export interface CapabilitiesResponse {
+  isSuperAdmin: boolean;
+  /** When the answer stops holding (epoch ms), or null when nothing expires. */
+  validUntil: number | null;
+  entities: Record<string, EntityCapabilitiesAnswer>;
 }
 
 /**

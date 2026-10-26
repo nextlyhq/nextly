@@ -15,11 +15,44 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type {
+  CapabilitiesResponse,
+  EntityCapabilitiesAnswer,
+} from "../../types/permissions";
 import { buildCapabilities } from "../useCurrentUserPermissions";
 
-/** The real deriver, never a hand-built literal. */
+/** The real deriver, never a hand-built literal, before the server answers. */
 const from = (...permissions: string[]) =>
-  buildCapabilities(permissions, false);
+  buildCapabilities(permissions, false, undefined);
+
+/** An answer from the server naming one collection and one Single. */
+const answer = (
+  posts: Partial<EntityCapabilitiesAnswer>,
+  home: Partial<EntityCapabilitiesAnswer> = {}
+): CapabilitiesResponse => ({
+  isSuperAdmin: false,
+  validUntil: null,
+  entities: {
+    posts: {
+      kind: "collection",
+      read: false,
+      create: false,
+      update: false,
+      delete: false,
+      publish: false,
+      unpublish: false,
+      ...posts,
+    },
+    home: {
+      kind: "single",
+      read: false,
+      update: false,
+      publish: false,
+      unpublish: false,
+      ...home,
+    },
+  },
+});
 
 describe("a grant reveals the section it belongs to", () => {
   it.each([
@@ -127,23 +160,67 @@ describe("a grant reveals ONLY its own section", () => {
   });
 });
 
-describe("collections, which are the other half of the derivation", () => {
-  it("builds per-collection capabilities from action-resource slugs", () => {
-    const caps = from("read-posts", "update-posts");
+describe("collections and Singles, which the server answers", () => {
+  it("takes each one's capabilities from the server's answer", () => {
+    const caps = buildCapabilities(
+      [],
+      false,
+      answer({ read: true, update: true, publish: true }, { read: true })
+    );
     expect(caps.collections.posts).toEqual({
       canRead: true,
       canCreate: false,
       canUpdate: true,
       canDelete: false,
+      canPublish: true,
+      canUnpublish: false,
     });
     expect(caps.canViewCollections).toBe(true);
+  });
+
+  it("follows the server where a code rule refuses what a held slug names", () => {
+    // `read-posts` is held, and the collection's rule refuses the read: the
+    // server says no, and so must the admin, or it offers a section the
+    // server will refuse.
+    const caps = buildCapabilities(
+      ["read-posts", "update-posts"],
+      false,
+      answer({ read: false, update: false })
+    );
+    expect(caps.collections.posts?.canRead).toBe(false);
+    expect(caps.collections.posts?.canUpdate).toBe(false);
+    expect(caps.canViewCollections).toBe(false);
+  });
+
+  it("offers nothing until the server has answered, whatever slugs are held", () => {
+    const caps = from("read-posts", "update-posts");
+    expect(caps.collections).toEqual({});
+    expect(caps.canViewCollections).toBe(false);
+  });
+
+  it("gives a Single no create or delete, which it does not have", () => {
+    const caps = buildCapabilities(
+      [],
+      false,
+      answer({}, { read: true, update: true })
+    );
+    expect(caps.collections.home).toMatchObject({
+      canRead: true,
+      canUpdate: true,
+      canCreate: false,
+      canDelete: false,
+    });
   });
 
   it("keeps SYSTEM resources out of the collection map", () => {
     // Otherwise `content-releases` would look like a collection called
     // "content-releases", and the section would be gated by a lookup that
     // happens to work rather than by the flag that is meant to answer.
-    const caps = from("read-content-releases", "read-media");
+    const caps = buildCapabilities(
+      ["read-content-releases", "read-media"],
+      false,
+      answer({})
+    );
     expect(caps.collections["content-releases"]).toBeUndefined();
     expect(caps.collections.media).toBeUndefined();
     expect(caps.canViewCollections).toBe(false);
