@@ -1514,8 +1514,9 @@ export class SingleMutationService extends BaseService {
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing
-      // `unpublish-<slug>`, on top of update — editing and publishing are
-      // separate capabilities, mirroring the collection write path. A write
+      // `unpublish-<slug>`, on top of update for a write that also edits —
+      // editing and publishing are separate capabilities, mirroring the
+      // collection write path. A write
       // targeting a non-default locale publishes through that locale's companion
       // `_status` (only when a string status was provided) and does not move the
       // main row; a default-locale or non-localized write moves the main-row
