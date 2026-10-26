@@ -28,7 +28,11 @@ describe("a built-in role", () => {
     roles = new RoleService(testDb.adapter, testLogger);
     const system = systemRoleFactory({ name: "Built In", level: 10 });
     const custom = roleFactory({ name: "Custom", level: 5 });
-    await testDb.db.insert(testDb.schema.roles).values([system, custom]);
+    // The column is a boolean; the fixtures write SQLite's 0 and 1.
+    await testDb.db.insert(testDb.schema.roles).values([
+      { ...system, isSystem: true },
+      { ...custom, isSystem: false },
+    ]);
     systemRoleId = system.id;
     customRoleId = custom.id;
   });
