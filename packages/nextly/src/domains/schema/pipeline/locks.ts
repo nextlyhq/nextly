@@ -9,7 +9,10 @@
  * is pooler-agnostic. Acquire is an atomic upsert that succeeds only when the
  * lock is free or its TTL has expired; release deletes only our own row.
  *
- * MySQL: GET_LOCK (unchanged). SQLite: single-writer no-op (unchanged).
+ * MySQL: GET_LOCK, named for the connection's database. A named lock belongs
+ * to the whole server, so a fixed name made every Nextly database on a server
+ * share one migrate lock: two apps (or two test workers) on one server refused
+ * or waited on each other's migrations. SQLite: single-writer no-op.
  *
  * @module domains/schema/pipeline/locks
  * @since v0.0.3-alpha (Plan C2; pooler-safe rewrite 2026-06)
@@ -26,7 +29,47 @@ import type {
 
 import { NextlyError } from "../../../errors";
 
-const MYSQL_LOCK_NAME = "nextly:migrate";
+/**
+ * The MySQL migrate lock's name, as SQL evaluated on the connection that takes
+ * it: one name per database, so only a migration of the same database waits.
+ * The database name is hashed because MySQL caps a lock name at 64 characters
+ * and a database name may itself be 64: this is 15 + 40 = 55. A connection
+ * with no database selected gets the hash of the empty string, one shared name,
+ * as before.
+ */
+export const MYSQL_MIGRATE_LOCK_NAME = sql`CONCAT('nextly:migrate:', SHA1(COALESCE(DATABASE(), '')))`;
+const MYSQL_LOCK_NAME = MYSQL_MIGRATE_LOCK_NAME;
+
+/**
+ * The name every Nextly before the per-database lock took, on any database.
+ * While an older version may still be running against this one (a rolling or
+ * serverless deploy with `db.runMigrationsOnBoot`), a holder of this name may
+ * be migrating it, so it is treated as busy too. Remove once no supported
+ * version takes it.
+ */
+const MYSQL_LEGACY_LOCK_NAME = "nextly:migrate";
+
+/**
+ * Whether the legacy name is free, waiting up to `waitSeconds` for it. It is
+ * checked after this database's own lock is taken, so a new process never
+ * holds neither.
+ */
+async function legacyLockFree(
+  db: PgLike,
+  waitSeconds: number
+): Promise<boolean> {
+  const deadline = Date.now() + waitSeconds * 1000;
+  for (;;) {
+    const [row] = toRows(
+      await db.execute(
+        sql`SELECT IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS holder`
+      )
+    );
+    if (row?.holder === null || row?.holder === undefined) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, POLL_MS));
+  }
+}
 const DEFAULT_TTL_SECONDS = 900;
 const POLL_MS = 1000;
 
@@ -74,13 +117,25 @@ function toRows(res: unknown): Array<Record<string, unknown>> {
   return (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
 }
 
-function lockBusy(): never {
+/**
+ * The busy-lock error, told per dialect. PostgreSQL's lock is a row that a
+ * stopped process can leave behind, so `--force-unlock` clears it. MySQL's is
+ * a named lock that goes when the connection holding it ends, so it is never
+ * stale and `--force-unlock` has nothing to clear: the remedy there is to let
+ * the other process finish, or stop it.
+ */
+function lockBusy(dialect: SupportedDialect): never {
   throw new NextlyError({
     code: "NEXTLY_MIGRATE_LOCK_BUSY",
     publicMessage:
-      "Another schema operation holds the migrate lock. Wait for it to finish " +
-      "(a running dev server also holds it) and retry, or run with " +
-      "`--force-unlock` to clear a stale lock.",
+      dialect === "mysql"
+        ? "Another schema operation holds the migrate lock on this database. " +
+          "Wait for it to finish (a running dev server also holds it) and retry. " +
+          "MySQL releases the lock when that process's connection ends, so " +
+          "stopping it frees the lock; `--force-unlock` has nothing to clear here."
+        : "Another schema operation holds the migrate lock. Wait for it to finish " +
+          "(a running dev server also holds it) and retry, or run with " +
+          "`--force-unlock` to clear a stale lock.",
   });
 }
 
@@ -197,6 +252,11 @@ async function withMysqlLock<T>(
       pinned.release();
       return { acquired: false };
     }
+    if (!(await legacyLockFree(pinned.db, waitSeconds))) {
+      await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
+      pinned.release();
+      return { acquired: false };
+    }
     const value = await fn();
     await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
     pinned.release();
@@ -261,7 +321,7 @@ export async function withMigrateLock<T>(
         }
       }
 
-      if (!acquired) lockBusy();
+      if (!acquired) lockBusy("postgresql");
       try {
         return { ran: true, value: await fn() };
       } finally {
@@ -292,7 +352,7 @@ export async function withMigrateLock<T>(
           );
           return { ran: false, reason: "lock-held" };
         }
-        lockBusy();
+        lockBusy("mysql");
       }
       return { ran: true, value: held.value };
     }
