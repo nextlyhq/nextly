@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -25,6 +26,11 @@ import {
 // Integration files share fixed system-table names, so this file keeps its
 // own collection slug.
 const NOTES = "rulefilter_byid_notes";
+// Drafts kept apart from the live entry, read by a key that may edit them, so
+// a read asking for the working draft may be given it.
+const DRAFTED = "rulefilter_byid_drafted";
+// A read rule whose filter names a field the collection does not have.
+const VANISHED = "rulefilter_byid_vanished";
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
@@ -43,6 +49,21 @@ async function boot(): Promise<TestNextly> {
         access: { read: answering({ team: { equals: "public" } }) },
         fields: [text({ name: "title" }), text({ name: "team" })],
       }),
+      defineCollection({
+        slug: DRAFTED,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: answering({ title: { equals: "public" } }),
+          update: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: VANISHED,
+        access: { read: answering({ vanished: { equals: "x" } }) },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   return current;
@@ -58,12 +79,18 @@ async function made(t: TestNextly, title: string, team: string) {
 }
 
 /** What a visitor's read by id answers: the entry, or the refusal whole. */
-async function readAsVisitor(t: TestNextly, id: string): Promise<unknown> {
+async function readAsVisitor(
+  t: TestNextly,
+  id: string,
+  collection: string = NOTES,
+  draft?: boolean
+): Promise<unknown> {
   try {
     const entry = await t.nextly.findByID({
-      collection: NOTES,
+      collection,
       id,
       overrideAccess: false,
+      ...(draft === undefined ? {} : { draft }),
     });
     return { found: (entry as { title?: unknown } | null)?.title ?? null };
   } catch (error) {
@@ -105,5 +132,74 @@ describe("a read by id under a read rule that answers a filter", () => {
     // two refusals, not of two empty answers.
     expect(missing).toMatchObject({ refused: { statusCode: 404 } });
     expect(await readAsVisitor(t, outside)).toEqual(missing);
+  });
+
+  it("does not overlay a working draft the filter was not asked about", async () => {
+    const t = await boot();
+    const made = await t.nextly.create({
+      collection: DRAFTED,
+      data: { title: "public", status: "published" },
+    });
+    const id = String((made.item as { id: string | number }).id);
+    // A pending edit the filter does not match.
+    await t.nextly.update({
+      collection: DRAFTED,
+      id,
+      data: { title: "secret" },
+      draft: true,
+    });
+    // POPULATION CONTROL: a trusted read asking for the working draft is
+    // given it, so the draft is there to be shown.
+    const trusted = await t.nextly.findByID({
+      collection: DRAFTED,
+      id,
+      draft: true,
+    });
+    expect((trusted as { title?: unknown } | null)?.title).toBe("secret");
+    // A key that may read and edit the collection is shown working drafts,
+    // and its read rule answers the filter.
+    const editor = apiKeyScope(
+      ["read", "update"].map(action => ({
+        slug: `${action}-${DRAFTED}`,
+        action,
+        resource: DRAFTED,
+      }))
+    );
+    const asEditor = await t.nextly.findByID({
+      collection: DRAFTED,
+      id,
+      draft: true,
+      overrideAccess: false,
+      user: { id: "key-owner" },
+      actor: editor,
+    });
+    // The live entry the filter matched, not content the filter never saw.
+    expect((asEditor as { title?: unknown } | null)?.title).toBe("public");
+  });
+
+  it("answers as missing, and lists nothing, where the rule's filter names a field the collection lacks", async () => {
+    const t = await boot();
+    const made = await t.nextly.create({
+      collection: VANISHED,
+      data: { title: "kept" },
+    });
+    const id = String((made.item as { id: string | number }).id);
+    const gone = await t.nextly.create({
+      collection: VANISHED,
+      data: { title: "gone" },
+    });
+    const goneId = String((gone.item as { id: string | number }).id);
+    await t.nextly.delete({ collection: VANISHED, id: goneId });
+    // Not a validation error naming the rule's field: the read is answered
+    // as a missing entry is, and the list finds nothing.
+    expect(await readAsVisitor(t, id, VANISHED)).toEqual(
+      await readAsVisitor(t, goneId, VANISHED)
+    );
+    const listed = await t.nextly.find({
+      collection: VANISHED,
+      overrideAccess: false,
+    });
+    expect(listed.items).toEqual([]);
+    expect(listed.meta.total).toBe(0);
   });
 });

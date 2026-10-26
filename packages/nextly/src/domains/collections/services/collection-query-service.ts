@@ -1870,6 +1870,35 @@ export class CollectionQueryService extends BaseService {
     };
   }
 
+  /**
+   * The condition a read rule's filter adds to a read. A filter that cannot be
+   * built against the collection as it stands, one naming a field it no
+   * longer has, matches no entry: a read by id then answers as a missing
+   * entry does, and a list finds nothing. The rule's own error is logged for
+   * whoever maintains the rule, by its code alone, and never handed to the
+   * caller, to whom it would describe the rule.
+   */
+  private async ruleFilterCondition(
+    collectionName: string,
+    filter: RuleFilter,
+    schema: DynamicSchema,
+    localizedCtx: LocalizedQueryContext | null
+  ): Promise<SQLWrapper | undefined> {
+    try {
+      const prepared = await prepareFilterCondition(
+        { collectionName, filter },
+        this.filterSources()
+      );
+      return prepared.condition(schema, localizedCtx);
+    } catch (error) {
+      this.logger.error("A read rule's filter could not be built", {
+        collectionName,
+        code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
+      });
+      return sql`1 = 0`;
+    }
+  }
+
   /** Where the filter builder reads its facts about a collection. */
   private filterSources(): FilterConditionSources {
     const fieldGroups = this.fieldGroupDataService;
@@ -2103,13 +2132,13 @@ export class CollectionQueryService extends BaseService {
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
     if (params.ruleFilter) {
-      const limited = await this.resolveFilterConditions({
-        collectionName: params.collectionName,
-        where: params.ruleFilter,
+      const limited = await this.ruleFilterCondition(
+        params.collectionName,
+        params.ruleFilter,
         schema,
-        localizedCtx,
-      });
-      conditions.push(...limited.conditions);
+        localizedCtx
+      );
+      if (limited) conditions.push(limited);
     }
 
     return {
@@ -4407,6 +4436,11 @@ export class CollectionQueryService extends BaseService {
       if (access.denied) {
         return access.denied;
       }
+      // A working draft is shown only where no read rule's filter is in force:
+      // the filter is judged against the live row, and the draft's content,
+      // which it never saw, could lie outside it.
+      const includeWorkingDraft =
+        params.includeWorkingDraft === true && access.filter === undefined;
 
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
@@ -4471,7 +4505,7 @@ export class CollectionQueryService extends BaseService {
         ...draftDocumentFacts(collectionForStatus as DraftDocumentConfig),
         fields: collectionFieldsFor(collectionForStatus) as FieldConfig[],
         componentSchemas: null,
-        includeWorkingDraft: params.includeWorkingDraft === true,
+        includeWorkingDraft,
         requestedStatus: params.status,
         // The capability is probed against the loaded row further down; this
         // asks only whether the document and the request allow an overlay.
@@ -4508,12 +4542,9 @@ export class CollectionQueryService extends BaseService {
       // so an entry it does not match is not found: the same `404` a missing
       // entry gets, and nothing that tells the two apart.
       const ruleCondition = access.filter
-        ? (
-            await prepareFilterCondition(
-              { collectionName: params.collectionName, filter: access.filter },
-              this.filterSources()
-            )
-          ).condition(
+        ? await this.ruleFilterCondition(
+            params.collectionName,
+            access.filter,
             schema,
             this.buildLocalizedQueryContext(
               companion,
@@ -4705,7 +4736,7 @@ export class CollectionQueryService extends BaseService {
         }),
         fields: fields as FieldConfig[],
         componentSchemas: null,
-        includeWorkingDraft: params.includeWorkingDraft === true,
+        includeWorkingDraft,
         requestedStatus: params.status,
         // The capability is probed below against the loaded row; this half asks
         // only whether the document and the request allow an overlay at all.
