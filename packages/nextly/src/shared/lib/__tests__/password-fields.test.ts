@@ -144,6 +144,23 @@ describe("nested password fields", () => {
     );
   });
 
+  it("hashes each occurrence of one password with its own salt", async () => {
+    const data: Record<string, unknown> = {
+      creds: { token: "samesecret" },
+      keys: [{ secret: "samesecret" }, { secret: "samesecret" }],
+    };
+    await hashPasswordFieldValues(data, NESTED, NO_FIELD_GROUPS);
+
+    const stored = [
+      (data.creds as { token: string }).token,
+      ...(data.keys as Array<{ secret: string }>).map(row => row.secret),
+    ];
+    expect(new Set(stored).size).toBe(3);
+    for (const hash of stored) {
+      await expect(verifyPassword("samesecret", hash)).resolves.toBe(true);
+    }
+  });
+
   it("strips nested password values from responses", () => {
     const entry: Record<string, unknown> = {
       creds: { token: "$2a$hash", label: "kept" },
