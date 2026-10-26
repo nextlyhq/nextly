@@ -2,9 +2,13 @@
  * A write changes only an entry's status when its body names `status` and
  * nothing a write would store: judged by the keys alone, never their values.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { isStatusOnlyWrite, statusGate } from "../immutable-system-fields";
+import {
+  isStatusOnlyWrite,
+  statusGate,
+  writeGateFor,
+} from "../immutable-system-fields";
 
 describe("isStatusOnlyWrite", () => {
   it("holds for a body naming status alone, on a collection and a Single", () => {
@@ -46,5 +50,35 @@ describe("statusGate", () => {
     expect(statusGate("published")).toBe("publish");
     expect(statusGate("draft")).toBe("unpublish");
     expect(statusGate(false)).toBe("unpublish");
+  });
+});
+
+describe("writeGateFor", () => {
+  it("names the gate a status-only body's status names, on an entry with a lifecycle", async () => {
+    await expect(
+      writeGateFor({ status: "published" }, "collection", () => true)
+    ).resolves.toBe("publish");
+    await expect(
+      writeGateFor({ status: "draft", id: "e1" }, "single", async () => true)
+    ).resolves.toBe("unpublish");
+  });
+
+  it("names update for a body naming a field, without reading the lifecycle", async () => {
+    const hasLifecycle = vi.fn(() => true);
+    await expect(
+      writeGateFor(
+        { status: "published", title: "t" },
+        "collection",
+        hasLifecycle
+      )
+    ).resolves.toBe("update");
+    expect(hasLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("names update for a status-only body where there is no lifecycle", async () => {
+    // `status` is then an ordinary field.
+    await expect(
+      writeGateFor({ status: "published" }, "collection", () => false)
+    ).resolves.toBe("update");
   });
 });

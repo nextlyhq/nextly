@@ -47,9 +47,8 @@ import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
-  isStatusOnlyWrite,
-  statusGate,
   stripImmutableSystemFields,
+  writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
@@ -8454,14 +8453,17 @@ export class CollectionMutationService extends BaseService {
       // publish or an unpublish alone, judged by the gate its status names in
       // place of update. Any other field it names is an edit, which needs
       // update whatever its value. The lifecycle is read only for such a body.
-      const statusOnly =
-        isStatusOnlyWrite(body, "collection") &&
-        (
-          (await this.collectionService.getCollection(
-            params.collectionName
-          )) as { status?: boolean }
-        ).status === true;
-      const gate = statusOnly ? statusGate(body.status) : "update";
+      const gate = await writeGateFor(
+        body,
+        "collection",
+        async () =>
+          (
+            (await this.collectionService.getCollection(
+              params.collectionName
+            )) as { status?: boolean }
+          ).status === true
+      );
+      const statusOnly = gate !== "update";
       // Handed on as the status alone: the system columns a status-only body
       // may also name are never stored, and no hook is handed a value sent by
       // a caller judged without update.
@@ -12128,11 +12130,11 @@ export class CollectionMutationService extends BaseService {
         // A write that changes only the status of an entry with a lifecycle
         // is a publish or an unpublish alone, judged by the gate its status
         // names in place of update, whether or not the status moves.
-        const gate =
-          isStatusOnlyWrite(body, "collection") &&
-          (collection as { status?: boolean }).status === true
-            ? statusGate(body.status)
-            : "update";
+        const gate = await writeGateFor(
+          body,
+          "collection",
+          () => (collection as { status?: boolean }).status === true
+        );
         // Handed on as the status alone: the system columns a status-only body
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.

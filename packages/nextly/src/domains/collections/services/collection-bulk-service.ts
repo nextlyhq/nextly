@@ -26,7 +26,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   isStatusOnlyWrite,
-  statusGate,
+  writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -909,11 +909,9 @@ export class CollectionBulkService extends BaseService {
     // A body that changes only the status of entries with a lifecycle is a
     // publish or an unpublish alone, judged by the gate its status names in
     // place of update; each row is judged again as it is written.
-    const gate =
-      isStatusOnlyWrite(params.data, "collection") &&
-      (await this.mutationService.hasLifecycle(params.collectionName))
-        ? statusGate(params.data.status)
-        : "update";
+    const gate = await writeGateFor(params.data, "collection", () =>
+      this.mutationService.hasLifecycle(params.collectionName)
+    );
     const accessDenied = await this.accessService.checkCollectionAccess({
       collectionName: params.collectionName,
       operation: gate,
