@@ -19,6 +19,7 @@
 
 import { z } from "zod";
 
+import { LIST_READ_GATES, requireRouteListRead } from "../auth/list-read-gates";
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import type {
@@ -123,10 +124,8 @@ export const GET = withErrorHandler(async (request: Request) => {
   // init runs, breaking the documented auto-initialization on first request.
   const registry = await getComponentRegistry();
 
-  await requireRouteAnyPermission(request, [
-    { action: "read", resource: "settings" },
-    { action: "manage", resource: "settings" },
-  ]);
+  // The list's gate is the one the dashboard's field-group count reads.
+  await requireRouteListRead(request, LIST_READ_GATES.fieldGroups);
 
   const { searchParams } = new URL(request.url);
 

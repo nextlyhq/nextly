@@ -58,7 +58,7 @@ const readPosts = {
   operation: "read",
   target: { kind: "collection", slug: "posts" },
 } as const;
-const contextNow = () => buildRuleContext(() => true, caller, readPosts);
+const contextNow = () => buildRuleContext(caller, readPosts);
 
 afterEach(() => {
   container.config = undefined;
@@ -214,7 +214,7 @@ describe("the languages a rule is told", () => {
   it("are the question's own where it names them, over the operation's", () => {
     container.config = { localization: LOCALISED };
     const ctx = withRuleLanguage(readLanguagesFor(LOCALISED, "fr"), () =>
-      buildRuleContext(() => true, caller, { ...readPosts, locale: "de" })
+      buildRuleContext(caller, { ...readPosts, locale: "de" })
     );
     expect(ctx.locale).toBe("de");
     expect(ctx.locales).toEqual(["de"]);
@@ -228,7 +228,7 @@ describe("the languages a rule is told", () => {
     const frenchOnly = ({ locales }: { locales: string[] }) =>
       locales.every(code => code === "fr");
     const ctx = withRuleLanguage(everyLanguage(), () =>
-      buildRuleContext(frenchOnly, caller, {
+      buildRuleContext(caller, {
         operation: "delete",
         target: { kind: "collection", slug: "posts" },
       })
@@ -302,7 +302,7 @@ describe("languagesOfContent", () => {
     // same in every language: the related row's rule is told every language.
     declare({ localized: false });
     const related = withRuleLanguage(french, () =>
-      buildRuleContext(() => true, caller, { operation: "read", target: pages })
+      buildRuleContext(caller, { operation: "read", target: pages })
     );
     expect(related.locale).toBeUndefined();
     expect(related.locales).toEqual(every.locales);

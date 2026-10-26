@@ -28,6 +28,10 @@ import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
+import {
+  MAX_ROLE_HIERARCHY_DEPTH,
+  walkRoleGraph,
+} from "../../domains/auth/services/role-graph";
 import { NextlyError } from "../../errors/nextly-error";
 import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
@@ -225,9 +229,6 @@ class PermissionChecker {
     );
     if (direct.size === 0) return { roleIds: direct, validUntil };
 
-    const all = new Set<string>(direct);
-    const queue: string[] = Array.from(direct);
-    const visited = new Set<string>(queue);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roleInherits } = this.t as any;
 
@@ -238,33 +239,29 @@ class PermissionChecker {
     // symmetric — every role reachable from the user's own would count, and a
     // base role would collect everything the roles built on top of it hold.
     // Matches RoleInheritanceService.listDescendantRoles, which the rest of
-    // the RBAC services resolve through.
-    while (queue.length > 0) {
-      const batch = queue.splice(0, 50);
-
-      const childRows = await rbacQuery(executor)
-        .select({ childRoleId: roleInherits.childRoleId })
-        .from(roleInherits)
-        .where(inArray(roleInherits.parentRoleId, batch));
-
-      for (const r of childRows as Array<{ childRoleId: string }>) {
-        const childRoleId = String(r.childRoleId);
-        if (!visited.has(childRoleId)) {
-          visited.add(childRoleId);
-          all.add(childRoleId);
-          queue.push(childRoleId);
-        }
-      }
-
-      if (visited.size > 2000) {
-        getAuthLogger()?.log?.("warn", {
-          category: "auth",
-          op: "error",
-          userId,
-        });
-        break;
-      }
+    // the RBAC services resolve through. The user's own roles count toward
+    // the limit, and a walk cut short there is used as far as it reached.
+    const walk = await walkRoleGraph(
+      Array.from(direct),
+      async batch =>
+        (
+          (await rbacQuery(executor)
+            .select({ childRoleId: roleInherits.childRoleId })
+            .from(roleInherits)
+            .where(inArray(roleInherits.parentRoleId, [...batch]))) as Array<{
+            childRoleId: string;
+          }>
+        ).map(r => r.childRoleId),
+      { limit: MAX_ROLE_HIERARCHY_DEPTH }
+    );
+    if (!walk.complete) {
+      getAuthLogger()?.log?.("warn", {
+        category: "auth",
+        op: "error",
+        userId,
+      });
     }
+    const all = new Set<string>([...direct, ...walk.ids]);
     return { roleIds: all, validUntil };
   }
 
@@ -643,10 +640,9 @@ export async function listEffectivePermissions(
  * the rows name them: each one's stored slug and the action and resource it
  * grants. Sorted by slug, each slug once.
  *
- * The rows rather than one spelling of them, because a rule is handed the
- * stored slug (`read-posts`) and, for one release, the earlier
- * `<resource>:<action>` spelling too, and a slug cannot be rebuilt from its
- * parts: `manage-api-keys` grants `update` on `api-keys`.
+ * The rows rather than the slugs alone, because a slug cannot be split back
+ * into the action and resource it grants: `manage-api-keys` grants `update`
+ * on `api-keys`. A rule is handed each one's stored slug (`read-posts`).
  *
  * Empty for a missing user id. A lookup that fails refuses rather than
  * answering empty: an empty list only denies a rule that asks for a

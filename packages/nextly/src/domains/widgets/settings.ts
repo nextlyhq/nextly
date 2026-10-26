@@ -1050,6 +1050,18 @@ function filterOnlyCellSetting(
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
+/**
+ * Whether a knob drives `setting` on `query`, the source it declares or none
+ * yet: the table's own answer, for a rule that must know which of a widget's
+ * queries a setting reaches, not merely that some knob takes it.
+ */
+export function drivesQuery(
+  setting: AnyWidgetSetting,
+  query: unknown
+): boolean {
+  return knobFor(setting, declaredKnobSource(query)) !== undefined;
+}
+
 function declaredKnobSource(query: unknown): KnobSource | undefined {
   const source =
     typeof query === "object" && query !== null
@@ -1270,6 +1282,21 @@ function allOffered(
 }
 
 /**
+ * The collection a Collection setting's value names, if any: only a value
+ * shaped like a collection slug names one, so a special default such as "*"
+ * names none and the card reads the source its widget declared.
+ *
+ * One rule for every reader of the value: the query a card asks, and whether
+ * the card is withheld from a reader (`collection-cards.ts`). Judged apart, a
+ * card could be withheld for a collection its query never reads.
+ */
+export function namedCollection(value: unknown): string | undefined {
+  return typeof value === "string" && SLUG_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+/**
  * Query knobs a setting may drive: ONE closed map from a kind of setting to
  * how it becomes part of the card's query.
  *
@@ -1298,13 +1325,14 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       setting.type === "collection" &&
       (readsACollection(source) || narrowsBy(source, "collection")),
     apply: (query, value, source, setting, ctx) => {
-      // Only a value shaped like a collection slug names one, read before any
-      // use of it: a special default such as "*" leaves the query as it is.
-      if (typeof value !== "string" || !SLUG_PATTERN.test(value)) return query;
+      // Read before any use of the value: a special default such as "*"
+      // names no collection and leaves the query as it is.
+      const collection = namedCollection(value);
+      if (collection === undefined) return query;
       if (!readsACollection(source) && narrowsBy(source, "collection")) {
-        return { ...query, where: { ...query.where, collection: value } };
+        return { ...query, where: { ...query.where, collection } };
       }
-      return readingCollection(query, value, setting, ctx);
+      return readingCollection(query, collection, setting, ctx);
     },
   },
   {

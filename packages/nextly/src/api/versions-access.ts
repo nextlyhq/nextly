@@ -68,7 +68,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -91,7 +90,13 @@ export async function requireRouteVersionReadAccess(
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
-  const auth = await requireRouteCollectionAccess(request, "read", slug);
+  // A history names one document: a caller who may not read it is answered
+  // as if it were missing, as the dispatcher's history routes answer.
+  const auth = await requireRouteCollectionAccess(request, "read", slug, {
+    method: "readDocumentHistory",
+    params: {},
+    namesOne: true,
+  });
 
   // Resolved role slugs so field-level `access.read` evaluates against the
   // caller's roles (session auth carries role ids; API-key auth carries slugs).
@@ -670,12 +675,7 @@ export async function redactSnapshotForUser(
   // field is declared. The same map takes the read rules into components.
   const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -851,8 +851,7 @@ export async function stripAutosavePasswords(
   stripPasswordsThroughComponents(
     snapshot,
     fields,
-    await autosaveComponentFields(fields, scopeKind, slug),
-    stripPasswordFieldValues
+    await autosaveComponentFields(fields, scopeKind, slug)
   );
 }
 

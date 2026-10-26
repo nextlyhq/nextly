@@ -36,7 +36,12 @@ import {
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
-import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  type FieldGroupReach,
+  hashPasswordFieldValues,
+  NO_FIELD_GROUPS,
+  storedPasswordValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -269,49 +274,11 @@ function parsedColumn(value: unknown): unknown {
 }
 
 /**
- * Every password value `containers` hold, at any depth: the stored hashes an
- * update's restore may put back.
+ * Where the password walk follows the field groups an instance holds inline:
+ * the resolver of their fields, or none where its containers hold none.
  */
-function storedPasswordValues(
-  containers: Record<string, unknown>,
-  fields: readonly FieldConfig[]
-): Set<string> {
-  const found = new Set<string>();
-  collectPasswords(containers, fields, found);
-  return found;
-}
-
-/** {@link storedPasswordValues} for one value: a record or a list of them. */
-function collectPasswords(
-  value: unknown,
-  level: readonly FieldConfig[],
-  found: Set<string>
-): void {
-  for (const row of Array.isArray(value) ? value : [value]) {
-    if (row === null || typeof row !== "object") continue;
-    for (const field of level) {
-      collectFieldPasswords(row as Record<string, unknown>, field, found);
-    }
-  }
-}
-
-/** The password values one field of `record` holds, at any depth. */
-function collectFieldPasswords(
-  record: Record<string, unknown>,
-  field: FieldConfig,
-  found: Set<string>
-): void {
-  const { name, type, fields } = field as {
-    name?: unknown;
-    type?: unknown;
-    fields?: unknown;
-  };
-  if (typeof name !== "string") return;
-  const held = record[name];
-  if (type === "password" && typeof held === "string") found.add(held);
-  else if (Array.isArray(fields)) {
-    collectPasswords(held, fields as FieldConfig[], found);
-  }
+function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
+  return nested ? { fieldsOf: nested } : NO_FIELD_GROUPS;
 }
 
 /**
@@ -2008,7 +1975,15 @@ export class FieldGroupMutationService extends BaseService {
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }
-    await hashPasswordFieldValues(instance, componentFields, restoredHashes);
+    // Through the field groups held inline in this one's containers too: their
+    // passwords are stored in those containers, which no save of their own
+    // reaches.
+    await hashPasswordFieldValues(
+      instance,
+      componentFields,
+      reachOf(nested),
+      restoredHashes
+    );
   }
 
   /**
@@ -2117,8 +2092,12 @@ export class FieldGroupMutationService extends BaseService {
     }
     await keepContainersAtStored(instance, stored, judge);
     // The stored hashes the write may put back, so the hashing pass leaves
-    // them as they are.
-    return storedPasswordValues(stored, componentFields);
+    // them as they are: at every depth, as the hashing pass reaches them.
+    return storedPasswordValues(
+      stored,
+      componentFields,
+      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
+    );
   }
 
   /**

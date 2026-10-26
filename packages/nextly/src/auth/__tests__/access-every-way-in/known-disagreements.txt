@@ -35,13 +35,21 @@ service visitor read collection returns-true at direct  # visitor-public-default
 service visitor read collection returns-true at website  # visitor-public-default
 service visitor read collection returns-true at service  # visitor-public-default
 service user-with read collection returns-false at schema  # schema-list-ignores-rules
+service user-with read collection permission-spelling at schema  # schema-list-ignores-rules
 service custom-role read collection returns-false at schema  # schema-list-ignores-rules
+service custom-role read collection permission-spelling at schema  # schema-list-ignores-rules
 service key-read-only read collection returns-false at schema  # schema-list-ignores-rules
+service key-read-only read collection permission-spelling at schema  # schema-list-ignores-rules
 service key-full-access read collection returns-false at schema  # schema-list-ignores-rules
+service key-full-access read collection permission-spelling at schema  # schema-list-ignores-rules
 service key-role-based read collection returns-false at schema  # schema-list-ignores-rules
+service key-role-based read collection permission-spelling at schema  # schema-list-ignores-rules
 service key-super-admin read collection returns-false at schema  # schema-list-ignores-rules
+service key-super-admin read collection permission-spelling at schema  # schema-list-ignores-rules
 service user-partial read collection returns-false at schema  # schema-list-ignores-rules
+service user-partial read collection permission-spelling at schema  # schema-list-ignores-rules
 service key-partial read collection returns-false at schema  # schema-list-ignores-rules
+service key-partial read collection permission-spelling at schema  # schema-list-ignores-rules
 service user-with read collection returns-null at schema  # schema-list-ignores-rules
 service user-with read collection returns-string at schema  # schema-list-ignores-rules
 service custom-role read collection returns-null at schema  # schema-list-ignores-rules
@@ -262,9 +270,6 @@ service visitor read related publish-false at population  # visitor-public-defau
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
-service key-without-rows read collection permission-spelling at entity  # key-slug-string-match
-service key-without-rows read related permission-spelling at population  # key-slug-string-match
-service key-without-rows read single permission-spelling at entity  # key-slug-string-match
 service user-naming-super-admin read related async-false at population  # claimed-super-admin
 service user-naming-super-admin read related async-throws at population  # claimed-super-admin
 service user-naming-super-admin read related async-true at population  # claimed-super-admin
@@ -287,7 +292,6 @@ service user-naming-super-admin read related user-is-key-maker at population  # 
 no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
 no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
-bound key-without-rows read related permission-spelling at population  # key-slug-string-match
 bound user-naming-super-admin read related async-false at population  # claimed-super-admin
 bound user-naming-super-admin read related async-throws at population  # claimed-super-admin
 bound user-naming-super-admin read related async-true at population  # claimed-super-admin
@@ -339,27 +343,49 @@ service key-full-access unpublish collection false at widget  # holds-permission
 service key-role-based unpublish collection false at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish collection false at widget  # holds-permission-key-skips-rules
 service key-read-only read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-read-only read collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access read collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based read collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial read collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access create collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based create collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access update collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based update collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial update collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial publish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
 service key-read-only read collection returns-null at widget  # holds-permission-key-skips-rules
 service key-read-only read collection returns-string at widget  # holds-permission-key-skips-rules
 service key-full-access read collection returns-null at widget  # holds-permission-key-skips-rules
@@ -568,14 +594,23 @@ service key-role-based update single false at widget  # holds-permission-key-ski
 service key-super-admin update single false at widget  # holds-permission-key-skips-rules
 service key-partial update single false at widget  # holds-permission-key-skips-rules
 service key-read-only read single returns-false at widget  # holds-permission-key-skips-rules
+service key-read-only read single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access read single returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access read single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based read single returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based read single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin read single returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial read single returns-false at widget  # holds-permission-key-skips-rules
+service key-partial read single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access update single returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access update single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based update single returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based update single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin update single returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial update single returns-false at widget  # holds-permission-key-skips-rules
+service key-partial update single permission-spelling at widget  # holds-permission-key-skips-rules
 service key-read-only read single returns-null at widget  # holds-permission-key-skips-rules
 service key-read-only read single returns-string at widget  # holds-permission-key-skips-rules
 service key-full-access read single returns-null at widget  # holds-permission-key-skips-rules
@@ -659,12 +694,19 @@ service key-full-access unpublish single-pub false at widget  # holds-permission
 service key-role-based unpublish single-pub false at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish single-pub false at widget  # holds-permission-key-skips-rules
 service key-full-access publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-partial publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-role-based unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
 service key-full-access publish single-pub returns-null at widget  # holds-permission-key-skips-rules
 service key-full-access publish single-pub returns-string at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub returns-null at widget  # holds-permission-key-skips-rules
@@ -1064,3 +1106,18 @@ no-service key-role-based read collection malformed-filter at widget  # holds-pe
 no-service key-role-based read collection malformed-filter at capabilities  # no-service
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
+service user-with new-pub collection other-operation at rest
+service user-with new-pub collection other-operation at direct  # lifecycle-judged-alone
+service user-with new-pub collection other-operation at service  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at rest
+service custom-role new-pub collection other-operation at direct  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at rest
+service key-full-access new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at rest
+service key-role-based new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at rest
+service key-super-admin new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at service  # lifecycle-judged-alone

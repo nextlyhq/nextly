@@ -23,6 +23,7 @@ import type {
   WidgetQuerySpec,
 } from "./query";
 import {
+  drivesQuery,
   isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
@@ -1790,7 +1791,6 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
  */
 function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
   const fromSetting = declaresCollectionSetting(d.settings);
-  const groupedBySetting = suppliesGrouping(d.settings);
   // The card's own query and each of a custom card's cells, judged alike: the
   // Collection setting supplies every one of their sources, or none.
   const asked: Array<[string, AskedQuery | undefined]> = [
@@ -1813,10 +1813,13 @@ function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
     if (query.source === undefined && !fromSetting) {
       return `${what} names no source, and no Collection setting supplies one`;
     }
+    // Per query: a Group by setting reaches only the queries its knob drives
+    // (a collection's, or one a Collection setting fills), so a cell on
+    // another kind of source is not supplied by it.
     if (
       query.op === "groupBy" &&
       query.groupBy === undefined &&
-      !groupedBySetting
+      !suppliesGrouping(d.settings, query)
     ) {
       return `${what} names no groupBy, and no Group by setting with a default supplies one`;
     }
@@ -1832,11 +1835,12 @@ interface AskedQuery {
 }
 
 /**
- * Whether a definition declares a Group by setting that always gives a value:
- * one with a default, or one taking its default from the collection. Read
- * defensively, as {@link declaresCollectionSetting} reads.
+ * Whether a definition declares a Group by setting that always gives `query`
+ * a value: one with a default, or one taking its default from the collection,
+ * that a knob drives on that query. Read defensively, as
+ * {@link declaresCollectionSetting} reads.
  */
-function suppliesGrouping(settings: unknown): boolean {
+function suppliesGrouping(settings: unknown, query: AskedQuery): boolean {
   return (
     Array.isArray(settings) &&
     settings.some((setting: unknown) => {
@@ -1848,7 +1852,8 @@ function suppliesGrouping(settings: unknown): boolean {
       };
       return (
         type === "groupBy" &&
-        (typeof defaultValue === "string" || defaultFrom === "collection")
+        (typeof defaultValue === "string" || defaultFrom === "collection") &&
+        drivesQuery(setting as AnyWidgetSetting, query)
       );
     })
   );

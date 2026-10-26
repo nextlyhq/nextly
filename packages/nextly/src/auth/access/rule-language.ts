@@ -314,3 +314,15 @@ export async function askEachLanguage<R>(
 export function currentRuleLanguage(): RuleLanguage {
   return ruleLanguage.getStore() ?? everyLanguage();
 }
+
+/**
+ * Asks `ask` about a read as a plain read is asked, in the default language
+ * and its fallbacks: whether the caller can see an entry at all. A gate that
+ * refused another action on one entry asks this to choose between telling the
+ * caller what it may not do and answering the entry as missing.
+ */
+export function askReadAsPlainRead<T>(ask: (action: "read") => T): T {
+  return withRuleLanguage(registeredReadLanguagesFor(undefined), () =>
+    ask("read")
+  );
+}

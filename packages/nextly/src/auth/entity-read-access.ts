@@ -58,9 +58,8 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
       userId: caller.user.id,
       authMethod: "api-key",
       permissions: [...scope.permissions],
-      // The rows behind those slugs, where the scope carried them: what gives
-      // a rule each grant's earlier spelling for its deprecation release. A
-      // scope that held slugs alone hands a rule the slugs.
+      // The rows behind those slugs, where the scope carried them. A rule is
+      // handed each grant's stored slug either way.
       ...(scope.grants ? { grants: scopeGrants(scope) } : {}),
       // The key's OWN roles when authentication resolved them; a key judged
       // on its owner's roles is the same defect as one judged on its owner's
