@@ -229,7 +229,7 @@ describe.each(getConfiguredTestDialects())(
       expect(stored.layout?.placements).toEqual(own);
     });
 
-    it("withholds a Recent entries or Over time card set to a collection the reader may not read, as it does a Count card", async () => {
+    it("withholds a Recent entries, Over time or Breakdown card set to a collection the reader may not read, as it does a Count card", async () => {
       // Every widget offered per collection reads the collection its
       // Collection setting names, so the same rule withholds each, not Count's
       // cards alone.
@@ -243,6 +243,9 @@ describe.each(getConfiguredTestDialects())(
         card("over-theirs", "core/over-time", {
           config: { collection: SECRET },
         }),
+        card("breakdown-theirs", "core/breakdown", {
+          config: { collection: SECRET },
+        }),
       ];
       const reader = await account("cv-lister@example.com");
       await service().saveLayout("user", reader, own, 0);
@@ -253,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
       ]);
       expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
 
-      // Their save carries both withheld cards back in place.
+      // Their save carries every withheld card back in place.
       const res = await call(reader, "PUT", {
         placements: seen.placements,
         version: seen.version,
