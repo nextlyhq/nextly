@@ -1050,6 +1050,18 @@ function filterOnlyCellSetting(
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
+/**
+ * Whether a knob drives `setting` on `query`, the source it declares or none
+ * yet: the table's own answer, for a rule that must know which of a widget's
+ * queries a setting reaches, not merely that some knob takes it.
+ */
+export function drivesQuery(
+  setting: AnyWidgetSetting,
+  query: unknown
+): boolean {
+  return knobFor(setting, declaredKnobSource(query)) !== undefined;
+}
+
 function declaredKnobSource(query: unknown): KnobSource | undefined {
   const source =
     typeof query === "object" && query !== null

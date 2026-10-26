@@ -168,8 +168,10 @@ export function askableWith(
   sources?: readonly PublishedContentSource[]
 ): boolean {
   const asked = widgetAsAsked(widget, config, sources);
-  if (asked.archetype === "custom" && asked.cells?.length) {
-    return asked.cells.some(cell => askableQuery(cell.query));
+  // Judged by what the widget DECLARES: a cells card whose conditional cells
+  // all fall away on this collection asks nothing, and would be offered empty.
+  if (widget.archetype === "custom" && widget.cells?.length) {
+    return (asked.cells ?? []).some(cell => askableQuery(cell.query));
   }
   return asked.query === undefined || askableQuery(asked.query);
 }
