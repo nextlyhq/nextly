@@ -76,7 +76,7 @@ export interface HistoryStoryListProps {
    * edited was, the list offers no "All languages": the other languages'
    * versions are not there, and the events alone would tell half their story.
    */
-  allLanguages?: boolean;
+  allLanguages: boolean;
   /** The retention limit, when the editor knows it. */
   retention?: number | false;
   /** Whether older versions remain to load: a predecessor may be among them. */
@@ -339,7 +339,7 @@ export function HistoryStoryList({
   lifecycle,
   localized,
   editingLocale,
-  allLanguages = true,
+  allLanguages,
   retention,
   hasMore,
   selected,

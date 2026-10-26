@@ -125,6 +125,15 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
 });
 
 /**
+ * A cell of the server's answer, or `own` where the answer has none: an older
+ * server answers no cell for a request judged in other languages, which the
+ * action's own cell then stands for.
+ */
+function cellOr(cell: boolean | undefined, own: boolean): boolean {
+  return cell ?? own;
+}
+
+/**
  * What the user may do with each collection and Single, as the server's
  * answer states it. No answer yet means nothing is known, so nothing is
  * offered: the map stays empty rather than guessed from permission slugs,
@@ -135,25 +144,29 @@ function collectionsFrom(
 ): Record<string, CollectionCapabilities> {
   const collections: Record<string, CollectionCapabilities> = {};
   for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
-    const canCreate = entity.create ?? false;
+    const canCreate = cellOr(entity.create, false);
     collections[slug] = {
       canRead: entity.read,
       // Every create the admin sends names no language, so the server writes
       // it in the default one: that is the create answered here, for the
       // list's New, the create page and the quick-create modal alike.
-      canCreate: entity.createInDefaultLanguage ?? canCreate,
+      canCreate: cellOr(entity.createInDefaultLanguage, canCreate),
       canUpdate: entity.update,
-      canDelete: entity.delete ?? false,
+      canDelete: cellOr(entity.delete, false),
       canPublish: entity.publish,
       canUnpublish: entity.unpublish,
-      // Each request judged in other languages, as the server judges it; an
-      // answer without it leaves the action's own cell.
-      canReadTranslations: entity.readTranslations ?? entity.read,
-      canReadHistory: entity.readHistory ?? entity.read,
-      canPublishEveryLanguage: entity.publishEveryLanguage ?? entity.publish,
-      canUpdateInDefaultLanguage:
-        entity.updateInDefaultLanguage ?? entity.update,
-      canDuplicate: entity.duplicate ?? canCreate,
+      // Each request judged in other languages, as the server judges it.
+      canReadTranslations: cellOr(entity.readTranslations, entity.read),
+      canReadHistory: cellOr(entity.readHistory, entity.read),
+      canPublishEveryLanguage: cellOr(
+        entity.publishEveryLanguage,
+        entity.publish
+      ),
+      canUpdateInDefaultLanguage: cellOr(
+        entity.updateInDefaultLanguage,
+        entity.update
+      ),
+      canDuplicate: cellOr(entity.duplicate, canCreate),
     };
   }
   return collections;

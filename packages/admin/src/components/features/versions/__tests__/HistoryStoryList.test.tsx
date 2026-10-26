@@ -121,6 +121,7 @@ function renderList(
       lifecycle
       localized={false}
       editingLocale={null}
+      allLanguages
       hasMore={false}
       selected={null}
       onSelect={vi.fn()}

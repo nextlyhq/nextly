@@ -37,7 +37,7 @@ import {
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
+import { useHistoryLanguage } from "@admin/hooks/useCanRequest";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
@@ -219,13 +219,11 @@ export function VersionHistorySheet({
   // The whole history reads every language's versions. A user the server
   // lets read only some of them is shown the language being edited instead,
   // rather than a list the server refuses outright.
-  const mayReadAllHistory = useCanRequest(scope.slug, "readHistory");
+  const historyLanguage = useHistoryLanguage(scope.slug, editingLocale);
   const list = useVersions({
     scope,
     enabled: open,
-    ...(mayReadAllHistory || editingLocale === null
-      ? {}
-      : { locale: editingLocale }),
+    ...(historyLanguage === undefined ? {} : { locale: historyLanguage }),
   });
   // The document's events, which the story shows beside its versions.
   const eventList = useDocumentEvents({ scope, enabled: open });
@@ -771,7 +769,7 @@ export function VersionHistorySheet({
                   editingLocale={editingLocale}
                   // Only the language being edited was read where the whole
                   // history may not be, so "All languages" is not offered.
-                  allLanguages={mayReadAllHistory}
+                  allLanguages={historyLanguage === undefined}
                   {...(retention !== undefined ? { retention } : {})}
                   hasMore={hasMore}
                   selected={selected}

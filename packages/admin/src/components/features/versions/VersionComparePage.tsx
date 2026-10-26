@@ -21,7 +21,7 @@ import { Alert, AlertDescription, Button } from "@admin/components/ui";
 import { ROUTES, buildRoute, withQuery } from "@admin/constants/routes";
 import { scopeKey, useVersions } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
+import { useHistoryLanguage } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
@@ -155,10 +155,9 @@ export function VersionComparePage({
 }: VersionComparePageProps): JSX.Element {
   // Unfiltered, the history reads every language's versions; a user the
   // server lets read only some is shown the default language's instead.
-  const mayReadAllHistory = useCanRequest(scope.slug, "readHistory");
   const { defaultLocale } = useLocalization();
-  const shownLocale =
-    locale ?? (mayReadAllHistory ? undefined : defaultLocale || undefined);
+  const historyLanguage = useHistoryLanguage(scope.slug, defaultLocale);
+  const shownLocale = locale ?? historyLanguage;
   const list = useVersions({
     scope,
     ...(shownLocale === undefined ? {} : { locale: shownLocale }),

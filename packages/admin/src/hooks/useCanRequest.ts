@@ -31,3 +31,17 @@ export function useAsksTranslationStatus(slug: string): boolean {
   const mayReadTranslations = useCanRequest(slug, "readTranslations");
   return enabled && mayReadTranslations;
 }
+
+/**
+ * The language a read of the collection or Single `slug`'s version history is
+ * narrowed to: none, so every language's versions, for a user the server lets
+ * read them all; otherwise `language`, since the unfiltered history would be
+ * refused outright.
+ */
+export function useHistoryLanguage(
+  slug: string,
+  language: string | null | undefined
+): string | undefined {
+  const mayReadAllHistory = useCanRequest(slug, "readHistory");
+  return mayReadAllHistory ? undefined : language || undefined;
+}

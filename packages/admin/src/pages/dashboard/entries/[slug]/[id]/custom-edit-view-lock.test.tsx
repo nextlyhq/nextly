@@ -88,6 +88,7 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
 // about the claim.
 vi.mock("@admin/hooks/useCanRequest", () => ({
   useCanRequest: () => true,
+  useAsksTranslationStatus: () => false,
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),

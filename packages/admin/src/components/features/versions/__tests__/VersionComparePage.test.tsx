@@ -62,8 +62,12 @@ vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,
 }));
 
-vi.mock("@admin/hooks/useCanRequest", () => ({
-  useCanRequest: (...a: unknown[]) => canRequestMock(...a) as boolean,
+// The server's answer about each request, which `useCanRequest` and the
+// history's language read.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({
+    canAccessCollection: (...a: unknown[]) => canRequestMock(...a) as boolean,
+  }),
 }));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
