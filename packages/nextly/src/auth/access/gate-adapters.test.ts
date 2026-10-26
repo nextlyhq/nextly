@@ -15,6 +15,7 @@ import {
 } from "../../domains/collections/__tests__/collection-test-helpers";
 import { consoleLogger } from "../../shared/types";
 import type { CollectionAccessControl } from "../../shared/types/access";
+import { makePrincipal } from "../../plugins/principals/principal";
 import { apiKeyScope } from "../authenticated-scope";
 import { runWithCallerScope } from "../caller-scope";
 
@@ -477,6 +478,34 @@ describe("a read whose route already authorized it", () => {
   it("cannot keep a route's filter outside a request", () => {
     // So the route refuses the caller rather than let the read run unfiltered.
     expect(kept("u1", OWN)).toBe(false);
+  });
+
+  it("asks a rule again for the same person once their attributes change", async () => {
+    // The rule is told the whole person: an answer for one tenant is no
+    // answer for another.
+    const rule = vi.fn(
+      ({ principal }: { principal: { attributes: { tenant: string } } }) =>
+        ({
+          tenant: { equals: principal.attributes.tenant },
+        }) as unknown as boolean
+    );
+    const as = (tenant: string) =>
+      collectionGateVerdict(
+        asked(
+          { read: rule as unknown as CollectionAccessControl["read"] },
+          {
+            principal: makePrincipal("members:member", "m1", { tenant }),
+            appliesFilter: true,
+          }
+        )
+      );
+    const [first, second] = await runWithAccessMemo(async () => [
+      await as("north"),
+      await as("south"),
+    ]);
+    expect(first).toMatchObject({ filter: { tenant: { equals: "north" } } });
+    expect(second).toMatchObject({ filter: { tenant: { equals: "south" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
   });
 
   it("asks a rule again for another caller in the same request", async () => {

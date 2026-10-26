@@ -15,6 +15,7 @@ import type { Principal } from "../../plugins/principals/types";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
+import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
   apiKeyWriteAllowed,
   scopeRowsAgree,
@@ -366,11 +367,15 @@ function readsRouteFilter(
  * What a rule is told about an actor (`ruleContext`), as a question kept for
  * the request names it, and nothing it is not told: a signed-in user and a
  * key are each the user id, the roles and the grants' slugs; a plugin person
- * is the person; a visitor is told nothing. So a narrower scope never reuses
- * a wider one's answer, and two asks that hand the rule the same context,
- * whichever way they built the actor, share one.
+ * is the whole person, its attributes included, which the rule is told; a
+ * visitor is told nothing. So a narrower scope, or a person whose attributes
+ * changed, never reuses an earlier answer, and two asks that hand the rule
+ * the same context, whichever way they built the actor, share one.
+ * `undefined` for a person no key can name, whose answer is not kept.
  */
-function ruleContextKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
+function ruleContextKeyOf(
+  actor: Exclude<Actor, { kind: "system" }>
+): string | undefined {
   switch (actor.kind) {
     case "user":
     case "key":
@@ -380,12 +385,12 @@ function ruleContextKeyOf(actor: Exclude<Actor, { kind: "system" }>): string {
         [...actor.roles].sort(),
         actor.permissions.map(grant => grant.slug).sort(),
       ]);
-    case "principal":
-      return JSON.stringify([
-        "principal",
-        actor.principal.kind,
-        actor.principal.id,
-      ]);
+    case "principal": {
+      const person = canonicalJson(actor.principal);
+      return person === undefined
+        ? undefined
+        : JSON.stringify(["principal", person]);
+    }
     case "visitor":
       return "visitor";
   }
@@ -406,10 +411,12 @@ function askedOnce<T>(
   asked: "rule" | "rules"
 ): Promise<T> {
   if (!q.appliesFilter || q.action !== "read") return ask();
+  const context = ruleContextKeyOf(actor);
+  if (context === undefined) return ask();
   const question = [
     asked,
     `${target.kind}:${target.slug}`,
-    ruleContextKeyOf(actor),
+    context,
     ruleLanguageKey(),
   ].join("|");
   return rememberRuleOutcome(question, ask);
