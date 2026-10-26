@@ -50,15 +50,12 @@ const MYSQL_LOCK_NAME = MYSQL_MIGRATE_LOCK_NAME;
 const MYSQL_LEGACY_LOCK_NAME = "nextly:migrate";
 
 /**
- * Whether the legacy name is free, waiting up to `waitSeconds` for it. It is
- * checked after this database's own lock is taken, so a new process never
- * holds neither.
+ * Whether the legacy name is free, waiting for it until `deadline` (epoch ms).
+ * It is checked after this database's own lock is taken, so a new process
+ * never holds neither, and it shares that lock's deadline: the caller's wait
+ * covers both names, not each in turn.
  */
-async function legacyLockFree(
-  db: PgLike,
-  waitSeconds: number
-): Promise<boolean> {
-  const deadline = Date.now() + waitSeconds * 1000;
+async function legacyLockFree(db: PgLike, deadline: number): Promise<boolean> {
   for (;;) {
     const [row] = toRows(
       await db.execute(
@@ -240,6 +237,8 @@ async function withMysqlLock<T>(
   waitSeconds: number,
   fn: () => Promise<T>
 ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  // One deadline for both names, taken before the first wait starts.
+  const deadline = Date.now() + waitSeconds * 1000;
   const pinned = await pinMysqlConnection(db);
   try {
     const acquired = toRows(
@@ -252,7 +251,7 @@ async function withMysqlLock<T>(
       pinned.release();
       return { acquired: false };
     }
-    if (!(await legacyLockFree(pinned.db, waitSeconds))) {
+    if (!(await legacyLockFree(pinned.db, deadline))) {
       await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
       pinned.release();
       return { acquired: false };

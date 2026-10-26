@@ -153,6 +153,34 @@ describe("withMigrateLock (mysql named lock)", () => {
   });
 });
 
+describe("withMigrateLock (mysql, while an older version holds the old name)", () => {
+  /**
+   * Both names share one wait. A `GET_LOCK` that used most of the budget must
+   * leave the old name's check only what is left, not a fresh budget, or a
+   * caller's maximum wait could nearly double.
+   */
+  it("spends one wait across the per-database lock and the old name", async () => {
+    const db = {
+      execute: vi.fn(async (q: unknown) => {
+        const text = JSON.stringify(q);
+        if (text.includes("GET_LOCK")) {
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          return { rows: [{ locked: 1 }] };
+        }
+        if (text.includes("IS_USED_LOCK")) return { rows: [{ holder: 7 }] };
+        return { rows: [] };
+      }),
+    };
+    const started = Date.now();
+    const outcome = await withMigrateLock(db, "mysql", async () => "x", {
+      mode: "wait",
+      maxWaitMs: 1_000,
+    });
+    expect(outcome).toEqual({ ran: false, reason: "lock-held" });
+    expect(Date.now() - started).toBeLessThan(1_800);
+  });
+});
+
 describe("withMigrateLock (postgres lock row)", () => {
   it("acquires (row returned), runs fn, releases", async () => {
     const db = fakeDb({ acquireRows: [1] });
