@@ -28,7 +28,11 @@ export interface CollectionCapabilities {
   canPublishEveryLanguage: boolean;
   /** An update sent with no language, as the quick-edit modal sends one. */
   canUpdateInDefaultLanguage: boolean;
-  /** Copying an entry. Never true of a Single. */
+  /**
+   * Copying a published entry. The server refuses a copy of a draft that was
+   * never published, whoever asks, so a surface offering a copy offers it
+   * only on an entry with a published version. Never true of a Single.
+   */
   canDuplicate: boolean;
 }
 
