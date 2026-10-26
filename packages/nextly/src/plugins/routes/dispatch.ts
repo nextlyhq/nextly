@@ -286,8 +286,16 @@ function requiredPermissionOrRefusal(
       permission: resolveRoutePermission(route.requiredPermission, self),
     };
   } catch (cause) {
+    // A permission the route cannot work out is the plugin's fault, not the
+    // caller's: answered 500, as any server fault is, and never let through.
+    // A 403 told the caller their grant fell short when no grant could have
+    // been enough. The resolver's own error, or the empty slug's, goes to the
+    // log.
     return {
-      error: NextlyError.forbidden({
+      error: new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage: "a plugin route's requiredPermission could not be resolved",
         ...(cause instanceof Error ? { cause } : {}),
         logContext: {
           reason: "plugin-route-permission-unresolved",

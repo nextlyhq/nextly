@@ -4,8 +4,8 @@
  * The unit tests next door prove the slug is composed from the plugin's own
  * names. This proves the DISPATCHER uses it: that a caller without the grant is
  * refused at the door rather than inside the handler, that a caller holding it
- * gets through, and that a resolver which throws refuses instead of falling
- * through to the ungated path.
+ * gets through, and that a resolver which throws is answered as the server
+ * fault it is (500) instead of falling through to the ungated path.
  *
  * That last one is the case worth the setup. `requiredPermission` is optional,
  * so "no permission" and "the permission could not be worked out" are one value
@@ -199,11 +199,14 @@ describe("a route gated by a computed permission", () => {
     ).not.toBe(true);
   });
 
-  it("refuses when the permission cannot be computed, rather than opening", async () => {
+  it("answers a server fault when the permission cannot be computed, rather than opening", async () => {
     const key = await readOnlyKey();
 
     const res = await post("broken", { authorization: `Bearer ${key}` });
-    const body = (await res.json()) as { reached?: boolean };
+    const body = (await res.json()) as {
+      reached?: boolean;
+      error?: { code?: string };
+    };
 
     expect(
       body.reached,
@@ -211,14 +214,22 @@ describe("a route gated by a computed permission", () => {
         "optional, so a swallowed failure reads as a route that needs no " +
         "permission — the gate opening the door it was written to close."
     ).not.toBe(true);
-    expect(res.status, "a gate that cannot be computed refuses").toBe(403);
+    // The plugin's fault, not the caller's: no grant could have been enough,
+    // so the answer is not a 403 saying theirs fell short.
+    expect(res.status, "a gate that cannot be computed is a server fault").toBe(
+      500
+    );
+    expect(body.error?.code).toBe("INTERNAL_ERROR");
   });
 
-  it("refuses an EMPTY computed permission, rather than opening the route", async () => {
+  it("answers a server fault for an EMPTY computed permission, rather than opening the route", async () => {
     const key = await readOnlyKey();
 
     const res = await post("empty", { authorization: `Bearer ${key}` });
-    const body = (await res.json()) as { reached?: boolean };
+    const body = (await res.json()) as {
+      reached?: boolean;
+      error?: { code?: string };
+    };
 
     expect(
       body.reached,
@@ -227,7 +238,8 @@ describe("a route gated by a computed permission", () => {
         "required` — so the gate reported the route as ungated instead of " +
         "refusing, which is the failure opening the door."
     ).not.toBe(true);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(500);
+    expect(body.error?.code).toBe("INTERNAL_ERROR");
   });
 
   it("still refuses an unauthenticated caller", async () => {
