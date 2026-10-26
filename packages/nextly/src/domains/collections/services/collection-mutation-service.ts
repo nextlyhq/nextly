@@ -13192,6 +13192,9 @@ export class CollectionMutationService extends BaseService {
         }>({
           collectionName: params.collectionName,
           operation: "delete",
+          // The one entry it deletes, so a caller who may not read it is
+          // answered as if it were missing, as the ordinary delete answers.
+          entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),

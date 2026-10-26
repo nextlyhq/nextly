@@ -58,6 +58,28 @@ describe("singles-detail PATCH route auth forwarding", () => {
     });
   });
 
+  it("tells the route gate the language the write names", async () => {
+    // A rule that allows updates only in the default language must be asked
+    // about the language actually written, as the dispatcher asks it.
+    const request = new Request(
+      "http://localhost/api/singles/site-settings?locale=fr",
+      { method: "PATCH" }
+    );
+    const context = { params: Promise.resolve({ slug: "site-settings" }) };
+
+    await PATCH(request, context);
+
+    expect(requireRouteCollectionAccessSpy).toHaveBeenCalledWith(
+      request,
+      "update",
+      "site-settings",
+      expect.objectContaining({
+        method: "updateSingleDocument",
+        params: { locale: "fr" },
+      })
+    );
+  });
+
   it("forwards the authenticated user, overrideAccess, and routeAuthorized to update", async () => {
     const request = new Request("http://localhost/api/singles/site-settings", {
       method: "PATCH",

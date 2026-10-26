@@ -401,6 +401,36 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   // ── Collection-level access: delete ───────────────────────────────────
 
   describe("delete access control", () => {
+    it("answers a delete in a transaction the caller may not read as missing", async () => {
+      // The transaction API reaches the same gate, and must answer the same
+      // caller the same way the ordinary delete does.
+      const rbac = createMockRbacAccessControlService();
+      callerMay();
+      const { service, selectData, adapter } = buildService({
+        rbacAccessControlService: rbac,
+      });
+      selectData.rows = [createSampleEntry()];
+
+      // The row exists, so the gate is what answers: a missing row would be
+      // answered by the lookup before it ("Entry not found").
+      const result = (await adapter.transaction((tx: object) =>
+        service.deleteEntryInTransaction(
+          { ...tx, selectOne: async () => createSampleEntry() } as never,
+          {
+            collectionName: "posts",
+            entryId: "entry-1",
+            user: { id: "user-1" },
+          }
+        )
+      )) as { statusCode: number; message: string; code?: string };
+
+      expect(result).toMatchObject({
+        statusCode: 404,
+        code: "NOT_FOUND",
+        message: "Not found.",
+      });
+    });
+
     it("should deny deleteEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
       callerMay();
