@@ -109,6 +109,7 @@ import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
+  renderTemplateParts,
   type RenderedTemplate,
   type TemplateFields,
 } from "./render-template";
@@ -444,34 +445,6 @@ type EmailTemplatesTable =
   | typeof emailTemplatesPg
   | typeof emailTemplatesMysql
   | typeof emailTemplatesSqlite;
-
-/**
- * The preview text as an inbox shows it: rendered exactly as the sent email
- * renders it, in the HTML it is spliced into, with the same data, engine and
- * brand, then read as text the way an inbox reads that hidden line.
- */
-function renderPreheaderText(
-  source: string,
-  template: TemplateFields,
-  data: Record<string, unknown>,
-  options: Parameters<typeof renderTemplate>[3]
-): string {
-  const { html } = renderTemplate(
-    {
-      ...template,
-      subject: "",
-      htmlContent: source,
-      plainTextContent: null,
-      preheader: null,
-      useLayout: false,
-      kind: "template",
-    },
-    null,
-    data,
-    options
-  );
-  return htmlToText(html, { linkTargets: false }).trim();
-}
 
 /**
  * The From line a reader would see, for a preview. One whose address uses a
@@ -2141,7 +2114,7 @@ export class EmailTemplateService extends BaseService {
         brandChange
       ),
     };
-    const rendered = renderTemplate(
+    const { rendered, preheaderHtml } = renderTemplateParts(
       { ...draft, legacy },
       layout && {
         ...layout,
@@ -2152,13 +2125,10 @@ export class EmailTemplateService extends BaseService {
     );
     return {
       ...rendered,
-      preheader: draft.preheader?.trim()
-        ? renderPreheaderText(
-            draft.preheader,
-            { ...draft, legacy },
-            sampleData,
-            options
-          )
+      // The preview text as an inbox shows it: the hidden line this render
+      // spliced into the HTML, read as text the way an inbox reads it.
+      preheader: preheaderHtml
+        ? htmlToText(preheaderHtml, { linkTargets: false }).trim()
         : "",
       from: draft.fromOverride
         ? previewFrom(draft.fromOverride, sampleData)

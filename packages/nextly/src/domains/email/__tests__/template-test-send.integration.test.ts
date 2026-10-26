@@ -261,6 +261,20 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       expect(linked.preheader).toBe("See your order");
 
+      // The preview text is the line the HTML carries, from the same render: a
+      // value that differs between reads must not show two different lines.
+      let reads = 0;
+      const counted = await templates.previewDraft(
+        { ...draft, preheader: "Read {{ count }}" },
+        {
+          get count() {
+            reads += 1;
+            return reads;
+          },
+        }
+      );
+      expect(counted.html).toContain(`>${counted.preheader}</div>`);
+
       // A From that can't render fails the preview, as it fails the send.
       await expect(
         templates.previewDraft(

@@ -154,6 +154,22 @@ export function renderTemplate(
   data: Record<string, unknown>,
   options: RenderTemplateOptions
 ): RenderedTemplate {
+  return renderTemplateParts(template, layout, data, options).rendered;
+}
+
+/**
+ * A render, plus the preheader as it was spliced into the HTML: `null` when
+ * the template has none. A preview reads its inbox line from this, so it is
+ * the line the HTML carries and not a second render's.
+ *
+ * @throws NextlyError as `renderTemplate` does.
+ */
+export function renderTemplateParts(
+  template: TemplateFields,
+  layout: LayoutFields | null,
+  data: Record<string, unknown>,
+  options: RenderTemplateOptions
+): { rendered: RenderedTemplate; preheaderHtml: string | null } {
   const legacy = template.legacy;
   const layoutData = withLayoutChrome(data, options);
   // The body reads the brand settings as `brand` too, so a site's template
@@ -191,9 +207,10 @@ export function renderTemplate(
     ? fill(template.plainTextContent, bodyData, "text", legacy)
     : htmlToText(html);
 
+  let preheaderHtml: string | null = null;
   if (template.preheader?.trim()) {
-    const preheader = fill(template.preheader, bodyData, "html", legacy);
-    html = `${PREHEADER_OPEN}${preheader}</div>${html}`;
+    preheaderHtml = fill(template.preheader, bodyData, "html", legacy);
+    html = `${PREHEADER_OPEN}${preheaderHtml}</div>${html}`;
   }
 
   // A layout row IS a wrapper, so wrapping it in another would nest two
@@ -202,7 +219,7 @@ export function renderTemplate(
     html = spliceIntoLayout(layout, html, layoutData);
   }
 
-  return { subject, html, text };
+  return { rendered: { subject, html, text }, preheaderHtml };
 }
 
 /**
