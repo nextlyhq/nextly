@@ -419,6 +419,48 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(await meta.get(PUBLIC_ROLE_META_KEY)).toBe("created");
   });
 
+  it("finishes a move a boot stopped part-way through", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const readMedia = await permissionId(nextly, "read-media");
+    const own = await services(nextly).roles.createRole({
+      name: "Ours",
+      slug: "ours",
+      permissionIds: [readMedia],
+    });
+    // A boot recorded the site's role, moved it to `public-1` and stopped
+    // before clearing what is cached from its grants or making Public.
+    await asBeforePublic(nextly, own.id);
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      update: (table: unknown) => {
+        set: (v: unknown) => { where: (c: unknown) => Promise<unknown> };
+      };
+    };
+    await db
+      .update(roles)
+      .set({ slug: "public-1" })
+      .where(eq(roles.id, own.id));
+    const meta = nextly.getService("metaService");
+    await meta.set(PUBLIC_ROLE_META_KEY, {
+      claim: "stopped",
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      moving: own.id,
+    });
+    grantsChanged.roleIds = [];
+
+    await seedPermissionsAndRolePresets();
+
+    expect(grantsChanged.roleIds).toContain(own.id);
+    expect((await services(nextly).roles.getRoleById(own.id)).slug).toBe(
+      "public-1"
+    );
+    expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
+      isSystem: true,
+    });
+    expect(await meta.get(PUBLIC_ROLE_META_KEY)).toBe("created");
+  });
+
   it("moves a site's own `public` role to the next free slug", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();

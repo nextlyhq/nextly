@@ -48,6 +48,20 @@ describe("collectRoles", () => {
     ).toThrow(/super-admin/);
   });
 
+  it("throws on the Public role's slug, from an app or a plugin", () => {
+    expect(() =>
+      collectRoles(
+        cfg([{ slug: "public", name: "X", permissionSlugs: [] }]),
+        []
+      )
+    ).toThrow(/public/);
+    expect(() =>
+      collectRoles(cfg(), [
+        plugin("@a/p", [{ slug: "public", name: "X", permissionSlugs: [] }]),
+      ])
+    ).toThrow(/public/);
+  });
+
   it("returns [] when nothing declares roles", () => {
     expect(collectRoles(cfg(), [])).toEqual([]);
   });

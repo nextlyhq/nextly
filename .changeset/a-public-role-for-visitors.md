@@ -34,3 +34,5 @@ A built-in Public role is added: the role visitors will be judged by. It holds n
 A site whose own role already used the slug `public` keeps that role under the next free slug (`public-1`, `public-2`, …) on the first boot of this version, with its name, holders, permissions and inheritance unchanged, and the change is logged. Code access rules that check the role slug `public` must check the new slug instead.
 
 Saving a role in the admin keeps its slug.
+
+An app or plugin role declared with the slug `public` is refused at boot, as one declared with `super-admin` already is.

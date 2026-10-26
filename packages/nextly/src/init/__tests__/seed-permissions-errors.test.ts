@@ -43,7 +43,10 @@ vi.mock("../../di/service-access", () => ({
   },
 }));
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
-vi.mock("../../domains/auth/services/public-role", () => ({ seedPublicRole }));
+vi.mock("../../domains/auth/services/public-role", () => ({
+  PUBLIC_ROLE_SLUG: "public",
+  seedPublicRole,
+}));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
