@@ -19,17 +19,6 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: vi.fn(),
 }));
 
-/** The address the router is on. */
-const route = vi.hoisted(() => ({ pathname: "/admin/collections/posts/1" }));
-vi.mock("@admin/hooks/useRouter", () => ({
-  useRouter: () => ({
-    isHydrated: true,
-    route: null,
-    outside: false,
-    pathname: route.pathname,
-  }),
-}));
-
 const mockNavigateTo = vi.fn();
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => mockNavigateTo(path),
@@ -85,7 +74,6 @@ function Page() {
 beforeEach(() => {
   vi.clearAllMocks();
   forgetEntryBehind();
-  route.pathname = "/admin/collections/posts/1";
 });
 
 afterEach(() => {
@@ -502,26 +490,25 @@ describe("PermissionGuard", () => {
     it("does not keep a page for another route that asks the same while a language is asked", () => {
       // The entry this guard opened is not the one navigated to: another
       // address asking the same of the same entity waits for its answer.
-      route.pathname = "/admin/collections/posts/1";
       holding([], false, { allows: ["read-posts"] });
-      const guarded = () => (
+      const guarded = (page: string) => (
         <PermissionGuard
           requiredPermission="read-posts"
           subject="collection"
           entity={POSTS}
+          page={page}
         >
           <Page />
         </PermissionGuard>
       );
-      const { rerender } = render(guarded());
+      const { rerender } = render(guarded("/admin/collections/posts/1"));
       expect(screen.getByText("the page")).toBeTruthy();
 
-      route.pathname = "/admin/collections/posts/2";
       holding([], false, {
         allows: [],
         content: { hasAnswer: false, isPlaceholder: true },
       });
-      rerender(guarded());
+      rerender(guarded("/admin/collections/posts/2"));
       expect(screen.getByText("Setting up your workspace")).toBeTruthy();
       expect(screen.queryByText("the page")).toBeNull();
     });

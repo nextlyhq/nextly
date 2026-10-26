@@ -8,7 +8,6 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { NoAccessPage } from "@admin/components/shared/no-access-page";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { useRouter } from "@admin/hooks/useRouter";
 import {
   DEFAULT_MARK_PATHS,
   DEFAULT_MARK_VIEWBOX,
@@ -32,6 +31,12 @@ interface PermissionGuardProps {
    * rather than by `requiredPermission`.
    */
   entity?: EntityAccess;
+  /**
+   * The address of the page the guard opens. A page kept through a change of
+   * content language is this one, so another route asking the same of the
+   * same entity (another entry, its history) is not taken for it.
+   */
+  page?: string;
   children: React.ReactNode;
 }
 
@@ -58,19 +63,18 @@ interface PermissionGuardProps {
  * answer as on a first visit, never opened on the old one's word. Each
  * settled answer decides what is open: the entity it opens, or nothing once it
  * refuses, so a page refused in one language is not reopened on the way to
- * the next. The page is the route's own, its address with the entity it asks,
- * so another route asking the same of the same entity (another entry, its
- * history) is not taken for it.
+ * the next. The page is the route's own, its address (`page`) with the entity
+ * it asks.
  */
 function useOpenThroughSwitch(
+  page: string | undefined,
   entity: EntityAccess | undefined,
   content: { isPlaceholder: boolean },
   hasAnswer: boolean,
   hasAccess: boolean
 ): { switching: boolean; keepsPage: boolean } {
-  const { pathname } = useRouter();
   const entityKey = entity
-    ? `${pathname} ${entity.slug}:${entity.action}`
+    ? `${page ?? ""} ${entity.slug}:${entity.action}`
     : null;
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   const switching = entity !== undefined && content.isPlaceholder;
@@ -85,6 +89,7 @@ export function PermissionGuard({
   requiredPermission,
   subject,
   entity,
+  page,
   children,
 }: PermissionGuardProps): React.JSX.Element {
   const access = useCurrentUserPermissions();
@@ -111,6 +116,7 @@ export function PermissionGuard({
   }, []);
 
   const { switching, keepsPage } = useOpenThroughSwitch(
+    page,
     entity,
     content,
     hasAnswer,
