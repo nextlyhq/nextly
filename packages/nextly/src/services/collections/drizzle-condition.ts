@@ -53,6 +53,13 @@ export interface LocalizedQueryContext {
   companionTableName: string;
   /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
   localizedFields: LocalizedFieldRef[];
+  /**
+   * The companion's runtime Drizzle table, when the caller has it loaded. A
+   * date operand is resolved against THIS table's column, so it binds as the
+   * companion compares rather than as a raw string each dialect reads alone.
+   * Absent → operands bind as given.
+   */
+  table?: unknown;
   /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
@@ -93,6 +100,17 @@ export function buildLocalizedWhereExists(
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
+  // The companion column, resolved on its own table: a date value is read as
+  // the instant it names and bound as this column compares — the same reading
+  // the main where builder applies. Bound raw, an ISO string beside an epoch
+  // column compares by type ordering on SQLite (numbers order before text, so
+  // nothing matches) and by each server's coercion on the others: one filter,
+  // three answers.
+  const companionColumn =
+    ctx.table !== undefined ? resolveColumn(ctx.table, column) : undefined;
+  if (companionColumn && COMPARISONS.has(op)) {
+    value = comparisonOperand(companionColumn, column, value);
+  }
   let valueCondition: SQL | undefined;
   switch (op) {
     case "=":

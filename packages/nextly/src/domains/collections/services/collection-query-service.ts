@@ -1738,6 +1738,7 @@ export class CollectionQueryService extends BaseService {
     // constrain by the resolved status too (a public read never matches a draft).
     return {
       companionTableName: companion.companionTableName,
+      table: companion.table,
       localizedFields: companion.localizedFields,
       mainIdColumn: schema.id,
       locale: localeChain[0],
