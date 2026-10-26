@@ -13,7 +13,7 @@
 
 import { Info } from "lucide-react";
 import type { JSX } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   Select,
@@ -317,6 +317,14 @@ function useHistoryView(
   // language, whatever was chosen while every language was: a view of all of
   // them would show the others' events without their versions.
   const view = allLanguages ? chosen : opening;
+  // That clamp ends a preview its view no longer shows, as a change of view
+  // the user makes does.
+  const clamped = view !== chosen;
+  useEffect(() => {
+    if (clamped && onClearSelection && hidesSelection(input, view, selected)) {
+      onClearSelection();
+    }
+  }, [clamped, input, view, selected, onClearSelection]);
   const changeView = (next: HistoryView) => {
     setView(next);
     if (onClearSelection && hidesSelection(input, next, selected)) {

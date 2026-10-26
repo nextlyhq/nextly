@@ -37,30 +37,33 @@ export function useAsksTranslationStatus(slug: string): boolean {
 
 /**
  * The language a read of the collection or Single `slug`'s version history is
- * narrowed to: none, so every language's versions, for a user the server lets
- * read them all; otherwise `language`, since the unfiltered history would be
- * refused outright.
+ * narrowed to: `undefined`, so every language's versions, for a user the
+ * server lets read them all; otherwise `language`, since the unfiltered
+ * history would be refused outright. `null` while that language is not known
+ * yet (the default one before the admin's languages load): the read waits
+ * rather than going out unfiltered.
  */
 export function useHistoryLanguage(
   slug: string,
   language: string | null | undefined
-): string | undefined {
+): string | null | undefined {
   const mayReadAllHistory = useCanRequest(slug, "readHistory");
-  return mayReadAllHistory ? undefined : language || undefined;
+  return mayReadAllHistory ? undefined : language || null;
 }
 
 /**
- * The language the version compare page reads the history in: the one its
- * address names, else as {@link useHistoryLanguage} narrows a read, to the
- * default language.
+ * How the version compare page reads the history: in the language its address
+ * names, else as {@link useHistoryLanguage} narrows a read, to the default
+ * language, and only once that language is known.
  */
 export function useCompareLanguage(
   slug: string,
   asked: string | undefined
-): string | undefined {
+): { locale: string | undefined; enabled: boolean } {
   const { defaultLocale } = useLocalization();
   const narrowed = useHistoryLanguage(slug, defaultLocale);
-  return asked ?? narrowed;
+  const locale = asked ?? narrowed;
+  return { locale: locale ?? undefined, enabled: locale !== null };
 }
 
 /**

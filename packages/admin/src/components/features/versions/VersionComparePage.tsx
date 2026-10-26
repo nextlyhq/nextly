@@ -156,7 +156,7 @@ export function VersionComparePage({
   // server lets read only some is shown the default language's instead.
   const list = useVersions({
     scope,
-    locale: useCompareLanguage(scope.slug, locale),
+    ...useCompareLanguage(scope.slug, locale),
   });
   // `useCan` answers false while permissions load, which is the right default
   // here: the read-only destination is reachable by everyone who can reach this

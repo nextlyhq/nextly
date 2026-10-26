@@ -222,8 +222,9 @@ export function VersionHistorySheet({
   const historyLanguage = useHistoryLanguage(scope.slug, editingLocale);
   const list = useVersions({
     scope,
-    enabled: open,
-    ...(historyLanguage === undefined ? {} : { locale: historyLanguage }),
+    // Waits while the language a narrowed read needs is not known yet.
+    enabled: open && historyLanguage !== null,
+    ...(historyLanguage ? { locale: historyLanguage } : {}),
   });
   // The document's events, which the story shows beside its versions.
   const eventList = useDocumentEvents({ scope, enabled: open });

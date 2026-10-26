@@ -426,6 +426,37 @@ describe("the language being edited", () => {
     ).toBeInTheDocument();
   });
 
+  it("ends the preview of another language's version once every language is no longer read", async () => {
+    // An English version previewed under All languages: once only Spanish's
+    // versions are read, its row goes, and so does the preview of it.
+    const onClearSelection = vi.fn();
+    const list = (all: boolean) => (
+      <HistoryStoryList
+        scope={scope}
+        versions={newest(versions)}
+        events={[]}
+        lifecycle={false}
+        localized
+        languages={{ editing: "es", all }}
+        hasMore={false}
+        selected={1}
+        onSelect={vi.fn()}
+        onClearSelection={onClearSelection}
+      />
+    );
+    const { rerender } = render(list(true));
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Languages shown" })
+    );
+    await userEvent.click(
+      screen.getByRole("option", { name: "All languages" })
+    );
+    expect(onClearSelection).not.toHaveBeenCalled();
+
+    rerender(list(false));
+    expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
   it("ends the preview of a version the language view stops showing", async () => {
     const onClearSelection = vi.fn();
     renderList(versions, [], {

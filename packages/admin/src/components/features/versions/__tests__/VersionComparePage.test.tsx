@@ -17,7 +17,10 @@ const {
   canRequestMock,
   navigateMock,
   diffMountMock,
+  languages,
 } = vi.hoisted(() => ({
+  /** The admin's default language, empty until its languages load. */
+  languages: { defaultLocale: "en" },
   useVersionsMock: vi.fn(),
   canMock: vi.fn(),
   canRequestMock: vi.fn(),
@@ -72,7 +75,7 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
-    defaultLocale: "en",
+    defaultLocale: languages.defaultLocale,
     enabled: true,
     locales: [],
     fallback: true,
@@ -121,6 +124,7 @@ const collection = (entryId: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  languages.defaultLocale = "en";
   canMock.mockReturnValue(true);
   canRequestMock.mockReturnValue(true);
   useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
@@ -153,6 +157,21 @@ describe("VersionComparePage — the languages its history is read in", () => {
     renderPage();
     expect(useVersionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
       locale: "en",
+      enabled: true,
+    });
+  });
+
+  it("waits for the default language before reading a narrowed history", () => {
+    // Before the admin's languages load the default one is not known, and an
+    // unnamed language would read every language's versions, which the
+    // server refuses this caller.
+    canRequestMock.mockImplementation(
+      (_slug: string, request: string) => request !== "readHistory"
+    );
+    languages.defaultLocale = "";
+    renderPage();
+    expect(useVersionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      enabled: false,
     });
   });
 });
