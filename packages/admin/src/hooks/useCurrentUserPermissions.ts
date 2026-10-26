@@ -736,8 +736,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
    * refuses what a role's permission allows is followed. Until that answer is
    * in hand nothing is known about any entity, so such a slug is refused
    * rather than guessed from the permission list, which cannot see the rules.
-   * Every other slug (a system resource, a plugin's own permission) is the
-   * permission list's.
+   * Once it is, a standard action on a resource the answer does not name is
+   * refused, except to a super-admin. Every other slug (a system resource, a
+   * plugin's own permission with another action) is the permission list's.
    */
   const can = (permission: string): boolean => {
     const asked = entityPermission(permission);
@@ -745,7 +746,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     if (!content.hasAnswer) return false;
     return Object.hasOwn(answer.data?.entities ?? {}, asked.resource)
       ? canAccessCollection(asked.resource, asked.action)
-      : hasPermission(permission);
+      : isSuperAdmin;
   };
 
   return {

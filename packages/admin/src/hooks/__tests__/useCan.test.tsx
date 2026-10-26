@@ -5,10 +5,11 @@
  * The property that separates it from a plausible broken one is where each
  * slug is answered: an action on a collection or Single follows the server's
  * capabilities answer, code rules included, even where the permission slugs
- * say otherwise, while every other slug (a system resource, a plugin's own
- * permission) still follows the slugs. A hook reading only the slugs passes
- * every case where the two agree, and one reading only the capabilities
- * refuses every slug they do not name.
+ * say otherwise, and a standard action on a resource that answer leaves out is
+ * refused, while every other slug (a system resource, a plugin's own
+ * permission with another action) still follows the slugs. A hook reading
+ * only the slugs passes every case where the two agree, and one reading only
+ * the capabilities refuses every slug they do not name.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
@@ -167,8 +168,7 @@ describe("useCan", () => {
     server.permissions = holding(
       "manage-seo",
       "read-webhooks",
-      "create-content-releases",
-      "read-seo-report"
+      "create-content-releases"
     );
     server.capabilities = answering({ posts: { read: true } });
 
@@ -177,17 +177,39 @@ describe("useCan", () => {
         "manage-seo",
         "read-webhooks",
         "create-content-releases",
-        // A plugin's own resource with a standard action, which no collection
-        // or Single is named after.
-        "read-seo-report",
         "delete-webhooks",
       ])
     ).toEqual({
       "manage-seo": true,
       "read-webhooks": true,
       "create-content-releases": true,
-      "read-seo-report": true,
       "delete-webhooks": false,
+    });
+  });
+
+  it("refuses a standard action on a resource the server's answer leaves out, though the role holds it", async () => {
+    server.permissions = holding(
+      "read-secrets",
+      "update-secrets",
+      "read-seo-report"
+    );
+    server.capabilities = answering({ posts: { read: true } });
+
+    expect(
+      await canEach(["read-secrets", "update-secrets", "read-seo-report"])
+    ).toEqual({
+      "read-secrets": false,
+      "update-secrets": false,
+      "read-seo-report": false,
+    });
+  });
+
+  it("gives a super-admin a standard action on a resource the server's answer leaves out", async () => {
+    server.permissions = { permissions: [], isSuperAdmin: true, roles: [] };
+    server.capabilities = answering({ posts: {} }, true);
+
+    expect(await canEach(["read-seo-report"])).toEqual({
+      "read-seo-report": true,
     });
   });
 

@@ -11,9 +11,11 @@ import { useCurrentUserPermissions } from "./useCurrentUserPermissions";
  * A read, create, update, delete, publish or unpublish of a collection or
  * Single (`"update-posts"`) is answered as the server decides it for that
  * entity, its code access rules included, so it can be `false` for a role
- * that holds the permission. Any other slug, a plugin's own permissions
- * included, is answered from the permissions the user's roles hold, a
- * super-admin holding all of them.
+ * that holds the permission. Once the server has answered, such a slug for a
+ * resource it does not name is `false` except to a super-admin, so a plugin
+ * permission that is not about a collection or Single takes another action
+ * (`"export-reports"`). Any other slug is answered from the permissions the
+ * user's roles hold, a super-admin holding all of them.
  *
  * Typed as `string` (not nextly's `PermissionSlug`) because admin's bundled
  * d.ts cannot reference nextly's barrel types; `PermissionSlug` is `string`
