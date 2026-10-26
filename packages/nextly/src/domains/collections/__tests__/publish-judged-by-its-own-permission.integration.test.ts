@@ -46,6 +46,8 @@ const HOME = "home";
 const PUBLISHER = "publisher-1";
 /** May read and update, and not publish. */
 const EDITOR = "editor-1";
+/** May read, and not update, publish or unpublish. */
+const READER = "reader-1";
 
 let current: TestNextly | undefined;
 let services: PluginServices | undefined;
@@ -131,13 +133,13 @@ async function stored(
   };
 }
 
-/** A REST write as `userId`, answered with its status. */
-async function rest(
+/** A REST write as `userId`, answered with its response. */
+async function restResponse(
   userId: string,
   method: "PATCH",
   path: string[],
   body: unknown
-): Promise<number> {
+): Promise<Response> {
   const token = await signAccessToken(
     buildClaims({
       userId,
@@ -164,7 +166,28 @@ async function rest(
     }),
     { params: Promise.resolve({ params: path }) }
   );
-  return res.status;
+  return res;
+}
+
+/** A REST write as `userId`, answered with its status. */
+async function rest(
+  userId: string,
+  method: "PATCH",
+  path: string[],
+  body: unknown
+): Promise<number> {
+  return (await restResponse(userId, method, path, body)).status;
+}
+
+/** A REST write as `userId`, answered with its status and error message. */
+async function restRefusal(
+  userId: string,
+  path: string[],
+  body: unknown
+): Promise<{ status: number; message: unknown }> {
+  const res = await restResponse(userId, "PATCH", path, body);
+  const json = (await res.json()) as { error?: { message?: unknown } };
+  return { status: res.status, message: json.error?.message };
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -356,6 +379,73 @@ describe.each(getConfiguredTestDialects())(
           title: "edited",
         })
       ).toBe(200);
+    });
+
+    it("refuses a status-only write over REST in the words of the action it asks", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, READER, "read", [POSTS, NOTES, HOME]);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      // Every gate refuses this caller, so each write is refused; the
+      // refusal names the action the body asks, not update.
+      expect
+        .soft(await restRefusal(READER, entry, { status: "published" }))
+        .toEqual({ status: 403, message: "You can't publish this posts." });
+      expect
+        .soft(
+          await restRefusal(READER, ["singles", HOME], { status: "published" })
+        )
+        .toEqual({ status: 403, message: "You can't publish Home." });
+      expect
+        .soft(
+          await restRefusal(READER, ["collections", POSTS, "entries"], {
+            where: { id: { equals: id } },
+            data: { status: "published" },
+          })
+        )
+        .toEqual({ status: 403, message: "You can't publish posts." });
+      expect((await stored(POSTS, id)).status).toBe("draft");
+
+      await trusted().update({
+        collection: POSTS,
+        id,
+        data: { status: "published" },
+      } as never);
+      expect
+        .soft(await restRefusal(READER, entry, { status: "draft" }))
+        .toEqual({
+          status: 403,
+          message: "You can't unpublish this posts.",
+        });
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      // A write naming a field is an edit, refused as one.
+      expect
+        .soft(
+          await restRefusal(READER, entry, { status: "draft", title: "edited" })
+        )
+        .toEqual({ status: 403, message: "You can't edit this posts." });
+      // Where a collection has no lifecycle its status is a field, so a write
+      // naming only it is an edit too.
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      expect
+        .soft(
+          await restRefusal(
+            READER,
+            [
+              "collections",
+              NOTES,
+              "entries",
+              String((item as { id: unknown }).id),
+            ],
+            { status: "published" }
+          )
+        )
+        .toEqual({ status: 403, message: "You can't edit this notes." });
     });
   }
 );
