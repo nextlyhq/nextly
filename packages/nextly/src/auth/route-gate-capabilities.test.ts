@@ -75,7 +75,7 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
         grant("unpublish", POSTS),
       ],
     },
-    // May publish posts, and holds no update to send the change through.
+    // May publish posts, and holds no update.
     "publisher-only": {
       roles: ["publisher"],
       grants: [grant("read", POSTS), grant("publish", POSTS)],
@@ -243,8 +243,8 @@ function cellsOf(capabilities: RouteCapabilities): Cell[] {
 }
 
 /**
- * What a REST request for `action` meets: its route's gate, and for a publish
- * or an unpublish, which is sent as an update, the update route's gate first.
+ * What a REST request for `action` meets: its own gate. A publish or an
+ * unpublish that changes only the status is judged by its own check alone.
  */
 async function restAllows(
   auth: AuthContext,
@@ -252,10 +252,7 @@ async function restAllows(
   resource: string,
   rbac: RBACAccessControlService | undefined
 ): Promise<boolean> {
-  const own = await routeGateVerdict(auth, action, resource, rbac);
-  if (action !== "publish" && action !== "unpublish") return own.allowed;
-  const update = await routeGateVerdict(auth, "update", resource, rbac);
-  return update.allowed && own.allowed;
+  return (await routeGateVerdict(auth, action, resource, rbac)).allowed;
 }
 
 /** Each setup and rule the comparison is made under, and its service. */
@@ -347,9 +344,9 @@ describe("routeGateCapabilities", () => {
     });
   });
 
-  it("refuses a publish to a caller who may publish but not update", async () => {
-    // A REST publish is a status change sent through the entry's update
-    // route, which refuses this caller before the publish is checked.
+  it("lets a caller who may publish but not update publish", async () => {
+    // A publish that changes only the status is judged by its own
+    // permission, so update's refusal does not close it.
     registered.rbac = new RBACAccessControlService();
     const { entities } = await routeGateCapabilities(
       { userId: "publisher-only" },
@@ -357,8 +354,12 @@ describe("routeGateCapabilities", () => {
       registered.rbac,
       LANGUAGE_OF
     );
-    expect(entities[POSTS]).toMatchObject({ publish: false, update: false });
-    // POPULATION CONTROL: the publish gate alone allows this caller.
+    expect(entities[POSTS]).toMatchObject({
+      publish: true,
+      unpublish: false,
+      update: false,
+    });
+    // The same answer as the publish gate alone.
     const alone = await routeGateVerdict(
       session("publisher-only").auth,
       "publish",
@@ -368,37 +369,30 @@ describe("routeGateCapabilities", () => {
     expect(alone.allowed).toBe(true);
   });
 
-  it("asks no publish check, and runs no publish rule, once the update it goes through is refused", async () => {
-    const publishRule = vi.fn(() => true);
+  it("answers a publish by its own rule where update is refused", async () => {
+    const publishRule = vi.fn(() => false);
     const rbac = new RBACAccessControlService();
-    rbac.registerCollectionAccess(POSTS, {
-      publish: publishRule,
-      unpublish: publishRule,
-    });
+    rbac.registerCollectionAccess(POSTS, { publish: publishRule });
     registered.rbac = rbac;
 
     const { entities } = await routeGateCapabilities(
-      { userId: "viewer" },
+      { userId: "publisher-only" },
       ENTITIES,
       rbac,
       LANGUAGE_OF
     );
-    expect(entities[POSTS]).toMatchObject({
-      update: false,
-      publish: false,
-      unpublish: false,
-    });
-    expect(publishRule).not.toHaveBeenCalled();
-
-    // POPULATION CONTROL: for a caller who may update and publish, the rule
-    // is asked.
-    await routeGateCapabilities(
-      { userId: "publisher" },
-      ENTITIES,
-      rbac,
-      LANGUAGE_OF
-    );
+    expect(entities[POSTS]).toMatchObject({ update: false, publish: false });
     expect(publishRule).toHaveBeenCalled();
+
+    // The control: the rule that allows lets the same caller publish.
+    publishRule.mockReturnValue(true);
+    const allowed = await routeGateCapabilities(
+      { userId: "publisher-only" },
+      ENTITIES,
+      rbac,
+      LANGUAGE_OF
+    );
+    expect(allowed.entities[POSTS]).toMatchObject({ publish: true });
   });
 
   it("records each cell's deviation under that cell's own subject", async () => {

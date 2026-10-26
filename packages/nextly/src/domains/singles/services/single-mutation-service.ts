@@ -32,7 +32,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
-import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
+import {
+  stripImmutableSystemFields,
+  writeGateFor,
+} from "../../../lib/immutable-system-fields";
 import {
   LIFECYCLE_STATUSES,
   isLifecycleStatus,
@@ -847,6 +850,80 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * Asks the publish permission and rule once for each language a write to
+   * every language puts live, those a pending change it promotes goes live in
+   * among them, each time told that language and all of them, as publishing
+   * every language does: a rule that answers by language answers for each,
+   * and any refusal refuses the write. The languages asked, which the row
+   * lock compares with what goes live, or the first refusal.
+   */
+  private async askPublishInEachLanguage(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    document: SingleDocument;
+    reachesLocalizedGroup: boolean;
+    options: UpdateSingleOptions;
+  }): Promise<{ asked: string[] } | { refusal: SingleResult }> {
+    const { slug, singleMeta, document, options } = params;
+    const companion = this.translationsOf(singleMeta);
+    const statusesReadable =
+      companion !== null &&
+      companion.hasStatus &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: singleMeta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      })) === "ready";
+    const asked = [
+      ...new Set([
+        ...this.languagesToPublish(
+          statusesReadable && companion
+            ? await readCompanionLocaleStatusAll(
+                this.adapter.getDrizzle<
+                  Parameters<typeof readCompanionLocaleStatusAll>[0]
+                >(),
+                companion.table,
+                document.id,
+                cachedCompanionReadiness(
+                  this.adapter,
+                  companion.companionTableName
+                )
+              )
+            : new Map<string, string | null>(),
+          document.status,
+          params.reachesLocalizedGroup
+        ),
+        ...(await this.languagesPromoted(
+          this.adapter,
+          singleMeta,
+          slug,
+          document.id
+        )),
+      ]),
+    ];
+    const denied = await askEachLanguage(asked, () =>
+      checkSingleAccess({
+        slug,
+        operation: "publish",
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        trusted: options.trusted,
+        routeAuthorized: false,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: options.authenticatedScope,
+        logger: this.logger,
+      })
+    );
+    if (!denied) return { asked };
+    // The languages refused are for the server log only.
+    this.logger.warn("Publish refused in some languages", {
+      single: slug,
+      refusedLanguages: denied.refused,
+    });
+    return { refusal: denied.refusal };
+  }
+
+  /**
    * The configured languages other than a document-wide write's own holding a
    * working draft of this Single, through `languagesHoldingWorkingDrafts`;
    * none, without a read, when the Single keeps no drafts.
@@ -1178,18 +1255,40 @@ export class SingleMutationService extends BaseService {
         {}
       );
 
-      const accessDenied = await checkSingleAccess({
-        slug,
-        operation: "update",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        routeAuthorized: options.routeAuthorized,
-        rbacAccessControlService: this.rbacAccessControlService,
-        // A scoped API key is judged on its own grants here too, so the session
-        // super-admin bypass does not apply to it on the primary update gate.
-        authenticatedScope: options.authenticatedScope,
-        logger: this.logger,
-      });
+      // A write that changes only the status of a Single with a lifecycle is
+      // a publish or an unpublish alone, judged by the gate its status names
+      // in place of update, whether or not the status moves. Any other field
+      // it names is an edit, which needs update whatever its value.
+      const gate = await writeGateFor(
+        data,
+        "single",
+        () => (singleMeta as { status?: boolean }).status === true
+      );
+      // Handed on as the status alone: the system columns a status-only body
+      // may also name are never stored, and no hook is handed a value sent by
+      // a caller judged without update.
+      if (gate !== "update") data = { status: data.status };
+      // A write to every language that publishes is judged as publishing
+      // every language is, once in each language it puts live (asked below,
+      // once its document is resolved and before any hook runs), not once in
+      // all of them together: a rule answering by language would otherwise
+      // refuse over a language that does not go live.
+      const publishesEveryLanguage = sweepAllLocales && gate === "publish";
+      const accessDenied = publishesEveryLanguage
+        ? null
+        : await checkSingleAccess({
+            slug,
+            operation: gate,
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            // The route attests only an update it ran itself.
+            routeAuthorized: gate === "update" && options.routeAuthorized,
+            rbacAccessControlService: this.rbacAccessControlService,
+            // A scoped API key is judged on its own grants here too, so the session
+            // super-admin bypass does not apply to it on the primary update gate.
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          });
       if (accessDenied) {
         return accessDenied;
       }
@@ -1222,6 +1321,32 @@ export class SingleMutationService extends BaseService {
         existingDoc,
         singleMeta.fields
       );
+
+      // Whether a write to every language reaches a localized field group,
+      // whose values go live in each language it stores: resolved OFF the
+      // transaction, for the reason the component schemas below are.
+      const fieldGroupService = this.fieldGroupDataService;
+      const reachesLocalizedGroup =
+        sweepAllLocales &&
+        fieldGroupService !== undefined &&
+        (await reachesLocalizedFieldGroup(singleMeta.fields, slug =>
+          fieldGroupService.getComponentDefinition(slug)
+        ));
+
+      // The languages a write to every language that publishes was asked
+      // about before any hook ran (see the gate above).
+      let askedBeforeHooks: string[] | undefined;
+      if (publishesEveryLanguage && !options.overrideAccess) {
+        const answer = await this.askPublishInEachLanguage({
+          slug,
+          singleMeta,
+          document: existingDoc,
+          reachesLocalizedGroup,
+          options,
+        });
+        if ("refusal" in answer) return answer.refusal;
+        askedBeforeHooks = answer.asked;
+      }
 
       // 3. Build shared context for hooks (seed with caller-provided context)
       const sharedContext: Record<string, unknown> = { ...options.context };
@@ -1271,17 +1396,6 @@ export class SingleMutationService extends BaseService {
       }
 
       const fieldConfigs = singleMeta.fields;
-
-      // Whether a write to every language reaches a localized field group,
-      // whose values go live in each language it stores: resolved OFF the
-      // transaction, for the reason the component schemas below are.
-      const fieldGroupService = this.fieldGroupDataService;
-      const reachesLocalizedGroup =
-        sweepAllLocales &&
-        fieldGroupService !== undefined &&
-        (await reachesLocalizedFieldGroup(fieldConfigs, slug =>
-          fieldGroupService.getComponentDefinition(slug)
-        ));
 
       // The component schemas the hold decision needs, resolved OFF the
       // transaction: this reads the component registry, and a registry read
@@ -1500,8 +1614,9 @@ export class SingleMutationService extends BaseService {
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing
-      // `unpublish-<slug>`, on top of update — editing and publishing are
-      // separate capabilities, mirroring the collection write path. A write
+      // `unpublish-<slug>`, on top of update for a write that also edits —
+      // editing and publishing are separate capabilities, mirroring the
+      // collection write path. A write
       // targeting a non-default locale publishes through that locale's companion
       // `_status` (only when a string status was provided) and does not move the
       // main row; a default-locale or non-localized write moves the main-row
@@ -1692,76 +1807,31 @@ export class SingleMutationService extends BaseService {
           : undefined;
       const companionPhysicallyExists = companionReadiness === "ready";
 
-      // A write to every language that publishes asks the publish permission
-      // and rule once for each language it puts live, those a pending change
-      // it promotes goes live in among them, each time told that language
-      // and all of them, as publishing every language does: a rule that
-      // answers by language answers for each, and any refusal refuses the
-      // write. Asked here, before the transaction and off its connection: a
-      // rule is the app's own code and may read the database. The lock
-      // re-reads what goes live (below), and asks nothing. Asked before the
-      // readiness checks below too, so a caller who may not publish is refused
-      // before it learns the state of the site's tables.
-      const sweepStatusesReadable =
-        sweepAllLocales &&
-        companion !== null &&
-        companion !== undefined &&
-        companionPhysicallyExists &&
-        companion.hasStatus;
-      const askedLanguages =
+      // A write to every language that publishes is asked about each language
+      // it puts live ({@link askPublishInEachLanguage}): before any hook ran
+      // where it was sent as one, else here, where a hook made it one. Asked
+      // before the transaction and off its connection, and before the
+      // readiness checks below, so a caller who may not publish is refused
+      // before it learns the state of the site's tables. The lock re-reads
+      // what goes live (below), and asks nothing.
+      let askedLanguages: string[] | undefined;
+      if (
         sweepAllLocales &&
         !options.overrideAccess &&
         (currentData as { status?: unknown }).status === "published"
-          ? [
-              ...new Set([
-                ...this.languagesToPublish(
-                  sweepStatusesReadable && companion
-                    ? await readCompanionLocaleStatusAll(
-                        this.adapter.getDrizzle<
-                          Parameters<typeof readCompanionLocaleStatusAll>[0]
-                        >(),
-                        companion.table,
-                        existingDoc.id,
-                        cachedCompanionReadiness(
-                          this.adapter,
-                          companion.companionTableName
-                        )
-                      )
-                    : new Map<string, string | null>(),
-                  existingDoc.status,
-                  reachesLocalizedGroup
-                ),
-                ...(await this.languagesPromoted(
-                  this.adapter,
-                  singleMeta,
-                  slug,
-                  existingDoc.id
-                )),
-              ]),
-            ]
-          : undefined;
-      if (askedLanguages !== undefined) {
-        const denied = await askEachLanguage(askedLanguages, () =>
-          checkSingleAccess({
+      ) {
+        if (askedBeforeHooks === undefined) {
+          const answer = await this.askPublishInEachLanguage({
             slug,
-            operation: "publish",
-            user: options.user,
-            overrideAccess: options.overrideAccess,
-            trusted: options.trusted,
-            routeAuthorized: false,
-            rbacAccessControlService: this.rbacAccessControlService,
-            authenticatedScope: options.authenticatedScope,
-            logger: this.logger,
-          })
-        );
-        if (denied) {
-          // The languages refused are for the server log only.
-          this.logger.warn("Publish refused in some languages", {
-            single: slug,
-            refusedLanguages: denied.refused,
+            singleMeta,
+            document: existingDoc,
+            reachesLocalizedGroup,
+            options,
           });
-          return denied.refusal;
+          if ("refusal" in answer) return answer.refusal;
+          askedBeforeHooks = answer.asked;
         }
+        askedLanguages = askedBeforeHooks;
       }
       // A localized single whose companion table does not exist yet has nowhere to put
       // a NON-default locale's values: the split below moves them out of the main

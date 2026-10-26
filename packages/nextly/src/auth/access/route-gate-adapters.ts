@@ -171,6 +171,22 @@ export function routeGateVerdict(
 }
 
 /**
+ * The verdict for one permission by the grant alone, no rule read: what a
+ * route asks of a publish or an unpublish of every language, whose rule the
+ * service asks once in each language the change puts live, which the route
+ * cannot know. Told every language here, a rule refusing a language that
+ * does not go live would refuse what the service allows.
+ */
+export function routeGrantVerdict(
+  auth: AuthContext,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<GateVerdict> {
+  return permissionVerdict(callerOf(auth), action, resource, rules);
+}
+
+/**
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.
  */
@@ -190,13 +206,6 @@ export const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
   (operation): operation is SingleAction =>
     !NOT_ON_A_SINGLE.some(missing => missing === operation)
 );
-
-/**
- * The actions a REST request reaches through the entry's update route: a
- * publish is a status change sent as an update, so its route asks update and
- * the publish check comes on top of it.
- */
-const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
 
 /** What the caller may do with one collection or Single. */
 export type EntityCapabilities =
@@ -244,7 +253,8 @@ const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
  * What `caller` may do with each of `entities`: the route gate's answer for
  * every action, as a REST request asking it would get, so the admin offers
  * what the server allows and nothing else. A publish or an unpublish is
- * allowed only where the update its request goes through is allowed too.
+ * answered by its own permission and rule: it is what a request changing
+ * only the status needs, while one that also edits fields needs update too.
  * `languageOf` gives the languages the REST operation behind an action is
  * told, so a rule hears the languages that request would.
  *
@@ -280,13 +290,6 @@ async function entityCapabilities(
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
-      // Update is answered before either lifecycle action in both lists. A
-      // refused update closes the door a publish is sent through, so its own
-      // check, and any rule it would run, is never asked.
-      if (THROUGH_UPDATE.has(action) && answered.update !== true) {
-        answered[action] = false;
-        continue;
-      }
       answered[action] = await withRuleLanguage(
         languageOf(OPERATION_OF[kind][action] ?? action),
         () => capability(caller, action, slug, rules)

@@ -137,9 +137,10 @@ function singleEntries(): SingleEntryService {
 }
 
 /**
- * Whether the author passes the gate the run's write meets: `update`, as any
- * write of the document must, and then the lifecycle action itself, never as
- * route-authorized, since no route stands in front of the run.
+ * Whether the author passes the gate the run's write meets: the lifecycle
+ * action itself, since the run writes the status alone, which is judged by
+ * that action and not update; never as route-authorized, since no route
+ * stands in front of the run.
  */
 async function authorMayPerform(
   adapter: Adapter,
@@ -149,32 +150,29 @@ async function authorMayPerform(
   action: ReleaseMemberAction
 ): Promise<boolean> {
   const rbac = rbacService();
-  for (const operation of ["update", action] as const) {
-    const denied =
-      scope.scopeKind === "single"
-        ? await checkSingleAccess({
-            slug: scope.scopeSlug,
-            operation,
-            user,
-            overrideAccess: false,
-            routeAuthorized: false,
-            rbacAccessControlService: rbac,
-            logger,
-          })
-        : await new CollectionAccessService(
-            adapter,
-            logger,
-            rbac
-          ).checkCollectionAccess({
-            collectionName: scope.scopeSlug,
-            operation,
-            user,
-            overrideAccess: false,
-            routeAuthorized: false,
-          });
-    if (denied !== null) return false;
-  }
-  return true;
+  const denied =
+    scope.scopeKind === "single"
+      ? await checkSingleAccess({
+          slug: scope.scopeSlug,
+          operation: action,
+          user,
+          overrideAccess: false,
+          routeAuthorized: false,
+          rbacAccessControlService: rbac,
+          logger,
+        })
+      : await new CollectionAccessService(
+          adapter,
+          logger,
+          rbac
+        ).checkCollectionAccess({
+          collectionName: scope.scopeSlug,
+          operation: action,
+          user,
+          overrideAccess: false,
+          routeAuthorized: false,
+        });
+  return denied === null;
 }
 
 /**

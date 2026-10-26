@@ -70,6 +70,56 @@ export function immutableSystemFieldsFor(
 }
 
 /**
+ * The gate a status-only write is judged by: `publish` for `"published"`, the
+ * one value that puts an entry live, and `unpublish` for any other, which can
+ * only take a published entry down.
+ */
+export function statusGate(status: unknown): "publish" | "unpublish" {
+  return status === "published" ? "publish" : "unpublish";
+}
+
+/**
+ * The gate a write is judged by: where its body changes only the status of an
+ * entry with a lifecycle ({@link isStatusOnlyWrite}), the `publish` or
+ * `unpublish` its status names ({@link statusGate}), whether or not the status
+ * moves; otherwise `update`. `hasLifecycle` is asked only for a status-only
+ * body, so an ordinary edit never reads it.
+ */
+export async function writeGateFor(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind,
+  hasLifecycle: () => boolean | Promise<boolean>
+): Promise<"update" | "publish" | "unpublish"> {
+  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
+    ? statusGate(body.status)
+    : "update";
+}
+
+/**
+ * Whether a write's body changes nothing but the entry's status: it names
+ * `status`, and every other key it names is a system column the write never
+ * stores from a body ({@link immutableSystemFieldsFor}). Such a write is a
+ * publish or an unpublish alone, judged by that permission and rule.
+ *
+ * Judged by the keys the body names, never their values: a body naming any
+ * other field, even at its stored value, edits the entry and needs update. A
+ * declared field with no column of its own counts as an edit too, since hooks
+ * may still read it.
+ */
+export function isStatusOnlyWrite(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind
+): boolean {
+  // A status left `undefined` names none: the write drops it as it drops any
+  // undefined status, so it is judged as the write it is.
+  if (body.status === undefined) return false;
+  const neverStored = immutableSystemFieldsFor(entity);
+  return Object.keys(body).every(
+    key => key === "status" || neverStored.has(key)
+  );
+}
+
+/**
  * The payload keys that name a declared field with no column on the entity's own row.
  *
  * Asked of `fieldProducesColumn`, the descriptor's answer to which fields become columns, so the

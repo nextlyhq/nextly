@@ -36,7 +36,6 @@ import {
   declaresRule,
   judge,
   outcomeAnswer,
-  ruleLetsThrough,
   plainRule,
   type AccessTarget,
   type Decision,
@@ -613,13 +612,7 @@ async function grantJudgedVerdict(
     // A key without the grant is refused before its rule is read, as today
     // and as the decision does: it lacks the permission either way.
     if (!slugHolds) return INSUFFICIENT;
-    const outcome = await askRule(actor, q.action, target);
-    const today = outcomeAllows(outcome);
-    return verdictOf(
-      await deviate("lifecycle-judged-alone", today, () =>
-        decidedFrom(actor, q.action, target, outcome)
-      )
-    );
+    return verdictOf(outcomeAllows(await askRule(actor, q.action, target)));
   }
   const answer = judge(
     actor,
@@ -683,27 +676,6 @@ const allowedVisitorBefore = (value: unknown): boolean => value !== false;
 /** A signed-in user's rule answer was judged truthy. */
 const allowedUserBefore = (value: unknown): boolean => Boolean(value);
 
-/**
- * The decision's answer from the action rule's outcome the gate has already
- * asked, so the rule runs once however its answer is compared. For a publish
- * or an unpublish its own rule lets through, the update rule, which the gate
- * itself does not ask, is asked here.
- */
-async function decidedFrom(
-  actor: Exclude<Actor, { kind: "system" }>,
-  action: AccessOperation,
-  target: AccessTarget,
-  outcome: RuleOutcome
-): Promise<boolean> {
-  // Asked exactly when the decision itself would ask it, so the outcomes it
-  // is handed are the ones it reads.
-  const update =
-    isLifecycle(action) && ruleLetsThrough(outcome, target, action)
-      ? await askRule(actor, "update", target)
-      : undefined;
-  return judge(actor, action, target, { action: outcome, update }).allowed;
-}
-
 /** How a signed-in user's verdict is asked, by what the target declares. */
 interface UserAsk {
   readonly q: CollectionQuestion;
@@ -754,20 +726,11 @@ async function withoutServiceVerdict({
  * super-admin authority included, so the targeted check answers it without
  * loading the caller's every role and grant.
  */
-async function ruleLessVerdict({
-  q,
-  target,
-  userId,
-  looked,
-}: UserAsk): Promise<GateVerdict> {
-  const holds = await userHoldsPermission(userId, q.action, q.slug, {
-    executor: q.executor,
-  });
-  if (!isLifecycle(q.action)) return verdictOf(holds);
+async function ruleLessVerdict({ q, userId }: UserAsk): Promise<GateVerdict> {
   return verdictOf(
-    await deviate("lifecycle-judged-alone", holds, () =>
-      decided(looked(), q.action, target)
-    )
+    await userHoldsPermission(userId, q.action, q.slug, {
+      executor: q.executor,
+    })
   );
 }
 
@@ -777,7 +740,7 @@ async function ruleLessVerdict({
  * A user named by no id holds nothing.
  */
 async function plainRuleVerdict(
-  { q, target, userId, looked }: UserAsk,
+  { q, userId }: UserAsk,
   plain: boolean
 ): Promise<GateVerdict> {
   if (!userId) return INSUFFICIENT;
@@ -790,14 +753,7 @@ async function plainRuleVerdict(
     executor: q.executor,
   });
   if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
-  if (!isLifecycle(q.action)) return verdictOf(plain);
-  // A publish or an unpublish is judged by its own permission and rule here,
-  // where the decision also asks update's.
-  return verdictOf(
-    await deviate("lifecycle-judged-alone", plain, () =>
-      decided(looked(), q.action, target)
-    )
-  );
+  return verdictOf(plain);
 }
 
 /**
@@ -858,12 +814,5 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
-  if (!isLifecycle(q.action)) return verdictOf(allowed);
-  // A publish or an unpublish is judged by its own permission and rule here,
-  // where the decision also asks update's.
-  return verdictOf(
-    await deviate("lifecycle-judged-alone", allowed, () =>
-      decidedFrom(actor, q.action, target, outcome)
-    )
-  );
+  return verdictOf(allowed);
 }

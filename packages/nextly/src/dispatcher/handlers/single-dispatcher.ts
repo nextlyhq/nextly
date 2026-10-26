@@ -89,6 +89,7 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -786,11 +787,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
           actor: readAuthenticatedActor(),
-          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
-          // that re-check while field-level write access + response redaction
-          // still run for this user (overrideAccess stays false).
+          // Where route auth admitted the caller on update, `routeAuthorized`
+          // skips only that re-check while field-level write access + response
+          // redaction still run for this user (overrideAccess stays false). A
+          // caller admitted on publish or unpublish alone is judged here.
           overrideAccess: false,
-          routeAuthorized: !!user,
+          routeAuthorized: !!user && routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -816,11 +818,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
         overrideAccess: false,
-        // Route auth already ran the RBAC gate for `update`; attesting it skips
-        // only that re-check. The publish gate always runs.
-        routeAuthorized: !!user,
-        // The route authorized this POST as `update` against an API key's
-        // scope; the service judges the key's own `publish-{slug}` grant.
+        // The route admitted this POST on the `publish-{slug}` grant alone,
+        // so it attests no gate: a Single with nothing to publish is still
+        // asked update by the service.
+        routeAuthorized: false,
+        // The service judges an API key's own `publish-{slug}` grant and the
+        // rule, in each language the publish puts live.
         authenticatedScope: readAuthenticatedScope(),
       });
       const published = unwrapServiceResult<{
