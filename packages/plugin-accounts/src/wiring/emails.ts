@@ -99,6 +99,47 @@ const TEMPLATES: Record<Kind, Template> = {
   },
 };
 
+/**
+ * How the editor shows each variable the templates use, and its test value.
+ * Presentation only: what a send is given is unchanged.
+ */
+const VARIABLE_PRESENTATION: Record<
+  string,
+  { type: "text" | "link"; label: string; example: string }
+> = {
+  link: {
+    type: "link",
+    label: "Link",
+    example: "https://example.com/account/verify?token=sample",
+  },
+  code: { type: "text", label: "Code", example: "123456" },
+  newAddress: {
+    type: "text",
+    label: "New email address",
+    example: "ada@example.com",
+  },
+  cancelLink: {
+    type: "link",
+    label: "Cancel link",
+    example: "https://example.com/account/cancel?token=sample",
+  },
+  notMeLink: {
+    type: "link",
+    label: "Not me link",
+    example: "https://example.com/account/not-me?token=sample",
+  },
+  resetLink: {
+    type: "link",
+    label: "Reset link",
+    example: "https://example.com/account/reset?token=sample",
+  },
+  signInLink: {
+    type: "link",
+    label: "Sign-in link",
+    example: "https://example.com/account/sign-in?token=sample",
+  },
+};
+
 /** The slug an email kind's template is registered under. */
 export function templateSlug(kind: Kind): string {
   return `accounts-${kind}`;
@@ -117,6 +158,7 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
       variables: variablesIn(template.html).map(name => ({
         name,
         required: true,
+        ...VARIABLE_PRESENTATION[name],
       })),
     })
   );
