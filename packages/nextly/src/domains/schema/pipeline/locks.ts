@@ -87,13 +87,25 @@ function toRows(res: unknown): Array<Record<string, unknown>> {
   return (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
 }
 
-function lockBusy(): never {
+/**
+ * The busy-lock error, told per dialect. PostgreSQL's lock is a row that a
+ * stopped process can leave behind, so `--force-unlock` clears it. MySQL's is
+ * a named lock that goes when the connection holding it ends, so it is never
+ * stale and `--force-unlock` has nothing to clear: the remedy there is to let
+ * the other process finish, or stop it.
+ */
+function lockBusy(dialect: SupportedDialect): never {
   throw new NextlyError({
     code: "NEXTLY_MIGRATE_LOCK_BUSY",
     publicMessage:
-      "Another schema operation holds the migrate lock. Wait for it to finish " +
-      "(a running dev server also holds it) and retry, or run with " +
-      "`--force-unlock` to clear a stale lock.",
+      dialect === "mysql"
+        ? "Another schema operation holds the migrate lock on this database. " +
+          "Wait for it to finish (a running dev server also holds it) and retry. " +
+          "MySQL releases the lock when that process's connection ends, so " +
+          "stopping it frees the lock; `--force-unlock` has nothing to clear here."
+        : "Another schema operation holds the migrate lock. Wait for it to finish " +
+          "(a running dev server also holds it) and retry, or run with " +
+          "`--force-unlock` to clear a stale lock.",
   });
 }
 
@@ -274,7 +286,7 @@ export async function withMigrateLock<T>(
         }
       }
 
-      if (!acquired) lockBusy();
+      if (!acquired) lockBusy("postgresql");
       try {
         return { ran: true, value: await fn() };
       } finally {
@@ -305,7 +317,7 @@ export async function withMigrateLock<T>(
           );
           return { ran: false, reason: "lock-held" };
         }
-        lockBusy();
+        lockBusy("mysql");
       }
       return { ran: true, value: held.value };
     }

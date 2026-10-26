@@ -30,3 +30,5 @@
 ---
 
 MySQL's migrate lock is now scoped to the database, so apps sharing a MySQL server no longer block each other's migrations. The lock was a server-wide named lock with one fixed name, so a `nextly migrate` (or a dev boot applying migrations) on one database refused, or waited, while another database on the same server was migrating. During the upgrade, don't run an old and a new `nextly migrate` against the same database at once: the two versions take differently named locks and would not exclude each other.
+
+On MySQL, the busy-lock error no longer suggests `--force-unlock`, which has nothing to clear there: it says the lock is released when the other process's connection ends, so wait for it or stop it. PostgreSQL's message is unchanged.

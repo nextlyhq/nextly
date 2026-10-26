@@ -133,6 +133,24 @@ describe("withMigrateLock (mysql named lock)", () => {
       withMigrateLock(db, "mysql", async () => "x")
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATE_LOCK_BUSY" });
   });
+
+  /**
+   * A named lock goes with the connection holding it, so it is never stale and
+   * `--force-unlock` clears nothing on MySQL: the message must not send anyone
+   * there, and must say what does free it.
+   */
+  it("tells a MySQL user what frees the lock, not to force-unlock it", async () => {
+    await expect(
+      withMigrateLock(fakeMysql(0), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("connection ends"),
+    });
+    await expect(
+      withMigrateLock(fakeMysql(0), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("run with `--force-unlock`"),
+    });
+  });
 });
 
 describe("withMigrateLock (postgres lock row)", () => {
@@ -157,6 +175,21 @@ describe("withMigrateLock (postgres lock row)", () => {
     await expect(
       withMigrateLock(db, "postgresql", async () => "x")
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATE_LOCK_BUSY" });
+  });
+
+  it("points a PostgreSQL user at --force-unlock, which clears a stale row", async () => {
+    await expect(
+      withMigrateLock(
+        fakeDb({ acquireRows: [0] }),
+        "postgresql",
+        async () => "x"
+      )
+    ).rejects.toMatchObject({
+      publicMessage:
+        "Another schema operation holds the migrate lock. Wait for it to finish " +
+        "(a running dev server also holds it) and retry, or run with " +
+        "`--force-unlock` to clear a stale lock.",
+    });
   });
 
   it("wait mode: settles via isSettled() even if never acquired (does not run fn)", async () => {
