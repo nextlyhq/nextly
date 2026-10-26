@@ -74,4 +74,28 @@ describe("seedPublicRole", () => {
     expect(onSlug).toEqual({ id: "public", builtIn: true });
     expect(await meta.get("public-role-created")).toBe("created");
   });
+
+  it("says when to try again while another boot holds the claim", async () => {
+    const meta = memoryMeta();
+    const at = new Date(Date.now() - 60_000).toISOString();
+    await meta.set("public-role-created", { claim: "another boot", at });
+    let made = false;
+
+    const seeded = await seedPublicRole({
+      publicSlugHolder: async () => null,
+      moveRoleOffPublicSlug: async () => null,
+      ensurePublicRole: async () => {
+        made = true;
+      },
+      meta,
+      logger: quiet,
+    });
+
+    // Its claim lapses five minutes after it was taken.
+    expect(seeded).toEqual({
+      made: false,
+      retryAt: Date.parse(at) + 5 * 60_000 + 1000,
+    });
+    expect(made).toBe(false);
+  });
 });
