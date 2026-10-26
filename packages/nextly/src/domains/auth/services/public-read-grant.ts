@@ -8,7 +8,9 @@
  * transaction that makes it, so a read an owner takes away again stays away,
  * while an entity added later, or a rule changed to `true`, is granted at the
  * first boot that sees it. Rules are asked as a visitor's request is, through
- * the same evaluator, in each configured language and in all at once.
+ * the same evaluator, in each configured language and in all at once. A
+ * permission a plugin declares for Public on one of its own collections
+ * (`contributes.publicGrants`) is granted the same way, once.
  *
  * Then what Public does not hold yet and visitors may be relying on is
  * listed, at every boot while Public lacks it: a read with no rule, which a
@@ -68,6 +70,15 @@ interface PublicReadGrantSeeding {
   permissionIds: () => Promise<Map<string, string>>;
   /** The permission slugs the role holds now. */
   publicHolds: (roleId: string) => Promise<Set<string>>;
+  /** The permissions plugins declare for Public, and those refused. */
+  declared: () => {
+    grants: ReadonlyArray<{ action: string; resource: string }>;
+    refused: ReadonlyArray<{
+      action: string;
+      collection: string;
+      owner: string;
+    }>;
+  };
   /**
    * Adds to the role the permission ids `pick` chooses, in one transaction
    * that never interleaves with an edit of the role's permissions; `pick` is
@@ -297,14 +308,16 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
 }
 
 /**
- * Grants Public each read code opens to anyone, once, then lists what Public
- * still lacks that visitors may be relying on.
+ * Grants Public each read code opens to anyone and each permission plugins
+ * declare for it, once, then lists what Public still lacks that visitors may
+ * be relying on.
  */
 export async function seedPublicReadGrants({
   publicRoleId,
   targets,
   permissionIds,
   publicHolds,
+  declared,
   addOnce,
   meta,
   logger,
@@ -330,12 +343,21 @@ export async function seedPublicReadGrants({
   );
 
   const ids = await permissionIds();
+  const { grants: pluginGrants, refused } = declared();
+  for (const { action, collection, owner } of refused) {
+    logger.error(
+      `[Nextly] The plugin "${owner}" declares that the Public role may ${action} "${collection}", which is not a collection it contributes, or not an action a plugin may grant (read or create). Nothing was granted for it.`
+    );
+  }
   const wanted = [
-    "media",
+    { action: "read", resource: "media" },
     ...asked
       .filter(({ read }) => read.kind === "answered" && read.value === true)
-      .map(({ target }) => target.slug),
-  ].flatMap(resource => ids.get(permissionSlug("read", resource)) ?? []);
+      .map(({ target }) => ({ action: "read", resource: target.slug })),
+    ...pluginGrants,
+  ].flatMap(
+    ({ action, resource }) => ids.get(permissionSlug(action, resource)) ?? []
+  );
   // Claimed and made in one transaction, under the lock an edit of the
   // role's permissions takes, so a grant is made once: not by two boots at
   // once, not again after an owner has taken it away, and not over an owner's

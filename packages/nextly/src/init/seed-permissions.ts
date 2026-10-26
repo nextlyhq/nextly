@@ -32,6 +32,7 @@ import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import { collectPublicGrants } from "../plugins/public-grants/collect-public-grants";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
@@ -231,10 +232,11 @@ async function seedEverything(): Promise<void> {
       logger: getService("logger"),
     });
   });
-  // Public's read where code lets anyone read, granted once per entity so an
-  // owner's change to it stands, and the startup listing of what it lacks.
+  // Public's read where code lets anyone read, and what plugins declare for
+  // it, each granted once so an owner's change to it stands, and the startup
+  // listing of what it lacks.
   if (publicRoleSeeded) {
-    await seedingStep("public role's reads", seedPublicRoleReads);
+    await seedingStep("public role's grants", seedPublicRoleGrants);
   }
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
@@ -253,7 +255,7 @@ async function seedEverything(): Promise<void> {
   });
 }
 
-function seedPublicRoleReads(): Promise<void> {
+function seedPublicRoleGrants(): Promise<void> {
   const adapter = getService("adapter");
   const logger = getService("logger");
   const grants = new RolePermissionService(adapter, logger);
@@ -295,6 +297,7 @@ function seedPublicRoleReads(): Promise<void> {
           permissionSlug(action, resource)
         )
       ),
+    declared: () => collectPublicGrants(getService("config").plugins ?? []),
     addOnce: (roleId, pick) => grants.addRolePermissionsOnce(roleId, pick),
     meta: getService("metaService"),
     logger,

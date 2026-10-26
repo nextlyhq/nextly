@@ -192,17 +192,17 @@ describe("seedPermissionsAndRolePresets", () => {
     ]);
     // The role visitors are judged by is made whatever the steps before it did.
     expect(seedPublicRole).toHaveBeenCalled();
-    // Its reads wait for it.
+    // Its grants wait for it.
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
   });
 
-  it("logs a failure of the Public role's reads the same way, and goes on", async () => {
+  it("logs a failure of the Public role's grants the same way, and goes on", async () => {
     seedPublicReadGrants.mockRejectedValue(new Error("connection reset"));
 
     await seedPermissionsAndRolePresets();
 
     expect(error.mock.calls.map(call => String(call[0]))).toEqual([
-      expect.stringContaining("Seeding public role's reads failed"),
+      expect.stringContaining("Seeding public role's grants failed"),
     ]);
     expect(seedPluginRoles).toHaveBeenCalled();
   });

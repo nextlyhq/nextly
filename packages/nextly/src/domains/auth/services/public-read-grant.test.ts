@@ -126,6 +126,7 @@ function site(
           ["read-posts", "p-posts"],
         ]),
       publicHolds: async () => new Set<string>(),
+      declared: () => ({ grants: [], refused: [] }),
       addOnce,
       meta,
       logger: quiet,
