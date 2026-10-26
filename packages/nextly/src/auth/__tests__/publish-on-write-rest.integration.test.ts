@@ -161,12 +161,21 @@ function rest(
   });
 }
 
-/** The entries of `collection` titled `title`, as stored. */
-async function stored(t: TestNextly, collection: string, title: string) {
+/**
+ * The entries of `collection` titled `title`, as stored, read in `locale`
+ * where one is given: a localized title is stored per language.
+ */
+async function stored(
+  t: TestNextly,
+  collection: string,
+  title: string,
+  locale?: string
+) {
   const found = await t.nextly.find({
     collection,
     where: { title: { equals: title } },
     status: "all",
+    ...(locale === undefined ? {} : { locale }),
   });
   return found.items as { status?: unknown }[];
 }
@@ -180,12 +189,16 @@ async function draftOf(t: TestNextly, title: string): Promise<string> {
   return String((made.item as { id: string | number }).id);
 }
 
-const singleStatus = async (t: TestNextly): Promise<unknown> =>
-  (
-    (await t.nextly.findSingle({ slug: BANNER, status: "all" })) as {
-      status?: unknown;
-    } | null
-  )?.status;
+/** The Single's headline and status as stored, or `null` with no document. */
+async function singleNow(
+  t: TestNextly
+): Promise<{ headline: unknown; status: unknown } | null> {
+  const found = (await t.nextly.findSingle({
+    slug: BANNER,
+    status: "all",
+  })) as { headline?: unknown; status?: unknown } | null;
+  return found && { headline: found.headline, status: found.status };
+}
 
 for (const dialect of getConfiguredTestDialects()) {
   describe(`creating or updating as published needs publish, through REST (${dialect})`, () => {
@@ -286,16 +299,21 @@ for (const dialect of getConfiguredTestDialects()) {
           { title, status: "published" }
         );
         expect(res.status).toBe(403);
+        // Read in French, where the write would have landed, and in English.
+        expect(await stored(t, PAGES, title, "fr")).toEqual([]);
         expect(await stored(t, PAGES, title)).toEqual([]);
       });
 
-      it("is refused a Single's update to published, and it stays a draft", async () => {
+      it("is refused a Single's update to published, and it is left as it was", async () => {
+        const before = await singleNow(t);
+        expect(before).not.toBeNull();
         const res = await rest("PATCH", `singles/${BANNER}`, callers[without], {
           headline: `${without} banner`,
           status: "published",
         });
         expect(res.status).toBe(403);
-        expect(await singleStatus(t)).not.toBe("published");
+        // Neither the content sent with the publish nor the status is stored.
+        expect(await singleNow(t)).toEqual(before);
       });
 
       it("is allowed each of those writes once granted publish, so it is the missing grant", async () => {
@@ -342,7 +360,7 @@ for (const dialect of getConfiguredTestDialects()) {
           }
         );
         expect(single.status).toBe(200);
-        expect(await singleStatus(t)).toBe("published");
+        expect((await singleNow(t))?.status).toBe("published");
         // Back to a draft, so the next caller's refusal is seen on a draft.
         await t.nextly.updateSingle({
           slug: BANNER,
