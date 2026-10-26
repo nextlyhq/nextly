@@ -56,6 +56,23 @@ expectTypeOf<{
   sort: string;
 }>().not.toMatchTypeOf<WidgetQuerySpec>();
 
+// A range sets a chart's interval, window and number of points, so a limit
+// beside it is refused rather than accepted and ignored.
+expectTypeOf<{
+  source: string;
+  op: "timeseries";
+  dateField: "createdAt";
+  range: "30d";
+}>().toMatchTypeOf<WidgetQuerySpec>();
+
+expectTypeOf<{
+  source: string;
+  op: "timeseries";
+  dateField: "createdAt";
+  range: "30d";
+  limit: number;
+}>().not.toMatchTypeOf<WidgetQuerySpec>();
+
 // `WidgetQuery` itself stays flat. This is the guard: the fixed-question
 // sources key an exhaustive table on these names, so a member disappearing
 // from here removes a compiler demand rather than raising an error.

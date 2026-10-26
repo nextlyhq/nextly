@@ -1156,9 +1156,16 @@ function readingCollection<T extends KnobQuery>(
     query.op === "list";
   if (!titled) return { ...query, source: `collection:${slug}` };
   const select = titledRows(ctx.sourceOf?.(slug));
-  return select === undefined
-    ? query
-    : { ...query, source: `collection:${slug}`, select };
+  if (select !== undefined) {
+    return { ...query, source: `collection:${slug}`, select };
+  }
+  // Nor the source the widget was declared with: a card set to a collection
+  // it cannot title reads nothing, never another collection's rows.
+  if (query.source === undefined && query.select === undefined) return query;
+  const sourceless: T = { ...query };
+  delete sourceless.source;
+  delete sourceless.select;
+  return sourceless;
 }
 
 /**
