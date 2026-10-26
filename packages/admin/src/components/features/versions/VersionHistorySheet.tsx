@@ -766,10 +766,12 @@ export function VersionHistorySheet({
                   events={story.events}
                   lifecycle={lifecycle}
                   localized={isLocalizedDocument}
-                  editingLocale={editingLocale}
                   // Only the language being edited was read where the whole
                   // history may not be, so "All languages" is not offered.
-                  allLanguages={historyLanguage === undefined}
+                  languages={{
+                    editing: editingLocale,
+                    all: historyLanguage === undefined,
+                  }}
                   {...(retention !== undefined ? { retention } : {})}
                   hasMore={hasMore}
                   selected={selected}

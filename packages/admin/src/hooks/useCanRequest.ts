@@ -45,3 +45,17 @@ export function useHistoryLanguage(
   const mayReadAllHistory = useCanRequest(slug, "readHistory");
   return mayReadAllHistory ? undefined : language || undefined;
 }
+
+/**
+ * The language the version compare page reads the history in: the one its
+ * address names, else as {@link useHistoryLanguage} narrows a read, to the
+ * default language.
+ */
+export function useCompareLanguage(
+  slug: string,
+  asked: string | undefined
+): string | undefined {
+  const { defaultLocale } = useLocalization();
+  const narrowed = useHistoryLanguage(slug, defaultLocale);
+  return asked ?? narrowed;
+}

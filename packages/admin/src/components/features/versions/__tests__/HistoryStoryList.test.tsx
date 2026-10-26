@@ -120,8 +120,7 @@ function renderList(
       events={newest(events)}
       lifecycle
       localized={false}
-      editingLocale={null}
-      allLanguages
+      languages={{ editing: null, all: true }}
       hasMore={false}
       selected={null}
       onSelect={vi.fn()}
@@ -205,7 +204,7 @@ describe("the pinned rows", () => {
     renderList(
       [version(1, 1, { locale: "es" }), version(2, 2, { locale: null })],
       [],
-      { localized: true, editingLocale: "es" }
+      { localized: true, languages: { editing: "es", all: true } }
     );
     const draft = screen.getByRole("button", { name: /Current draft/ });
     expect(draft).toHaveTextContent("Spanish");
@@ -362,7 +361,7 @@ describe("the language being edited", () => {
     renderList(versions, [], {
       lifecycle: false,
       localized: true,
-      editingLocale: "es",
+      languages: { editing: "es", all: true },
     });
     expect(
       screen.getByRole("button", { name: /Version 2/ })
@@ -382,8 +381,7 @@ describe("the language being edited", () => {
     renderList(versions, [], {
       lifecycle: false,
       localized: true,
-      editingLocale: "es",
-      allLanguages: false,
+      languages: { editing: "es", all: false },
     });
     expect(
       screen.queryByRole("combobox", { name: "Languages shown" })
@@ -398,7 +396,7 @@ describe("the language being edited", () => {
     renderList(versions, [], {
       lifecycle: false,
       localized: true,
-      editingLocale: "es",
+      languages: { editing: "es", all: true },
       // An English version, chosen while every language was shown.
       selected: 1,
       onClearSelection,
@@ -430,7 +428,7 @@ describe("the language being edited", () => {
         version(3, 3, { locale: "es", status: "published" }),
       ],
       [event("published", 3, { versionNo: 3, parts: ["en", "es"] })],
-      { localized: true, editingLocale: "en", onSelect }
+      { localized: true, languages: { editing: "en", all: true }, onSelect }
     );
     const choices = screen.getAllByRole("button", {
       name: /Version \d+|Currently published|Current draft/,

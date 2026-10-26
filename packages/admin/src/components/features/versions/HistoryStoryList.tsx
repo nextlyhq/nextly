@@ -69,14 +69,14 @@ export interface HistoryStoryListProps {
   lifecycle: boolean;
   /** Whether the document is translated; the language choice shows if so. */
   localized: boolean;
-  /** The language being edited, which the list opens on. */
-  editingLocale: string | null;
   /**
-   * Whether every language's versions were read. When only the language being
-   * edited was, the list offers no "All languages": the other languages'
-   * versions are not there, and the events alone would tell half their story.
+   * The languages the list was read in. `editing` is the language being
+   * edited, which the list opens on. `all` is whether every language's
+   * versions were read; when only the language being edited was, the list
+   * offers no "All languages": the other languages' versions are not there,
+   * and the events alone would tell half their story.
    */
-  allLanguages: boolean;
+  languages: { editing: string | null; all: boolean };
   /** The retention limit, when the editor knows it. */
   retention?: number | false;
   /** Whether older versions remain to load: a predecessor may be among them. */
@@ -338,8 +338,7 @@ export function HistoryStoryList({
   events,
   lifecycle,
   localized,
-  editingLocale,
-  allLanguages,
+  languages,
   retention,
   hasMore,
   selected,
@@ -352,7 +351,7 @@ export function HistoryStoryList({
   const [filter, setFilter] = useState<HistoryFilter>("everything");
   const [view, changeView] = useHistoryView(
     { versions, events, lifecycle, localized, filter },
-    openingView(localized, editingLocale),
+    openingView(localized, languages.editing),
     selected,
     onClearSelection
   );
@@ -378,8 +377,8 @@ export function HistoryStoryList({
       )}
       <StoryTools
         localized={localized}
-        editingLocale={editingLocale}
-        allLanguages={allLanguages}
+        editingLocale={languages.editing}
+        allLanguages={languages.all}
         languageName={languageName}
         view={view}
         onView={changeView}
