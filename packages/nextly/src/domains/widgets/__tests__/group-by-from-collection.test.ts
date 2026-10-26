@@ -157,6 +157,35 @@ describe("a grouped query that leaves its key to a setting", () => {
     ).not.toThrow();
   });
 
+  it("is refused for a cell on a source the Group by setting does not reach", () => {
+    // 🔴 Read widget-wide, the defaulted setting excused every grouped cell,
+    // and this one, on a system source no content knob drives, registered with
+    // no group key and was dropped on every load.
+    const cells = (second: Record<string, unknown>) =>
+      ({
+        id: "core/grouped-cells",
+        title: "Grouped cells",
+        archetype: "custom",
+        component: "core#GroupedCells",
+        offered: "per-collection",
+        defaultSize: "md",
+        settings: fromCollection,
+        cells: [
+          { key: "byCollection", query: grouped },
+          { key: "second", query: second },
+        ],
+      }) as WidgetDefinition;
+    expect(() =>
+      validateWidgetDefinition(
+        cells({ source: "system:activity", op: "groupBy", status: "all" })
+      )
+    ).toThrow(/its cell "second" names no groupBy/);
+    // The control: a second cell the setting does reach is admitted.
+    expect(() =>
+      validateWidgetDefinition(cells({ op: "groupBy", status: "all" }))
+    ).not.toThrow();
+  });
+
   it("is refused where nothing would give one", () => {
     // 🔴 Without the rule this registers, and every card is asked a grouping
     // of nothing, which the endpoint refuses on every load.
