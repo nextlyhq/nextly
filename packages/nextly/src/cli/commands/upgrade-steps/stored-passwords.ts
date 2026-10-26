@@ -33,13 +33,17 @@ const registries = new WeakMap<
  * upgrade a DrizzleAdapter; its tables are resolved through a registry
  * installed here once, as every CLI command that reads through the adapter
  * installs one, and shared by the steps after, so a table one registers
- * stays resolvable for the rest.
+ * stays resolvable for the rest; each step installs it again before reading.
  */
 export function storedPasswordsOn(
   adapter: DrizzleAdapter
 ): StoredPasswordsSource {
   let registry = registries.get(adapter);
-  if (!registry) {
+  if (registry) {
+    // Installed again: anything else may have installed its own since, and
+    // the tables registered on this one are resolved only while it is.
+    adapter.setTableResolver(registry);
+  } else {
     registry = installRegistryResolver(adapter);
     registries.set(adapter, registry);
   }

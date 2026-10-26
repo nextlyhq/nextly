@@ -549,6 +549,8 @@ async function visitVersions(
   apply: boolean
 ): Promise<StoredPlainPasswordCount[]> {
   const counts: StoredPlainPasswordCount[] = [];
+  // An install from before version history has no versions to change.
+  if (!(await source.adapter.tableExists(VERSIONS_TABLE))) return counts;
   for (const entity of await versionedEntities(source)) {
     let count = 0;
     await forEachRow(
