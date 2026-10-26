@@ -337,7 +337,12 @@ const EMAIL_TEMPLATE_METHODS: Record<
         validated.data,
         validated.brand
       );
-      return respondData(preview);
+      // A render, not stored data: preview text or a subject that reads as a
+      // date must reach the editor as the email shows it, not rewritten to the
+      // installation's timezone.
+      const response = respondData(preview);
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
     },
   },
   overrideTemplate: {
