@@ -421,13 +421,16 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.COLLECTIONS]: {
     component: CollectionsLandingRedirect,
-    screenName: railScreen("collections"),
+    // Named here, not by the rail: the rail holds one Content item for both, so it has no
+    // Collections item to read a label from.
+    screenName: "Collections",
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.SINGLES]: {
     component: SinglesLandingRedirect,
-    screenName: railScreen("singles"),
+    // As Collections above: the rail's one Content item holds Singles too.
+    screenName: "Singles",
     type: "private",
     section: overridableBy("singles"),
   },
