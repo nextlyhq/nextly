@@ -46,7 +46,6 @@
   "src/domains/schema/pipeline/classifier/modes.ts": 1,
   "src/domains/schema/pipeline/ddl-emitter/postgres.ts": 1,
   "src/domains/schema/pipeline/index.ts": 1,
-  "src/domains/schema/pipeline/locks.ts": 1,
   "src/domains/schema/pipeline/pre-cleanup/executor.ts": 4,
   "src/domains/schema/pipeline/pushschema-pipeline.ts": 2,
   "src/domains/schema/pipeline/resolution/types.ts": 4,
