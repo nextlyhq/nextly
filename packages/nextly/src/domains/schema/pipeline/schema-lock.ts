@@ -889,66 +889,113 @@ class SchemaLockHold {
 }
 
 /**
- * Take every lock, waiting as `whenHeld` says. Returns the context's own hold when this is work
- * inside a holder, `settled` when `isSettled` ended the wait, or throws the refusal.
+ * The wait one run makes for a held lock, across however many attempts it takes: one deadline,
+ * one notice, and the refusal once the deadline has passed.
+ */
+class LockWait {
+  private readonly waitMs: number;
+  private readonly deadline: number;
+  private announced = false;
+
+  constructor(private readonly options: SchemaLockOptions) {
+    this.waitMs =
+      options.whenHeld === "wait" ? (options.waitMs ?? SCHEMA_LOCK_WAIT_MS) : 0;
+    this.deadline = Date.now() + this.waitMs;
+  }
+
+  /**
+   * After an attempt found `holder` in the way: refuse once the wait is over, stop when
+   * `isSettled` says the work is done, and otherwise pause before the next attempt.
+   */
+  async after(holder: SchemaLockHolder): Promise<"retry" | "settled"> {
+    const { options } = this;
+    if (Date.now() >= this.deadline) {
+      throw refusalFor(options, holder, this.waitMs);
+    }
+    if (!this.announced) {
+      this.announced = true;
+      options.logger?.info?.(
+        `[Nextly] Waiting up to ${Math.round(this.waitMs / 1000)} s for the schema lock: ${describeHolder(holder)}`
+      );
+    }
+    if (options.isSettled && (await options.isSettled())) return "settled";
+    await new Promise(resolve =>
+      setTimeout(
+        resolve,
+        Math.max(
+          0,
+          Math.min(options.pollMs ?? POLL_MS, this.deadline - Date.now())
+        )
+      )
+    );
+    return "retry";
+  }
+}
+
+/**
+ * Take every lock, waiting as the run's `LockWait` says. Returns the context's own hold when this
+ * is work inside a holder, or `settled` when `isSettled` ended the wait.
  */
 async function acquire(
-  hold: SchemaLockHold
+  hold: SchemaLockHold,
+  wait: LockWait
 ): Promise<
   | { kind: "acquired" }
   | { kind: "reentrant"; held: HeldHere }
   | { kind: "settled" }
 > {
-  const { options } = hold;
-  const waitMs =
-    options.whenHeld === "wait" ? (options.waitMs ?? SCHEMA_LOCK_WAIT_MS) : 0;
-  const deadline = Date.now() + waitMs;
-  let announced = false;
   for (;;) {
-    if (hold.interrupted) throw interruptedBeforeStart(options.command);
+    if (hold.interrupted) throw interruptedBeforeStart(hold.options.command);
     const attempt = hold.acquireOnce();
     hold.pending = attempt;
     const outcome = await attempt;
     if (outcome.kind !== "held") return outcome;
-    if (Date.now() >= deadline)
-      throw refusalFor(options, outcome.holder, waitMs);
-    if (!announced) {
-      announced = true;
-      options.logger?.info?.(
-        `[Nextly] Waiting up to ${Math.round(waitMs / 1000)} s for the schema lock: ${describeHolder(outcome.holder)}`
-      );
-    }
-    if (options.isSettled && (await options.isSettled()))
+    if ((await wait.after(outcome.holder)) === "settled") {
       return { kind: "settled" };
-    await new Promise(resolve =>
-      setTimeout(
-        resolve,
-        Math.max(0, Math.min(options.pollMs ?? POLL_MS, deadline - Date.now()))
-      )
-    );
+    }
   }
+}
+
+/** The field-group session's refusal of a claim another process holds, as that holder. */
+function heldFieldGroupOwner(error: unknown): string | undefined {
+  if (!NextlyError.is(error)) return undefined;
+  const context = error.logContext;
+  if (context?.reason !== "migration lock is held elsewhere") return undefined;
+  return typeof context.heldBy === "string"
+    ? context.heldBy
+    : "another process";
 }
 
 /**
  * Run `work` in the field-group session the lock holds beside its own row, inside this context's
  * record of what it holds.
+ *
+ * Returns `field-group-held` when the session could not take the field-group lock because another
+ * process holds it — on a table that predates its expiry column the observation before it cannot
+ * see that — so the run waits for it, or refuses, as for any held lock, rather than failing with
+ * the session's own error. Once the work has started, the session's errors are the work's.
  */
 async function runHeld<T>(
   hold: SchemaLockHold,
   work: (session: SchemaLockSession) => Promise<T>
-): Promise<T> {
+): Promise<
+  { kind: "ran"; value: T } | { kind: "field-group-held"; owner: string }
+> {
   // The session decides its claim before the work starts; until then an interrupt waits for it,
   // so the claim it lands is one the release can see.
   let decided: () => void = () => {};
   hold.pending = new Promise<void>(resolve => {
     decided = resolve;
   });
+  // The work itself, which can outlive the session: a session that cannot confirm its own lease
+  // rejects at once while the work runs on, and nothing may be released while it does.
+  let running: Promise<unknown> | undefined;
   // The work's own result, kept so an interrupted run that finished reports it: the interrupt
   // freed the field-group lock under the session, which the session would otherwise report as a
   // lock it did not hold to the end.
   let finished: { value: T } | undefined;
   try {
-    return await withMigrationSession(
+    const value = await withMigrationSession(
       {
         adapter: hold.adapter,
         dialect: hold.dialect,
@@ -961,32 +1008,44 @@ async function runHeld<T>(
         // its expiry column, which an operator should hear about.
         logger: sessionLogger(hold.options.logger),
       },
-      async session => {
+      session => {
         if (session.lock.kind === "held")
           hold.fieldGroupClaim = session.lock.owner;
         decided();
-        if (hold.interrupted)
-          throw interruptedBeforeStart(hold.options.command);
+        if (hold.interrupted) {
+          return Promise.reject(interruptedBeforeStart(hold.options.command));
+        }
         const held: HeldHere = {
           adapter: hold.adapter,
           claim: hold.claim,
           session,
           released: false,
         };
-        try {
-          const value = await heldHere.run(
-            [...(heldHere.getStore() ?? []), held],
-            () => work(session)
-          );
-          finished = { value };
-          return value;
-        } finally {
-          held.released = true;
-        }
+        const result = heldHere
+          .run([...(heldHere.getStore() ?? []), held], () => work(session))
+          .then(value => {
+            finished = { value };
+            return value;
+          })
+          .finally(() => {
+            held.released = true;
+          });
+        running = result;
+        return result;
       }
     );
+    return { kind: "ran", value };
   } catch (error) {
-    if (hold.interrupted && finished !== undefined) return finished.value;
+    if (running === undefined) {
+      const owner = heldFieldGroupOwner(error);
+      if (owner !== undefined) return { kind: "field-group-held", owner };
+      throw error;
+    }
+    // Released only once the work has stopped, whatever the session reported first.
+    await Promise.allSettled([running]);
+    if (hold.interrupted && finished !== undefined) {
+      return { kind: "ran", value: finished.value };
+    }
     throw error;
   } finally {
     decided();
@@ -1035,6 +1094,7 @@ export async function withSchemaLock<T>(
     return { ran: true, value: await work(outer.session) };
 
   const hold = new SchemaLockHold(options, leaseSeconds);
+  const wait = new LockWait(options);
   const removeSignals = hold.installSignals();
   try {
     hold.rowReady = await ensureRow(
@@ -1042,13 +1102,30 @@ export async function withSchemaLock<T>(
       hold.dialect,
       hold.mayCreateTables
     );
-    const acquired = await acquire(hold);
-    if (acquired.kind === "settled") return { ran: false, reason: "settled" };
-    if (acquired.kind === "reentrant") {
-      return { ran: true, value: await work(acquired.held.session) };
+    let value: T;
+    for (;;) {
+      const acquired = await acquire(hold, wait);
+      if (acquired.kind === "settled") return { ran: false, reason: "settled" };
+      if (acquired.kind === "reentrant") {
+        return { ran: true, value: await work(acquired.held.session) };
+      }
+      hold.startRenewal();
+      const ran = await runHeld(hold, work);
+      if (ran.kind === "ran") {
+        value = ran.value;
+        break;
+      }
+      // The field-group lock was held after all: give back what this attempt took, and wait.
+      await hold.stopRenewal();
+      await hold.releaseAll();
+      const holder: SchemaLockHolder = {
+        kind: "earlier-field-group-lock",
+        owner: ran.owner,
+      };
+      if ((await wait.after(holder)) === "settled") {
+        return { ran: false, reason: "settled" };
+      }
     }
-    hold.startRenewal();
-    const value = await runHeld(hold, work);
     if (hold.lost && !hold.interrupted) {
       throw NextlyError.serviceUnavailable({
         publicMessage:

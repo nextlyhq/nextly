@@ -243,6 +243,36 @@ describe.each(LOCK_DIALECTS)("the schema lock on %s", dialect => {
     60_000
   );
 
+  it("keeps every lock while its work runs on after the field-group session reports its claim lost", async () => {
+    let ownerMidWork: string | null | undefined;
+    const run = withSchemaLock(
+      {
+        adapter,
+        command: "nextly migrate",
+        whenHeld: "refuse",
+        leaseSeconds: 2,
+        logger: quiet,
+      },
+      async () => {
+        // Another process takes the field-group row over, so the session's next renewal finds the
+        // claim gone and reports it at once, while this work carries on.
+        await adapter.executeQuery(
+          "UPDATE nextly_field_group_lock SET owner = 'taken-over' WHERE id = 1"
+        );
+        await sleep(3_000);
+        const rows = (await adapter.executeQuery(
+          "SELECT owner FROM nextly_schema_lock WHERE id = 1"
+        )) as Array<{ owner: string | null }>;
+        ownerMidWork = rows[0]?.owner ?? null;
+      }
+    );
+
+    await expect(run).rejects.toBeDefined();
+    // Still this run's, after the session had reported the loss: nothing was released under work
+    // that had not stopped.
+    expect(ownerMidWork).toEqual(expect.any(String));
+  }, 60_000);
+
   it("excludes db:sync while another process runs nextly migrate", async () => {
     holder = startHolder(world, {
       command: "nextly migrate",

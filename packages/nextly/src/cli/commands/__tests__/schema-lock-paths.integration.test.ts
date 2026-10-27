@@ -188,6 +188,37 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
     );
   }, 90_000);
 
+  it("plans migrate:down again once it holds the lock, acting on the database as it stands then", async () => {
+    await migrate();
+    await holdTheLock();
+    const rollback = (async () =>
+      migrateDownCore({
+        ...(await downDatabaseDeps({ adapter, dialect })),
+        nodeEnv: "test",
+        logger,
+        options: { step: 1, allowDataLoss: true, yes: true },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: () =>
+          Promise.resolve({ sql: `DROP TABLE ${TABLE};`, transaction: true }),
+        withLock: (lockAdapter, d, fn, opts) =>
+          withMigrateLock(lockAdapter, d, fn, {
+            ...opts,
+            waitMs: 20_000,
+            pollMs: 200,
+          }),
+      }))();
+    await new Promise(resolve => setTimeout(resolve, 1_500));
+    // While it waits, another run rolls the same migration back.
+    await adapter.executeQuery(`DROP TABLE ${TABLE}`);
+    await adapter.executeQuery(
+      "UPDATE nextly_schema_events SET status = 'rolled_back' WHERE filename LIKE '%schema_lock_paths%'"
+    );
+    holder?.send("release");
+
+    // Nothing left to undo: the plan made before the wait would have dropped a table that is gone.
+    await expect(rollback).resolves.toEqual({ rolledBack: [] });
+  }, 90_000);
+
   it("refuses migrate:baseline, writing no file", async () => {
     const baselineDir = mkdtempSync(
       join(tmpdir(), "nextly-schema-lock-baseline-")

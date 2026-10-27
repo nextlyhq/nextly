@@ -107,6 +107,27 @@ describe.each(LOCK_DIALECTS)(
       60_000
     );
 
+    it("treats an earlier field-group lock on a table that predates its expiry column as held", async () => {
+      // The table as an earlier version left it: built from today's DDL, less the column it gained.
+      await holdEarlierFieldGroupLock("none");
+      await adapter.executeQuery(
+        "ALTER TABLE nextly_field_group_lock DROP COLUMN expires_at"
+      );
+
+      // The same refusal as any held lock, so a production boot refuses to start on it rather than
+      // reading the field-group session's own error as a migration failure it may serve through.
+      await expect(myRun()).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATE_LOCK_BUSY",
+        logContext: {
+          holder: {
+            kind: "earlier-field-group-lock",
+            owner: "db:sync#earlier-version",
+          },
+        },
+      });
+      expect(await exists(MINE)).toBe(false);
+    }, 60_000);
+
     it("proceeds once an earlier field-group lock has lapsed", async () => {
       await holdEarlierFieldGroupLock("lapsed");
 
