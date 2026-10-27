@@ -384,6 +384,38 @@ const ACTOR_CACHE_MAX_ENTRIES = 10_000;
 const actorCache = new Map<string, KeptActor>();
 
 /**
+ * Whether what this process kept under `key` may still be served: the role
+ * version it was read under stands and it has not expired. When it may, the
+ * request's memo of `key` is told when it expires, so a request that keeps
+ * serving its own copy never outlives this one: without that, a request
+ * running past the minute would go on serving what a change made through
+ * another instance, unseen by the role version, had replaced. Shared by
+ * every cache here, so each is bounded the same way.
+ */
+function keptStillServes(
+  key: string,
+  kept: { readonly epoch: string; readonly expiresAt: number }
+): boolean {
+  if (!stampIsCurrent(kept.epoch) || kept.expiresAt <= Date.now()) {
+    return false;
+  }
+  answersHoldUntil(key, kept.expiresAt);
+  return true;
+}
+
+/**
+ * When what was read under `key` just now stops being served: after the
+ * minute, or at `validUntil`, the soonest expiry of a role assignment it came
+ * from, whichever is first. The request's memo of `key` is told too, so
+ * nothing the request keeps outlives what this process would keep.
+ */
+function keptUntil(key: string, validUntil: number | undefined): number {
+  const expiresAt = cacheExpiry(Date.now(), ACTOR_CACHE_TTL_MS, validUntil);
+  answersHoldUntil(key, expiresAt);
+  return expiresAt;
+}
+
+/**
  * The user's actor, read now with nothing kept: one walk of their roles, then
  * those roles' slugs and grants. Throws on a failed read.
  */
@@ -429,22 +461,14 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
   const kept = actorCache.get(userId);
   if (kept) {
     actorCache.delete(userId);
-    if (stampIsCurrent(kept.epoch) && kept.expiresAt > Date.now()) {
+    if (keptStillServes(userId, kept)) {
       // Most recently asked last, so the oldest-asked goes first when full.
       actorCache.set(userId, kept);
-      answersHoldUntil(userId, kept.expiresAt);
       return kept.actor;
     }
   }
   const actor = await loadActor(userId);
-  const expiresAt = cacheExpiry(
-    Date.now(),
-    ACTOR_CACHE_TTL_MS,
-    actor.validUntil
-  );
-  // Nothing the request keeps about this user outlives what this process
-  // would keep: these roles, and the kept actor's own life.
-  answersHoldUntil(userId, expiresAt);
+  const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
       const oldest = actorCache.keys().next().value;
@@ -529,16 +553,12 @@ async function loadPublicGrants(
 async function publicGrantsOnPool(): Promise<readonly GrantedPermission[]> {
   const resolvedUnder = await refreshEpoch();
   const kept = publicGrantsKept;
-  if (kept && stampIsCurrent(kept.epoch) && kept.expiresAt > Date.now()) {
-    return kept.grants;
-  }
+  if (kept && keptStillServes(PUBLIC_GRANTS_KEY, kept)) return kept.grants;
   const grants = await loadPublicGrants();
+  // No role assignment is behind them, so only the minute bounds them.
+  const expiresAt = keptUntil(PUBLIC_GRANTS_KEY, undefined);
   if (stampIsCurrent(resolvedUnder)) {
-    publicGrantsKept = {
-      grants,
-      epoch: resolvedUnder,
-      expiresAt: Date.now() + ACTOR_CACHE_TTL_MS,
-    };
+    publicGrantsKept = { grants, epoch: resolvedUnder, expiresAt };
   }
   return grants;
 }
