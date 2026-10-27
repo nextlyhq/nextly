@@ -151,6 +151,13 @@ const PROPERTY = "serverExternalPackages";
  */
 const LEGACY_PROPERTY = "serverComponentsExternalPackages";
 
+/**
+ * Why a config with the deprecated list is left alone. Named, so the advice
+ * printed for it can say what to do with that list rather than the advice
+ * for every other refusal, which says to keep the experimental keys there.
+ */
+const LEGACY_LIST_REASON = `it lists packages under experimental.${LEGACY_PROPERTY}, which Next.js copies over ${PROPERTY}, replacing the packages added there`;
+
 /** A text insertion at an offset of the original source, replacing `remove` characters. */
 type Edit = { at: number; remove: number; text: string };
 type Plan = { edits: Edit[]; added: string[] } | { reason: string };
@@ -696,7 +703,7 @@ function experimentalConflict(
   required: string[]
 ): string | null {
   if (propertyValue(experimental, LEGACY_PROPERTY)) {
-    return `it lists packages under experimental.${LEGACY_PROPERTY}, which Next.js copies over ${PROPERTY}, replacing the packages added there; move those entries into the top-level ${PROPERTY} list and delete experimental.${LEGACY_PROPERTY}`;
+    return LEGACY_LIST_REASON;
   }
   return (
     clashReason("transpilePackages", object, "transpilePackages", required) ??
@@ -1069,7 +1076,10 @@ export function nextConfigFiles(patch: NextConfigPatch): GeneratedFiles {
     case "manual":
       files.skipped.push({
         path: patch.file,
-        why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
+        why:
+          patch.reason === LEGACY_LIST_REASON
+            ? `Nextly's packages were not added: ${patch.reason}. Move the packages under experimental.${LEGACY_PROPERTY} into a top-level ${PROPERTY} list, add Nextly's to it, and delete experimental.${LEGACY_PROPERTY}, keeping the config's other experimental keys`
+            : `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
         toAdd: optionText(patch.packages),
       });
   }

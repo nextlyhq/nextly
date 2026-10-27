@@ -128,3 +128,24 @@ export function assertSupportedFrameworkVersions(
     logContext: { problems },
   });
 }
+
+/**
+ * Whether this process's installed versions passed the check. On `globalThis`
+ * so every copy of this module in one process (a server and a rendering layer,
+ * a reload in development) shares the answer.
+ */
+const checked = globalThis as unknown as {
+  __nextly_frameworkVersionsChecked?: boolean;
+};
+
+/**
+ * {@link assertSupportedFrameworkVersions} once per process, at the boot
+ * boundary every way of starting nextly shares. Marked as checked only once
+ * it passes, so a refused start is refused again on every attempt, and a boot
+ * after it pays nothing.
+ */
+export function ensureSupportedFrameworkVersions(appRoot: string): void {
+  if (checked.__nextly_frameworkVersionsChecked) return;
+  assertSupportedFrameworkVersions(appRoot);
+  checked.__nextly_frameworkVersionsChecked = true;
+}

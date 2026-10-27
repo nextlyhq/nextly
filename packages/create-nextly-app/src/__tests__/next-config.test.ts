@@ -404,9 +404,14 @@ describe("a config with the deprecated experimental list", () => {
 
     expect(result.kind).toBe("manual");
     expect(await read("next.config.mjs")).toBe(text);
-    const message = said(result);
-    expect(message).toContain(
-      "move those entries into the top-level serverExternalPackages list and delete experimental.serverComponentsExternalPackages"
+    const [advice] = nextConfigFiles(result).skipped;
+    expect(advice?.why).toBe(
+      "Nextly's packages were not added: it lists packages under experimental.serverComponentsExternalPackages, which Next.js copies over serverExternalPackages, replacing the packages added there. Move the packages under experimental.serverComponentsExternalPackages into a top-level serverExternalPackages list, add Nextly's to it, and delete experimental.serverComponentsExternalPackages, keeping the config's other experimental keys"
+    );
+    // The advice every other refusal gets would keep the legacy key, which is
+    // exactly what loses Nextly's packages.
+    expect(advice?.why).not.toContain(
+      "keeping any packages and experimental keys already there"
     );
   });
 });
