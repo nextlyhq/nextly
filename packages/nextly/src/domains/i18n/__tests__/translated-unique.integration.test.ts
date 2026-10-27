@@ -487,11 +487,18 @@ describeEachDialect("a translated unique field", dialect => {
       expect((await liveIndexes(companion)).get(index)?.unique).toBe(true);
       // On SQLite the index leaves blanks out by its WHERE; a push that rewrote it without one
       // would count every untranslated document as a duplicate of the others.
+      // It still keys the field's column and the language, so it holds the field's values.
       if (dialect === "sqlite") {
         const [row] = await query<{ sql: string }>(
           `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = '${index}'`
         );
-        expect(row?.sql).toMatch(/WHERE .+ IS NOT NULL AND .+ <> ''/);
+        expect(row?.sql).toContain(
+          `WHERE "${column}" IS NOT NULL AND "${column}" <> ''`
+        );
+        const keyed = await query<{ name: string }>(
+          `SELECT name FROM pragma_index_info('${index}') ORDER BY seqno`
+        );
+        expect(keyed.map(k => k.name)).toEqual([column, "_locale"]);
       }
     }
   );
