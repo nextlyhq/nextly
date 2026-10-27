@@ -11,7 +11,8 @@
  */
 
 import { allWidgets, sizeFacts } from "../canonical";
-import { CORE_WIDGET_IDS } from "../core-widgets";
+// The ids alone, not the widgets: this check runs wherever a config is read.
+import { CORE_WIDGET_IDS } from "../core-widgets/ids";
 import type { WidgetDefinition } from "../definition";
 import {
   GRID_COLUMNS,
