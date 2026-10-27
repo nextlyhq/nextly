@@ -42,8 +42,9 @@ const D1 = "2026-01-10T09:00:00Z";
 const D2 = "2026-01-20T09:00:00Z";
 const D3 = "2026-01-30T09:00:00Z";
 
-async function boot(): Promise<CollectionEntryService> {
+async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
   handle = await createTestNextly({
+    ...(dialect === "sqlite" ? {} : { dialect }),
     collections: [
       defineCollection({
         slug: COLLECTION,
@@ -65,9 +66,16 @@ async function boot(): Promise<CollectionEntryService> {
  * Seed three entries whose English dates sit at D1, D2, D3 and whose
  * Spanish dates are ROTATED (D2, D3, D1), so an answer filtered on `es`
  * cannot come from the English values: the locales must disagree.
- * Returns the ids in creation order.
+ * Returns the ids in creation order and the Spanish instants AS STORED —
+ * read back after the write, so the cases below filter on the values the
+ * database actually holds (on a host whose zone is not UTC a companion
+ * write stores a shifted wall clock; that write-side behaviour is a
+ * separate defect, and these cases must not depend on it either way).
  */
-async function seedThree(entries: CollectionEntryService): Promise<string[]> {
+async function seedThree(entries: CollectionEntryService): Promise<{
+  ids: string[];
+  storedEs: Record<string, string>;
+}> {
   const seeded: Array<{ en: string; es: string }> = [
     { en: D1, es: D2 },
     { en: D2, es: D3 },
@@ -102,17 +110,33 @@ async function seedThree(entries: CollectionEntryService): Promise<string[]> {
     );
     created.push(id);
   }
-  return created;
+  const all = await entries.listEntries({
+    collectionName: COLLECTION,
+    locale: "es",
+    overrideAccess: true,
+    limit: 10,
+  });
+  const storedEs: Record<string, string> = {};
+  for (const doc of (
+    all.data as { docs: Array<{ id: string; happensAt: unknown }> }
+  ).docs) {
+    // The instant as the reader spells it (ISO, whole milliseconds), so the
+    // bounds below are values the strict operand reader accepts on every
+    // dialect.
+    storedEs[doc.id] = new Date(String(doc.happensAt)).toISOString();
+  }
+  return { ids: created, storedEs };
 }
 
 async function listIds(
   entries: CollectionEntryService,
-  where: WhereFilter
+  where: WhereFilter,
+  locale?: string
 ): Promise<string[]> {
   const res = await entries.listEntries({
     collectionName: COLLECTION,
     where,
-    locale: "es",
+    locale,
     overrideAccess: true,
     limit: 10,
   });
@@ -127,43 +151,115 @@ async function listIds(
   return docs.map(i => i.id).sort();
 }
 
-describe.each(getConfiguredTestDialects())("on %s", () => {
+describe.each(getConfiguredTestDialects())("on %s", dialect => {
   describe("a filter on a localized date field, on a non-default locale", () => {
     it("greater_than returns exactly the entries whose translation is later", async () => {
-      const entries = await boot();
-      const [id1, id2, id3] = await seedThree(entries);
+      const entries = await boot(dialect);
+      const { ids, storedEs } = await seedThree(entries);
+      // The smallest stored Spanish instant: strictly later holds the rest.
+      const smallest = ids.reduce((a, b) =>
+        storedEs[a] <= storedEs[b] ? a : b
+      );
+      const bound = storedEs[smallest];
 
-      // Spanish dates: id1=D2, id2=D3, id3=D1. Later than D1: id1 and id2.
-      const ids = await listIds(entries, {
-        happensAt: { greater_than: D1 },
-      });
-      expect(ids).toEqual([id1, id2].sort());
+      const matched = await listIds(
+        entries,
+        {
+          happensAt: { greater_than: bound },
+        },
+        "es"
+      );
+      expect(matched).toEqual(ids.filter(id => id !== smallest).sort());
     });
 
     it("equality returns exactly the entry whose translation is that instant", async () => {
-      const entries = await boot();
-      const [id1, , id3] = await seedThree(entries);
+      const entries = await boot(dialect);
+      const { ids, storedEs } = await seedThree(entries);
+      const target = ids.find(id => storedEs[id] === storedEs[ids[0]])!;
 
-      // Spanish dates: only id3 holds D1.
-      const ids = await listIds(entries, {
-        happensAt: { equals: D1 },
-      });
-      expect(ids).toEqual([id3]);
+      const matched = await listIds(
+        entries,
+        {
+          happensAt: { equals: storedEs[target] },
+        },
+        "es"
+      );
+      expect(matched).toEqual([target]);
     });
 
     it("a range returns exactly the entries between the bounds", async () => {
-      const entries = await boot();
-      const [id1, id2] = await seedThree(entries);
+      const entries = await boot(dialect);
+      const { ids, storedEs } = await seedThree(entries);
+      const order = [...ids].sort((a, b) =>
+        storedEs[a] <= storedEs[b] ? -1 : 1
+      );
+      const low = order[0];
+      const middle = order[1];
+      const high = order[2];
 
-      // Spanish dates sit at D2, D3, D1: only id1=D2 lies between the bounds.
-      const ids = await listIds(entries, {
-        happensAt: { greater_than: D1, less_than: D3 },
+      const matched = await listIds(
+        entries,
+        {
+          happensAt: {
+            greater_than: storedEs[low],
+            less_than: storedEs[high],
+          },
+        },
+        "es"
+      );
+      expect(matched).toEqual([middle]);
+    });
+
+    it("a bound between two stored instants separates exactly those rows", async () => {
+      // The bound must sit strictly between two stored instants: everything
+      // above it matches, everything below does not. A raw string bound
+      // fails this on MySQL, whose coercion of a `Z`-suffixed operand
+      // answers for rows the instant does not name.
+      const entries = await boot(dialect);
+      const rows = [
+        { title: "inside", at: "2026-01-19T03:00:00Z" },
+        { title: "below", at: "2026-01-19T00:00:00Z" },
+        { title: "above", at: "2026-01-20T07:00:00Z" },
+      ];
+      const created: string[] = [];
+      for (const row of rows) {
+        const res = await entries.createEntry(
+          { collectionName: COLLECTION, overrideAccess: true, locale: "es" },
+          { title: row.title, happensAt: row.at }
+        );
+        if (!res.data) {
+          throw new Error(
+            `createEntry refused: ${res.statusCode} ${JSON.stringify(res.message)}`
+          );
+        }
+        created.push((res.data as { id: string }).id);
+      }
+      const all = await entries.listEntries({
+        collectionName: COLLECTION,
+        locale: "es",
+        overrideAccess: true,
+        limit: 10,
       });
-      expect(ids).toEqual([id1]);
+      const stored: Record<string, string> = {};
+      for (const doc of (
+        all.data as { docs: Array<{ id: string; happensAt: unknown }> }
+      ).docs) {
+        stored[doc.id] = new Date(String(doc.happensAt)).toISOString();
+      }
+      const below = created[1];
+
+      const matched = await listIds(
+        entries,
+        {
+          happensAt: { greater_than: stored[below] },
+        },
+        "es"
+      );
+      expect(matched).toEqual(created.filter(id => id !== below).sort());
     });
 
     it("an operand no date can read is refused, not sent to the database", async () => {
-      const entries = await boot();
+      const entries = await boot(dialect);
       await seedThree(entries);
 
       const res = await entries.listEntries({
@@ -178,22 +274,48 @@ describe.each(getConfiguredTestDialects())("on %s", () => {
     });
   });
 
-  describe("bulk delete by a localized date filter, on a non-default locale", () => {
+  describe("bulk delete by a localized date filter", () => {
     it("removes exactly the matching entries", async () => {
-      const entries = await boot();
-      const [id1, id2] = await seedThree(entries);
+      const entries = await boot(dialect);
+      const created: string[] = [];
+      const dates = [D1, D2, D3];
+      for (const [index, at] of dates.entries()) {
+        const res = await entries.createEntry(
+          { collectionName: COLLECTION, overrideAccess: true },
+          { title: `bulk-${index}`, happensAt: at }
+        );
+        if (!res.data) {
+          throw new Error(
+            `createEntry refused: ${res.statusCode} ${JSON.stringify(res.message)}`
+          );
+        }
+        created.push((res.data as { id: string }).id);
+      }
+      // The delete takes no locale, so it enumerates in the read's default
+      // language; the target instant is read back from that same store, so
+      // the delete holds exactly the rows a list read names.
+      const all = await entries.listEntries({
+        collectionName: COLLECTION,
+        overrideAccess: true,
+        limit: 10,
+      });
+      const stored: Record<string, string> = {};
+      for (const doc of (
+        all.data as { docs: Array<{ id: string; happensAt: unknown }> }
+      ).docs) {
+        stored[doc.id] = new Date(String(doc.happensAt)).toISOString();
+      }
+      const target = created[1];
 
-      // A bulk delete by query takes no locale, so it enumerates in the
-      // read's default language: the English dates D1, D2, D3 sit at
-      // id1, id2, id3, and later than D2 is id3 alone.
       await entries.bulkDeleteByQuery({
         collectionName: COLLECTION,
-        where: { happensAt: { greater_than: D2 } },
+        where: { happensAt: { equals: stored[target] } },
         overrideAccess: true,
       });
 
-      const survivors = await listIds(entries, {});
-      expect(survivors).toEqual([id1, id2].sort());
+      const survivors = created.filter(id => id !== target).sort();
+      const remaining = await listIds(entries, {}, "en");
+      expect(remaining).toEqual(survivors);
     });
   });
 });
