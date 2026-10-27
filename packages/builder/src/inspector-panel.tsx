@@ -49,6 +49,7 @@ import {
   TabsList,
   TabsTrigger,
   Textarea,
+  useIsomorphicLayoutEffect,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -726,24 +727,30 @@ function CustomInspector({
   editor: EditorState;
 }): React.JSX.Element | null {
   /*
-   * The document each commit builds on, carried from one commit to the next.
+   * The editor and the document every commit reads, held where any copy of
+   * `commit` sees the latest.
    *
    * A component may commit twice in one handler, before the panel re-renders,
-   * and `editor.document` is still the render's copy then. Building the second
-   * patch from it would carry the first prop's old value back in, undoing that
-   * edit. So each commit builds on the document the last one produced, and a
-   * new render starts again from the editor's.
+   * or hold `commit` across an await while the document moves on. Either way
+   * the render's `editor.document` is out of date when the call runs, and a
+   * patch built from it would put back what changed in between (`propPatch`
+   * copies the props whole) and miss a lock set meanwhile. So each render
+   * publishes its editor here, each commit advances the document to what its
+   * own write produced, and the callback itself never changes.
    */
-  const commit = React.useMemo(() => {
-    let live = editor.document;
-    return (name: string, value: unknown): void => {
-      if (!propIsWritable(live, nodeId, name)) return;
-      const next = commitProp(editor, live, nodeId, name, value);
-      if (next !== null) live = next;
-    };
-    // Keyed on the editor, which `useEditorState` replaces whenever its
-    // document changes, so each render starts from the current document.
-  }, [editor, nodeId]);
+  const live = React.useRef({ editor, document: editor.document });
+  useIsomorphicLayoutEffect(() => {
+    live.current = { editor, document: editor.document };
+  }, [editor]);
+  const commit = React.useCallback(
+    (name: string, value: unknown): void => {
+      const { editor: current, document } = live.current;
+      if (!propIsWritable(document, nodeId, name)) return;
+      const next = commitProp(current, document, nodeId, name, value);
+      if (next !== null) live.current = { editor: current, document: next };
+    },
+    [nodeId]
+  );
   const node = findNode(editor.document.nodes, nodeId);
   if (node === undefined) return null;
   return (

@@ -218,6 +218,41 @@ describe("a block's own inspector", () => {
     expect(live.nodes[0]?.props).toEqual({ title: "Welcome", tone: "cool" });
   });
 
+  it("builds a deferred commit on the document as it stands when it runs", () => {
+    /*
+     * A component may hold `commit` across an await (an upload, a lookup)
+     * while the document moves on. The held callback must read the editor's
+     * current document, or its whole-props patch puts back what changed in
+     * between, and a lock set meanwhile goes unseen.
+     */
+    const first = editorFor(documentOf([hero()]));
+    const { rerender } = render(
+      <InspectorPanel editor={first} inspectors={resolving} />
+    );
+    const held = given?.commit;
+
+    // Another surface changes `tone` before the held commit runs.
+    const moved = editorFor(
+      documentOf([hero({ props: { title: "Hello", tone: "cool" } })])
+    );
+    rerender(<InspectorPanel editor={moved} inspectors={resolving} />);
+    held?.("title", "Welcome");
+
+    expect(first.apply).not.toHaveBeenCalled();
+    expect(moved.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "hero",
+      patch: { props: { title: "Welcome", tone: "cool" } },
+    });
+
+    // And a lock set before it runs stops it.
+    const locked = editorFor(documentOf([hero({ locked: true })]));
+    rerender(<InspectorPanel editor={locked} inspectors={resolving} />);
+    held?.("title", "Too late");
+
+    expect(locked.apply).not.toHaveBeenCalled();
+  });
+
   it("refuses every write while the block is locked, whatever the component does", () => {
     const editor = editorFor(documentOf([hero({ locked: true })]));
     render(<InspectorPanel editor={editor} inspectors={resolving} />);
