@@ -991,6 +991,73 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
           applyWidgetSettings(list, [titled], { collection: "posts" })
         ).toBe(list);
       });
+
+      describe("with the fields its rows show chosen", () => {
+        const chosen = {
+          name: "fields",
+          type: "fields" as const,
+          of: "collection",
+        };
+        // What this reader is offered of posts: a read-ruled `salary` is not.
+        const offered = {
+          ...published(),
+          fieldsOf: (collection: string) =>
+            collection === "posts"
+              ? [
+                  { name: "headline", offered: true },
+                  { name: "updatedAt", offered: true },
+                  { name: "category", offered: true },
+                  { name: "salary", offered: false },
+                ]
+              : undefined,
+        };
+
+        it("asks the chosen fields after the title, in the order chosen", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["category", "updatedAt"] },
+              offered
+            ).select
+          ).toEqual(["headline", "category", "updatedAt"]);
+        });
+
+        it("never asks the title twice", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["headline", "updatedAt"] },
+              offered
+            ).select
+          ).toEqual(["headline", "updatedAt"]);
+        });
+
+        it("asks the list's own fields where a chosen one is not offered to this reader", () => {
+          // 🔴 A stored choice naming a read-ruled field, saved before the rule or by
+          // another reader, must not reach the read: the row keeps its defaults.
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["category", "salary"] },
+              offered
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
+
+        it("asks the list's own fields where nothing is chosen", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts" },
+              offered
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
+      });
     });
 
     it("leaves a widget's own select named dateRange alone when it offers anything but the query's spans", () => {

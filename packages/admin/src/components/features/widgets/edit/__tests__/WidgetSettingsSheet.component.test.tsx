@@ -114,6 +114,48 @@ describe("the settings sheet with content settings", () => {
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("by");
   });
 
+  it("opens a Fields choice naming a field no longer offered without it, and says so", async () => {
+    const withFields: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const onSave = open(
+      { collection: "posts", shown: ["headline", "salary"] },
+      withFields
+    );
+    expect(
+      screen.getByText("Fields was reset: salary is no longer available")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    // 🔴 The field the reader may not see is not saved back for the card to ask for.
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(JSON.stringify(saved(onSave))).not.toContain("salary");
+  });
+
+  it("names a chosen field by its readable name, not its key, where the source gives no label", () => {
+    // 🔴 A field the source publishes without a label read as its key (`publishedAt`), while
+    // the card's own column heading for it reads "Published At".
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "publishedAt", type: "date" },
+          ],
+        },
+      ],
+    };
+    open({ collection: "posts", shown: ["publishedAt"] }, [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ]);
+    expect(screen.getByText("Published At")).toBeTruthy();
+    expect(screen.queryByText("publishedAt")).toBeNull();
+  });
+
   it("says nothing while the sources have not arrived", () => {
     mockBranding.value = {};
     open({ collection: "posts", by: "secret" });

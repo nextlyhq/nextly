@@ -184,6 +184,18 @@ export type ContentSetting =
     })
   | (WidgetSettingBase & { type: "sort"; of: string; defaultValue?: string })
   | (WidgetSettingBase & {
+      type: "fields";
+      of: string;
+      /**
+       * The fields each row shows after its title, in order, from the
+       * collection the setting works over. Unset, a titled list shows its
+       * status and when it was updated.
+       *
+       * @experimental
+       */
+      defaultValue?: string[];
+    })
+  | (WidgetSettingBase & {
       type: "groupBy";
       of: string;
       defaultValue?: string;
@@ -213,6 +225,7 @@ export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 const DEPENDENT_TYPES: ReadonlySet<AnyWidgetSetting["type"]> = new Set([
   "filter",
   "sort",
+  "fields",
   "groupBy",
 ]);
 
@@ -303,6 +316,14 @@ const USABLE_AS: Record<
   collection: value => isName(value),
   sort: value => isName(value),
   groupBy: value => isName(value),
+  // The fields a list's rows show: one or more names, each once, and no more
+  // than a row has places for.
+  fields: value =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= MAX_CHOSEN_FIELDS &&
+    value.every(isName) &&
+    new Set(value).size === value.length,
   // The list view's conditions: a plain object of them.
   filter: value =>
     typeof value === "object" && value !== null && !Array.isArray(value),
@@ -1278,6 +1299,26 @@ function isRelativeSpan(value: unknown): value is RelativeSpan {
 /** The ops a window bounds: a count, and a timeseries. */
 const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
 
+/**
+ * The most fields a list's rows may be set to show after their title: the
+ * places a row has for them, its meta line and its end, as the admin draws it.
+ */
+const MAX_CHOSEN_FIELDS = 8;
+
+/**
+ * `query` asking `chosen` after its title. A titled list keeps the title it
+ * was given first and replaces the rest; any other list asks exactly the
+ * fields chosen. The title is never asked twice.
+ */
+function withChosenFields<T extends KnobQuery>(query: T, chosen: string[]): T {
+  const title = query.select?.[0];
+  if (title === undefined) return { ...query, select: [...chosen] };
+  return {
+    ...query,
+    select: [title, ...chosen.filter(name => name !== title)],
+  };
+}
+
 /** The field a sort names, without its direction. */
 function sortField(sort: string): string {
   return sort.startsWith("-") ? sort.slice(1) : sort;
@@ -1387,6 +1428,22 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       setting.type === "sort" && readsACollection(source),
     fits: (value, fields) => allOffered([sortField(value as string)], fields),
     apply: (query, value) => ({ ...query, sort: value as string }),
+  },
+  {
+    // The fields a list's rows show after their title. Each must be one the
+    // reader is offered, the same rule a sort or a filter is held to, so a
+    // field a read rule keeps from this reader is never asked for, whatever
+    // the stored setting names; a value that does not fit leaves the list's
+    // own fields.
+    drives: (setting, source) =>
+      setting.type === "fields" && readsACollection(source),
+    fits: (value, fields) =>
+      Array.isArray(value) &&
+      allOffered(
+        value.filter((name): name is string => typeof name === "string"),
+        fields
+      ),
+    apply: (query, value) => withChosenFields(query, value as string[]),
   },
   {
     drives: (setting, source) =>

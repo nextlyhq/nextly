@@ -6,7 +6,7 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
@@ -14,6 +14,16 @@ import { render, screen, within } from "@admin/__tests__/utils";
 import { CardTierContext } from "../widgets/frame/tier";
 
 import { RecentEntriesCard } from "./RecentEntriesCard";
+
+/** The collections the workspace payload publishes to the reader, as a test sets them. */
+let mockBranding: { widgetSources?: unknown[] } = {};
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useBranding: () => mockBranding,
+}));
+afterEach(() => {
+  mockBranding = {};
+});
 
 const FILTER = { headline: { contains: "news" } };
 
@@ -162,5 +172,79 @@ describe("the Recent entries card", () => {
       .getAllByRole("columnheader")
       .map(heading => heading.textContent);
     expect(headings).toEqual(["Headline", "Updated", "Status"]);
+  });
+
+  it("leads each row with the initial of its collection's label, not its slug", () => {
+    // 🔴 Posts are published to this reader as "Articles": a chip read off the slug says "P".
+    mockBranding = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Articles",
+          lifecycle: false,
+          fields: [],
+        },
+      ],
+    };
+    drawAt("medium");
+    const leading = screen
+      .getAllByTestId("entity-row")
+      .map(each => within(each).getByTestId("entity-row-leading").textContent);
+    expect(leading.length).toBeGreaterThan(0);
+    expect(new Set(leading)).toEqual(new Set(["A"]));
+  });
+
+  it("draws its status as a pill, in the tone of done for a published entry", () => {
+    drawAt("medium", {
+      ok: true,
+      result: {
+        op: "list",
+        items: [
+          { id: "e1", headline: "Story 1", status: "published" },
+          { id: "e2", headline: "Story 2", status: "draft" },
+        ],
+        fields: [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [
+              { value: "published", label: "Published" },
+              { value: "draft", label: "Draft" },
+            ],
+          },
+        ],
+      },
+    });
+    // 🔴 One tone for both says nothing about which is live.
+    const pills = screen
+      .getAllByTestId("status-pill")
+      .map(pill => [pill.textContent, pill.dataset.tone]);
+    expect(pills).toEqual([
+      ["Published", "good"],
+      ["Draft", "neutral"],
+    ]);
+  });
+
+  it("shows the fields its reader chose, each on the meta line or at the row's end", () => {
+    // Chosen in the card's Fields: a topic, which has no choices, joins the meta line.
+    const chosen: WidgetSlot = {
+      ok: true,
+      result: {
+        op: "list",
+        items: [{ id: "e1", headline: "Story 1", topic: "Plans" }],
+        fields: [
+          { name: "headline", label: "Headline", type: "string" },
+          { name: "topic", label: "Topic", type: "string" },
+        ],
+      },
+    };
+    drawAt("medium", chosen);
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "Plans"
+    );
+    expect(within(row!).queryByTestId("entity-row-trailing")).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import type React from "react";
 
 import { answerTotal } from "../widgets/archetypes/tiered-rows";
 import { FrameState } from "../widgets/frame/card-state";
+import { useCollectionLabel } from "../widgets/frame/collection-label";
 import { ListCard } from "../widgets/frame/list-card";
 import { useListCard } from "../widgets/frame/list-slot";
 import { listViewHref } from "../widgets/frame/list-view-href";
@@ -25,6 +26,7 @@ import { recentEntriesModel, rowLabelField } from "./recent-entries-model";
 
 export const RecentEntriesCard: React.FC<WidgetComponentProps> = props => {
   const { tier, drawn, density, now, read } = useListCard(props);
+  const labelOf = useCollectionLabel();
   const { query } = props;
   if ("node" in read) return read.node;
   const label = rowLabelField(query);
@@ -48,7 +50,7 @@ export const RecentEntriesCard: React.FC<WidgetComponentProps> = props => {
   const columns = read.list.fields ?? [];
   return (
     <ListCard
-      model={recentEntriesModel(query, label, columns, now)}
+      model={recentEntriesModel(query, label, columns, now, labelOf)}
       rows={read.list.items}
       drawn={drawn}
       total={answerTotal(read.list)}

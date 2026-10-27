@@ -23,6 +23,7 @@ import { useController, useWatch } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { ConditionRow, type ConditionValue } from "@admin/components/field-ui";
+import { fieldLabel } from "@admin/lib/field-label";
 
 import {
   conditionToWhere,
@@ -45,7 +46,9 @@ export interface ContentSettingControlProps {
 
 type Field = PublishedContentSource["fields"][number];
 
-const labelOf = (field: Field) => field.label ?? field.name;
+// A field as every control names it: its declared label, or its name made readable, the way the
+// card's own column headings read, so a choice reads the same in the sheet and on the card.
+const labelOf = (field: Field) => fieldLabel(field);
 
 /**
  * A select field with these options, for `FieldRenderer` to draw. Clearable
@@ -111,6 +114,23 @@ export function ContentSettingControl({
             .map(field => ({ label: labelOf(field), value: field.name })),
           true
         )}
+        mode="edit"
+      />
+    );
+  }
+  if (setting.type === "fields") {
+    return (
+      <FieldRenderer
+        field={{
+          // The fields each row shows after its title, in the order picked, from
+          // the ones this reader is offered; cleared, the card shows its own.
+          ...selectOf(
+            setting,
+            fields.map(field => ({ label: labelOf(field), value: field.name })),
+            true
+          ),
+          hasMany: true,
+        }}
         mode="edit"
       />
     );
