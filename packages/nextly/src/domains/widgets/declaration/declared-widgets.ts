@@ -94,7 +94,11 @@ interface DeclaredWidgetShape {
   readonly hidesWhenEmpty?: boolean;
 }
 
-/** The add panel's category for a widget that names none. */
+/**
+ * The add panel's category for a widget that names none. Not for core's own:
+ * the panel shows a category as a label beside the name, and core's widgets
+ * carry none, so a core declaration that names none stays without one.
+ */
 const DEFAULT_CATEGORY = "Other";
 
 /**
@@ -137,7 +141,13 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * query. The size is published with every end filled in (`sizeBounds`), the
  * one reading of a declared size, so no reader fills a missing end its own way.
  */
-function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
+function toDefinition(
+  declaration: DeclaredWidgetShape,
+  owner: string
+): WidgetDefinition {
+  const category =
+    declaration.category ??
+    (owner === CORE_OWNER ? undefined : DEFAULT_CATEGORY);
   const display = displayOfView(declaration.view);
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
@@ -149,7 +159,7 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
     title: declaration.title,
     description: declaration.description,
     ...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
-    category: declaration.category ?? DEFAULT_CATEGORY,
+    ...(category === undefined ? {} : { category }),
     ...(typeof display === "string"
       ? { archetype: display }
       : {
@@ -360,7 +370,7 @@ export function registerDashboardWidgets({
       // has a declaration here to answer its cards from. One drawn by its own
       // component is published as a custom card core answers: the admin hands
       // that component the props its declaration types (`WidgetProps`).
-      registerDeclaredDefinition(toDefinition(declaration), owner);
+      registerDeclaredDefinition(toDefinition(declaration, owner), owner);
     }
   }
 }
@@ -410,12 +420,12 @@ function wellFormedDefinitions(
 ): ReadonlyMap<string, WidgetDefinition> {
   const faulty = new Set(faults.map(fault => fault.widget));
   const definitions = new Map<string, WidgetDefinition>();
-  for (const { declarations } of groups) {
+  for (const { owner, declarations } of groups) {
     if (!Array.isArray(declarations)) continue;
     for (const raw of declarations as readonly unknown[]) {
       const id = (raw as { id?: unknown } | null)?.id;
       if (typeof id !== "string" || faulty.has(id)) continue;
-      definitions.set(id, toDefinition(raw as DeclaredWidgetShape));
+      definitions.set(id, toDefinition(raw as DeclaredWidgetShape, owner));
     }
   }
   return definitions;

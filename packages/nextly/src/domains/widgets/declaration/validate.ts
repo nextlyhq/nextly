@@ -49,6 +49,12 @@ export interface WidgetDeclarationFault {
 export interface WidgetDeclarationGroup {
   owner: string;
   declarations: unknown;
+  /**
+   * Core's own declarations: the one group whose ids are in core's `core/`
+   * namespace, and must be. Set by core where it registers them, never read
+   * from a plugin or the site.
+   */
+  core?: true;
 }
 
 /**
@@ -118,7 +124,8 @@ const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
  */
 export function widgetDeclarationFaults(
   raw: unknown,
-  owner: string
+  owner: string,
+  inCore = false
 ): WidgetDeclarationFault[] {
   if (!isRecord(raw)) {
     return [
@@ -130,7 +137,11 @@ export function widgetDeclarationFaults(
     ];
   }
   const widget = typeof raw.id === "string" ? raw.id : "(no id)";
-  return declarationProblems(raw).map(problem => ({ owner, widget, problem }));
+  return declarationProblems(raw, inCore).map(problem => ({
+    owner,
+    widget,
+    problem,
+  }));
 }
 
 /** What one check finds: nothing, one problem, or several. */
@@ -143,7 +154,10 @@ type Found = string | readonly string[] | undefined;
  * its own and a new field adds a line here rather than a branch somewhere in
  * the middle.
  */
-const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
+const CHECKS: readonly ((
+  d: Record<string, unknown>,
+  inCore: boolean
+) => Found)[] = [
   d =>
     Object.keys(d)
       .filter(key => !FIELDS.has(key))
@@ -152,7 +166,7 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
           ? `${quote(key)} is not a field of a widget declaration; ${RENAMED_FIELDS[key]}`
           : `${quote(key)} is not a field of a widget declaration`
       ),
-  d => idProblem(d.id),
+  (d, inCore) => idProblem(d.id, inCore),
   d => requiredTextProblem("title", d.title),
   d => descriptionProblem(d.description),
   d => optionalTextProblem("icon", d.icon),
@@ -183,9 +197,12 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
 ];
 
 /** The problems with a declaration that is at least an object. */
-function declarationProblems(d: Record<string, unknown>): string[] {
+function declarationProblems(
+  d: Record<string, unknown>,
+  inCore: boolean
+): string[] {
   return CHECKS.flatMap(check => {
-    const found = check(d);
+    const found = check(d, inCore);
     if (found === undefined) return [];
     return typeof found === "string" ? [found] : [...found];
   });
@@ -282,12 +299,19 @@ function summaryProblems(summary: unknown): string[] {
   ];
 }
 
-function idProblem(id: unknown): string | undefined {
+function idProblem(id: unknown, inCore: boolean): string | undefined {
   if (id === undefined) return "id is required";
   if (!isValidWidgetId(id)) {
     return `id must be namespace/name in lowercase slug form, such as "acme/orders", got ${quote(id)}`;
   }
   const namespace = id.slice(0, id.indexOf("/"));
+  // Core's own widgets live in `core/`, and only there: the per-collection and
+  // per-Single namespaces are for the cards core generates.
+  if (inCore) {
+    return namespace === "core"
+      ? undefined
+      : `id "${id}" is one of core's own widgets, so it must be in the "core/" namespace`;
+  }
   if ((RESERVED_NAMESPACES as readonly string[]).includes(namespace)) {
     return `id "${id}" is in the reserved "${namespace}/" namespace; use your own, such as your package's name`;
   }
@@ -455,7 +479,8 @@ export function collectWidgetDeclarationFaults(
 ): WidgetDeclarationFault[] {
   const faults: WidgetDeclarationFault[] = [];
   const claimed = new Map<string, string>();
-  for (const { owner, declarations } of groups) {
+  for (const group of groups) {
+    const { owner, declarations } = group;
     if (!Array.isArray(declarations)) {
       faults.push({
         owner,
@@ -465,7 +490,9 @@ export function collectWidgetDeclarationFaults(
       continue;
     }
     for (const declaration of declarations) {
-      faults.push(...widgetDeclarationFaults(declaration, owner));
+      faults.push(
+        ...widgetDeclarationFaults(declaration, owner, group.core === true)
+      );
       const id = isRecord(declaration) ? declaration.id : undefined;
       if (typeof id !== "string") continue;
       const earlier = claimed.get(id);

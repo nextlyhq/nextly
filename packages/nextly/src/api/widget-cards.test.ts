@@ -38,33 +38,36 @@ const ordersFunction = vi.fn(async () => ({ total: 7 }));
 const declarations: Record<string, unknown> = {
   "acme/orders": {
     owner: "plugin @acme/shop",
+    display: "metric",
     declaration: {
       id: "acme/orders",
       size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
-      data: ordersFunction,
-      display: "metric",
-      empty: { when: (data: { total: number }) => data.total === 0 },
+      load: ordersFunction,
+      view: "figure",
+      isEmpty: (data: { total: number }) => data.total === 0,
     },
   },
   // Declared, but not a widget this caller could place: what only the write's gate refuses.
   "acme/secret": {
     owner: "plugin @acme/shop",
+    display: "metric",
     declaration: {
       id: "acme/secret",
       size: { default: { w: 12, h: 3 } },
-      data: async () => ({ total: 1 }),
-      display: "metric",
+      load: async () => ({ total: 1 }),
+      view: "figure",
     },
   },
   "acme/recent": {
     owner: "plugin @acme/shop",
     collections: { orders: "shop_orders" },
+    display: "list",
     declaration: {
       id: "acme/recent",
       size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
-      data: {
+      load: {
         query: ({ settings }: { settings: { items: number } }) => ({
           collection: "orders",
           op: "list",
@@ -72,18 +75,19 @@ const declarations: Record<string, unknown> = {
           limit: settings.items,
         }),
       },
-      display: "list",
+      view: "list",
     },
   },
   // Plain JavaScript, as no type saw it: a list whose query counts once its
   // card asks for more than the starting number of items.
   "acme/shifty": {
     owner: "plugin @acme/shop",
+    display: "list",
     declaration: {
       id: "acme/shifty",
       size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
-      data: {
+      load: {
         query: ({ settings }: { settings: { items: number } }) => ({
           collection: "orders",
           op: settings.items > 5 ? "count" : "list",
@@ -91,7 +95,7 @@ const declarations: Record<string, unknown> = {
           limit: settings.items,
         }),
       },
-      display: "list",
+      view: "list",
     },
   },
 };

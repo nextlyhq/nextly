@@ -29,11 +29,16 @@ export const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
  */
 const NOTE_MAX_LENGTH = 2000;
 
-/** A note's text: Markdown over several lines, empty until its reader writes it. */
-export const NOTE_TEXT: WidgetSetting = {
-  name: "text",
-  label: "Note",
+/**
+ * A note's text: Markdown over several lines, empty until its reader writes it.
+ *
+ * A setting of the note's declaration, which names it by its key (`text`).
+ * Its label rides beside the builder's fields: startup holds it to the rules
+ * every setting's label is held to, and the settings sheet names it "Note".
+ */
+export const NOTE_TEXT = {
   ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
+  label: "Note",
 };
 
 /** Recent entries' "Number of items", the same offer under the same name. */

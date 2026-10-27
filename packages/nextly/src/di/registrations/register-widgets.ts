@@ -40,10 +40,15 @@
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  CORE_DECLARATIONS,
+  CORE_WIDGET_IDS,
+  CORE_WIDGETS,
+} from "../../domains/widgets/core-widgets";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
+  CORE_OWNER,
   registerDashboardWidgets,
   type DeclaredWidgetGroup,
 } from "../../domains/widgets/declaration/declared-widgets";
@@ -139,12 +144,17 @@ export function resetWidgetRegistries(
   // plugin's contribution and the site config are read once, here, and every
   // check reads the copy. The site's own widgets are checked with the plugins'
   // but not registered yet.
-  const coreIds = new Set(CORE_WIDGETS.map(widget => widget.id));
+  const coreIds = new Set<string>(CORE_WIDGET_IDS);
   const dashboards = pluginDashboardSnapshots(plugins);
   const site = siteDashboardSnapshot(dashboard);
   registerDashboardWidgets({
     core: CORE_WIDGETS,
-    groups: pluginWidgetDeclarationGroups(dashboards),
+    // Core's own declarations first, through the same checks as a plugin's,
+    // so a plugin claiming one of their ids is the one named.
+    groups: [
+      { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
+      ...pluginWidgetDeclarationGroups(dashboards),
+    ],
     legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
       ...pluginSuggestionFaults(dashboards, groups, coreIds),

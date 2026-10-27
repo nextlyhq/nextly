@@ -651,6 +651,33 @@ describe("startup with several declarations", () => {
     ]);
   });
 
+  it("lets core's own group, and only it, declare in core's namespace, and keeps it there", () => {
+    const core = (id: string) =>
+      collectWidgetDeclarationFaults([
+        { owner: "core", core: true, declarations: [valid({ id })] },
+      ]).map(fault => fault.problem);
+    expect(core("core/orders")).toEqual([]);
+    // Core's per-collection and per-Single namespaces are for the cards it
+    // generates, and a core declaration outside `core/` is a slip to name.
+    expect(core("acme/orders")).toEqual([
+      'id "acme/orders" is one of core\'s own widgets, so it must be in the "core/" namespace',
+    ]);
+    expect(core("collection/orders")).toEqual([
+      'id "collection/orders" is one of core\'s own widgets, so it must be in the "core/" namespace',
+    ]);
+    // The control: the same id from any other group is refused as reserved.
+    expect(
+      collectWidgetDeclarationFaults([
+        {
+          owner: 'plugin "@acme/shop"',
+          declarations: [valid({ id: "core/orders" })],
+        },
+      ]).map(fault => fault.problem)
+    ).toEqual([
+      'id "core/orders" is in the reserved "core/" namespace; use your own, such as your package\'s name',
+    ]);
+  });
+
   it("refuses one id declared twice, naming both owners", () => {
     const faults = collectWidgetDeclarationFaults([
       { owner: 'plugin "@acme/shop"', declarations: [valid()] },

@@ -42,8 +42,9 @@ no old spelling kept:
   `"timeseries"` is now `"series"`.
 - `empty.when` is now the top-level `isEmpty`, and a view with its own
   component must give it. `empty` holds the message and the action.
-- `example` is now `preview`, a list of named cases (`{ name, data,
-settings? }`), each checked against the widget's data and settings types.
+- `example` is now `preview`, a list of named cases, each checked against the
+  widget's data and settings types. A case is written
+  `{ name, data, settings? }`.
 - `permission` is now `access`.
 - `sketch` is removed: the add panel draws the view's own sketch.
 
@@ -72,3 +73,8 @@ rather than started with the rule ignored.
   same message, and nothing is kept until every check passes.
 - A long title or description no longer stops startup.
 - Core's widget list is one module per widget under `core-widgets/`.
+
+**Core's Note card is declared with `defineWidget`**, as a plugin's widget is.
+It reads the same to its reader, with one exception: an unwritten note's empty
+state now reads "Nothing written yet. Write it in the card's settings.", drawn
+by the card's frame like every other empty card.

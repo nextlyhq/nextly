@@ -6,7 +6,10 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  CORE_DECLARATIONS,
+  CORE_WIDGETS,
+} from "../../domains/widgets/core-widgets";
 import * as declaredWidgets from "../../domains/widgets/declaration/declared-widgets";
 import { SITE_CONFIG } from "../../domains/widgets/declaration/site-dashboard";
 import {
@@ -51,9 +54,18 @@ describe("the one call", () => {
     expect(call).toHaveBeenCalledTimes(1);
     const [given] = call.mock.calls[0];
     expect(given.core).toBe(CORE_WIDGETS);
+    // Core's own declarations come first, marked as core's, then each plugin's.
     expect(given.groups?.map(group => group.owner)).toEqual([
+      "core",
       'plugin "@acme/shop"',
     ]);
+    expect(given.groups?.[0]).toEqual({
+      owner: "core",
+      core: true,
+      declarations: CORE_DECLARATIONS,
+    });
+    // Only core's group is marked: a plugin's never is.
+    expect(given.groups?.[1]?.core).toBeUndefined();
     expect(given.checkedOnly).toEqual([
       { owner: SITE_CONFIG, declarations: [site] },
     ]);

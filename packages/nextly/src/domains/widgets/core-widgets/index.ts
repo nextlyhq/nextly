@@ -87,7 +87,7 @@ export { CORE_WIDGET_COMPONENT_PREFIX } from "./shared";
  * between two of these later without renumbering the rest -- the reason
  * `defaultOrder` is a number and not an index.
  */
-const CORE_WIDGET_LITERALS = [
+const CORE_ORDER = [
   getStartedWidget,
   contentWidget,
   quickCreateWidget,
@@ -101,14 +101,38 @@ const CORE_WIDGET_LITERALS = [
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
+] as const;
+
+/**
+ * Core's widgets declared with `defineWidget`, as a plugin declares its own.
+ * Registered through the same call as everyone's declarations, under core.
+ */
+export const CORE_DECLARATIONS = [noteWidget] as const;
+
+/** Core's widgets still written as definitions: every one not declared. */
+const CORE_WIDGET_LITERALS = [
+  getStartedWidget,
+  contentWidget,
+  quickCreateWidget,
+  teamWidget,
+  needsAttentionWidget,
+  recentlyEditedWidget,
+  upcomingReleasesWidget,
+  recentActivityWidget,
+  countWidget,
+  breakdownWidget,
+  recentEntriesWidget,
+  overTimeWidget,
 ] as const satisfies readonly WidgetDefinition[];
 
 /**
- * Core's widgets, as every reader of a definition sees them.
+ * Core's widgets still written as definitions, as every reader of a
+ * definition sees them.
  *
  * The same array as `CORE_WIDGET_LITERALS`, typed as definitions: callers
  * read optional fields (`requiredPermission`, `chrome`, `lifecycle`) that a
- * literal type would only have on the entries that set them.
+ * literal type would only have on the entries that set them. NOT every core
+ * widget: read core's ids from `CORE_WIDGET_IDS`.
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
@@ -120,4 +144,13 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
  * offering an alternative to a built-in is checked against the widgets core
  * actually has.
  */
-export type CoreWidgetId = (typeof CORE_WIDGET_LITERALS)[number]["id"];
+export type CoreWidgetId = (typeof CORE_ORDER)[number]["id"];
+
+/**
+ * Every one of core's widget ids, definitions and declarations alike, in
+ * core's order: the one list of what is core's, for every reader asking
+ * whether an id is a built-in and where it sorts.
+ */
+export const CORE_WIDGET_IDS: readonly CoreWidgetId[] = CORE_ORDER.map(
+  widget => widget.id
+);
