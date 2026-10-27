@@ -64,6 +64,7 @@ import { breakdownWidget } from "./breakdown";
 import { contentWidget } from "./content";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
+import type { CORE_WIDGET_IDS } from "./ids";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
@@ -135,20 +136,23 @@ const CORE_WIDGET_LITERALS = [
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
 /**
- * The id of one of core's widgets.
- *
- * Read from the list itself, kept literal by `as const` above, so a widget
- * added, renamed or removed there changes this with no second edit: a plugin
- * offering an alternative to a built-in is checked against the widgets core
- * actually has.
+ * Core's widget ids live in `./ids`, which imports nothing, so a reader that
+ * needs only the ids (the site dashboard's declaration check, the add panel)
+ * does not load every card. They are held equal to `CORE_ORDER`'s own ids, in
+ * order, here at compile time: a widget added, renamed, removed or moved
+ * above fails this assignment until `./ids` says the same.
  */
-export type CoreWidgetId = (typeof CORE_ORDER)[number]["id"];
+type IdsOf<T extends readonly { readonly id: string }[]> = {
+  readonly [K in keyof T]: T[K]["id"];
+};
+type Same<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+const coreIdsMatchOrder: Same<
+  IdsOf<typeof CORE_ORDER>,
+  typeof CORE_WIDGET_IDS
+> = true;
+void coreIdsMatchOrder;
 
-/**
- * Every one of core's widget ids, definitions and declarations alike, in
- * core's order: the one list of what is core's, for every reader asking
- * whether an id is a built-in and where it sorts.
- */
-export const CORE_WIDGET_IDS: readonly CoreWidgetId[] = CORE_ORDER.map(
-  widget => widget.id
-);
+export { CORE_WIDGET_IDS } from "./ids";

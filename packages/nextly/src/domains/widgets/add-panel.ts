@@ -20,7 +20,7 @@
  */
 
 import type { CanonicalWidget } from "./canonical";
-import { CORE_WIDGET_IDS, type CoreWidgetId } from "./core-widgets";
+import { CORE_WIDGET_IDS, type CoreWidgetId } from "./core-widgets/ids";
 
 /** The groups a widget can be listed in, in the panel's order. */
 export const ADD_PANEL_GROUPS = [
