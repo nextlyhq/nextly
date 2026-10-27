@@ -39,6 +39,11 @@ const POSTS = "updfilter_posts";
 const OPEN_POSTS = "updfilter_open_posts";
 // Published entries whose edits are held as a pending change.
 const DRAFTED = "updfilter_drafted";
+// Anyone signed in may publish, only its owner edit; a hook turns a publish
+// into an edit.
+const HOOKED = "updfilter_hooked";
+/** The title the hook sets on a publish. */
+const SET_BY_A_HOOK = "set by a hook";
 
 const AUTHOR = "updfilter-author";
 const OTHER = "updfilter-other";
@@ -81,10 +86,27 @@ async function boot(): Promise<TestNextly> {
         access: { read: () => true, ...writes },
         fields: [text({ name: "title" }), text({ name: "owner" })],
       }),
+      defineCollection({
+        slug: HOOKED,
+        status: true,
+        access: { read: () => true, update: ownEntries, publish: () => true },
+        hooks: {
+          beforeChange: [
+            context => {
+              const data = context.data as Record<string, unknown>;
+              if (context.operation === "update" && data.status) {
+                data.title = SET_BY_A_HOOK;
+              }
+              return data;
+            },
+          ],
+        },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
     ],
   });
   // A code rule only narrows a permission, so the author holds each one.
-  const all = [POSTS, OPEN_POSTS, DRAFTED];
+  const all = [POSTS, OPEN_POSTS, DRAFTED, HOOKED];
   await userWhoMay(current, AUTHOR, "read", all);
   for (const action of ["update", "publish", "unpublish"]) {
     await grantTo(current, AUTHOR, action, all);
@@ -275,6 +297,49 @@ describe("an update rule that answers a filter", () => {
     expect(refused.result?.success ?? false).toBe(false);
     expect(statusOf(refused)).toBe(403);
     expect(await stored(t, OPEN_POSTS, own)).toEqual(before);
+  });
+});
+
+describe("a publish a hook turns into an edit", () => {
+  // Judged by the publish rule, which lets anyone publish; the hook names a
+  // field, so the write is an edit, and the update rule's filter limits it.
+  it("is allowed on an entry the update filter matches, and refused on another's", async () => {
+    const t = await boot();
+    const { own, others } = await seed(t, HOOKED);
+    const before = await stored(t, HOOKED, others);
+
+    await update(t, HOOKED, own, { status: "published" });
+    const refused = await errorOf(() =>
+      update(t, HOOKED, others, { status: "published" })
+    );
+
+    expect((await stored(t, HOOKED, own))?.title).toBe(SET_BY_A_HOOK);
+    expect(refused.statusCode).toBe(403);
+    expect(await stored(t, HOOKED, others)).toEqual(before);
+  });
+
+  it("is allowed on an entry the update filter matches inside the caller's transaction, and refused on another's", async () => {
+    const t = await boot();
+    const { own, others } = await seed(t, HOOKED);
+    const before = await stored(t, HOOKED, others);
+
+    const written = await updateInTransaction(
+      t,
+      own,
+      { status: "published" },
+      HOOKED
+    );
+    const refused = await updateInTransaction(
+      t,
+      others,
+      { status: "published" },
+      HOOKED
+    );
+
+    expect(written.result?.success).toBe(true);
+    expect((await stored(t, HOOKED, own))?.title).toBe(SET_BY_A_HOOK);
+    expect(statusOf(refused)).toBe(403);
+    expect(await stored(t, HOOKED, others)).toEqual(before);
   });
 });
 

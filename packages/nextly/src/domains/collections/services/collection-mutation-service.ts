@@ -8930,8 +8930,10 @@ export class CollectionMutationService extends BaseService {
       // place of update. A hook that made it an edit, naming a field or
       // dropping the status, asks update now, before anything is written, as
       // the same edit sent by the caller would have been.
+      // Its rule's filter limits the edit as an edit's own: the entry is
+      // matched against it now, and again under the lock and after the write.
       if (statusOnly && !isStatusOnlyWrite(finalData, "collection")) {
-        const editDenied = await this.accessService.checkCollectionAccess({
+        const editParams: FilteredWriteCheck["params"] = {
           collectionName: params.collectionName,
           operation: "update",
           entryId: params.entryId,
@@ -8940,7 +8942,17 @@ export class CollectionMutationService extends BaseService {
           // The route admitted a status change, not this edit.
           routeAuthorized: false,
           authenticatedScope: params.authenticatedScope,
-        });
+        };
+        const access =
+          await this.accessService.checkCollectionWrite(editParams);
+        const editDenied =
+          access.denied ??
+          (await this.addWriteFilter(writeFilters, {
+            schema,
+            access,
+            params: editParams,
+            locale: params.locale,
+          }));
         if (editDenied) return editDenied;
       }
 
@@ -13091,17 +13103,23 @@ export class CollectionMutationService extends BaseService {
         rowAllowed !== undefined &&
         !isStatusOnlyWrite(finalData, "collection")
       ) {
-        const editDenied = await this.accessService.checkCollectionAccess({
-          collectionName: params.collectionName,
-          operation: "update",
-          entryId,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          // The route admitted a status change, not this edit.
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-          executor: tx.getDrizzle(),
-        });
+        // Its rule's filter limits the edit as an edit's own: matched against
+        // the locked row now, and again after the write.
+        const editDenied = await this.refusalOfWriteInTransaction(
+          tx,
+          {
+            collectionName: params.collectionName,
+            operation: "update",
+            entryId,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+            // The route admitted a status change, not this edit.
+            routeAuthorized: false,
+            authenticatedScope: params.authenticatedScope,
+            executor: tx.getDrizzle(),
+          },
+          filteredWrites
+        );
         if (editDenied) return editDenied;
       }
 

@@ -198,7 +198,7 @@ describe("a plugin's signed-in person", () => {
   });
 
   it("is judged as the person even where the user the read names is called super-admin", async () => {
-    checkAccess.mockResolvedValue(true);
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: true });
 
     await expect(
       relatedRowReads(
@@ -209,7 +209,7 @@ describe("a plugin's signed-in person", () => {
         },
         service({ read: false })
       )
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 });
 
@@ -223,7 +223,7 @@ describe("a user handed in naming the super-admin role", () => {
 
     await expect(
       relatedRowReads("posts", { user: named, principal: null }, service())
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 
   it("is shown the rows once they hold the role", async () => {
@@ -235,6 +235,6 @@ describe("a user handed in naming the super-admin role", () => {
 
     await expect(
       relatedRowReads("posts", { user: named, principal: null }, service())
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 });
