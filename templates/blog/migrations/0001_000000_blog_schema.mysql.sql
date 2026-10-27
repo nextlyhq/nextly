@@ -3,6 +3,11 @@
 -- Dialect: mysql
 -- Template: blog
 -- Version: 1.0
+--
+-- Every table takes the database's character set and collation, as nextly's
+-- own tables do: a foreign key to `users` or `media` needs both sides in one
+-- collation. A column that references a row is varchar(36), nextly's id type
+-- for one, since MySQL keys no TEXT column and indexes every foreign key.
 
 -- ============================================
 -- UP: Create all blog schema
@@ -17,8 +22,8 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `slug` varchar(255) NOT NULL,
   `content` text,
   `excerpt` text,
-  `featured_image` text,
-  `author` text,
+  `featured_image` varchar(36),
+  `author` varchar(36),
   `categories` json,
   `tags` json,
   `published_at` timestamp NULL DEFAULT NULL,
@@ -32,7 +37,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_posts_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Categories collection
 CREATE TABLE IF NOT EXISTS `dc_categories` (
@@ -48,7 +53,7 @@ CREATE TABLE IF NOT EXISTS `dc_categories` (
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_categories_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Tags collection
 CREATE TABLE IF NOT EXISTS `dc_tags` (
@@ -63,7 +68,7 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_tags_slug` (`slug`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ USER EXTENSION TABLE ============
 
@@ -72,18 +77,23 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
 -- at runtime so the migration and the runtime schema stay in lockstep.
 -- Column names are snake_case of the camelCase field names defined in
 -- codefirst.config.ts: bio → bio, avatarUrl → avatar_url, slug → slug.
+-- One exception: `slug` is unique here, as in the other dialects' files,
+-- because /authors/[slug] finds an author by it. MySQL keys a varchar, not a
+-- TEXT column, so it is varchar(255): the length nextly gives a unique text
+-- field on MySQL.
 CREATE TABLE IF NOT EXISTS `user_ext` (
   `id` varchar(36) PRIMARY KEY NOT NULL,
   `user_id` varchar(36) NOT NULL,
   `bio` text,
   `avatar_url` text,
-  `slug` text,
+  `slug` varchar(255),
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text,
   UNIQUE KEY `uq_user_ext_user_id` (`user_id`),
+  UNIQUE KEY `uq_user_ext_slug` (`slug`),
   CONSTRAINT `fk_user_ext_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ JUNCTION TABLES ============
 
@@ -94,7 +104,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts_categories` (
   PRIMARY KEY (`post_id`, `category_id`),
   CONSTRAINT `fk_posts_categories_post` FOREIGN KEY (`post_id`) REFERENCES `dc_posts`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_posts_categories_category` FOREIGN KEY (`category_id`) REFERENCES `dc_categories`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Posts <-> Tags (many-to-many)
 CREATE TABLE IF NOT EXISTS `dc_posts_tags` (
@@ -103,7 +113,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts_tags` (
   PRIMARY KEY (`post_id`, `tag_id`),
   CONSTRAINT `fk_posts_tags_post` FOREIGN KEY (`post_id`) REFERENCES `dc_posts`(`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_posts_tags_tag` FOREIGN KEY (`tag_id`) REFERENCES `dc_tags`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ SINGLES ============
 -- Note: All single tables include system columns (id, title, slug, created_at, updated_at)
@@ -119,12 +129,12 @@ CREATE TABLE IF NOT EXISTS `single_site_settings` (
   `site_name` varchar(255) NOT NULL DEFAULT 'My Blog',
   `tagline` varchar(500) DEFAULT 'Thoughts on web development',
   `site_description` text,
-  `logo` text,
+  `logo` varchar(36),
   `social` json,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Navigation single
 CREATE TABLE IF NOT EXISTS `single_navigation` (
@@ -140,7 +150,7 @@ CREATE TABLE IF NOT EXISTS `single_navigation` (
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- Homepage single
 CREATE TABLE IF NOT EXISTS `single_homepage` (
@@ -163,7 +173,7 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB;
 
 -- ============ INDEXES ============
 
@@ -171,7 +181,7 @@ CREATE TABLE IF NOT EXISTS `single_homepage` (
 CREATE INDEX `idx_posts_status` ON `dc_posts`(`status`);
 CREATE INDEX `idx_posts_published` ON `dc_posts`(`published_at` DESC);
 CREATE INDEX `idx_posts_featured` ON `dc_posts`(`featured`);
-CREATE INDEX `idx_posts_author` ON `dc_posts`(`author`(255));
+CREATE INDEX `idx_posts_author` ON `dc_posts`(`author`);
 
 -- Categories indexes
 CREATE INDEX `idx_categories_slug` ON `dc_categories`(`slug`);
