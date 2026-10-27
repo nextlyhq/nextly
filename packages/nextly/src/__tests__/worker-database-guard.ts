@@ -307,6 +307,34 @@ export function releaseWorker(
 }
 
 /**
+ * With more than one worker, a database per worker on each server `env` names,
+ * keeping each server's URL as the base the workers derive theirs from.
+ * Answers how to drop them all. When a later server fails, the earlier ones'
+ * databases are dropped before the error goes on: a setup that throws returns
+ * no teardown, so nothing else would drop them or close their connections.
+ */
+export async function provisionServers(
+  env: Record<string, string | undefined>,
+  workers: number,
+  create: typeof createWorkerDatabases = createWorkerDatabases
+): Promise<(() => Promise<void>)[]> {
+  const drops: (() => Promise<void>)[] = [];
+  try {
+    for (const server of SERVER_DIALECTS) {
+      const url = env[server.urlEnv];
+      if (workers > 1 && url) {
+        drops.push(await create(server.dialect, url, workers));
+        env[server.baseEnv] = url;
+      }
+    }
+  } catch (error) {
+    for (const drop of drops) await drop();
+    throw error;
+  }
+  return drops;
+}
+
+/**
  * The run's global setup: the claims directory and, on PostgreSQL or MySQL
  * with more than one worker, a database per worker on each server the run
  * names. Both are removed when the run ends.
@@ -315,13 +343,13 @@ export default async function setup(): Promise<() => Promise<void>> {
   const workers = integrationWorkers(process.env);
   const dir = mkdtempSync(join(tmpdir(), "nextly-integration-workers-"));
   process.env[CLAIMS_ENV] = dir;
-  const drops: (() => Promise<void>)[] = [];
-  for (const server of SERVER_DIALECTS) {
-    const url = process.env[server.urlEnv];
-    if (workers > 1 && url) {
-      drops.push(await createWorkerDatabases(server.dialect, url, workers));
-      process.env[server.baseEnv] = url;
-    }
+  let drops: (() => Promise<void>)[];
+  try {
+    drops = await provisionServers(process.env, workers);
+  } catch (error) {
+    // No teardown runs after a failed setup, so the claims directory goes here.
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
   }
   return async () => {
     const log = join(dir, CLAIMS_LOG);

@@ -12,6 +12,7 @@ import {
   claimWorker,
   describeClaims,
   integrationWorkers,
+  provisionServers,
   releaseWorker,
   workerDatabaseName,
   workerDatabaseUrl,
@@ -189,6 +190,43 @@ describe("claimWorker", () => {
     // The id is free for the next process in the slot.
     claimWorker(dir, "1", 300, () => true);
     expect(readFileSync(join(dir, "pool-1"), "utf8")).toBe("300");
+  });
+});
+
+describe("provisionServers", () => {
+  it("drops the databases made on one server when the next server's fail, then fails", async () => {
+    // A setup that throws returns no teardown, so nothing else would drop
+    // the first server's databases or close its admin connection.
+    const env: Record<string, string | undefined> = {
+      TEST_POSTGRES_URL: "postgres://u@localhost/nextly_test",
+      TEST_MYSQL_URL: "mysql://u@localhost/nextly_test",
+    };
+    const dropped: string[] = [];
+    const create = async (dialect: "postgresql" | "mysql") => {
+      if (dialect === "mysql") throw new Error("mysql refused");
+      return async () => {
+        dropped.push(dialect);
+      };
+    };
+    await expect(provisionServers(env, 2, create)).rejects.toThrow(
+      "mysql refused"
+    );
+    expect(dropped).toEqual(["postgresql"]);
+  });
+
+  it("makes nothing for one worker, and keeps each named server's URL as its base", async () => {
+    const env: Record<string, string | undefined> = {
+      TEST_MYSQL_URL: "mysql://u@localhost/nextly_test",
+    };
+    const made: string[] = [];
+    const create = async (dialect: "postgresql" | "mysql") => {
+      made.push(dialect);
+      return async () => {};
+    };
+    expect(await provisionServers(env, 1, create)).toEqual([]);
+    expect(await provisionServers(env, 2, create)).toHaveLength(1);
+    expect(made).toEqual(["mysql"]);
+    expect(env.NEXTLY_INTEGRATION_MYSQL_URL).toBe(env.TEST_MYSQL_URL);
   });
 });
 
