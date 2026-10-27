@@ -44,7 +44,17 @@ const { getStartedSteps } = vi.hoisted(() => ({ getStartedSteps: vi.fn() }));
 vi.mock("../domains/widgets/get-started", async importOriginal => {
   const actual =
     await importOriginal<typeof import("../domains/widgets/get-started")>();
-  return { ...actual, getStartedSteps };
+  return {
+    ...actual,
+    getStartedSteps,
+    // The probe reads the steps through their detail: the same answer, with
+    // nothing fallen back, so a case states the answer once.
+    getStartedDetail: async (...args: unknown[]) => ({
+      answer: (await getStartedSteps(...args)) as unknown,
+      fellBack: new Set(),
+      unlisted: false,
+    }),
+  };
 });
 
 import { requireAuthentication } from "../auth/middleware";
@@ -2060,6 +2070,29 @@ describe("the Get started card in the layout read and write", () => {
       "core/team",
     ]);
     expect(body.getStarted).toEqual({ drawn: true, answer: open });
+  });
+
+  it("answers the default from the steps when asked, though the arrangement holds no card of its own", async () => {
+    // 🔴 Worked out only for the reader's own card, the default left the card
+    // out for an arrangement without one, and a staged reset previewed a
+    // dashboard the reset would not land on.
+    getStartedSteps.mockResolvedValue(open);
+    stored = { layout: serializeLayout([teamCard]), version: 3 };
+    const plain = (await bodyOf(
+      await getWidgetLayout(getReq())
+    )) as WithStarted;
+    expect(plain.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "core/team",
+    ]);
+    const asked = (await bodyOf(
+      await getWidgetLayout(getStartedReq())
+    )) as WithStarted;
+    expect(asked.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      STARTED,
+      "core/team",
+    ]);
+    // The reader's own arrangement is unchanged by the asking.
+    expect(asked.placements?.map(p => p.widgetId)).toEqual(["core/team"]);
   });
 
   it("leaves a finished card dormant for a reader who never acted on it, and never offers it in the add panel", async () => {

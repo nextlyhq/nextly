@@ -5,10 +5,25 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConditionProbe } from "../condition-probe";
-import type { GetStartedAnswer } from "../get-started-steps";
+import type { GetStartedDetail } from "../get-started";
+import type {
+  GetStartedAnswer,
+  GetStartedStepKind,
+} from "../get-started-steps";
 import { onboardingIsIncomplete, onboardingProgress } from "../onboarding";
 
-function probeAnswering(answer: GetStartedAnswer): ConditionProbe {
+function probeAnswering(
+  answer: GetStartedAnswer,
+  // A step whose own check fell back, which the answer withholds; and
+  // whether the registries were unlisted, which the answer's `unknown` covers
+  // unless something fell back.
+  fallback: { fellBack?: GetStartedStepKind[]; unlisted?: boolean } = {}
+): ConditionProbe {
+  const detail: GetStartedDetail = {
+    answer,
+    fellBack: new Set(fallback.fellBack ?? []),
+    unlisted: fallback.unlisted ?? answer.unknown,
+  };
   const unused = () => Promise.reject(new Error("not under test"));
   return {
     caller: { user: { id: "u1", roles: [] } },
@@ -23,6 +38,7 @@ function probeAnswering(answer: GetStartedAnswer): ConditionProbe {
     mayReadReleases: unused,
     releasesExist: unused,
     getStarted: async () => answer,
+    getStartedDetail: async () => detail,
   };
 }
 
@@ -35,6 +51,25 @@ const known = (statuses: Array<["collection" | "entry" | "invite", string]>) =>
   }) as GetStartedAnswer;
 
 describe("the checklist's steps", () => {
+  it("draw a step whose own check fell back as a row not complete, and say not known only for an unlisted registry", async () => {
+    // 🔴 Deprecated and unchanged until removed: the Get started answer
+    // withholds a fallen-back step and is "not known"; this read keeps the
+    // row it always drew and answers "not known" only as it always did.
+    const progress = await onboardingProgress(
+      probeAnswering(
+        { unknown: true, steps: [], done: 0, total: 0 },
+        { fellBack: ["collection"], unlisted: false }
+      )
+    );
+    expect(progress).toEqual({
+      steps: [
+        { id: "account", complete: true },
+        { id: "collection", complete: false },
+      ],
+      unknown: false,
+    });
+  });
+
   it("are the answer's collection and entry steps, after the account", async () => {
     const { steps } = await onboardingProgress(
       probeAnswering(

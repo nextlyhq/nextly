@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rangedLimitSettingProblem,
   validateWidgetDefinition,
   widgetValueProblem,
   MAX_TEXT_CONTENT,
 } from "../definition";
+import { applyWidgetSettings } from "../settings";
 
 const valid = {
   id: "core/recent-entries",
@@ -400,7 +402,7 @@ describe("defaultOrder places a widget without depending on which channel it cam
   });
 });
 
-describe("chrome decides whether the HOST frames the widget", () => {
+describe("every widget is framed", () => {
   const custom = {
     id: "core/team",
     title: "Team",
@@ -409,60 +411,46 @@ describe("chrome decides whether the HOST frames the widget", () => {
     component: "core#TeamSummary",
   };
 
-  it("defaults to being framed by leaving it unstated", () => {
-    // The compatibility bound: every widget shipping today states nothing and
-    // must keep the card it has.
+  it("accepts a widget that says nothing about its frame", () => {
     expect(() => validateWidgetDefinition(custom)).not.toThrow();
   });
 
-  it("lets a CUSTOM widget decline the frame", () => {
-    // A `custom` widget supplies its own component, so it can already be a
-    // designed surface -- a section with its own heading and rules. Framing one
-    // draws a second heading around the first.
+  it("refuses a widget that names chrome, whatever its value", () => {
+    // The frame draws every card's header and every state, so no widget may
+    // decline it; a plain-JavaScript declaration that still names the field
+    // learns so at startup. Cast, because the field is no longer typed.
+    for (const chrome of ["none", "card", 42]) {
+      expect(() =>
+        validateWidgetDefinition({ ...custom, chrome } as never)
+      ).toThrow(/chrome is not a widget field/);
+    }
+  });
+});
+
+describe("hidesWhenEmpty", () => {
+  const custom = {
+    id: "core/team",
+    title: "Team",
+    archetype: "custom" as const,
+    defaultSize: "lg" as const,
+    component: "core#TeamSummary",
+  };
+
+  it("accepts true and false", () => {
     expect(() =>
-      validateWidgetDefinition({ ...custom, chrome: "none" })
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: true })
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: false })
     ).not.toThrow();
   });
 
-  it("refuses to unframe an archetype CORE draws", () => {
-    // Core fills a metric/list/table/actions/text body and the card IS that
-    // body's surface -- its title, its footer, its busy state. Unframed, the
-    // content has no heading and nothing owning its states.
-    //
-    // The fixture deliberately omits `component`: spreading the custom one in
-    // made every case throw on `component is only valid for archetype "custom"`
-    // instead, so the assertion passed with no chrome rule present at all. The
-    // MESSAGE is asserted for the same reason -- `toThrow()` alone cannot tell
-    // which rule refused.
-    for (const [archetype, extra] of [
-      ["metric", { query: { source: "collection:posts", op: "count" } }],
-      // `list`, not `find`: these two archetypes draw a list result, and the
-      // op was never validated against the archetype until now, so the wrong
-      // spelling sat here harmlessly. It refuses on the op before reaching the
-      // chrome rule this case is about.
-      ["list", { query: { source: "collection:posts", op: "list" } }],
-      ["table", { query: { source: "collection:posts", op: "list" } }],
-      ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
-      // Carries its prose for the same reason `actions` carries its shortcuts.
-      ["text", { content: "Prose." }],
-    ] as const) {
-      expect(() =>
-        validateWidgetDefinition({
-          id: "core/x",
-          title: "X",
-          defaultSize: "lg",
-          archetype,
-          chrome: "none",
-          ...extra,
-        })
-      ).toThrow(/chrome/i);
-    }
-  });
-
-  it("refuses a chrome value outside the vocabulary", () => {
+  it("refuses anything that is not a boolean", () => {
+    // A truthy "false" would take a card off every reader's dashboard that
+    // its author meant to keep.
     expect(() =>
-      validateWidgetDefinition({ ...custom, chrome: "borderless" })
-    ).toThrow();
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: "false" } as never)
+    ).toThrow(/hidesWhenEmpty, when given, must be a boolean/);
   });
 });
 
@@ -994,5 +982,49 @@ describe("a custom card's cells", () => {
     expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
       /its cell "split" names no source, and no Collection setting supplies one/
     );
+  });
+});
+
+describe("a limit setting beside a ranged query", () => {
+  // The rule refuses exactly the setting the limit knob would apply: one test
+  // of what a limit setting is, read by both, so the two cannot part.
+  it.each([
+    [{ name: "limit", type: "number" as const, label: "Limit" }, 3],
+    [{ name: "limit", type: "text" as const, label: "Limit" }, "3"],
+    [{ name: "items", type: "number" as const, label: "Items" }, 3],
+  ])("refuses %o exactly when the limit knob applies it", (setting, value) => {
+    const applied = applyWidgetSettings(
+      { source: "collection:posts", op: "list" as const },
+      [setting],
+      { [setting.name]: value }
+    );
+    const refused = rangedLimitSettingProblem({
+      query: {
+        source: "collection:posts",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "30d",
+      },
+      settings: [setting],
+    });
+    expect(refused !== undefined).toBe("limit" in applied);
+  });
+
+  it("is refused at registration, naming the widget", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        id: "acme/over-time",
+        title: "Over time",
+        archetype: "timeseries",
+        defaultSize: "md",
+        query: {
+          source: "collection:posts",
+          op: "timeseries",
+          dateField: "createdAt",
+          range: "30d",
+        },
+        settings: [{ name: "limit", type: "number", label: "Limit" }],
+      })
+    ).toThrow(/acme\/over-time: declares a "limit" setting/);
   });
 });

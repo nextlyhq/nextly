@@ -109,7 +109,6 @@ const scale = parseThemeScale(css);
  */
 const ALLOWED_DECORATIVE = new Set<string>([
   "text-primary/20", // hover-reveal ghost buttons and sparkline decoration
-  "text-primary/40", // loading spinner; meaning carried by motion + adjacent text
   "text-muted/10", // chart ring-track backing
   "border-warning-200/50", // soft border on a light tint badge (fill+text identify it)
   "border-success-900/50", // dark tonal badge border (fill+text identify it)

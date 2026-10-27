@@ -84,6 +84,11 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     error: populated.error,
   }),
 }));
+/** Whether the signed-in user may only read this collection. */
+let readOnlyForReader = false;
+vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
+  useReadOnlyForReader: () => readOnlyForReader,
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));
@@ -122,6 +127,7 @@ function claimRequest(): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  readOnlyForReader = false;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver,
@@ -239,6 +245,26 @@ describe("a custom collection edit view", () => {
     });
   });
 
+  it("makes no claim for a user who may only read, and hands the view a read-only page with its writes withheld", () => {
+    // The server refuses such a user's claim, and its refusal would read as
+    // "could not check whether anyone else is editing" over editable fields.
+    // A view gates its own save on `actionsDisabled`, so that is withheld as
+    // well as the fields.
+    withCustomView();
+    readOnlyForReader = true;
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(claimRequest()).toMatchObject({ enabled: false });
+    expect(customViewProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
+    expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+      "Your access lets you view this, but not change it."
+    );
+  });
+
   it("withholds nothing while the claim is this editor's own", () => {
     withCustomView();
 
@@ -275,6 +301,51 @@ describe("a custom collection edit view", () => {
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
     expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+
+  it("says an entry a reader may not read is not found, as the server answers it", () => {
+    // The server answers an entry the caller may not read exactly as a
+    // missing one, 404 "Not found.", so the page says so and claims nothing.
+    readOnlyForReader = true;
+    entryQuery = {
+      data: undefined,
+      isLoading: false,
+      error: new Error("Not found."),
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(
+      screen.getByText(/Failed to load entry:\s*Not found\./)
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("document-lock-banner")).toBeNull();
+    expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+
+  it("tells an edit injection a reader's page holds its writes", () => {
+    // Before/AfterEdit open on read as the editor does, so one written to
+    // change the entry is told to hold its writes, as a custom view is.
+    let slotProps: Record<string, unknown> | undefined;
+    registerComponent(
+      "@acme/notes/admin#BeforeEdit",
+      (props: Record<string, unknown>) => {
+        slotProps = props;
+        return <div>before the editor</div>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { BeforeEdit: "@acme/notes/admin#BeforeEdit" } },
+    };
+    readOnlyForReader = true;
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("before the editor")).toBeInTheDocument();
+    expect(slotProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
   });
 
   it("leaves the claim to the form when there is no custom view", () => {

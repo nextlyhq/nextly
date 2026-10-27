@@ -16,13 +16,9 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { TieredRows } from "@admin/components/features/widgets/archetypes/tiered-rows";
+import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardSlotFailure,
-} from "@admin/components/features/widgets/frame/states";
+import { readListSlot } from "@admin/components/features/widgets/frame/list-slot";
 import {
   rowsDrawn,
   useCardTier,
@@ -95,39 +91,24 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
   const tier = useCardTier() ?? "medium";
   const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
 
-  if (!slot) {
-    return isFetching ? (
-      <CardSkeleton shape="rows" rows={drawn} layout={{ kind: "list" }} />
-    ) : null;
-  }
-  if (!slot.ok) {
-    return (
-      <CardSlotFailure
-        slot={slot}
-        title="Upcoming releases"
-        onRetry={onRetry}
-      />
-    );
-  }
-  if (slot.result.op !== "list") {
-    return (
-      <CardError
-        message="This card was answered with something other than a list."
-        title="Upcoming releases"
-      />
-    );
-  }
-  const { attention, releases } = rowsOf(slot.result.items);
+  const read = readListSlot({ slot, isFetching, rows: drawn, onRetry });
+  if ("node" in read) return read.node;
+  const { attention, releases } = rowsOf(read.list.items);
   if (attention.length === 0 && releases.length === 0) {
     return (
-      <CardEmpty
-        title="Nothing scheduled"
-        detail="Releases you schedule appear here, soonest first."
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: {
+            title: "Nothing scheduled",
+            detail: "Releases you schedule appear here, soonest first.",
+          },
+        }}
       />
     );
   }
   // Only the columns a release row draws: the attention fields head nothing.
-  const columns = (slot.result.fields ?? []).filter(
+  const columns = (read.list.fields ?? []).filter(
     field => field.name === "title" || field.name === "scheduledAt"
   );
   return (

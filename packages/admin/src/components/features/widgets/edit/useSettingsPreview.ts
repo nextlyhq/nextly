@@ -64,11 +64,12 @@ export interface ShownAnswer {
 export interface SettingsPreview {
   /** The widget as the sheet's values would ask it. */
   definition: DashboardWidget;
+  /** The widget's own name under the title, when the title names the card's subject. */
+  subtitle?: string;
   /** The preview's own card id, and the settings its component reads. */
   placement: { id: string; settings: Record<string, unknown> };
   slot: WidgetSlot | undefined;
   slotFor?: CellSlotLookup;
-  updatedAt: Date | null;
   /** The preview is waiting for an answer to the question its values ask. */
   isFetching: boolean;
   /** The tier the answer drawn was fetched at, so a list knows whether more exist. */
@@ -133,11 +134,18 @@ export function useSettingsPreview(args: {
   // and which cells a collection's lifecycle answers.
   const sources = useBranding().widgetSources;
 
+  const heading = useMemo(
+    () => titleAsAsked(widget, draft, sources),
+    [widget, draft, sources]
+  );
   const definition = useMemo(() => {
     const asked = widgetAsAsked(widget, draft, sources);
-    const title = titleAsAsked(widget, draft, sources);
-    return title === asked.title ? asked : { ...asked, title };
-  }, [widget, draft, sources]);
+    return heading.title === asked.title
+      ? asked
+      : { ...asked, title: heading.title };
+  }, [widget, draft, sources, heading.title]);
+  const subtitle =
+    heading.subtitle === undefined ? {} : { subtitle: heading.subtitle };
   const asking = questionOf(widget, draft, sources);
   const sameQuestion = asking === questionOf(widget, stored, sources);
   // The question settles before it is asked, so a run of changes asks once.
@@ -169,15 +177,17 @@ export function useSettingsPreview(args: {
     [definition.cells, previewCells, ready]
   );
 
-  if (sameQuestion) return shownPreview(definition, placement, shown);
+  if (sameQuestion) {
+    return { ...shownPreview(definition, placement, shown), ...subtitle };
+  }
   return {
     definition,
+    ...subtitle,
     placement,
     // Nothing until the changed question is answered: the card's own answer was asked another
     // way, and drawing it here would preview what the change does not show.
     slot: ready ? asked.slots[previewId] : undefined,
     ...(slotFor === undefined ? {} : { slotFor }),
-    updatedAt: ready ? asked.updatedAt : null,
     isFetching: !ready || asked.fetchingPlacementIds.has(previewId),
     // Only an answer asked sized has a tier: a custom card's and a server card's were not.
     ...(definition.archetype === "custom" || widget.serverData === true
@@ -217,7 +227,6 @@ function shownPreview(
     placement,
     slot: shown.slot,
     ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
-    updatedAt: shown.updatedAt,
     isFetching: shown.isFetching,
     ...(shown.answerTier === undefined ? {} : { answerTier: shown.answerTier }),
   };

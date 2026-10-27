@@ -87,7 +87,7 @@ describe("dropLineFor: where the line is drawn", () => {
     // Centred in the gap after `c`, as tall as `c`.
     expect(line).toEqual({
       orientation: "vertical",
-      x: 396,
+      x: 392,
       top: 224,
       length: 200,
     });
@@ -99,7 +99,7 @@ describe("dropLineFor: where the line is drawn", () => {
     const line = dropLineFor(CARDS, 2, 0, GRID_WIDTH);
     expect(line).toEqual({
       orientation: "horizontal",
-      y: -12,
+      y: -8,
       x: 0,
       length: GRID_WIDTH,
     });
@@ -110,7 +110,7 @@ describe("dropLineFor: where the line is drawn", () => {
     const line = dropLineFor(CARDS, 0, 4, GRID_WIDTH);
     expect(line).toEqual({
       orientation: "horizontal",
-      y: 436,
+      y: 432,
       x: 0,
       length: GRID_WIDTH,
     });
