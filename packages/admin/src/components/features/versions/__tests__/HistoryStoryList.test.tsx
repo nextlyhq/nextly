@@ -120,7 +120,7 @@ function renderList(
       events={newest(events)}
       lifecycle
       localized={false}
-      languages={{ editing: null, all: true }}
+      editingLocale={null}
       hasMore={false}
       selected={null}
       onSelect={vi.fn()}
@@ -204,7 +204,7 @@ describe("the pinned rows", () => {
     renderList(
       [version(1, 1, { locale: "es" }), version(2, 2, { locale: null })],
       [],
-      { localized: true, languages: { editing: "es", all: true } }
+      { localized: true, editingLocale: "es" }
     );
     const draft = screen.getByRole("button", { name: /Current draft/ });
     expect(draft).toHaveTextContent("Spanish");
@@ -361,7 +361,7 @@ describe("the language being edited", () => {
     renderList(versions, [], {
       lifecycle: false,
       localized: true,
-      languages: { editing: "es", all: true },
+      editingLocale: "es",
     });
     expect(
       screen.getByRole("button", { name: /Version 2/ })
@@ -375,94 +375,12 @@ describe("the language being edited", () => {
     ).toHaveTextContent("Spanish and shared fields");
   });
 
-  it("offers no All languages where only the language being edited was read", () => {
-    // The other languages' versions were not fetched, so a view of every
-    // language would show their events without their versions.
-    renderList(versions, [], {
-      lifecycle: false,
-      localized: true,
-      languages: { editing: "es", all: false },
-    });
-    expect(
-      screen.queryByRole("combobox", { name: "Languages shown" })
-    ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: /Version 2/ })
-    ).toBeInTheDocument();
-  });
-
-  it("returns to the language being edited once every language is no longer read", async () => {
-    // All languages chosen, then the right to read every language's history
-    // ends while the list is open: only Spanish's versions are read now, so
-    // the list shows Spanish rather than other languages' events alone.
-    const list = (all: boolean) => (
-      <HistoryStoryList
-        scope={scope}
-        versions={newest(versions)}
-        events={[]}
-        lifecycle={false}
-        localized
-        languages={{ editing: "es", all }}
-        hasMore={false}
-        selected={null}
-        onSelect={vi.fn()}
-      />
-    );
-    const { rerender } = render(list(true));
-    await userEvent.click(
-      screen.getByRole("combobox", { name: "Languages shown" })
-    );
-    await userEvent.click(
-      screen.getByRole("option", { name: "All languages" })
-    );
-    expect(
-      screen.getByRole("button", { name: /Version 1/ })
-    ).toBeInTheDocument();
-
-    rerender(list(false));
-    expect(screen.queryByRole("button", { name: /Version 1/ })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: /Version 2/ })
-    ).toBeInTheDocument();
-  });
-
-  it("ends the preview of another language's version once every language is no longer read", async () => {
-    // An English version previewed under All languages: once only Spanish's
-    // versions are read, its row goes, and so does the preview of it.
-    const onClearSelection = vi.fn();
-    const list = (all: boolean) => (
-      <HistoryStoryList
-        scope={scope}
-        versions={newest(versions)}
-        events={[]}
-        lifecycle={false}
-        localized
-        languages={{ editing: "es", all }}
-        hasMore={false}
-        selected={1}
-        onSelect={vi.fn()}
-        onClearSelection={onClearSelection}
-      />
-    );
-    const { rerender } = render(list(true));
-    await userEvent.click(
-      screen.getByRole("combobox", { name: "Languages shown" })
-    );
-    await userEvent.click(
-      screen.getByRole("option", { name: "All languages" })
-    );
-    expect(onClearSelection).not.toHaveBeenCalled();
-
-    rerender(list(false));
-    expect(onClearSelection).toHaveBeenCalledTimes(1);
-  });
-
   it("ends the preview of a version the language view stops showing", async () => {
     const onClearSelection = vi.fn();
     renderList(versions, [], {
       lifecycle: false,
       localized: true,
-      languages: { editing: "es", all: true },
+      editingLocale: "es",
       // An English version, chosen while every language was shown.
       selected: 1,
       onClearSelection,
@@ -494,7 +412,7 @@ describe("the language being edited", () => {
         version(3, 3, { locale: "es", status: "published" }),
       ],
       [event("published", 3, { versionNo: 3, parts: ["en", "es"] })],
-      { localized: true, languages: { editing: "en", all: true }, onSelect }
+      { localized: true, editingLocale: "en", onSelect }
     );
     const choices = screen.getAllByRole("button", {
       name: /Version \d+|Currently published|Current draft/,

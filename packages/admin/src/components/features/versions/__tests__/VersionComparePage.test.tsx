@@ -11,22 +11,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
-const {
-  useVersionsMock,
-  canMock,
-  canRequestMock,
-  navigateMock,
-  diffMountMock,
-  languages,
-} = vi.hoisted(() => ({
-  /** The admin's default language, empty until its languages load. */
-  languages: { defaultLocale: "en" },
-  useVersionsMock: vi.fn(),
-  canMock: vi.fn(),
-  canRequestMock: vi.fn(),
-  navigateMock: vi.fn(),
-  diffMountMock: vi.fn(),
-}));
+const { useVersionsMock, canMock, navigateMock, diffMountMock } = vi.hoisted(
+  () => ({
+    useVersionsMock: vi.fn(),
+    canMock: vi.fn(),
+    navigateMock: vi.fn(),
+    diffMountMock: vi.fn(),
+  })
+);
 
 // Stubbed so these tests stay about the page. The real view fetches a diff of
 // its own; what matters here is whether it is asked to START OVER.
@@ -63,24 +55,6 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
 
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,
-}));
-
-// The server's answer about each request, which `useCanRequest` and the
-// history's language read.
-vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({
-    canAccessCollection: (...a: unknown[]) => canRequestMock(...a) as boolean,
-  }),
-}));
-
-vi.mock("@admin/hooks/useLocalization", () => ({
-  useLocalization: () => ({
-    defaultLocale: languages.defaultLocale,
-    enabled: true,
-    locales: [],
-    fallback: true,
-    getLocale: () => undefined,
-  }),
 }));
 
 vi.mock("@admin/lib/navigation", () => ({
@@ -124,56 +98,8 @@ const collection = (entryId: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  languages.defaultLocale = "en";
   canMock.mockReturnValue(true);
-  canRequestMock.mockReturnValue(true);
   useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
-});
-
-describe("VersionComparePage — the languages its history is read in", () => {
-  const renderPage = () =>
-    render(
-      <VersionComparePage
-        scope={collection("e1")}
-        documentHref="/admin/collections/posts/e1"
-        readOnlyHref="/admin/collections/posts"
-      />
-    );
-
-  it("reads every language's history where the server allows it", () => {
-    renderPage();
-    expect(canRequestMock).toHaveBeenCalledWith("posts", "readHistory");
-    // No language narrows the read: `useVersions` lists every language's
-    // versions for an absent locale.
-    expect(
-      (useVersionsMock.mock.calls.at(-1)?.[0] as { locale?: string }).locale
-    ).toBeUndefined();
-  });
-
-  it("reads the default language's where it does not, rather than a refused list", () => {
-    canRequestMock.mockImplementation(
-      (_slug: string, request: string) => request !== "readHistory"
-    );
-    renderPage();
-    expect(useVersionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
-      locale: "en",
-      enabled: true,
-    });
-  });
-
-  it("waits for the default language before reading a narrowed history", () => {
-    // Before the admin's languages load the default one is not known, and an
-    // unnamed language would read every language's versions, which the
-    // server refuses this caller.
-    canRequestMock.mockImplementation(
-      (_slug: string, request: string) => request !== "readHistory"
-    );
-    languages.defaultLocale = "";
-    renderPage();
-    expect(useVersionsMock.mock.calls.at(-1)?.[0]).toMatchObject({
-      enabled: false,
-    });
-  });
 });
 
 describe("VersionComparePage — landmarks", () => {

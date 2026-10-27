@@ -21,7 +21,6 @@ import { Alert, AlertDescription, Button } from "@admin/components/ui";
 import { ROUTES, buildRoute, withQuery } from "@admin/constants/routes";
 import { scopeKey, useVersions } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
-import { useCompareLanguage } from "@admin/hooks/useCanRequest";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -152,12 +151,7 @@ export function VersionComparePage({
   to,
   locale,
 }: VersionComparePageProps): JSX.Element {
-  // Unfiltered, the history reads every language's versions; a user the
-  // server lets read only some is shown the default language's instead.
-  const list = useVersions({
-    scope,
-    ...useCompareLanguage(scope.slug, locale),
-  });
+  const list = useVersions({ scope, locale });
   // `useCan` answers false while permissions load, which is the right default
   // here: the read-only destination is reachable by everyone who can reach this
   // page, so an unresolved permission costs a less specific target rather than

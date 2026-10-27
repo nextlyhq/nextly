@@ -13,7 +13,7 @@
 
 import { Info } from "lucide-react";
 import type { JSX } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   Select,
@@ -69,14 +69,8 @@ export interface HistoryStoryListProps {
   lifecycle: boolean;
   /** Whether the document is translated; the language choice shows if so. */
   localized: boolean;
-  /**
-   * The languages the list was read in. `editing` is the language being
-   * edited, which the list opens on. `all` is whether every language's
-   * versions were read; when only the language being edited was, the list
-   * offers no "All languages": the other languages' versions are not there,
-   * and the events alone would tell half their story.
-   */
-  languages: { editing: string | null; all: boolean };
+  /** The language being edited, which the list opens on. */
+  editingLocale: string | null;
   /** The retention limit, when the editor knows it. */
   retention?: number | false;
   /** Whether older versions remain to load: a predecessor may be among them. */
@@ -94,7 +88,6 @@ export interface HistoryStoryListProps {
 function StoryTools({
   localized,
   editingLocale,
-  allLanguages,
   languageName,
   view,
   onView,
@@ -103,7 +96,6 @@ function StoryTools({
 }: {
   localized: boolean;
   editingLocale: string | null;
-  allLanguages: boolean;
   languageName: (code: string) => string;
   view: HistoryView;
   onView: (view: HistoryView) => void;
@@ -112,7 +104,7 @@ function StoryTools({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 px-4 pb-1 pt-2">
-      {localized && editingLocale && allLanguages ? (
+      {localized && editingLocale ? (
         <Select
           value={view.kind === "all" ? ALL_LANGUAGES : view.locale}
           onValueChange={value =>
@@ -309,22 +301,9 @@ function useHistoryView(
   input: Omit<Parameters<typeof buildStory>[0], "view">,
   opening: HistoryView,
   selected: number | null,
-  onClearSelection: (() => void) | undefined,
-  allLanguages: boolean
+  onClearSelection: (() => void) | undefined
 ): [HistoryView, (next: HistoryView) => void] {
-  const [chosen, setView] = useState<HistoryView>(opening);
-  // Where only the language being edited was read, the list shows that
-  // language, whatever was chosen while every language was: a view of all of
-  // them would show the others' events without their versions.
-  const view = allLanguages ? chosen : opening;
-  // That clamp ends a preview its view no longer shows, as a change of view
-  // the user makes does.
-  const clamped = view !== chosen;
-  useEffect(() => {
-    if (clamped && onClearSelection && hidesSelection(input, view, selected)) {
-      onClearSelection();
-    }
-  }, [clamped, input, view, selected, onClearSelection]);
+  const [view, setView] = useState<HistoryView>(opening);
   const changeView = (next: HistoryView) => {
     setView(next);
     if (onClearSelection && hidesSelection(input, next, selected)) {
@@ -351,7 +330,7 @@ export function HistoryStoryList({
   events,
   lifecycle,
   localized,
-  languages,
+  editingLocale,
   retention,
   hasMore,
   selected,
@@ -364,10 +343,9 @@ export function HistoryStoryList({
   const [filter, setFilter] = useState<HistoryFilter>("everything");
   const [view, changeView] = useHistoryView(
     { versions, events, lifecycle, localized, filter },
-    openingView(localized, languages.editing),
+    openingView(localized, editingLocale),
     selected,
-    onClearSelection,
-    languages.all
+    onClearSelection
   );
   const story = useMemo(
     () => buildStory({ versions, events, lifecycle, localized, view, filter }),
@@ -391,8 +369,7 @@ export function HistoryStoryList({
       )}
       <StoryTools
         localized={localized}
-        editingLocale={languages.editing}
-        allLanguages={languages.all}
+        editingLocale={editingLocale}
         languageName={languageName}
         view={view}
         onView={changeView}
