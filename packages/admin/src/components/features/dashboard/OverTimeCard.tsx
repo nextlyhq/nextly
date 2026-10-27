@@ -16,6 +16,7 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { pointLabel } from "../widgets/archetypes/timeseries";
+import { useCollectionUnit } from "../widgets/charts/chart-unit";
 import { OverTimeChart } from "../widgets/charts/over-time-chart";
 import { FrameState, readSlot } from "../widgets/frame/card-state";
 
@@ -25,6 +26,12 @@ export const OverTimeCard: React.FC<WidgetComponentProps> = ({
   settings,
   onRetry,
 }) => {
+  // What it counts, for the chart's tooltip ("12 new posts"), asked before any early answer as
+  // a hook must be.
+  const unit = useCollectionUnit(
+    typeof settings.collection === "string" ? settings.collection : undefined,
+    "new"
+  );
   const read = readSlot(slot, {
     isFetching,
     skeleton: { shape: "chart" },
@@ -63,6 +70,7 @@ export const OverTimeCard: React.FC<WidgetComponentProps> = ({
       title="Entries created"
       labelHeading="Interval"
       chartStyle={settings.chartStyle === "bars" ? "bars" : "line"}
+      unit={unit}
       // The instant keys each interval; its label is its UTC calendar start, as the server
       // buckets it, in the admin's date format.
       intervals={points.map(point => ({
