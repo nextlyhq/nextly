@@ -40,6 +40,7 @@ import {
   release,
   requireBounded,
   runMembers,
+  signalGroup,
   slotCount,
   slotDir,
   tryAcquire,
@@ -993,6 +994,30 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(Date.now() - started).toBeLessThan(8000);
     expect((await child.done).code).toBe(143);
   }, 15_000);
+
+  /*
+   * 🔴 macOS answers a kill sent to a group whose only members are zombies —
+   * killed, not yet reaped — with EPERM, not ESRCH. The sweep after a run's
+   * leader exits can meet exactly that group, and the error ended the runner
+   * with status 1 in place of the run's own (the case above, 1 run in 12 under
+   * load). perl keeps the zombie: it never reaps the child it put in a group of
+   * its own.
+   */
+  it.runIf(HAS_PERL)("treats a group left with only zombies as one with nothing to signal", async () => {
+    const keeper = spawn(
+      "perl",
+      ["-e", '$| = 1; my $pid = fork(); if ($pid == 0) { setpgrp(0, 0); exit 0 } print "$pid\\n"; sleep 30'],
+      { stdio: ["ignore", "pipe", "ignore"] }
+    );
+    spawned.push(keeper.pid);
+    let out = "";
+    keeper.stdout.on("data", chunk => (out += chunk));
+    expect(await waitUntil(() => /^\d+\n/.test(out), 5000)).toBe(true);
+    const zombie = Number(out.trim());
+    expect(await waitUntil(() => processTable()?.get(zombie)?.state?.startsWith("Z"), 5000)).toBe(true);
+
+    expect(() => signalGroup(zombie, "SIGKILL")).not.toThrow();
+  });
 
   it("passes Ctrl-C on to the run, whose group the terminal does not reach", async () => {
     const child = runBounded(WITH_GRANDCHILD);

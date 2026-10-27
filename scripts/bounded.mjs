@@ -646,8 +646,19 @@ function sendSignal(target, signal) {
   }
 }
 
-function signalGroup(pgid, signal) {
-  sendSignal(-pgid, signal);
+/**
+ * Sends a signal to a process group, ignoring one with nothing left to signal.
+ * macOS answers a group whose only members are zombies — killed, not yet
+ * reaped — with EPERM rather than ESRCH, and the sweep after a leader exits
+ * can meet exactly that group. Every caller signals a group the run made, so
+ * EPERM here means nothing alive is left in it.
+ */
+export function signalGroup(pgid, signal) {
+  try {
+    sendSignal(-pgid, signal);
+  } catch (error) {
+    if (error.code !== "EPERM") throw error;
+  }
 }
 
 /** Runs a command in this process's group and returns its exit code. */
