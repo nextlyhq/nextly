@@ -1660,6 +1660,11 @@ jobs:
     name: Dev reload applies a saved schema edit
     needs: [ci]
     runs-on: ubuntu-latest
+    # Whether its test ran: the Decide step below skips it for a commit that
+    # cannot affect it, and the job still succeeds. The job that reports main's
+    # advisory jobs reads this, so a success that tested nothing clears nothing.
+    outputs:
+      tested: ${{ steps.decide.outputs.inert != 'true' }}
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:

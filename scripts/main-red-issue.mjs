@@ -9,10 +9,12 @@
  * it stays unread for as long as nobody happens to open that run. This makes
  * it read: a run on `main` in which one of them failed opens the issue (or
  * updates it, so there is never a second), naming the jobs, the commit, the
- * run and, where the job's log names them, the failing tests. The first run in
- * which every one of them passed closes it. A run in which one was skipped or
- * cancelled and none failed (a superseded push, a cancelled run) tested
- * nothing, so it leaves the issue as it is.
+ * run and, where the job's log names them, the failing tests. It closes once
+ * every job it names has since passed, having run its test: a job skipped or
+ * cancelled (a superseded push), or one that decided a commit could not affect
+ * it, proved nothing. The issue records the commit it was last written for,
+ * and a run on an older commit (runs on `main` can finish out of order) leaves
+ * it alone.
  *
  * Usage, in a workflow step: node scripts/main-red-issue.mjs
  * Reads RESULTS (the `needs` context as JSON), GITHUB_REPOSITORY, GITHUB_SHA,
@@ -42,16 +44,37 @@ export const LABEL = "main-red";
 const MAX_TESTS = 20;
 
 /**
- * What the advisory jobs in one run say: red with the failed jobs' names, green
- * when every one passed, unknown otherwise.
+ * What the advisory jobs in one run say, by job id: which failed, and which
+ * passed having run their test. A job may decide inside itself that a commit
+ * cannot affect it and still succeed; it says so in a `tested` output, and a
+ * success with `tested` false proves nothing.
  *
- * @returns {{ state: "red" | "green" | "unknown", failed?: string[] }}
+ * @returns {{ failed: string[], passed: string[] }}
  */
 export function verdict(results) {
-  const failed = Object.keys(ADVISORY).filter(id => results[id]?.result === "failure");
-  if (failed.length > 0) return { state: "red", failed: failed.map(id => ADVISORY[id]) };
-  const green = Object.keys(ADVISORY).every(id => results[id]?.result === "success");
-  return { state: green ? "green" : "unknown" };
+  const ids = Object.keys(ADVISORY);
+  return {
+    failed: ids.filter(id => results[id]?.result === "failure"),
+    passed: ids.filter(id => results[id]?.result === "success" && results[id]?.outputs?.tested !== "false"),
+  };
+}
+
+/** The commit and failed jobs an issue was last written for, from its marker, or null. */
+function recorded(issue) {
+  const match = /<!-- main-red (\{.*?\}) -->/.exec(issue.body ?? "");
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether `sha` is older than the commit the issue records, by GitHub's own comparison. */
+async function olderThan(sha, state, { repository, context }) {
+  if (!state?.sha || state.sha === sha) return false;
+  const { status } = await githubJson(`repos/${repository}/compare/${state.sha}...${sha}`, context);
+  return status === "behind";
 }
 
 /** Opens, updates or closes the issue for this run, and returns the exit code. */
@@ -61,31 +84,42 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   const sha = env.GITHUB_SHA;
   const runUrl = `${env.GITHUB_SERVER_URL}/${repository}/actions/runs/${env.GITHUB_RUN_ID}`;
   try {
-    const result = verdict(JSON.parse(env.RESULTS ?? "{}"));
-    if (result.state === "unknown") {
-      console.log("main-red-issue: no advisory job failed and not all passed; nothing to report");
+    const { failed, passed } = verdict(JSON.parse(env.RESULTS ?? "{}"));
+    if (failed.length === 0 && passed.length === 0) {
+      console.log("main-red-issue: no advisory job failed or ran its test; nothing to report");
       return 0;
     }
     const open = (await githubJson(`repos/${repository}/issues?labels=${LABEL}&state=open&per_page=10`, context)).filter(
       issue => !issue.pull_request
     );
-    if (result.state === "green") {
-      if (open.length === 0) return 0;
-      for (const issue of open) {
-        await write(`repos/${repository}/issues/${issue.number}/comments`, context, "POST", {
-          body: `Every advisory job passed on ${sha.slice(0, 9)} (${runUrl}).`,
-        });
-        await write(`repos/${repository}/issues/${issue.number}`, context, "PATCH", { state: "closed", state_reason: "completed" });
-      }
-      console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed ${open.map(issue => `#${issue.number}`).join(", ")}`);
+    const current = open[0];
+    const state = current ? recorded(current) : null;
+    if (current && (await olderThan(sha, state, { repository, context }))) {
+      console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${current.number}'s ${state.sha.slice(0, 9)}; leaving it`);
       return 0;
     }
-    const tests = await failingTests(env.GITHUB_RUN_ID, result.failed, { repository, context });
-    const title = `main is red: ${result.failed.join(", ")} on ${sha.slice(0, 9)}`;
-    const body = issueBody(result.failed, sha, runUrl, tests);
-    if (open.length > 0) {
-      await write(`repos/${repository}/issues/${open[0].number}`, context, "PATCH", { title, body });
-      console.log(`main-red-issue: updated #${open[0].number}: ${title}`);
+    if (failed.length === 0) {
+      if (!current) return 0;
+      const named = state?.jobs ?? Object.keys(ADVISORY);
+      const unproven = named.filter(id => !passed.includes(id));
+      if (unproven.length > 0) {
+        console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
+        return 0;
+      }
+      await write(`repos/${repository}/issues/${current.number}/comments`, context, "POST", {
+        body: `${named.map(id => ADVISORY[id] ?? id).join(", ")} passed on ${sha.slice(0, 9)} (${runUrl}).`,
+      });
+      await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { state: "closed", state_reason: "completed" });
+      console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
+      return 0;
+    }
+    const names = failed.map(id => ADVISORY[id]);
+    const tests = await failingTests(env.GITHUB_RUN_ID, names, { repository, context });
+    const title = `main is red: ${names.join(", ")} on ${sha.slice(0, 9)}`;
+    const body = issueBody({ sha, jobs: failed }, names, runUrl, tests);
+    if (current) {
+      await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { title, body });
+      console.log(`main-red-issue: updated #${current.number}: ${title}`);
     } else {
       await ensureLabel({ repository, context });
       await write(`repos/${repository}/issues`, context, "POST", { title, body, labels: [LABEL] });
@@ -118,8 +152,9 @@ async function write(path, context, method, body) {
 
 /**
  * The failing tests the failed jobs' logs name, or null when no log could be
- * read. Playwright's list reporter marks a failed test `✘`; a retry of the same
- * test is listed once.
+ * read. Playwright's GitHub reporter, which the browser jobs use on CI, prints
+ * each failure as an error line `N) [project] › file:line:col › title`, once
+ * per attempt; its list reporter marks one `✘`. Each test is listed once.
  */
 async function failingTests(runId, failedNames, { repository, context }) {
   try {
@@ -132,7 +167,9 @@ async function failingTests(runId, failedNames, { repository, context }) {
       if (!response.ok) continue;
       read = true;
       for (const line of (await response.text()).split("\n")) {
-        const match = /✘\s+\d+\s+(\[[^\]]+\]\s+›\s+.*?)(?:\s+\(retry #\d+\))?\s+\([\d.]+m?s\)\s*$/.exec(line);
+        const match =
+          /##\[error\]\s+\d+\) (\[[^\]]+\] › .+?)\s*$/.exec(line) ??
+          /✘\s+\d+\s+(\[[^\]]+\]\s+›\s+.*?)(?:\s+\(retry #\d+\))?\s+\([\d.]+m?s\)\s*$/.exec(line);
         if (match) tests.add(match[1]);
       }
     }
@@ -142,9 +179,15 @@ async function failingTests(runId, failedNames, { repository, context }) {
   }
 }
 
-/** The issue's text: jobs, commit and run, then the failing tests or why they are missing. */
-function issueBody(failed, sha, runUrl, tests) {
+/**
+ * The issue's text: a marker recording the commit and failed jobs (read back
+ * to order later runs and to know what must pass), the jobs, commit and run,
+ * then the failing tests or why they are missing.
+ */
+function issueBody(state, failed, runUrl, tests) {
+  const { sha } = state;
   const lines = [
+    `<!-- main-red ${JSON.stringify(state)} -->`,
     `The run on \`main\` at ${sha.slice(0, 9)} failed jobs that do not block a merge:`,
     "",
     ...failed.map(name => `- **${name}**`),
@@ -160,7 +203,7 @@ function issueBody(failed, sha, runUrl, tests) {
     lines.push(...tests.slice(0, MAX_TESTS).map(test => `- \`${test}\``));
     if (tests.length > MAX_TESTS) lines.push(`- and ${tests.length - MAX_TESTS} more`);
   }
-  lines.push("", "This issue is updated while `main` stays red and closed by the first run in which these jobs all pass.");
+  lines.push("", "This issue is updated while `main` stays red, and closed once each of these jobs has passed again.");
   return lines.join("\n");
 }
 
