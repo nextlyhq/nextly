@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * Deletes the Actions caches of open pull requests that no run will read
- * again, on a schedule, so they stop holding the repository's cache allowance
- * until least-recently-used eviction reaches them (and `main`'s caches with
- * them). Two kinds, both under a pull request's merge ref
- * (`refs/pull/<n>/merge`):
+ * Deletes the Actions caches pull requests hold that no run will read again,
+ * on a schedule, so they stop holding the repository's cache allowance until
+ * least-recently-used eviction reaches them (and `main`'s caches with them).
+ * Three kinds, all under a pull request's merge ref (`refs/pull/<n>/merge`):
  *
+ * - **A closed pull request's.** Its caches are deleted as it closes
+ *   (`delete-closed-pull-request-caches.mjs`), but a run cancelled then can
+ *   still finish an upload afterwards, and a pull request closed with a merge
+ *   conflict starts no `pull_request` workflow at all. Every cache under a
+ *   closed one's ref goes; one whose state cannot be read keeps its caches.
  * - **Superseded.** A job saves under a key ending in the commit or lockfile
  *   it ran on, and the next push of the same pull request saves the same
  *   family again under a new ending. A restore takes the newest by prefix, so
@@ -45,15 +49,20 @@ export function familyOf(key) {
 
 /**
  * What to delete from a cache listing, each with its reason; everything else
- * is kept. Of a family on one pull request's ref the newest by creation is
- * kept, and an entry of a pull request's ref whose key `main` also holds goes
+ * is kept. `closed` are the merge refs of pull requests known to be closed:
+ * all of their caches go. Of a family on an open pull request's ref the
+ * newest by creation is kept, and an entry whose key `main` also holds goes
  * whatever its age.
  */
-export function sweepPlan(caches) {
+export function sweepPlan(caches, { closed = new Set() } = {}) {
   const mainKeys = new Set(caches.filter(cache => cache.ref === "refs/heads/main").map(cache => cache.key));
   const doomed = new Map();
   const families = new Map();
   for (const cache of caches.filter(entry => isPullRequestRef(entry.ref))) {
+    if (closed.has(cache.ref)) {
+      doomed.set(cache.id, { cache, reason: "a closed pull request's" });
+      continue;
+    }
     if (mainKeys.has(cache.key)) {
       doomed.set(cache.id, { cache, reason: "a copy of main's" });
       continue;
@@ -86,13 +95,33 @@ async function allCaches(repository, context) {
   return { caches, short: caches.length < total };
 }
 
+/**
+ * The merge refs, among those caches are held under, whose pull request is
+ * closed. A pull request that cannot be read is left out, so its caches are
+ * judged as an open one's: deleting is the direction that cannot be undone.
+ */
+async function closedRefs(caches, repository, context) {
+  const refs = [...new Set(caches.map(cache => cache.ref).filter(isPullRequestRef))];
+  const closed = new Set();
+  for (const ref of refs) {
+    const number = ref.split("/")[2];
+    try {
+      const pull = await githubJson(`repos/${repository}/pulls/${number}`, context);
+      if (pull.state === "closed") closed.add(ref);
+    } catch (error) {
+      console.log(`sweep-pull-request-caches: #${number} could not be read (${error.message}); its caches are judged as open`);
+    }
+  }
+  return closed;
+}
+
 /** Sweeps the repository's pull-request caches, and returns the exit code. */
 export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   const repository = env.GITHUB_REPOSITORY;
   const context = { token: env.GH_TOKEN, fetchImpl };
   try {
     const { caches, short } = await allCaches(repository, context);
-    const plan = sweepPlan(caches);
+    const plan = sweepPlan(caches, { closed: await closedRefs(caches, repository, context) });
     let freed = 0;
     const failed = [];
     for (const { cache, reason } of plan) {

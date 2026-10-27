@@ -72,14 +72,30 @@ describe("sweepPlan", () => {
     expect(planned(caches)).toEqual([]);
   });
 
+  it("deletes every cache of a closed pull request's ref, and judges an open one's by family", () => {
+    const caches = [
+      cache(PR, "playwright-Linux-1.52.0", "2026-10-27T01:00:00Z"),
+      cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z"),
+      cache(OTHER_PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z"),
+      cache(MAIN, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T01:00:00Z"),
+    ];
+    expect(sweepPlan(caches, { closed: new Set([PR, MAIN]) }).map(({ cache: entry, reason }) => `${entry.ref} ${entry.key} ${reason}`)).toEqual([
+      `${PR} playwright-Linux-1.52.0 a closed pull request's`,
+      `${PR} turbo-v2-Linux-ci-${SHA(1)} a closed pull request's`,
+    ]);
+  });
+
   it("keeps a key with no family, even beside others of its prefix", () => {
     const caches = [cache(PR, "playwright-Linux-1.52.0", "2026-10-27T01:00:00Z"), cache(PR, "playwright-Linux-1.53.0", "2026-10-27T02:00:00Z")];
     expect(planned(caches)).toEqual([]);
   });
 });
 
-/** A fetch answering the cache list from `pages` and DELETEs with `deleteStatus(id)`, recording deletions. */
-function api(pages, deleteStatus = () => 204) {
+/**
+ * A fetch answering the cache list from `pages`, each pull request's state from
+ * `states` (404 when absent), and DELETEs with `deleteStatus(id)`, recording deletions.
+ */
+function api(pages, deleteStatus = () => 204, states = {}) {
   const deleted = [];
   const fetchImpl = async (url, { method = "GET" } = {}) => {
     const path = url.replace("https://api.github.com/", "");
@@ -88,6 +104,11 @@ function api(pages, deleteStatus = () => 204) {
       deleted.push(id);
       const status = deleteStatus(id);
       return { ok: status >= 200 && status < 300, status };
+    }
+    const pull = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(path);
+    if (pull) {
+      const state = states[pull[1]];
+      return state === undefined ? { ok: false, status: 404, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ state }) };
     }
     const page = Number(/[?&]page=(\d+)/.exec(path)?.[1]);
     const answer = path.startsWith(`repos/${REPO}/actions/caches?per_page=100&page=`) ? pages[page - 1] : undefined;
@@ -128,6 +149,14 @@ describe("main", () => {
     const { code, printed } = await run(api([{ total_count: 4, actions_caches: caches }], id => (id === c.id ? 403 : 204)));
     expect(code).toBe(1);
     expect(printed).toContainEqual(expect.stringContaining(`could not delete 1 cache(s): ${c.key}`));
+  });
+
+  it("deletes a closed pull request's caches, and keeps those of one it could not read", async () => {
+    const closed = cache(PR, "playwright-Linux-1.52.0", "2026-10-27T01:00:00Z");
+    const unread = cache(OTHER_PR, "playwright-Linux-1.52.0", "2026-10-27T01:00:00Z");
+    const stub = api([{ total_count: 2, actions_caches: [closed, unread] }], () => 204, { 7: "closed" });
+    expect((await run(stub)).code).toBe(0);
+    expect(stub.deleted).toEqual([closed.id]);
   });
 
   it("fails when the list came back shorter than GitHub's total, after sweeping what it held", async () => {
