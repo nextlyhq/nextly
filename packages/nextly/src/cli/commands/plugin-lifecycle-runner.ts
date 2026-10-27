@@ -18,6 +18,7 @@ import {
   newestEventsByFilename,
 } from "../../domains/schema/events/newest-event";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { isInteractiveTerminal } from "../../domains/schema/migrate/data-loss-consent";
 import {
   orderedMigrations,
   pluginModuleStatements,
@@ -37,6 +38,7 @@ import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
 import type { CommandContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
 import {
   downDatabaseDeps,
@@ -52,6 +54,7 @@ import {
   runPluginUninstallCommand,
   type LifecyclePlugin,
   type PreparedModuleDown,
+  type UninstallOptions,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
 import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
@@ -745,6 +748,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     prepareDowns,
     runDown,
     underMigrateLock,
+    // A full uninstall without consent asks the person at a terminal, and is
+    // refused at once where nobody is there to answer.
+    interactive: isInteractiveTerminal(),
+    askToDelete: askToDeleteInTerminal,
   };
 }
 
@@ -776,7 +783,7 @@ export async function runPluginInstallAll(
 
 export async function runPluginUninstall(
   name: string,
-  options: RunnerOptions & { keepData: boolean; yes: boolean },
+  options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
   const deps = await connect(options, context);
@@ -787,7 +794,11 @@ export async function runPluginUninstall(
     // two of them leaves a state no snapshot describes.
     await runPluginUninstallCommand(
       name,
-      { keepData: options.keepData, yes: options.yes },
+      {
+        keepData: options.keepData,
+        yes: options.yes,
+        consent: options.consent,
+      },
       deps
     );
   } finally {

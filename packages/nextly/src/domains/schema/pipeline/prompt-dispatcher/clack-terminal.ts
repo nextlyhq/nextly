@@ -20,8 +20,17 @@
 
 import * as clack from "@clack/prompts";
 
+import { NextlyError } from "../../../../errors/nextly-error";
+import { consoleLogger } from "../../../../shared/types";
+import {
+  deprecationNotices,
+  judgeDataLoss,
+  resolveDataLossConsent,
+} from "../../migrate/data-loss-consent";
+import { nonEmptyValuesOf } from "../classifier/classifier";
 import type {
   ClassifierEvent,
+  DestructiveDropEvent,
   PromptDispatcher,
   PromptDispatchResult,
   RenameCandidate,
@@ -39,22 +48,78 @@ function hasTTY(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
-// Power-user opt-out: skip the interactive destructive_drop prompt and
-// auto-confirm every drop. Useful for CI/CD or non-interactive workflows
-// where the operator already trusts the config edit and just wants the
-// columns gone. Matches Drizzle Kit's --force / Prisma's
-// --accept-data-loss pattern. Only affects destructive_drop events;
-// other event kinds (type_change, NOT NULL) still prompt.
-// Two spellings are honored: NEXTLY_ALLOW_CODE_FIRST_DROPS is the original
-// env opt-in, and NEXTLY_ACCEPT_DATA_LOSS is what `db:sync
-// --accept-data-loss` exports for the rest of the run.
-function shouldAutoConfirmDrops(): boolean {
-  const allowCodeFirstDrops = process.env.NEXTLY_ALLOW_CODE_FIRST_DROPS === "1";
-  const acceptDataLoss = process.env.NEXTLY_ACCEPT_DATA_LOSS === "1";
-  return allowCodeFirstDrops || acceptDataLoss;
+function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
+  return event.kind === "destructive_drop";
+}
+
+/** Asks at the terminal, defaulting to no; a cancelled prompt is a no. */
+async function askInTerminal(question: string): Promise<boolean> {
+  const answer = await clack.confirm({
+    message: question,
+    initialValue: false,
+  });
+  return !clack.isCancel(answer) && answer;
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
+  /**
+   * `print` writes the data-loss listing and notices; a test collects them.
+   */
+  constructor(
+    private readonly print: (line: string) => void = line =>
+      consoleLogger.warn(line)
+  ) {}
+
+  /**
+   * The column drops judged by the data-loss consent (`NEXTLY_ACCEPT_DATA_LOSS`,
+   * which `db:sync --accept-data-loss` sets for its run, or the earlier
+   * `NEXTLY_ALLOW_CODE_FIRST_DROPS`): their confirmations when covered or
+   * agreed to at the terminal, null when the terminal says no. A drop the
+   * consent does not cover is refused, naming it, before any DDL: with no
+   * terminal by a `TTYRequiredError` that names the consent covering it,
+   * and under a consent naming other targets by a refusal of its own.
+   */
+  private async judgeDrops(
+    drops: readonly DestructiveDropEvent[],
+    interactive: boolean
+  ): Promise<Resolution[] | null> {
+    if (drops.length === 0) return [];
+    const consent = resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+    });
+    for (const notice of deprecationNotices(consent)) this.print(notice);
+    const verdict = await judgeDataLoss({
+      deletions: drops.map(drop => ({
+        kind: "column" as const,
+        table: drop.tableName,
+        column: drop.columnName,
+        count: nonEmptyValuesOf(drop),
+      })),
+      consent,
+      interactive,
+      ask: askInTerminal,
+      print: this.print,
+      // A push from `next dev` has no command line to pass a flag on; the
+      // variable reaches both it and `db:sync`.
+      flag: false,
+    });
+    if (verdict.kind === "declined") return null;
+    if (verdict.kind === "refused") {
+      if (verdict.reason === "needs-consent") {
+        throw new TTYRequiredError(verdict.message);
+      }
+      throw NextlyError.invalidInput({
+        message: verdict.message,
+        logContext: { reason: "data-loss-not-covered" },
+      });
+    }
+    return drops.map(drop => ({
+      kind: "confirm_drop" as const,
+      eventId: drop.id,
+    }));
+  }
+
   async dispatch(args: {
     candidates: RenameCandidate[];
     events: ClassifierEvent[];
@@ -69,22 +134,15 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     if (!hasTTY()) {
-      // Honor the drop opt-in before refusing: a non-interactive run whose
-      // batch needs nothing but drop confirmations can proceed when the
-      // operator opted in (mirrors the TTY pre-scan in runEventPrompts).
-      // Anything needing a real decision — renames, type changes — still
-      // requires a terminal below.
-      if (
-        candidates.length === 0 &&
-        shouldAutoConfirmDrops() &&
-        events.every(e => e.kind === "destructive_drop")
-      ) {
+      // A batch of nothing but column drops is the data-loss consent's to
+      // judge: applied when covered, refused at once, naming the consent
+      // that covers it, when not. Anything needing a real decision —
+      // renames, type changes — still requires a terminal below.
+      if (candidates.length === 0 && events.every(isDrop)) {
         return {
           confirmedRenames: [],
-          resolutions: events.map(e => ({
-            kind: "confirm_drop" as const,
-            eventId: e.id,
-          })),
+          resolutions:
+            (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
           proceed: true,
         };
       }
@@ -174,54 +232,19 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       return { resolutions: [], proceed: true };
     }
 
-    const resolutions: Resolution[] = [];
-
-    // Pre-scan: when the operator has opted in to auto-confirmed drops
-    // (shouldAutoConfirmDrops) AND every event in this batch is a
-    // destructive_drop, skip clack entirely and auto-confirm all of them.
-    // The intro/outro frame would be noise for a workflow that explicitly
-    // doesn't want prompts.
-    const autoConfirmDrops = shouldAutoConfirmDrops();
-    const allDestructiveDrops = events.every(
-      e => e.kind === "destructive_drop"
-    );
-    if (autoConfirmDrops && allDestructiveDrops) {
-      for (const event of events) {
-        if (event.kind !== "destructive_drop") continue;
-        resolutions.push({ kind: "confirm_drop", eventId: event.id });
-      }
-      return { resolutions, proceed: true };
-    }
+    // Every drop is listed, with what each column holds, and asked about
+    // once, before any other question: the operator sees all that would be
+    // lost before agreeing to any of it. Covered by consent, it is listed
+    // and confirmed without asking.
+    const drops = await this.judgeDrops(events.filter(isDrop), true);
+    if (drops === null) return { resolutions: [], proceed: false };
+    const resolutions: Resolution[] = [...drops];
+    const others = events.filter(event => !isDrop(event));
+    if (others.length === 0) return { resolutions, proceed: true };
 
     clack.intro("Schema change requires confirmation");
 
-    for (const event of events) {
-      if (event.kind === "destructive_drop") {
-        // Mirrors Drizzle Kit's `push` destructive-confirm UX. The note
-        // surfaces column type and row count so the user sees the
-        // magnitude of the loss before answering.
-        clack.note(
-          `Type: ${event.columnType}\nRows affected: ${event.tableRowCount}`,
-          `Drop column "${event.tableName}.${event.columnName}"`
-        );
-        // Per-drop opt-out: power users can still set the flag mid-session
-        // (e.g. from .env, then HMR-restart) to skip every subsequent
-        // drop prompt without touching the rename/type-change UX.
-        if (autoConfirmDrops) {
-          resolutions.push({ kind: "confirm_drop", eventId: event.id });
-          continue;
-        }
-        const proceed = await clack.confirm({
-          message: `Drop "${event.columnName}" from "${event.tableName}"?`,
-          initialValue: false,
-        });
-        if (clack.isCancel(proceed) || proceed === false) {
-          clack.outro("Cancelled");
-          return { resolutions, proceed: false };
-        }
-        resolutions.push({ kind: "confirm_drop", eventId: event.id });
-        continue;
-      }
+    for (const event of others) {
       if (event.kind === "type_change") {
         // Render the per-dialect warning text and ask Y/N.
         clack.note(

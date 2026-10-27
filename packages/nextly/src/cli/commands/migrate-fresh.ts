@@ -19,8 +19,8 @@
  * # Drop all tables and re-run migrations (with confirmation)
  * nextly migrate:fresh
  *
- * # Skip confirmation prompt
- * nextly migrate:fresh --force
+ * # Consent to deleting every table, for a run with no terminal
+ * nextly migrate:fresh --accept-data-loss
  *
  * # Run seeders after migrations (placeholder)
  * nextly migrate:fresh --seed
@@ -41,6 +41,10 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
+import {
+  isInteractiveTerminal,
+  judgeDataLoss,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
@@ -53,6 +57,10 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
 
 import { runMigrate } from "./migrate";
@@ -66,7 +74,13 @@ import { runMigrate } from "./migrate";
  */
 export interface MigrateFreshCommandOptions {
   /**
-   * Skip confirmation prompt.
+   * The data-loss consent, in the form without targets: the command deletes
+   * every table, so a list of them is refused.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
+
+  /**
+   * The earlier spelling of the consent, honoured with a deprecation notice.
    * @default false
    */
   force?: boolean;
@@ -167,18 +181,38 @@ export async function runMigrateFresh(
   logger.warn("This command will DROP ALL TABLES in your database.");
   logger.warn("All data will be permanently lost.");
 
-  if (!options.force) {
-    const confirmed = await confirmDestructiveAction(
-      "Are you sure you want to proceed? (yes/no): "
-    );
-
-    if (!confirmed) {
-      logger.newline();
-      logger.info("Operation cancelled.");
-      process.exit(0);
-    }
-  } else {
-    logger.debug("Skipping confirmation (--force flag used)");
+  // The data-loss consent decides, before the database is touched: covered,
+  // the run proceeds; at a terminal, it asks; otherwise it refuses at once
+  // rather than waiting on input nobody will give. What it deletes is every
+  // table, which no list of tables can be said to cover.
+  let verdict: Awaited<ReturnType<typeof judgeDataLoss>>;
+  try {
+    verdict = await judgeDataLoss({
+      deletions: [
+        { kind: "unnamed", description: "every table in the database" },
+      ],
+      consent: readDataLossConsent({
+        flag: options.acceptDataLoss,
+        honours: ["migrate:fresh --force"],
+        earlierFlags: options.force ? ["migrate:fresh --force"] : [],
+        warn: message => logger.warn(message),
+      }),
+      interactive: isInteractiveTerminal(),
+      ask: question => confirmDestructiveAction(`${question} (yes/no): `),
+      print: line => logger.warn(line),
+    });
+  } catch (error) {
+    logger.error(describeError(error));
+    process.exit(1);
+  }
+  if (verdict.kind === "declined") {
+    logger.newline();
+    logger.info("Operation cancelled.");
+    process.exit(0);
+  }
+  if (verdict.kind === "refused") {
+    logger.error(verdict.message);
+    process.exit(1);
   }
 
   // Step 4: Connect to database
@@ -571,7 +605,11 @@ export function registerMigrateFreshCommand(program: Command): void {
   program
     .command("migrate:fresh")
     .description("Drop all tables and re-run all migrations")
-    .option("-f, --force", "Skip confirmation prompt", false)
+    .option(
+      "--accept-data-loss [targets]",
+      "Consent to deleting every table, for a run with no terminal; takes no targets. Same as NEXTLY_ACCEPT_DATA_LOSS=1."
+    )
+    .option("-f, --force", "Deprecated: use --accept-data-loss", false)
     .option("--seed", "Run seeders after migrations", false)
     .action(async (cmdOptions: MigrateFreshCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();

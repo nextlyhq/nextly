@@ -19,11 +19,32 @@ import {
   formatEventId,
   type ClassificationResult,
   type ClassifierEvent,
+  type DestructiveDropEvent,
 } from "../resolution/types";
 
 import { narrowingRefusal } from "./narrowing-refusal";
 import { buildPerDialectWarning } from "./type-warnings";
 import { isWideningChange, stringNarrowingLimit } from "./type-widening";
+
+/**
+ * A column drop with how many of its rows hold a value: what the data-loss
+ * listing shows beside the column, since a drop of a column nobody filled in
+ * loses nothing and one of a full column loses every row's value.
+ */
+interface CountedDropEvent extends DestructiveDropEvent {
+  nonEmptyValues: number;
+}
+
+/**
+ * The count of values a drop event carries, when the classifier counted
+ * them. A dispatcher reads it through this, so an event built elsewhere
+ * without one is listed without a count rather than refused.
+ */
+export function nonEmptyValuesOf(event: ClassifierEvent): number | undefined {
+  return "nonEmptyValues" in event && typeof event.nonEmptyValues === "number"
+    ? event.nonEmptyValues
+    : undefined;
+}
 
 export class RealClassifier implements Classifier {
   async classify(args: {
@@ -152,15 +173,19 @@ export class RealClassifier implements Classifier {
         // Either way, prompt to confirm before destroying data. Row
         // count gives the user the magnitude of the loss.
         const tableRowCount = await args.countRows(op.tableName);
-        events.push({
+        // The rows that hold a value, which is what the drop loses.
+        const nulls = await args.countNulls(op.tableName, op.columnName);
+        const drop: CountedDropEvent = {
           id: formatEventId("destructive_drop", op.tableName, op.columnName),
           kind: "destructive_drop",
           tableName: op.tableName,
           columnName: op.columnName,
           columnType: op.columnType,
           tableRowCount,
+          nonEmptyValues: tableRowCount - nulls,
           applicableResolutions: ["confirm_drop", "abort"],
-        });
+        };
+        events.push(drop);
       }
     }
 

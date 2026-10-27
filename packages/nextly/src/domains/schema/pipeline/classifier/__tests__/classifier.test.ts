@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import type { Operation } from "../../diff/types";
-import { RealClassifier } from "../classifier";
+import { nonEmptyValuesOf, RealClassifier } from "../classifier";
 
 const noopWarnings: string[] = [];
 
@@ -399,6 +399,27 @@ describe("RealClassifier — destructive_drop detection", () => {
       expect(event.tableRowCount).toBe(12);
       expect(event.applicableResolutions).toEqual(["confirm_drop", "abort"]);
     }
+  });
+
+  it("counts the dropped column's non-empty values, which its listing shows", async () => {
+    const countNulls = vi.fn().mockResolvedValue(4);
+    const result = await new RealClassifier().classify({
+      operations: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "excerpt",
+          columnType: "text",
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls,
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "postgresql",
+    });
+    expect(countNulls).toHaveBeenCalledWith("dc_posts", "excerpt");
+    expect(nonEmptyValuesOf(result.events[0])).toBe(8);
   });
 
   it("emits one destructive_drop per drop_column op across mixed batches", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
@@ -191,9 +192,9 @@ describe("migrateDownCore", () => {
     expect(executed).toEqual([]);
   });
 
-  it("requires --allow-data-loss when DOWN drops a column", async () => {
+  it("requires the data-loss consent when DOWN drops a column", async () => {
     const { deps } = baseDeps();
-    await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+    await expect(migrateDownCore(deps)).rejects.toThrow(/--accept-data-loss/);
   });
 
   it.each([
@@ -203,7 +204,7 @@ describe("migrateDownCore", () => {
     // A column drop beside a constraint drop, in one ALTER.
     ['ALTER TABLE "t" DROP COLUMN "c", DROP CONSTRAINT "t_k"', "postgresql"],
   ] as const)(
-    "requires --allow-data-loss for %s on %s",
+    "requires the data-loss consent for %s on %s",
     async (downSql, dialect) => {
       // PostgreSQL and MySQL drop a column without the COLUMN keyword; each of
       // these loses data as surely as `DROP COLUMN` does.
@@ -211,12 +212,63 @@ describe("migrateDownCore", () => {
         dialect,
         readDownSql: async () => down(downSql),
       });
-      await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);
+      await expect(migrateDownCore(deps)).rejects.toThrow(/--accept-data-loss/);
       expect(executed).toEqual([]);
     }
   );
 
-  it("does not require --allow-data-loss for a complete SQLite table rebuild", async () => {
+  it("rolls back a DOWN that drops a column with the consent without targets", async () => {
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 1,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: true, env: {} }),
+      },
+    });
+    await migrateDownCore(deps);
+    expect(executed.length).toBe(1);
+  });
+
+  it("refuses a consent naming targets, which cannot cover a DOWN it does not name", async () => {
+    const { deps, executed } = baseDeps({
+      options: {
+        step: 1,
+        yes: false,
+        dryRun: false,
+        consent: resolveDataLossConsent({ flag: "t", env: {} }),
+      },
+    });
+    await expect(migrateDownCore(deps)).rejects.toThrow(
+      /does not cover[\s\S]*a\.sql's DOWN[\s\S]*only by the consent without targets/
+    );
+    expect(executed).toEqual([]);
+  });
+
+  it("asks a terminal, and rolls back only on yes", async () => {
+    const asked: string[] = [];
+    const yes = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+    });
+    await migrateDownCore(yes.deps);
+    expect(asked).toHaveLength(1);
+    expect(yes.executed.length).toBe(1);
+
+    const no = baseDeps({
+      interactive: true,
+      askToDelete: async () => false,
+    });
+    await expect(migrateDownCore(no.deps)).resolves.toEqual({
+      rolledBack: [],
+    });
+    expect(no.executed).toEqual([]);
+  });
+
+  it("does not require the data-loss consent for a complete SQLite table rebuild", async () => {
     // A constraint-only DOWN on SQLite rebuilds the table: the rows are
     // copied into the twin before the original is dropped.
     const rebuild = [
@@ -242,7 +294,7 @@ describe("migrateDownCore", () => {
         new Map([["t", new Set(["id", "a", "secret"])]]),
     });
     await expect(migrateDownCore(narrow.deps)).rejects.toThrow(
-      /allow-data-loss/
+      /--accept-data-loss/
     );
 
     // The control: the same DROP without the copy before it loses the rows.
@@ -250,10 +302,12 @@ describe("migrateDownCore", () => {
       dialect: "sqlite",
       readDownSql: async () => down('DROP TABLE "t";'),
     });
-    await expect(migrateDownCore(bare.deps)).rejects.toThrow(/allow-data-loss/);
+    await expect(migrateDownCore(bare.deps)).rejects.toThrow(
+      /--accept-data-loss/
+    );
   });
 
-  it("does not require --allow-data-loss for a DOWN that drops no data", async () => {
+  it("does not require the data-loss consent for a DOWN that drops no data", async () => {
     // The control: the same path, with a DOWN that drops a constraint and an
     // index — schema only.
     const { deps, executed } = baseDeps({
@@ -344,7 +398,7 @@ describe("migrateDownCore", () => {
     expect(res.rolledBack).toEqual([]);
   });
 
-  it("dry-run previews a destructive DOWN even WITHOUT --allow-data-loss", async () => {
+  it("dry-run previews a destructive DOWN even without the data-loss consent", async () => {
     // dry-run is a non-destructive preview: it must not be blocked by the
     // data-loss guard (so operators can read the SQL before deciding).
     const { deps, executed } = baseDeps({

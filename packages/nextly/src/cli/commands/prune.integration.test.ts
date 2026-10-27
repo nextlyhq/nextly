@@ -30,14 +30,14 @@ const bootWithPluginCollection = async (slug: string) => {
 };
 
 describe("nextly prune (D14)", () => {
-  it("dry-run lists orphans and drops nothing", async () => {
+  it("an unapproved prune lists orphans and drops nothing", async () => {
     const registry = await bootWithPluginCollection("p2_prune_dry");
 
     const result = await runPrune({
       registry,
       adapter: current!.adapter,
       currentSlugs: [], // plugin removed → its collection is orphaned
-      force: false,
+      approve: async () => false,
     });
 
     expect(result.orphans).toContain("p2_prune_dry");
@@ -46,14 +46,14 @@ describe("nextly prune (D14)", () => {
     expect(await registry.getCollectionBySlug("p2_prune_dry")).not.toBeNull();
   });
 
-  it("--force drops the orphaned collection (metadata + physical table)", async () => {
+  it("an approved prune drops the orphaned collection (metadata + physical table)", async () => {
     const registry = await bootWithPluginCollection("p2_prune_force");
 
     const result = await runPrune({
       registry,
       adapter: current!.adapter,
       currentSlugs: [],
-      force: true,
+      approve: async () => true,
     });
 
     expect(result.dropped).toContain("p2_prune_force");
