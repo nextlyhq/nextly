@@ -20,6 +20,25 @@ export const PORT = Number(process.env.E2E_PROD_PORT) || 3101;
 export const BASE_URL = `http://localhost:${PORT}`;
 export const E2E_DB_RELATIVE = "file:./data/e2e-prod.db";
 
+/**
+ * What readies the main server's database, run from the repository root with
+ * `productionServerEnv`: empty it, seed it with the user the suite signs in as,
+ * and install each plugin the playground configures. Why each step is needed
+ * is told in `playwright.production.config.ts`, which runs them. Shared with
+ * the visual check, which serves the same seeded build.
+ */
+export const PREPARE_COMMANDS = [
+  "node e2e/scripts/reset-e2e-db.mjs",
+  "pnpm --filter playground exec tsx scripts/seed.ts",
+  "pnpm --filter playground exec nextly plugins install --all",
+];
+
+/** The production build of the playground, into `NEXT_DIST_DIR`. */
+export const BUILD_COMMAND = "pnpm --filter playground exec next build";
+
+/** The production server of that build, on `PORT`. */
+export const START_COMMAND = "pnpm --filter playground exec next start";
+
 /** The environment a production server of the playground is started with. */
 export function productionServerEnv(port: number): Record<string, string> {
   return {

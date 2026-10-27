@@ -76,31 +76,24 @@ async function isKnownDefect(
   );
 }
 
+/** One AA rule axe found broken, and every element it found it on. */
+interface AxeFinding {
+  id: string;
+  impact: string;
+  targets: string[];
+}
+
 /**
- * axe's AA violations, named so a failure says what to fix: on the whole page,
- * or only inside the elements `scope.include` selects, for a check that holds
- * one part of a screen to the standard.
+ * Waits for every running CSS transition to end, so what is measured or
+ * captured next is what a reader sees once the page is still.
+ *
+ * The dark palette is applied by an effect after mount, so an element drawn
+ * before it eases its colours across (Tailwind's `transition-colors`), and a
+ * scan in that window measures a light-mode colour on the dark background: a
+ * contrast failure no reader ever sees. Transitions only: they end, while a
+ * skeleton's pulse repeats for good.
  */
-export async function expectNoAxeViolations(
-  page: Page,
-  scope?: { include: string }
-): Promise<void> {
-  let builder = new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES);
-  if (scope) {
-    // At least one of them drawn: a screen can hold a hidden copy of a part
-    // (a table and its narrow-screen cards), which axe rightly skips.
-    await expect(
-      page.locator(scope.include).filter({ visible: true }).first()
-    ).toBeVisible();
-    builder = builder.include(scope.include);
-  }
-  // Settled before measuring. The dark palette is applied by an effect after
-  // mount, so an element drawn before it eases its colours across (Tailwind's
-  // `transition-colors`), and a scan in that window measures a light-mode
-  // colour on the dark background: a contrast failure no reader ever sees.
-  // Transitions only: they end, while a skeleton's pulse repeats for good.
+export async function settleTransitions(page: Page): Promise<void> {
   await page.evaluate(() =>
     Promise.all(
       document
@@ -109,9 +102,28 @@ export async function expectNoAxeViolations(
         .map(animation => animation.finished.catch(() => undefined))
     )
   );
+}
+
+/**
+ * axe's AA scan of the page, or of the elements `scope.include` selects, with
+ * the known shared-chrome defect set aside: the raw results, for a caller that
+ * judges how much was scanned, and the violations named by rule and element.
+ *
+ * The one scan both the specs and the visual check run, so a page they both
+ * look at is held to the same rules in each.
+ */
+export async function scanAxe(
+  page: Page,
+  scope?: { include: string }
+): Promise<{ results: AxeResults; findings: AxeFinding[] }> {
+  let builder = new AxeBuilder({ page })
+    .withTags(AA_TAGS)
+    .disableRules(HOST_OWNED_RULES);
+  if (scope) builder = builder.include(scope.include);
+  // Settled before measuring, so no colour is read mid-transition.
+  await settleTransitions(page);
   const results = await builder.analyze();
-  expectScannedSomething(results, scope);
-  const findings = [];
+  const findings: AxeFinding[] = [];
   for (const v of results.violations) {
     const targets: string[] = [];
     for (const node of v.nodes) {
@@ -122,6 +134,27 @@ export async function expectNoAxeViolations(
       findings.push({ id: v.id, impact: v.impact ?? "unknown", targets });
     }
   }
+  return { results, findings };
+}
+
+/**
+ * axe's AA violations, named so a failure says what to fix: on the whole page,
+ * or only inside the elements `scope.include` selects, for a check that holds
+ * one part of a screen to the standard.
+ */
+export async function expectNoAxeViolations(
+  page: Page,
+  scope?: { include: string }
+): Promise<void> {
+  if (scope) {
+    // At least one of them drawn: a screen can hold a hidden copy of a part
+    // (a table and its narrow-screen cards), which axe rightly skips.
+    await expect(
+      page.locator(scope.include).filter({ visible: true }).first()
+    ).toBeVisible();
+  }
+  const { results, findings } = await scanAxe(page, scope);
+  expectScannedSomething(results, scope);
   expect(
     findings,
     `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`

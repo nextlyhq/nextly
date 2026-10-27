@@ -11,6 +11,13 @@ export const ADMIN = "/admin";
 export type Theme = "light" | "dark";
 
 /**
+ * Where the admin keeps the chosen theme in local storage, which it reads
+ * before its first paint. Shared with the visual check, which opens each
+ * screen in both themes the same way.
+ */
+export const THEME_STORAGE_KEY = "nextly-theme";
+
+/**
  * Open an admin page in a known theme.
  *
  * The theme is written to storage before the app boots rather than clicked
@@ -27,7 +34,7 @@ export async function gotoAdmin(
 ): Promise<void> {
   await page.addInitScript(
     ([key, value]) => window.localStorage.setItem(key, value),
-    ["nextly-theme", theme] as const
+    [THEME_STORAGE_KEY, theme] as const
   );
 
   await page.goto(`${ADMIN}${path}`);

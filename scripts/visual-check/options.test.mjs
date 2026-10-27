@@ -1,0 +1,95 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  captureName,
+  capturePlan,
+  parseOptions,
+  prodPort,
+  UsageError,
+} from "./options.mjs";
+
+describe("what the visual check is asked to do", () => {
+  it("reads the routes and each flag", () => {
+    expect(
+      parseOptions([
+        "/admin",
+        "/admin/collections/posts",
+        "--full",
+        "--reuse",
+        "--publish",
+        "posts-list",
+      ])
+    ).toEqual(
+      expect.objectContaining({
+        routes: ["/admin", "/admin/collections/posts"],
+        full: true,
+        reuse: true,
+        publish: "posts-list",
+      })
+    );
+    expect(parseOptions(["/admin"])).toEqual(
+      expect.objectContaining({ full: false, reuse: false, publish: undefined })
+    );
+  });
+
+  it("refuses no route, a route that is not a path, and a topic a branch name cannot hold", () => {
+    expect(() => parseOptions([])).toThrow(UsageError);
+    expect(() => parseOptions(["admin"])).toThrow(UsageError);
+    expect(() => parseOptions(["/admin", "--publish", "../main"])).toThrow(
+      UsageError
+    );
+    expect(() => parseOptions(["/admin", "--publish", "a b"])).toThrow(
+      UsageError
+    );
+    expect(() => parseOptions(["/admin", "--reuse", "--keep"])).toThrow(
+      UsageError
+    );
+  });
+
+  /*
+   * Distinct names are the property: a naming that dropped the query or merged
+   * separators would still produce a tidy name, and two routes would then
+   * write over each other's captures.
+   */
+  it("names a capture after its route, width and scheme, one name per route", () => {
+    expect(captureName("/admin", 390, "light")).toBe("admin-390-light.png");
+    expect(captureName("/admin/collections/posts", 1440, "dark")).toBe(
+      "admin-collections-posts-1440-dark.png"
+    );
+    expect(captureName("/", 1024, "light")).toBe("root-1024-light.png");
+    expect(captureName("/admin/x?tab=fields", 390, "dark")).toBe(
+      "admin-x-tab-fields-390-dark.png"
+    );
+    expect(captureName("/admin/x", 390, "dark")).not.toBe(
+      captureName("/admin/x?tab=fields", 390, "dark")
+    );
+  });
+
+  it("refuses two routes whose captures would share a name", () => {
+    expect(() => parseOptions(["/admin/a-b", "/admin/a/b"])).toThrow(
+      /same capture names/
+    );
+  });
+
+  it("plans six captures per route: three widths, light and dark", () => {
+    const plan = capturePlan(["/admin"]);
+    expect(plan.map(step => step.file)).toEqual([
+      "admin-390-light.png",
+      "admin-390-dark.png",
+      "admin-1024-light.png",
+      "admin-1024-dark.png",
+      "admin-1440-light.png",
+      "admin-1440-dark.png",
+    ]);
+    expect(capturePlan(["/admin", "/admin/media"])).toHaveLength(12);
+  });
+
+  it("serves on the checkout's own production port, from the environment or its slot settings", () => {
+    expect(prodPort({ E2E_PROD_PORT: "3452" }, undefined)).toBe(3452);
+    expect(prodPort({}, { env: { E2E_PROD_PORT: "3212" } })).toBe(3212);
+    expect(
+      prodPort({ E2E_PROD_PORT: "3452" }, { env: { E2E_PROD_PORT: "3212" } })
+    ).toBe(3452);
+    expect(prodPort({}, undefined)).toBe(3101);
+  });
+});
