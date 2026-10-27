@@ -7,8 +7,8 @@ name: Cancel closed pull request runs
 # every workflow at once. Runs of a push to `main`, the merge queue and
 # schedules are never touched: see `scripts/cancel-closed-pull-request-runs.mjs`.
 #
-# The same job then deletes the Actions caches the pull request's runs saved
-# under its merge ref, which nothing reads once it is closed and which would
+# The same job then deletes the Actions caches a closed pull request's runs
+# saved under its merge ref, which nothing reads once it is closed and which would
 # otherwise hold the repository's cache allowance until eviction reaches them,
 # taking `main`'s caches with them: see
 # `scripts/delete-closed-pull-request-caches.mjs`.

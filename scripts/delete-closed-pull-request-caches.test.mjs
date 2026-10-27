@@ -2,11 +2,11 @@
  * Deleting a closed pull request's Actions caches, against a stand-in for the
  * GitHub API that answers only the routes a case gives it.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cachesOf, main, mergeRefOf } from "./delete-closed-pull-request-caches.mjs";
 
@@ -18,9 +18,17 @@ const cache = (id, ref = REF, size = 1024 * 1024) => ({ id, key: `key-${id}`, re
 const listPage = page => `GET repos/${REPO}/actions/caches?ref=${encodeURIComponent(REF)}&per_page=100&page=${page}`;
 const pullRoute = `GET repos/${REPO}/pulls/${NUMBER}`;
 
+/** The temporary directories the event files went in, removed after each test. */
+const made = [];
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 /** The workflow's environment, with an event file naming the closed pull request. */
 function envFor() {
-  const path = join(mkdtempSync(join(tmpdir(), "delete-caches-")), "event.json");
+  const dir = mkdtempSync(join(tmpdir(), "delete-caches-"));
+  made.push(dir);
+  const path = join(dir, "event.json");
   writeFileSync(path, JSON.stringify({ pull_request: { number: NUMBER } }));
   return { GITHUB_EVENT_PATH: path, GITHUB_REPOSITORY: REPO, GH_TOKEN: "t" };
 }
@@ -89,6 +97,21 @@ describe("main", () => {
     expect(code).toBe(1);
     expect(stub.deleted()).toEqual([1, 2]);
     expect(printed).toContainEqual(expect.stringContaining("the list was short"));
+  });
+
+  it("deletes nothing for a pull request reopened while its caches were listed", async () => {
+    let reads = 0;
+    const stub = api({ [listPage(1)]: { total_count: 1, actions_caches: [cache(1)] } });
+    const fetchImpl = async (url, init) => {
+      if (url.endsWith(`repos/${REPO}/pulls/${NUMBER}`)) {
+        reads += 1;
+        return { ok: true, status: 200, json: async () => ({ state: reads === 1 ? "closed" : "open" }) };
+      }
+      return stub.fetchImpl(url, init);
+    };
+    expect((await run({ fetchImpl })).code).toBe(0);
+    expect(reads).toBe(2);
+    expect(stub.deleted()).toEqual([]);
   });
 
   it("deletes nothing for a pull request reopened since it closed", async () => {

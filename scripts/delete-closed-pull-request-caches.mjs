@@ -9,8 +9,8 @@
  * closed, nothing reads them again, yet they count against the repository's
  * cache allowance until least-recently-used eviction reaches them, and
  * eviction does not know which entries are dead: it removes `main`'s pnpm
- * store or Playwright browsers as readily. So they are deleted here, as the
- * pull request closes.
+ * store or Playwright browsers as readily. So they are deleted here, on the
+ * close.
  *
  * Only a cache whose ref is exactly that pull request's merge ref is deleted:
  * never one of `main`, the merge queue, a tag or another pull request.
@@ -52,7 +52,7 @@ async function cachesUnder(repository, ref, context) {
 }
 
 /**
- * The caches that are this pull request's to delete: those whose ref is
+ * The caches of pull request `number` that may be deleted: those whose ref is
  * exactly its merge ref. The listing is already filtered by ref; this holds
  * the deletion to it whatever the listing returns.
  */
@@ -95,6 +95,14 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
       return 0;
     }
     const { caches, short } = await cachesUnder(repository, mergeRefOf(pull.number), context);
+    // Asked again after the listing, which can take a while: a reopening
+    // during it wants these caches back. One during the deletions themselves
+    // loses only a cache, which its next run rebuilds from `main`'s.
+    const again = await githubJson(`repos/${repository}/pulls/${pull.number}`, context);
+    if (again.state === "open") {
+      console.log(`delete-closed-pull-request-caches: #${pull.number} was reopened; nothing deleted`);
+      return 0;
+    }
     const outcomes = await deleteAll(cachesOf(pull.number, caches), repository, context);
     const freed = outcomes.filter(outcome => outcome.ok).reduce((sum, outcome) => sum + outcome.bytes, 0);
     for (const outcome of outcomes) console.log(`delete-closed-pull-request-caches: ${outcome.key}: HTTP ${outcome.status}`);
