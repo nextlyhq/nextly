@@ -909,7 +909,11 @@ export class CollectionBulkService extends BaseService {
     // A body that changes only the status of entries with a lifecycle is a
     // publish or an unpublish alone, judged by the gate its status names in
     // place of update; each row is judged again as it is written.
-    const gate = await writeGateFor(params.data, "collection", () =>
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate this asks and the rows written must read the same
+    // body.
+    const data = { ...params.data };
+    const gate = await writeGateFor(data, "collection", () =>
       this.mutationService.hasLifecycle(params.collectionName)
     );
     const accessDenied = await this.accessService.checkCollectionAccess({
@@ -1018,7 +1022,7 @@ export class CollectionBulkService extends BaseService {
     return this.bulkUpdateEntries({
       collectionName: params.collectionName,
       ids,
-      data: params.data,
+      data,
       user: params.user,
       actor: params.actor,
       overrideAccess: params.overrideAccess,

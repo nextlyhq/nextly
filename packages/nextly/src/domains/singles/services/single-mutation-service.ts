@@ -1132,6 +1132,10 @@ export class SingleMutationService extends BaseService {
     // — keep receiving a real locale or nothing. Mirrors the collection write
     // path exactly, because a Single scheduled in a release must behave the way
     // an entry scheduled in the same release behaves.
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate a write asks and the write itself must read the same
+    // body.
+    data = { ...data };
     const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
     const options: UpdateSingleOptions = sweepAllLocales
       ? { ...rawOptions, locale: undefined }

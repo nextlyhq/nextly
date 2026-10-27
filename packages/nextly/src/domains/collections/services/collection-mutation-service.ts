@@ -8338,6 +8338,10 @@ export class CollectionMutationService extends BaseService {
     // unlocalized write (`locale: undefined`): the main row's `status` moves and
     // is NOT stripped the way a non-default locale's write strips it. The only
     // thing the wildcard adds is the companion sweep at the write itself.
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate a write asks and the write itself must read the same
+    // body.
+    body = { ...body };
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
@@ -12161,38 +12165,17 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           tx.getDrizzle()
         );
+      // Read once, as plain data: a caller's object may compute a key on each
+      // read, and the gate a write asks and the write itself must read the same
+      // body.
+      body = { ...body };
 
-      // No owner predicate: write access is decided for the collection rather
-      // than per row, so the fetch is by id alone and the access service holds
-      // the whole verdict.
-      const fetchWhere = this.whereEq("id", entryId);
-
-      // Fetch existing entry first (needed for owner checks and hooks). Lock the
-      // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
-      // a concurrent rename cannot commit between this read and the update below,
-      // which would otherwise leave the `previousSlug` captured here stale and
-      // the prior URL's cache tag unbusted.
-      const existingEntry = await tx.selectOne<Record<string, unknown>>(
-        tableName,
-        { where: fetchWhere, forUpdate: true }
-      );
-
-      if (!existingEntry) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
-          data: null,
-        };
-      }
-
-      if (options.rowGate === "batch-hoisted") {
-        // Nothing to re-check per row. The batch worker's caller hoists the
-        // collection-level update gate out of the loop, and there is no
-        // row-ownership rule left for a safety net to compare against.
-      } else {
+      // Asked before the row is locked, so a caller the gate refuses holds no
+      // lock on an entry it may not change, however many rows a batch names.
+      // A batch-hoisted row has nothing to re-check: the batch's caller asked
+      // the collection-level update gate once, and no row-ownership rule is
+      // left for a safety net to compare against.
+      if (options.rowGate === "access-service") {
         // A write that changes only the status of an entry with a lifecycle
         // is a publish or an unpublish alone, judged by the gate its status
         // names in place of update, whether or not the status moves.
@@ -12224,6 +12207,32 @@ export class CollectionMutationService extends BaseService {
         if (accessDenied) {
           return accessDenied;
         }
+      }
+
+      // No owner predicate: write access is decided for the collection rather
+      // than per row, so the fetch is by id alone and the access service holds
+      // the whole verdict.
+      const fetchWhere = this.whereEq("id", entryId);
+
+      // Fetch existing entry first (needed for owner checks and hooks). Lock the
+      // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
+      // a concurrent rename cannot commit between this read and the update below,
+      // which would otherwise leave the `previousSlug` captured here stale and
+      // the prior URL's cache tag unbusted.
+      const existingEntry = await tx.selectOne<Record<string, unknown>>(
+        tableName,
+        { where: fetchWhere, forUpdate: true }
+      );
+
+      if (!existingEntry) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: options.identifyMissingEntry
+            ? `Entry not found: ${entryId}`
+            : "Entry not found",
+          data: null,
+        };
       }
 
       let currentData: Record<string, unknown> = { ...body };
