@@ -274,6 +274,21 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
     };
   }
 
+  // A plugin page's address before plugin pages are known: it may yet be one,
+  // so it is held rather than called missing. Before the dynamic routes, as a
+  // registered plugin page is: a page named like a core one (`settings`) must
+  // not draw the core screen while the registry is unknown. Private, as the page would be,
+  // so the session check and the permissions request start during the hold.
+  if (isPluginPageAddress(pathname) && !arePluginPagesKnown()) {
+    return {
+      Component: () => React.createElement(PluginPageHold),
+      params: {},
+      searchParams: parseSearchParams(rawSearch),
+      routeType: "private",
+      section: "plugins",
+    };
+  }
+
   // Dynamic match
   const dynamic = matchDynamicRoute(pathname);
   if (dynamic && !isUndeclaredDocumentView(dynamic.pattern, dynamic.params)) {
@@ -289,19 +304,6 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
-    };
-  }
-
-  // A plugin page's address before plugin pages are known: it may yet be one,
-  // so it is held rather than called missing. Private, as the page would be,
-  // so the session check and the permissions request start during the hold.
-  if (isPluginPageAddress(pathname) && !arePluginPagesKnown()) {
-    return {
-      Component: () => React.createElement(PluginPageHold),
-      params: {},
-      searchParams: parseSearchParams(rawSearch),
-      routeType: "private",
-      section: "plugins",
     };
   }
 

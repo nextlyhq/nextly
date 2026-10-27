@@ -19,6 +19,7 @@ import {
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PluginPageRegistrar } from "@admin/components/shared/plugin-page-registrar";
 import { usePluginPageRegistration } from "@admin/hooks/usePluginPageRegistration";
 import { ADMIN_WORKSPACE_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
 import { resolveRoute } from "@admin/lib/routing";
@@ -88,6 +89,18 @@ describe("a plugin page's address before its registry is known", () => {
     expect(screen.queryByText("Page Not Found")).toBeNull();
   });
 
+  it("holds a plugin page named like a core one, such as settings", () => {
+    const settings = "/admin/plugins/acme/settings";
+
+    expect(resolveRoute(settings, "").params).toEqual({});
+    draw(settings);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading");
+
+    // Once known with no such plugin page, the core screen answers it.
+    setPluginPagesKnown(true);
+    expect(resolveRoute(settings, "").params).toEqual({ slug: "acme" });
+  });
+
   it("answers a core address that matches nothing as not found at once", () => {
     brandingStatus.isPending = true;
 
@@ -111,21 +124,17 @@ describe("a plugin page's address before its registry is known", () => {
 });
 
 describe("once the registry is known", () => {
-  it("is known only after admin-meta answered, and the router is told", () => {
+  it("is known once admin-meta answered, even with no plugin list", () => {
     const dispatch = vi.spyOn(window, "dispatchEvent");
     const { rerender } = renderHook(
-      ({ plugins }: { plugins: PluginMetadata[] | undefined }) =>
-        usePluginPageRegistration(plugins),
-      {
-        initialProps: {
-          plugins: undefined as PluginMetadata[] | undefined,
-        },
-      }
+      ({ answered }: { answered: boolean }) =>
+        usePluginPageRegistration(undefined, answered),
+      { initialProps: { answered: false } }
     );
     expect(arePluginPagesKnown()).toBe(false);
 
-    // An answer listing no plugins at all is still an answer.
-    rerender({ plugins: [] });
+    // An installation with no plugins answers without a list at all.
+    rerender({ answered: true });
 
     expect(arePluginPagesKnown()).toBe(true);
     expect(
@@ -133,8 +142,37 @@ describe("once the registry is known", () => {
     ).toBe(true);
   });
 
+  it("is unknown again when the answer is cleared, as on signing out", () => {
+    const { rerender } = renderHook(
+      ({ answered }: { answered: boolean }) =>
+        usePluginPageRegistration(answered ? [acme] : undefined, answered),
+      { initialProps: { answered: true } }
+    );
+    expect(arePluginPagesKnown()).toBe(true);
+
+    rerender({ answered: false });
+
+    expect(arePluginPagesKnown()).toBe(false);
+  });
+
+  it("takes the answer from admin-meta's status, not from a plugin list", () => {
+    brandingStatus.isPending = true;
+    const { rerender } = render(<PluginPageRegistrar />);
+    expect(arePluginPagesKnown()).toBe(false);
+
+    // Settled with no plugin list, as an installation without plugins answers.
+    brandingStatus.isPending = false;
+    rerender(<PluginPageRegistrar />);
+    expect(arePluginPagesKnown()).toBe(true);
+
+    // A first answer that never came is not an answer.
+    brandingStatus.isUnavailable = true;
+    rerender(<PluginPageRegistrar />);
+    expect(arePluginPagesKnown()).toBe(false);
+  });
+
   it("draws the registered page's address as that page, not a hold", () => {
-    renderHook(() => usePluginPageRegistration([acme]));
+    renderHook(() => usePluginPageRegistration([acme], true));
 
     expect(resolveRoute(ADDRESS, "").pluginComponentPath).toBe(
       "@acme/x/admin#Reports"
@@ -142,7 +180,7 @@ describe("once the registry is known", () => {
   });
 
   it("answers an address no plugin registered as not found", () => {
-    renderHook(() => usePluginPageRegistration([]));
+    renderHook(() => usePluginPageRegistration([], true));
 
     draw(ADDRESS);
 
@@ -152,7 +190,7 @@ describe("once the registry is known", () => {
   it("answers a page withdrawn by a later answer as not found", () => {
     const { rerender } = renderHook(
       ({ plugins }: { plugins: PluginMetadata[] }) =>
-        usePluginPageRegistration(plugins),
+        usePluginPageRegistration(plugins, true),
       { initialProps: { plugins: [acme] } }
     );
     act(() => rerender({ plugins: [] }));

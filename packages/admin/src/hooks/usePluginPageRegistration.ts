@@ -112,7 +112,13 @@ function registerPluginDocumentViews(plugin: PluginMetadata): string[] {
  * no collections to trigger their module import.
  */
 export function usePluginPageRegistration(
-  plugins: PluginMetadata[] | undefined
+  plugins: PluginMetadata[] | undefined,
+  /**
+   * Whether admin-meta's answer is in. Not the same as `plugins` being
+   * present: an installation with no plugins answers without a list, and a
+   * cleared answer (signing out) takes the list away.
+   */
+  answered: boolean
 ): void {
   // Signature of the plugin routes registered by the last run, so the effect
   // can tell an actual route change from an unrelated admin-meta change. Seeded
@@ -154,18 +160,20 @@ export function usePluginPageRegistration(
     const signature = routeSignature(registeredRoutes);
     const previousSignature = registeredRoutesRef.current;
     registeredRoutesRef.current = signature;
-    // Once admin-meta has answered, the registry is known, whatever it listed:
-    // a plugin-prefixed address held while it was unknown is now either a page
-    // or genuinely not found. The first answer re-resolves even when it added
-    // no route, or a held address would wait for a change that never comes.
+    // The registry is known while admin-meta's answer is in, whatever it
+    // listed: a plugin-prefixed address held while it was unknown is then
+    // either a page or genuinely not found. Becoming known re-resolves even when
+    // no route was added, or a held address would wait for a change that never
+    // comes. A cleared answer makes it unknown again, so the next deep link is
+    // held rather than called missing.
     const wasKnown = arePluginPagesKnown();
-    if (plugins !== undefined) setPluginPagesKnown(true);
-    const becameKnown = !wasKnown && arePluginPagesKnown();
+    setPluginPagesKnown(answered);
+    const becameKnown = !wasKnown && answered;
     if (
       (signature !== previousSignature || becameKnown) &&
       typeof window !== "undefined"
     ) {
       window.dispatchEvent(new Event("locationchange"));
     }
-  }, [plugins]);
+  }, [plugins, answered]);
 }
