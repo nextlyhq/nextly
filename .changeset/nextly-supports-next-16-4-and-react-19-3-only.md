@@ -29,6 +29,11 @@
 "nextly": patch
 ---
 
-Nextly now supports only Next.js 16.4.1 or later within 16.x, and React and React DOM 19.3.0 or later within 19.x. Every package that names them accepts exactly `next ^16.4.1` and `react`/`react-dom ^19.3.0`; the Next.js 15 and React 18 alternatives are gone. Apps still on them should upgrade before updating Nextly: `npx @next/codemod@latest upgrade 16.4.2` for Next.js, then `react@^19.3.0 react-dom@^19.3.0`.
+**Next.js 15 and React 18 are no longer supported.** Nextly now supports only Next.js 16.4.1 or later within 16.x, and React and React DOM 19.3.0 or later within 19.x, and every package that names them accepts exactly `next ^16.4.1` and `react`/`react-dom ^19.3.0`.
+
+To upgrade an app before updating Nextly:
+
+- Next.js: `npx @next/codemod@latest upgrade 16.4.2`
+- React: `npm install react@^19.3.0 react-dom@^19.3.0` (or your package manager's equivalent)
 
 `create-nextly-app` now writes `next`, `eslint-config-next`, `react` and `react-dom` at the reviewed minor (`~16.4.2`, `~19.3.1`) rather than npm's latest release, and stops before changing an existing app whose installed Next.js, React or React DOM is outside these ranges, naming the installed version and what to change.
