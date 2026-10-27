@@ -17,7 +17,11 @@
  */
 
 import type { RelativeSpan, WidgetQuery } from "../query";
-import { MAX_WIDGET_ROWS } from "../query-limits";
+import {
+  LIST_DENSITIES,
+  type ListDensity,
+  MAX_WIDGET_ROWS,
+} from "../query-limits";
 
 /**
  * Carries a setting's value type without a runtime property.
@@ -198,7 +202,7 @@ export const settings = {
   groupBy: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "groupBy", On>("groupBy", options),
   /**
-   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 25), 5 by
+   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 10), 5 by
    * default. Read from that one limit, so the editor never offers rows the card would not draw.
    */
   items: ({ default: start = 5 }: { default?: number } = {}) =>
@@ -226,6 +230,17 @@ export const settings = {
       default: start,
       options: choices(CHART_STYLES),
       ...quickFlag(quick),
+    }),
+  /**
+   * Density: a select of default or compact rows, for a list card; default
+   * unless chosen. A compact card holds more rows at the same size.
+   *
+   * @experimental
+   */
+  density: ({ default: start = "default" }: { default?: ListDensity } = {}) =>
+    declare<ListDensity, "select">("select", {
+      default: start,
+      options: choices(LIST_DENSITIES),
     }),
   /** Only mine: a checkbox, off by default. */
   onlyMine: ({

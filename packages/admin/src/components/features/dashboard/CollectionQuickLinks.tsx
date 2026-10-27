@@ -7,7 +7,11 @@ import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
 import type React from "react";
 import { useMemo } from "react";
 
-import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
+import {
+  ListFooter,
+  listFooter,
+} from "@admin/components/features/widgets/frame/list-card";
+import { listViewHref } from "@admin/components/features/widgets/frame/list-view-href";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -341,7 +345,9 @@ function useContentTiles(slot: WidgetSlot | undefined) {
     groups,
     singles,
     // The one row more the card asked for is what says more exist than it draws.
-    moreExist: (rows?.length ?? 0) > TILES_DRAWN,
+    // The list's one footer, from the extra tile the card asked for: a floor, since the content
+    // source counts no total.
+    footer: listFooter(rows?.length ?? 0, TILES_DRAWN, undefined),
     collectionsByName,
     singlesBySlug,
     collectionsLoading,
@@ -446,7 +452,9 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
           ))}
         </ContentGroup>
       )}
-      {content.moreExist && <MoreExist query={query} />}
+      {content.footer !== undefined && (
+        <ListFooter footer={content.footer} href={listViewHref(query)} />
+      )}
     </div>
   );
 };

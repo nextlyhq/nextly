@@ -181,10 +181,10 @@ describe("the Collections card's tiles", () => {
       })),
     });
     expect(screen.getAllByRole("link")).toHaveLength(7);
-    expect(screen.queryByText(/more exist/i)).toBeNull();
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
   });
 
-  it("says more exist past the most it draws, from the one row more", () => {
+  it("says there are more past the most it draws, from the one row more", () => {
     const names = Array.from({ length: 50 }, (_, i) => `c${i}`);
     given({
       list: names.map(name => ({ name, label: name })),
@@ -195,8 +195,10 @@ describe("the Collections card's tiles", () => {
         count: 1,
       })),
     });
+    // The content source has no list view to open, so the footer is plain text, and the extra
+    // row says only that at least one more exists.
     expect(screen.getAllByRole("link")).toHaveLength(49);
-    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+    expect(screen.getByTestId("list-card-footer")).toHaveTextContent("1+ more");
   });
 
   it("draws a counted collection the list lacks, after the listed ones", () => {
@@ -228,8 +230,10 @@ describe("the Collections card's tiles", () => {
         count: 1,
       })),
     });
+    // The content source has no list view to open, so the footer is plain text, and the extra
+    // row says only that at least one more exists.
     expect(screen.getAllByRole("link")).toHaveLength(49);
-    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+    expect(screen.getByTestId("list-card-footer")).toHaveTextContent("1+ more");
   });
 
   it("draws each Single after the collections, linking to it, a Single sharing a collection's slug included", () => {

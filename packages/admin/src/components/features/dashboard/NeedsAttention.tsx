@@ -8,6 +8,7 @@ import { Link } from "@admin/components/ui/link";
 
 import { CountValue, countLabel } from "../widgets/archetypes/count-value";
 import { FrameState } from "../widgets/frame/card-state";
+import { EntityRow } from "../widgets/frame/entity-row";
 import { CardFigure } from "../widgets/frame/figure";
 import { useCardTier } from "../widgets/frame/tier";
 
@@ -130,41 +131,42 @@ function SmallParts({ kind }: { kind: AttentionKindRow }) {
   );
 }
 
-/** A kind's name and count, linking to its one list when it has one. */
+/**
+ * A kind's name and count as one row of the dashboard's list layout, leading to its one list
+ * when it has one.
+ */
 function KindLink({ kind, tier }: { kind: AttentionKindRow; tier?: "small" }) {
-  const className =
-    "flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm text-muted-foreground";
   if (kind.unchecked) {
     // Nothing found, but some lists went unread: no number to show, and no
     // list holds what was not read. Said in words, and in full aloud.
     return (
-      <div
-        className={className}
-        data-testid={`needs-attention-${kind.kind}-unchecked`}
-      >
-        <span className="truncate">{kind.label}</span>
-        <span aria-hidden="true">Not all checked</span>
-        <span className="sr-only">Not all lists were checked</span>
+      <div data-testid={`needs-attention-${kind.kind}-unchecked`}>
+        <EntityRow
+          density="default"
+          title={kind.label}
+          trailing={
+            <>
+              <span aria-hidden="true">Not all checked</span>
+              <span className="sr-only">Not all lists were checked</span>
+            </>
+          }
+        />
       </div>
     );
   }
-  const body = (
-    <>
-      <span className="truncate">{kind.label}</span>
-      <span className="tabular-nums text-foreground">
-        <CountValue total={kind.count} atLeast={kind.atLeast} tier={tier} />
-      </span>
-    </>
-  );
-  if (kind.href === undefined) return <div className={className}>{body}</div>;
   return (
-    <Link
+    <EntityRow
+      density="default"
+      title={kind.label}
+      // Said as a sentence, so the count is not run into the label: "Overdue releases: 3".
+      spoken={`${kind.label}: ${countLabel(kind.count, kind.atLeast)}`}
       href={kind.href}
-      className={`${className} hover-subtle-row hover:text-foreground`}
-      aria-label={`${kind.label}: ${countLabel(kind.count, kind.atLeast)}`}
-    >
-      {body}
-    </Link>
+      trailing={
+        <span className="tabular-nums text-foreground">
+          <CountValue total={kind.count} atLeast={kind.atLeast} tier={tier} />
+        </span>
+      }
+    />
   );
 }
 
@@ -184,19 +186,21 @@ function KindRow({
     <li data-testid={`needs-attention-${kind.kind}`}>
       <KindLink kind={kind} />
       {showParts && (
-        <ul className="ml-3 grid gap-0.5 border-l border-border pl-2">
+        <ul className="ml-3 border-l border-border pl-2">
           {kind.parts.map(part => (
             <li key={part.key}>
-              <Link
+              {/* A part is a row too, set compact under the kind it belongs to. */}
+              <EntityRow
+                density="compact"
+                title={part.label}
+                spoken={`${part.label}: ${countLabel(part.count, part.atLeast)}`}
                 href={part.href}
-                className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-xs text-muted-foreground hover-subtle-row hover:text-foreground"
-                aria-label={`${part.label}: ${countLabel(part.count, part.atLeast)}`}
-              >
-                <span className="truncate">{part.label}</span>
-                <span className="tabular-nums">
-                  <CountValue total={part.count} atLeast={part.atLeast} />
-                </span>
-              </Link>
+                trailing={
+                  <span className="tabular-nums">
+                    <CountValue total={part.count} atLeast={part.atLeast} />
+                  </span>
+                }
+              />
             </li>
           ))}
         </ul>

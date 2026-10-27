@@ -46,7 +46,7 @@ describe("the query core runs for a card", () => {
         collection: "posts",
         sort: "title",
         range: "7d",
-        items: 12,
+        items: 8,
       })
     ).toEqual({
       source: "collection:posts",
@@ -54,7 +54,7 @@ describe("the query core runs for a card", () => {
       select: ["title"],
       sort: "title",
       where: { createdAt: { after: "7d" } },
-      limit: 12,
+      limit: 8,
     });
   });
 
@@ -69,7 +69,7 @@ describe("the query core runs for a card", () => {
   ])("changes with %s", (_label, changed, expected) => {
     // One setting changed against the same baseline: the query changes in
     // exactly the part that setting writes, and nowhere else.
-    const base = { collection: "posts", sort: "title", range: "7d", items: 12 };
+    const base = { collection: "posts", sort: "title", range: "7d", items: 8 };
     const before = buildCardQuery(recentEntries, base);
     const after = buildCardQuery(recentEntries, { ...base, ...changed });
     expect(after).toEqual({ ...before, ...expected });

@@ -6,14 +6,12 @@
  *
  * Drawn from the card's own slot, which the dashboard batch fills from
  * `system:recent-edits`. A custom card rather than the generic list, because a
- * row here is a link and five facts, where the list draws a label and one line
- * of detail and links nothing.
+ * row here is a link and four facts read from the answer's own row shape.
  *
- * By the card's own width: small lists the titles alone; medium and large add
- * a line under each with its collection, who saved it, when, and its status.
- * It draws at most the "Number of items" its reader chose, and says more exist
- * when the answer holds the one row more the batch asked for, as core's other
- * lists do.
+ * Drawn by the one list card: each row's collection, who saved it and when on
+ * its meta line, its status at its end, and a table at the large tier. It draws
+ * the rows its body holds, at most the "Number of items" its reader chose, and
+ * one footer when the answer holds more.
  *
  * @module components/features/dashboard/RecentlyEdited
  */
@@ -21,59 +19,73 @@
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
-import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
+import { answerTotal } from "@admin/components/features/widgets/archetypes/tiered-rows";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
+import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
 import {
-  LIST_CLASS,
-  LIST_DETAIL_CLASS,
-  LIST_LABEL_CLASS,
-  LIST_ROW_CLASS,
-} from "@admin/components/features/widgets/frame/geometry";
+  ListCard,
+  type ListModel,
+} from "@admin/components/features/widgets/frame/list-card";
 import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
-import { Link } from "@admin/components/ui/link";
+import { listViewHref } from "@admin/components/features/widgets/frame/list-view-href";
+import {
+  LeadingChip,
+  StatusPill,
+} from "@admin/components/features/widgets/frame/row-parts";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
-import { cn } from "@admin/lib/utils";
 
 import {
   noEditsText,
   recentEditRows,
+  statusTone,
   type RecentEditRow,
 } from "./recently-edited-model";
 
 /**
- * One document's row. The title is the link; an untitled document is listed
- * as "Untitled", muted so it reads as a stand-in rather than a document named
- * that.
+ * The card's rows as a list: each titled by its document and leading to it, its collection's
+ * initial before it, its collection, who saved it and when on the meta line, and its status as
+ * a pill at the row's end.
+ *
+ * The relative time is the line's; the absolute instant, in the admin's time zone, is the
+ * element's title and its `dateTime`, so the exact moment is a hover away and machine-readable
+ * either way.
  */
-const EditRow: React.FC<{
-  edit: RecentEditRow;
-  detailed: boolean;
-  now: number;
-}> = ({ edit, detailed, now }) => {
-  // What leads the detail line, before when it was saved: whichever of the
-  // collection and the saver the row has.
-  const lead = [edit.collection, edit.savedBy].filter(Boolean).join(" · ");
-  return (
-    <li data-testid="recent-edit" className={LIST_ROW_CLASS}>
-      <Link
-        href={edit.href}
-        className={cn(
-          LIST_LABEL_CLASS,
-          "font-medium hover:underline",
-          edit.untitled ? "text-muted-foreground" : "text-foreground"
-        )}
-      >
-        {edit.title}
-      </Link>
-      {detailed && (
-        <span className={cn(LIST_DETAIL_CLASS, "text-muted-foreground")}>
-          {lead !== "" && `${lead} · `}
-          {/*
-          The relative time is the line's; the absolute instant, in the
-          admin's time zone, is the element's title and its `dateTime`, so the
-          exact moment is a hover away and machine-readable either way.
-        */}
+function recentEditsModel(
+  now: number,
+  labelOf: (slug: string) => string
+): ListModel<RecentEditRow> {
+  return {
+    titleLabel: "Document",
+    titleOf: edit => edit.title,
+    hrefOf: edit => edit.href,
+    // The initial of the collection's label, or "S" for a Single, which belongs to none.
+    leadingOf: edit => (
+      <LeadingChip>
+        {edit.collection === undefined
+          ? "S"
+          : labelOf(edit.collection).charAt(0).toUpperCase()}
+      </LeadingChip>
+    ),
+    fields: [
+      {
+        key: "collection",
+        label: "Collection",
+        role: "meta",
+        present: edit =>
+          edit.collection === undefined ? undefined : labelOf(edit.collection),
+      },
+      {
+        key: "savedBy",
+        label: "Saved by",
+        role: "meta",
+        present: edit => edit.savedBy,
+      },
+      {
+        key: "savedAt",
+        label: "Saved",
+        role: "meta",
+        present: edit => (
           <time
             dateTime={edit.savedAt}
             title={formatDateWithAdminTimezone(edit.savedAt, {
@@ -87,15 +99,26 @@ const EditRow: React.FC<{
           >
             {formatRelativeTime(edit.savedAt, now)}
           </time>
-          {edit.status !== undefined && ` · ${edit.status}`}
-        </span>
-      )}
-    </li>
-  );
-};
+        ),
+      },
+      {
+        key: "status",
+        label: "Status",
+        role: "trailing",
+        present: edit =>
+          edit.status === undefined ? undefined : (
+            <StatusPill tone={statusTone(edit.status)}>
+              {edit.status}
+            </StatusPill>
+          ),
+      },
+    ],
+  };
+}
 
 export const RecentlyEdited: React.FC<WidgetComponentProps> = props => {
-  const { tier, drawn, now, read } = useListCard(props);
+  const { tier, drawn, density, now, read } = useListCard(props);
+  const labelOf = useCollectionLabel();
   const { query } = props;
   if ("node" in read) return read.node;
   // A row this build cannot read is left out rather than drawn from guesses.
@@ -114,19 +137,15 @@ export const RecentlyEdited: React.FC<WidgetComponentProps> = props => {
     );
   }
   return (
-    <div className="space-y-2">
-      <ul data-testid="recently-edited" className={LIST_CLASS}>
-        {edits.slice(0, drawn).map(edit => (
-          <EditRow
-            key={edit.key}
-            edit={edit}
-            detailed={tier !== "small"}
-            now={now}
-          />
-        ))}
-      </ul>
-      {read.list.items.length > drawn && <MoreExist query={query} />}
-    </div>
+    <ListCard
+      model={recentEditsModel(now, labelOf)}
+      rows={edits}
+      drawn={drawn}
+      total={answerTotal(read.list)}
+      viewAllHref={listViewHref(query)}
+      tier={tier}
+      density={density}
+    />
   );
 };
 

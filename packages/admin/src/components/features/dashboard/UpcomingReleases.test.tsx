@@ -2,7 +2,8 @@
  * The dashboard's Upcoming releases card, drawn from its `system:releases`
  * answer: the line naming releases that need attention above the rows at every
  * size, each part linking to the Releases list filtered to its reason; the rows
- * as core's lists draw them; and the frame's own states.
+ * as core's lists draw them, each leading to its release; and the frame's own
+ * states.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
@@ -28,6 +29,7 @@ const FIELDS = [
 
 const release = (n: number) => ({
   kind: "release",
+  id: `r${n}`,
   title: `Launch ${n}`,
   scheduledAt: "2099-01-01T00:00:00.000Z",
 });
@@ -93,21 +95,35 @@ describe("the releases that need attention", () => {
 });
 
 describe("the upcoming rows", () => {
-  it("say more exist from the release rows alone, never the attention rows", () => {
-    // Asked 5 at medium, drawn 5 with one more held back: more exist. The two
-    // attention rows do not count toward either.
+  it("say there are more from the release rows alone, never the attention rows", () => {
+    // Asked 5 at medium, drawn 5 with none held back: nothing more. The two
+    // attention rows do not count toward the rows or the footer.
     draw(
       {
         slot: answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(release)]),
       },
       "medium"
     );
-    expect(screen.queryByText(/more exist/i)).toBeNull();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
   });
 
-  it("say more exist when the release rows hold one more than the card draws", () => {
+  it("say there are more when the release rows hold one more than the card draws", () => {
+    // The footer leads to Releases. The source counts no total, so the extra row says at least
+    // six exist.
     draw({ slot: answer([...[1, 2, 3, 4, 5, 6].map(release)]) }, "medium");
-    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveTextContent("View all (6+)");
+    expect(footer).toHaveAttribute("href", "/admin/releases");
+  });
+
+  it("lead each release row to its release", () => {
+    draw({ slot: answer([release(1), release(2)]) }, "medium");
+    expect(screen.getByText("Launch 2").closest("a")).toHaveAttribute(
+      "href",
+      "/admin/releases/r2"
+    );
   });
 
   it("draws the standard empty state when nothing is scheduled or waiting", () => {

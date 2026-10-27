@@ -13,6 +13,7 @@
 
 import type { WidgetResult } from "nextly/widget-result";
 
+import type { StatusTone } from "@admin/components/features/widgets/frame/row-parts";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { describeActivityActor } from "@admin/lib/dashboard";
 
@@ -57,6 +58,16 @@ const STATUS_LABELS: Record<string, string> = {
 
 /** A held working draft on a published document, which the source flags apart from its status. */
 export const CHANGES_NOT_PUBLISHED = "Changes not published";
+
+/**
+ * What a row's status label means to the reader, as its pill's tone: a published document is
+ * done, one holding changes not yet published is waiting on someone, and any other status
+ * (a draft, or a lifecycle added later) asks nothing of them.
+ */
+export function statusTone(label: string): StatusTone {
+  if (label === CHANGES_NOT_PUBLISHED) return "warn";
+  return label === STATUS_LABELS.published ? "good" : "neutral";
+}
 
 /** `value` when it is a non-empty string, so a number, null or "" reads as absent. */
 function text(value: unknown): string | undefined {

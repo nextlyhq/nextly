@@ -1,16 +1,18 @@
 /**
  * What a Recent entries card draws from its rows: the field naming each row, where each row
- * links, and the line of detail under it (its status and when it was updated).
+ * links, and the fields beside it (when it was updated, and its status).
  *
  * Kept apart from the component so the reading is tested without rendering.
  */
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { formatRelativeTime } from "@admin/lib/dashboard";
+import { fieldLabel } from "@admin/lib/field-label";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
 import { asPresentedText } from "../widgets/archetypes/cell-text";
-import { collectionSlugOf } from "../widgets/archetypes/more-exist";
+import type { ListModel } from "../widgets/frame/list-card";
+import { collectionSlugOf } from "../widgets/frame/list-view-href";
 
 /** The query a Recent entries card asked, as far as its rows are read by it. */
 export interface RecentEntriesQuery {
@@ -33,7 +35,7 @@ export function rowLabelField(
  * Where a row links: its entry's edit page in the collection the card reads. `undefined` for a
  * row with no id, or a card not reading one collection.
  */
-export function entryHref(
+function entryHref(
   query: RecentEntriesQuery | undefined,
   item: Record<string, unknown>
 ): string | undefined {
@@ -45,24 +47,42 @@ export function entryHref(
 }
 
 /**
- * A row's line of detail: its status, as the column labels it, and when it was updated, read
- * against `now`. Either is left out where the row has none; nothing at all for neither.
+ * A Recent entries card's rows as a list: each titled by its title field and leading to its
+ * entry, with when it was updated (read against `now`) on the meta line and its status, as the
+ * column labels it, at the row's end. A row without one of them leaves that place empty.
  */
-export function entryDetail(
-  item: Record<string, unknown>,
+export function recentEntriesModel(
+  query: RecentEntriesQuery | undefined,
+  label: string,
   columns: readonly WidgetResultField[],
   now: number
-): string | undefined {
-  const status = asPresentedText(
-    item.status,
-    columns.find(column => column.name === "status")
-  );
-  const updated =
-    typeof item.updatedAt === "string"
-      ? formatRelativeTime(item.updatedAt, now)
-      : undefined;
-  const parts = [status, updated].filter(
-    (part): part is string => part !== undefined && part !== ""
-  );
-  return parts.length === 0 ? undefined : parts.join(" · ");
+): ListModel<Record<string, unknown>> {
+  const column = (name: string) => columns.find(each => each.name === name);
+  return {
+    titleLabel: fieldLabel({ name: label, label: column(label)?.label }),
+    titleOf: item => asPresentedText(item[label], column(label)) ?? "—",
+    hrefOf: item => entryHref(query, item),
+    fields: [
+      {
+        key: "updatedAt",
+        label: column("updatedAt")?.label ?? "Updated",
+        role: "meta",
+        present: item =>
+          typeof item.updatedAt === "string"
+            ? formatRelativeTime(item.updatedAt, now)
+            : undefined,
+      },
+      ...(column("status") === undefined
+        ? []
+        : [
+            {
+              key: "status",
+              label: column("status")?.label ?? "Status",
+              role: "trailing" as const,
+              present: (item: Record<string, unknown>) =>
+                asPresentedText(item.status, column("status")),
+            },
+          ]),
+    ],
+  };
 }

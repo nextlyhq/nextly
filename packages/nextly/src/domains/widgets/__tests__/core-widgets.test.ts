@@ -269,10 +269,12 @@ describe("the default dashboard", () => {
   const AGREED = [
     ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
     ["core/quick-create", [4, 3], [4, 2], [12, 4]],
-    ["core/recently-edited", [6, 4], [4, 3], [12, 6]],
-    ["core/recent-activity", [6, 4], [4, 3], [12, 6]],
+    // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
+    // default, but four beside Team, whose row it shares.
+    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
-    ["core/upcoming-releases", [4, 4], [4, 3], [8, 6]],
+    ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
     ["core/team", [4, 4], [3, 2], [6, 4]],
   ] as const;
 

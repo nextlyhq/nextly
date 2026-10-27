@@ -527,7 +527,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/recent",
         title: "Recent posts",
         archetype: "list",
-        size: { default: { w: 4, h: 3 } },
+        size: { default: { w: 4, h: 5 } },
         query: {
           source: "collection:posts",
           op: "list",
@@ -546,6 +546,8 @@ describe("WidgetGrid — collection and gating", () => {
               { title: "First post", slug: "first-post" },
               { title: "Second post", slug: "second-post" },
             ],
+            // The selected fields, described as the server answers a query that selects them.
+            fields: [{ name: "title" }, { name: "slug" }],
           },
         },
       ],
@@ -554,10 +556,12 @@ describe("WidgetGrid — collection and gating", () => {
     renderGrid();
 
     await waitFor(() =>
-      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2)
+      expect(screen.getAllByTestId("entity-row")).toHaveLength(2)
     );
     expect(screen.getByText("First post")).toBeInTheDocument();
-    expect(screen.getByText("second-post")).toBeInTheDocument();
+    expect(screen.getAllByTestId("entity-row-meta")[1]).toHaveTextContent(
+      "second-post"
+    );
     // And the select reached the server as declared, so the rows are drawn from
     // fields the query actually asked for.
     expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
@@ -566,12 +570,56 @@ describe("WidgetGrid — collection and gating", () => {
           source: "collection:posts",
           op: "list",
           select: ["title", "slug"],
-          // The five rows the card draws, and one more: the extra row is how a list learns that
-          // more exist, since its answer carries no total.
+          // The five rows its five-row-tall body holds, and one more: the extra row is how a list learns that
+          // more exist from a source that does not count its rows.
           limit: 6,
         },
       ],
     });
+  });
+
+  it("counts a list's View all by the total the server sent, through the batch", async () => {
+    // The server answers a collection list with the read's own count. 🔴 A batch parser that
+    // rebuilt the list from its rows and fields alone would drop it, and the footer would fall
+    // back to the floor the extra row gives, "View all (6+)", for a list of 42.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        size: { default: { w: 4, h: 5 } },
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: Array.from({ length: 6 }, (_, i) => ({
+              title: `Post ${i + 1}`,
+            })),
+            fields: [{ name: "title" }],
+            total: 42,
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("entity-row")).toHaveLength(5)
+    );
+    expect(screen.getByTestId("list-card-footer")).toHaveTextContent(
+      "View all (42)"
+    );
   });
 
   it("shows an actions card's empty state when the reader may use none of them", async () => {
@@ -700,9 +748,11 @@ describe("WidgetGrid — collection and gating", () => {
     renderGrid();
 
     await waitFor(() =>
-      expect(screen.getByTestId("widget-table")).toBeInTheDocument()
+      expect(screen.getByTestId("list-card-table")).toBeInTheDocument()
     );
-    expect(screen.getByText("Published at")).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Published at" })
+    ).toBeInTheDocument();
     expect(screen.getByText("First post")).toBeInTheDocument();
     // The label reached the browser through the batch parser, which rebuilds a
     // list result from the fields it names -- so this also proves the

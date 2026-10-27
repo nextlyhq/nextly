@@ -1,13 +1,14 @@
 /**
  * The dashboard's Recent activity card, drawn from its `system:activity`
- * answer: the frame's own states, and the rows its tier and its "Number of
- * items" allow, with "More exist" from the one row more the batch asked for.
+ * answer: the frame's own states, the rows its tier and its "Number of items"
+ * allow, each leading to what it is about, and "N+ more" from the one row more
+ * the batch asked for.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
@@ -52,7 +53,11 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   );
 }
 
-const titles = () => screen.queryAllByText(/^Doc \d+$/).map(n => n.textContent);
+/** The document each drawn row names, in order. */
+const titles = () =>
+  screen
+    .queryAllByTestId("entity-row-title")
+    .map(n => /Doc \d+/.exec(n.textContent ?? "")?.[0]);
 
 describe("the Recent activity card", () => {
   it("holds its rows' place while its first answer is on the way, and is not available with no request", () => {
@@ -102,8 +107,9 @@ describe("the Recent activity card", () => {
     );
   });
 
-  it("draws the rows its reader asked for, and says more exist from the extra row", () => {
-    // Asked for 3: the batch asked 4, and the fourth says more exist.
+  it("draws the rows its reader asked for, and says there are more from the extra row", () => {
+    // Asked for 3: the batch asked 4, and the fourth says at least one more exists. The feed
+    // has no list view to open, so the footer is plain text.
     const { unmount } = draw({
       slot: {
         ok: true,
@@ -112,7 +118,9 @@ describe("the Recent activity card", () => {
       query: { ...LIST_QUERY, limit: 3 },
     });
     expect(titles()).toEqual(["Doc 1", "Doc 2", "Doc 3"]);
-    expect(screen.getByText("More exist")).toBeInTheDocument();
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveTextContent("1+ more");
+    expect(footer.closest("a")).toBeNull();
     unmount();
 
     // The must-differ half: an answer no longer than the rows drawn says nothing more.
@@ -124,7 +132,33 @@ describe("the Recent activity card", () => {
       query: { ...LIST_QUERY, limit: 3 },
     });
     expect(titles()).toEqual(["Doc 1", "Doc 2", "Doc 3"]);
-    expect(screen.queryByText("More exist")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+  });
+
+  it("links each row to the entry or Single it is about, and a deletion to nothing", () => {
+    draw({
+      slot: {
+        ok: true,
+        result: {
+          op: "list",
+          items: [
+            row(1),
+            row(2, { subjectKind: "single", collection: "home" }),
+            // Its subject is gone, so there is nothing to open.
+            row(3, { action: "delete" }),
+          ],
+        },
+      },
+      query: LIST_QUERY,
+    });
+    const hrefs = screen
+      .getAllByTestId("entity-row-title")
+      .map(title => title.closest("a")?.getAttribute("href"));
+    expect(hrefs).toEqual([
+      "/admin/collections/posts/p1",
+      "/admin/singles/home",
+      undefined,
+    ]);
   });
 
   it("draws no more rows than a small card has room for", () => {
@@ -158,13 +192,19 @@ describe("the Recent activity card", () => {
     });
     expect(titles()).toEqual(["Doc 1"]);
     // The count's own words: a bare /12/ also matches a relative time such as "12h ago".
-    expect(screen.getByText(/12 times/)).toBeInTheDocument();
+    // Seen with its dot in the row's title, and heard with a comma in its spoken form.
+    expect(screen.getByTestId("entity-row-title")).toHaveTextContent(
+      "Ana updated Doc 1 · 12 times"
+    );
+    expect(screen.getByText("Ana updated Doc 1, 12 times")).toHaveClass(
+      "sr-only"
+    );
   });
 
   it("heads a Single's row by its label, with no collection beside it", () => {
-    // A collection's entry draws its collection as a chip after the title; a
-    // Single's row has no collection, and drawing its slug there would name one
-    // that does not exist. The collection row is the control.
+    // A collection's entry names its collection on the meta line; a Single's row
+    // has no collection, and drawing its slug there would name one that does not
+    // exist. The collection row is the control.
     draw({
       slot: {
         ok: true,
@@ -182,9 +222,12 @@ describe("the Recent activity card", () => {
       },
       query: LIST_QUERY,
     });
-    const single = screen.getByText("Site Settings").closest("p");
+    const [single, collection] = screen.getAllByTestId("entity-row");
+    expect(single).toHaveTextContent("Site Settings");
     expect(single?.textContent).not.toContain("site-settings");
-    const collection = screen.getByText("Hello").closest("p");
-    expect(collection?.textContent).toContain("posts");
+    expect(collection).toHaveTextContent("Hello");
+    expect(
+      within(collection!).getByTestId("entity-row-meta")
+    ).toHaveTextContent("posts");
   });
 });
