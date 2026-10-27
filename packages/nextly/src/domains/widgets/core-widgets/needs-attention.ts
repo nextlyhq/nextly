@@ -9,8 +9,10 @@ import type { WidgetDefinition } from "../definition";
 import { MAX_WIDGET_LIMIT } from "../query-limits";
 import { ATTENTION_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const needsAttentionWidget = {
-  id: "core/needs-attention",
+  id: CORE_WIDGET_ID.needsAttention,
   title: "Needs attention",
   description:
     "What is waiting: unpublished changes, releases due this week, and overdue releases.",

@@ -8,10 +8,11 @@
 import type { WidgetDefinition } from "../definition";
 import { RELEASES_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY } from "./shared";
 
 export const upcomingReleasesWidget = {
-  id: "core/upcoming-releases",
+  id: CORE_WIDGET_ID.upcomingReleases,
   title: "Upcoming releases",
   description: "Scheduled releases that have not shipped yet, soonest first.",
   // Its own component, so the line naming releases that need attention can sit above the

@@ -7,10 +7,11 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { OVER_TIME_DATE_RANGE, OVER_TIME_CHART_STYLE } from "./shared";
 
 export const overTimeWidget = {
-  id: "core/over-time",
+  id: CORE_WIDGET_ID.overTime,
   title: "Over time",
   description:
     "How many entries a collection gained in each day, week or month of a range.",

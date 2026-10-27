@@ -64,7 +64,6 @@ import { breakdownWidget } from "./breakdown";
 import { contentWidget } from "./content";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
-import type { CORE_WIDGET_IDS } from "./ids";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
@@ -74,33 +73,6 @@ import { recentEntriesWidget } from "./recent-entries";
 import { recentlyEditedWidget } from "./recently-edited";
 import { teamWidget } from "./team";
 import { upcomingReleasesWidget } from "./upcoming-releases";
-
-/**
- * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
- * Recently edited, Recent activity, Content, Upcoming releases and Team, each
- * at its agreed size, after the onboarding cards. The cards that share a row
- * share a height, so the default dashboard tiles: Needs attention and Create
- * at 3 rows, the two activity lists at 4, Upcoming releases and Team at 4.
- *
- * Spaced by ten rather than numbered one-by-one, so a card can be placed
- * between two of these later without renumbering the rest -- the reason
- * `defaultOrder` is a number and not an index.
- */
-const CORE_ORDER = [
-  getStartedWidget,
-  contentWidget,
-  quickCreateWidget,
-  teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
-  upcomingReleasesWidget,
-  recentActivityWidget,
-  countWidget,
-  breakdownWidget,
-  noteWidget,
-  recentEntriesWidget,
-  overTimeWidget,
-] as const;
 
 /**
  * Core's widgets declared with `defineWidget`, as a plugin declares its own.
@@ -135,24 +107,6 @@ const CORE_WIDGET_LITERALS = [
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
-/**
- * Core's widget ids live in `./ids`, which imports nothing, so a reader that
- * needs only the ids (the site dashboard's declaration check, the add panel)
- * does not load every card. They are held equal to `CORE_ORDER`'s own ids, in
- * order, here at compile time: a widget added, renamed, removed or moved
- * above fails this assignment until `./ids` says the same.
- */
-type IdsOf<T extends readonly { readonly id: string }[]> = {
-  readonly [K in keyof T]: T[K]["id"];
-};
-type Same<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
-    ? true
-    : false;
-const coreIdsMatchOrder: Same<
-  IdsOf<typeof CORE_ORDER>,
-  typeof CORE_WIDGET_IDS
-> = true;
-void coreIdsMatchOrder;
-
+// Core's widget ids, and their order, live in `./ids`, which imports nothing:
+// re-exported for the readers that load the widgets anyway.
 export { CORE_WIDGET_IDS } from "./ids";

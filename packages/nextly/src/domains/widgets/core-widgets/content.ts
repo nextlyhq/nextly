@@ -9,8 +9,10 @@ import type { WidgetDefinition } from "../definition";
 import { MAX_WIDGET_LIMIT } from "../query-limits";
 import { CONTENT_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const contentWidget = {
-  id: "core/content",
+  id: CORE_WIDGET_ID.content,
   title: "Content",
   description:
     "Each collection and Single this reader may see, with its entries and drafts.",
