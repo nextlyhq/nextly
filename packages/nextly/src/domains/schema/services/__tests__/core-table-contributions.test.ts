@@ -7,7 +7,7 @@ import { getTableName, isTable, type Table } from "drizzle-orm";
 import { getTableConfig as mysqlConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteConfig } from "drizzle-orm/sqlite-core";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, beforeAll } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
@@ -18,6 +18,13 @@ import {
   coreTableWithLiveContributions,
   EXTENDABLE_CORE_TABLE_FACTORIES,
 } from "../core-table-contributions";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 

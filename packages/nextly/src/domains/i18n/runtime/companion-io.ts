@@ -18,6 +18,7 @@ import type {
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import { readIndexUniqueness } from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
@@ -26,6 +27,7 @@ import {
   COMPANION_UPDATED_AT_COLUMN,
 } from "../companion-columns";
 import type { LocalizedFieldRef } from "../companion-join";
+import { companionIndexFacts } from "../migration/reconcile-companion";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
   I18nTransitionKind,
@@ -780,8 +782,13 @@ async function liveColumnsOf(
  *   apply that moved a value and stopped before the registry recorded it left its column in place.
  * - `liveCompanionColumns`: every companion column, so a rename, a move or a drop an earlier apply
  *   already made is not made again.
+ * - `liveCompanionIndexes` and `liveCompanionNotUnique`: the indexes the companion actually
+ *   carries. Read from the database rather than inferred from the fields, because configuration
+ *   is not proof of a database object: an entity marked translated and unique before the rule was
+ *   enforced carries the flags and no index, and a plan that believed the flags created nothing,
+ *   leaving later writes unconstrained.
  *
- * The companion's columns are read once and serve the last two.
+ * The companion's columns are read once and serve two of these.
  */
 export async function liveCompanionShape(
   adapter: CompanionIntrospectAdapter,
@@ -796,6 +803,8 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
+  liveCompanionIndexes?: readonly string[];
+  liveCompanionNotUnique?: readonly string[];
 }> {
   const { tableName, companionExists } = args;
   const live = companionExists
@@ -814,6 +823,17 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
+    // Only for a companion that exists: there are no indexes on a table that is about to be
+    // created, and the transition plans its creates from that.
+    ...(companionExists
+      ? companionIndexFacts(
+          await readIndexUniqueness(
+            adapter.getDrizzle(),
+            adapter.dialect,
+            `${tableName}_locales`
+          )
+        )
+      : {}),
   };
 }
 

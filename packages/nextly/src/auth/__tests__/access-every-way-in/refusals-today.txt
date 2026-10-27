@@ -321,9 +321,6 @@ service custom-role publish collection malformed-filter at direct  404 NOT_FOUND
 service custom-role publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service custom-role publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service custom-role publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service custom-role publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -387,8 +384,6 @@ service custom-role publish single-pub false at route  403 FORBIDDEN error  | Yo
 service custom-role publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service custom-role publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service custom-role publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service custom-role publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service custom-role publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service custom-role publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service custom-role publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service custom-role publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -559,9 +554,6 @@ service custom-role unpublish collection malformed-filter at direct  404 NOT_FOU
 service custom-role unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service custom-role unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service custom-role unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service custom-role unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -625,8 +617,6 @@ service custom-role unpublish single-pub false at route  403 FORBIDDEN error  | 
 service custom-role unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service custom-role unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service custom-role unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service custom-role unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service custom-role unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service custom-role unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service custom-role unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service custom-role unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
@@ -690,7 +680,7 @@ service custom-role update collection malformed-filter at route  403 FORBIDDEN e
 service custom-role update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service custom-role update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service custom-role update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service custom-role update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service custom-role update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1085,9 +1075,6 @@ service key-full-access publish collection malformed-filter at direct  404 NOT_F
 service key-full-access publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service key-full-access publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-full-access publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-full-access publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -1143,8 +1130,6 @@ service key-full-access publish single-pub false at route  403 FORBIDDEN error  
 service key-full-access publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-full-access publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-full-access publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service key-full-access publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-full-access publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-full-access publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-full-access publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-full-access publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -1295,9 +1280,6 @@ service key-full-access unpublish collection malformed-filter at direct  404 NOT
 service key-full-access unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service key-full-access unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-full-access unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-full-access unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -1353,8 +1335,6 @@ service key-full-access unpublish single-pub false at route  403 FORBIDDEN error
 service key-full-access unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-full-access unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-full-access unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service key-full-access unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-full-access unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-full-access unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-full-access unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-full-access unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
@@ -1412,7 +1392,7 @@ service key-full-access update collection malformed-filter at route  403 FORBIDD
 service key-full-access update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-full-access update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service key-full-access update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-full-access update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-full-access update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1899,9 +1879,6 @@ service key-partial publish collection malformed-filter at direct  404 NOT_FOUND
 service key-partial publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service key-partial publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-partial publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-partial publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-partial publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -1961,8 +1938,6 @@ service key-partial publish single-pub false at route  403 FORBIDDEN error  | Yo
 service key-partial publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-partial publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-partial publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service key-partial publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-partial publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-partial publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-partial publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-partial publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -2131,10 +2106,10 @@ service key-partial unpublish collection none at direct  403 FORBIDDEN thrown  m
 service key-partial unpublish collection none at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c none.
 service key-partial unpublish collection none at route  403 FORBIDDEN error  | You can't unpublish c nones.
 service key-partial unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
-service key-partial unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service key-partial unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
+service key-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service key-partial unpublish collection other-operation at route  403 FORBIDDEN error  | You can't unpublish c other operations.
-service key-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service key-partial unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -2216,8 +2191,8 @@ service key-partial unpublish single-pub malformed-filter at route  403 FORBIDDE
 service key-partial unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
 service key-partial unpublish single-pub none at rest  403 FORBIDDEN error  | You can't unpublish S Pub None.
 service key-partial unpublish single-pub none at route  403 FORBIDDEN error  | You can't unpublish S Pub None.
-service key-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service key-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Other Operation.
+service key-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
 service key-partial unpublish single-pub other-operation at route  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
 service key-partial unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-partial unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
@@ -2291,7 +2266,7 @@ service key-partial update collection malformed-filter at route  403 FORBIDDEN e
 service key-partial update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-partial update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-partial update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service key-partial update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-partial update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-partial update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2773,10 +2748,10 @@ service key-read-only publish collection async-throws at direct  404 NOT_FOUND t
 service key-read-only publish collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection async-throws at route  403 FORBIDDEN error  | You can't publish c async throws.
 service key-read-only publish collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service key-read-only publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
 service key-read-only publish collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
 service key-read-only publish collection async-true at route  403 FORBIDDEN error  | You can't publish c async trues.
-service key-read-only publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service key-read-only publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
 service key-read-only publish collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection false at route  403 FORBIDDEN error  | You can't publish c falses.
@@ -2785,14 +2760,14 @@ service key-read-only publish collection malformed-filter at direct  404 NOT_FOU
 service key-read-only publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service key-read-only publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service key-read-only publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
 service key-read-only publish collection none at rest  403 FORBIDDEN error  missing=same  | You can't edit this c none.
 service key-read-only publish collection none at route  403 FORBIDDEN error  | You can't publish c nones.
-service key-read-only publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
-service key-read-only publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-read-only publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
+service key-read-only publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
 service key-read-only publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-read-only publish collection other-operation at route  403 FORBIDDEN error  | You can't publish c other operations.
-service key-read-only publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-read-only publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
 service key-read-only publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -2801,10 +2776,10 @@ service key-read-only publish collection principal-kind at direct  404 NOT_FOUND
 service key-read-only publish collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection principal-kind at route  403 FORBIDDEN error  | You can't publish c principal kinds.
 service key-read-only publish collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service key-read-only publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
 service key-read-only publish collection publish-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c publish false.
 service key-read-only publish collection publish-false at route  403 FORBIDDEN error  | You can't publish c publish falses.
-service key-read-only publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service key-read-only publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
 service key-read-only publish collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection returns-empty-in at route  403 FORBIDDEN error  | You can't publish c returns empty ins.
@@ -2825,34 +2800,34 @@ service key-read-only publish collection returns-string at direct  404 NOT_FOUND
 service key-read-only publish collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection returns-string at route  403 FORBIDDEN error  | You can't publish c returns strings.
 service key-read-only publish collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service key-read-only publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
 service key-read-only publish collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
 service key-read-only publish collection returns-true at route  403 FORBIDDEN error  | You can't publish c returns trues.
-service key-read-only publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service key-read-only publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
 service key-read-only publish collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection returns-undefined at route  403 FORBIDDEN error  | You can't publish c returns undefineds.
 service key-read-only publish collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service key-read-only publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
 service key-read-only publish collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't edit this c role name.
 service key-read-only publish collection role-name at route  403 FORBIDDEN error  | You can't publish c role names.
-service key-read-only publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
-service key-read-only publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service key-read-only publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
+service key-read-only publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role screen spelling.
 service key-read-only publish collection role-screen-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c role screen spelling.
 service key-read-only publish collection role-screen-spelling at route  403 FORBIDDEN error  | You can't publish c role screen spellings.
-service key-read-only publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service key-read-only publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role screen spelling.
 service key-read-only publish collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection throws at route  403 FORBIDDEN error  | You can't publish c throws.
 service key-read-only publish collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service key-read-only publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
 service key-read-only publish collection true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c true.
 service key-read-only publish collection true at route  403 FORBIDDEN error  | You can't publish c trues.
-service key-read-only publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
-service key-read-only publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service key-read-only publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
+service key-read-only publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
 service key-read-only publish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service key-read-only publish collection user-is-key-maker at route  403 FORBIDDEN error  | You can't publish c user is key makers.
-service key-read-only publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service key-read-only publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
 service key-read-only publish single-pub async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub async-false at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub async-false at route  403 FORBIDDEN error  | You can't publish S Pub Async False.
@@ -2862,7 +2837,7 @@ service key-read-only publish single-pub async-filter at route  403 FORBIDDEN er
 service key-read-only publish single-pub async-throws at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub async-throws at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub async-throws at route  403 FORBIDDEN error  | You can't publish S Pub Async Throws.
-service key-read-only publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async True.
+service key-read-only publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async True.
 service key-read-only publish single-pub async-true at rest  403 FORBIDDEN error  | You can't edit S Pub Async True.
 service key-read-only publish single-pub async-true at route  403 FORBIDDEN error  | You can't publish S Pub Async True.
 service key-read-only publish single-pub false at direct  404 NOT_FOUND thrown  | Not found.
@@ -2871,10 +2846,10 @@ service key-read-only publish single-pub false at route  403 FORBIDDEN error  | 
 service key-read-only publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service key-read-only publish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
+service key-read-only publish single-pub none at direct  403 FORBIDDEN thrown  | You can't publish S Pub None.
 service key-read-only publish single-pub none at rest  403 FORBIDDEN error  | You can't edit S Pub None.
 service key-read-only publish single-pub none at route  403 FORBIDDEN error  | You can't publish S Pub None.
-service key-read-only publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
+service key-read-only publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't publish S Pub Other Operation.
 service key-read-only publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-read-only publish single-pub other-operation at route  403 FORBIDDEN error  | You can't publish S Pub Other Operation.
 service key-read-only publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
@@ -2883,7 +2858,7 @@ service key-read-only publish single-pub permission-spelling at route  403 FORBI
 service key-read-only publish single-pub principal-kind at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub principal-kind at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub principal-kind at route  403 FORBIDDEN error  | You can't publish S Pub Principal Kind.
-service key-read-only publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
+service key-read-only publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Publish False.
 service key-read-only publish single-pub publish-false at rest  403 FORBIDDEN error  | You can't edit S Pub Publish False.
 service key-read-only publish single-pub publish-false at route  403 FORBIDDEN error  | You can't publish S Pub Publish False.
 service key-read-only publish single-pub returns-empty-in at direct  404 NOT_FOUND thrown  | Not found.
@@ -2901,25 +2876,25 @@ service key-read-only publish single-pub returns-null at route  403 FORBIDDEN er
 service key-read-only publish single-pub returns-string at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub returns-string at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub returns-string at route  403 FORBIDDEN error  | You can't publish S Pub Returns String.
-service key-read-only publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns True.
+service key-read-only publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns True.
 service key-read-only publish single-pub returns-true at rest  403 FORBIDDEN error  | You can't edit S Pub Returns True.
 service key-read-only publish single-pub returns-true at route  403 FORBIDDEN error  | You can't publish S Pub Returns True.
 service key-read-only publish single-pub returns-undefined at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub returns-undefined at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub returns-undefined at route  403 FORBIDDEN error  | You can't publish S Pub Returns Undefined.
-service key-read-only publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Name.
+service key-read-only publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Name.
 service key-read-only publish single-pub role-name at rest  403 FORBIDDEN error  | You can't edit S Pub Role Name.
 service key-read-only publish single-pub role-name at route  403 FORBIDDEN error  | You can't publish S Pub Role Name.
-service key-read-only publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Screen Spelling.
+service key-read-only publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Screen Spelling.
 service key-read-only publish single-pub role-screen-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Role Screen Spelling.
 service key-read-only publish single-pub role-screen-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Role Screen Spelling.
 service key-read-only publish single-pub throws at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only publish single-pub throws at rest  404 NOT_FOUND error  | Not found.
 service key-read-only publish single-pub throws at route  403 FORBIDDEN error  | You can't publish S Pub Throws.
-service key-read-only publish single-pub true at direct  403 FORBIDDEN thrown  | You can't edit S Pub True.
+service key-read-only publish single-pub true at direct  403 FORBIDDEN thrown  | You can't publish S Pub True.
 service key-read-only publish single-pub true at rest  403 FORBIDDEN error  | You can't edit S Pub True.
 service key-read-only publish single-pub true at route  403 FORBIDDEN error  | You can't publish S Pub True.
-service key-read-only publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
+service key-read-only publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't publish S Pub User Is Key Maker.
 service key-read-only publish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S Pub User Is Key Maker.
 service key-read-only publish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You can't publish S Pub User Is Key Maker.
 service key-read-only read collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -3034,10 +3009,10 @@ service key-read-only unpublish collection async-throws at direct  404 NOT_FOUND
 service key-read-only unpublish collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection async-throws at route  403 FORBIDDEN error  | You can't unpublish c async throws.
 service key-read-only unpublish collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service key-read-only unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
 service key-read-only unpublish collection async-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c async true.
 service key-read-only unpublish collection async-true at route  403 FORBIDDEN error  | You can't unpublish c async trues.
-service key-read-only unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service key-read-only unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
 service key-read-only unpublish collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only unpublish collection false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection false at route  403 FORBIDDEN error  | You can't unpublish c falses.
@@ -3046,14 +3021,14 @@ service key-read-only unpublish collection malformed-filter at direct  404 NOT_F
 service key-read-only unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service key-read-only unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service key-read-only unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
 service key-read-only unpublish collection none at rest  403 FORBIDDEN error  missing=same  | You can't edit this c none.
 service key-read-only unpublish collection none at route  403 FORBIDDEN error  | You can't unpublish c nones.
-service key-read-only unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
-service key-read-only unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-read-only unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
+service key-read-only unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service key-read-only unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
 service key-read-only unpublish collection other-operation at route  403 FORBIDDEN error  | You can't unpublish c other operations.
-service key-read-only unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service key-read-only unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service key-read-only unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -3062,10 +3037,10 @@ service key-read-only unpublish collection principal-kind at direct  404 NOT_FOU
 service key-read-only unpublish collection principal-kind at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection principal-kind at route  403 FORBIDDEN error  | You can't unpublish c principal kinds.
 service key-read-only unpublish collection principal-kind at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service key-read-only unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
 service key-read-only unpublish collection publish-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this c publish false.
 service key-read-only unpublish collection publish-false at route  403 FORBIDDEN error  | You can't unpublish c publish falses.
-service key-read-only unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service key-read-only unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
 service key-read-only unpublish collection returns-empty-in at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only unpublish collection returns-empty-in at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection returns-empty-in at route  403 FORBIDDEN error  | You can't unpublish c returns empty ins.
@@ -3086,34 +3061,34 @@ service key-read-only unpublish collection returns-string at direct  404 NOT_FOU
 service key-read-only unpublish collection returns-string at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection returns-string at route  403 FORBIDDEN error  | You can't unpublish c returns strings.
 service key-read-only unpublish collection returns-string at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service key-read-only unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
 service key-read-only unpublish collection returns-true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c returns true.
 service key-read-only unpublish collection returns-true at route  403 FORBIDDEN error  | You can't unpublish c returns trues.
-service key-read-only unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service key-read-only unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
 service key-read-only unpublish collection returns-undefined at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only unpublish collection returns-undefined at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection returns-undefined at route  403 FORBIDDEN error  | You can't unpublish c returns undefineds.
 service key-read-only unpublish collection returns-undefined at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service key-read-only unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
 service key-read-only unpublish collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't edit this c role name.
 service key-read-only unpublish collection role-name at route  403 FORBIDDEN error  | You can't unpublish c role names.
-service key-read-only unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
-service key-read-only unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service key-read-only unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
+service key-read-only unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role screen spelling.
 service key-read-only unpublish collection role-screen-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this c role screen spelling.
 service key-read-only unpublish collection role-screen-spelling at route  403 FORBIDDEN error  | You can't unpublish c role screen spellings.
-service key-read-only unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service key-read-only unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role screen spelling.
 service key-read-only unpublish collection throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only unpublish collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only unpublish collection throws at route  403 FORBIDDEN error  | You can't unpublish c throws.
 service key-read-only unpublish collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service key-read-only unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
 service key-read-only unpublish collection true at rest  403 FORBIDDEN error  missing=same  | You can't edit this c true.
 service key-read-only unpublish collection true at route  403 FORBIDDEN error  | You can't unpublish c trues.
-service key-read-only unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
-service key-read-only unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service key-read-only unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
+service key-read-only unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
 service key-read-only unpublish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this c user is key maker.
 service key-read-only unpublish collection user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish c user is key makers.
-service key-read-only unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service key-read-only unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
 service key-read-only unpublish single-pub async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub async-false at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub async-false at route  403 FORBIDDEN error  | You can't unpublish S Pub Async False.
@@ -3123,7 +3098,7 @@ service key-read-only unpublish single-pub async-filter at route  403 FORBIDDEN 
 service key-read-only unpublish single-pub async-throws at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub async-throws at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub async-throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Async Throws.
-service key-read-only unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async True.
+service key-read-only unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async True.
 service key-read-only unpublish single-pub async-true at rest  403 FORBIDDEN error  | You can't edit S Pub Async True.
 service key-read-only unpublish single-pub async-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Async True.
 service key-read-only unpublish single-pub false at direct  404 NOT_FOUND thrown  | Not found.
@@ -3132,10 +3107,10 @@ service key-read-only unpublish single-pub false at route  403 FORBIDDEN error  
 service key-read-only unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service key-read-only unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
+service key-read-only unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
 service key-read-only unpublish single-pub none at rest  403 FORBIDDEN error  | You can't edit S Pub None.
 service key-read-only unpublish single-pub none at route  403 FORBIDDEN error  | You can't unpublish S Pub None.
-service key-read-only unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
+service key-read-only unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Other Operation.
 service key-read-only unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-read-only unpublish single-pub other-operation at route  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
 service key-read-only unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
@@ -3144,7 +3119,7 @@ service key-read-only unpublish single-pub permission-spelling at route  403 FOR
 service key-read-only unpublish single-pub principal-kind at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub principal-kind at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub principal-kind at route  403 FORBIDDEN error  | You can't unpublish S Pub Principal Kind.
-service key-read-only unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
+service key-read-only unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Publish False.
 service key-read-only unpublish single-pub publish-false at rest  403 FORBIDDEN error  | You can't edit S Pub Publish False.
 service key-read-only unpublish single-pub publish-false at route  403 FORBIDDEN error  | You can't unpublish S Pub Publish False.
 service key-read-only unpublish single-pub returns-empty-in at direct  404 NOT_FOUND thrown  | Not found.
@@ -3162,25 +3137,25 @@ service key-read-only unpublish single-pub returns-null at route  403 FORBIDDEN 
 service key-read-only unpublish single-pub returns-string at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub returns-string at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub returns-string at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns String.
-service key-read-only unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns True.
+service key-read-only unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns True.
 service key-read-only unpublish single-pub returns-true at rest  403 FORBIDDEN error  | You can't edit S Pub Returns True.
 service key-read-only unpublish single-pub returns-true at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns True.
 service key-read-only unpublish single-pub returns-undefined at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub returns-undefined at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub returns-undefined at route  403 FORBIDDEN error  | You can't unpublish S Pub Returns Undefined.
-service key-read-only unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Name.
+service key-read-only unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Name.
 service key-read-only unpublish single-pub role-name at rest  403 FORBIDDEN error  | You can't edit S Pub Role Name.
 service key-read-only unpublish single-pub role-name at route  403 FORBIDDEN error  | You can't unpublish S Pub Role Name.
-service key-read-only unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Screen Spelling.
+service key-read-only unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Screen Spelling.
 service key-read-only unpublish single-pub role-screen-spelling at rest  403 FORBIDDEN error  | You can't edit S Pub Role Screen Spelling.
 service key-read-only unpublish single-pub role-screen-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Role Screen Spelling.
 service key-read-only unpublish single-pub throws at direct  404 NOT_FOUND thrown  | Not found.
 service key-read-only unpublish single-pub throws at rest  404 NOT_FOUND error  | Not found.
 service key-read-only unpublish single-pub throws at route  403 FORBIDDEN error  | You can't unpublish S Pub Throws.
-service key-read-only unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't edit S Pub True.
+service key-read-only unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub True.
 service key-read-only unpublish single-pub true at rest  403 FORBIDDEN error  | You can't edit S Pub True.
 service key-read-only unpublish single-pub true at route  403 FORBIDDEN error  | You can't unpublish S Pub True.
-service key-read-only unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
+service key-read-only unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub User Is Key Maker.
 service key-read-only unpublish single-pub user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit S Pub User Is Key Maker.
 service key-read-only unpublish single-pub user-is-key-maker at route  403 FORBIDDEN error  | You can't unpublish S Pub User Is Key Maker.
 service key-read-only update collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -3678,9 +3653,6 @@ service key-role-based publish collection malformed-filter at direct  404 NOT_FO
 service key-role-based publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service key-role-based publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-role-based publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-role-based publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -3740,8 +3712,6 @@ service key-role-based publish single-pub false at route  403 FORBIDDEN error  |
 service key-role-based publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-role-based publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service key-role-based publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-role-based publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-role-based publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-role-based publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -3902,9 +3872,6 @@ service key-role-based unpublish collection malformed-filter at direct  404 NOT_
 service key-role-based unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service key-role-based unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-role-based unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-role-based unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -3964,8 +3931,6 @@ service key-role-based unpublish single-pub false at route  403 FORBIDDEN error 
 service key-role-based unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-role-based unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service key-role-based unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-role-based unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-role-based unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-role-based unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
@@ -4026,7 +3991,7 @@ service key-role-based update collection malformed-filter at route  403 FORBIDDE
 service key-role-based update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-role-based update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service key-role-based update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-role-based update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-role-based update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -4442,9 +4407,6 @@ service key-super-admin publish collection malformed-filter at direct  404 NOT_F
 service key-super-admin publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service key-super-admin publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-super-admin publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-super-admin publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -4508,8 +4470,6 @@ service key-super-admin publish single-pub false at route  403 FORBIDDEN error  
 service key-super-admin publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-super-admin publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-super-admin publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service key-super-admin publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-super-admin publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-super-admin publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-super-admin publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-super-admin publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -4678,9 +4638,6 @@ service key-super-admin unpublish collection malformed-filter at direct  404 NOT
 service key-super-admin unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service key-super-admin unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service key-super-admin unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-super-admin unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -4744,8 +4701,6 @@ service key-super-admin unpublish single-pub false at route  403 FORBIDDEN error
 service key-super-admin unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service key-super-admin unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service key-super-admin unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service key-super-admin unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service key-super-admin unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service key-super-admin unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service key-super-admin unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service key-super-admin unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
@@ -4809,7 +4764,7 @@ service key-super-admin update collection malformed-filter at route  403 FORBIDD
 service key-super-admin update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service key-super-admin update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service key-super-admin update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service key-super-admin update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service key-super-admin update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6231,9 +6186,6 @@ service user-partial publish collection malformed-filter at direct  404 NOT_FOUN
 service user-partial publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service user-partial publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service user-partial publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service user-partial publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-partial publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -6297,8 +6249,6 @@ service user-partial publish single-pub false at route  403 FORBIDDEN error  | Y
 service user-partial publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service user-partial publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service user-partial publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service user-partial publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service user-partial publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service user-partial publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service user-partial publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service user-partial publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -6477,10 +6427,10 @@ service user-partial unpublish collection none at direct  403 FORBIDDEN thrown  
 service user-partial unpublish collection none at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c none.
 service user-partial unpublish collection none at route  403 FORBIDDEN error  | You can't unpublish c nones.
 service user-partial unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
-service user-partial unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service user-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service user-partial unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
+service user-partial unpublish collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service user-partial unpublish collection other-operation at route  403 FORBIDDEN error  | You can't unpublish c other operations.
-service user-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service user-partial unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service user-partial unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -6562,8 +6512,8 @@ service user-partial unpublish single-pub malformed-filter at route  403 FORBIDD
 service user-partial unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
 service user-partial unpublish single-pub none at rest  403 FORBIDDEN error  | You can't unpublish S Pub None.
 service user-partial unpublish single-pub none at route  403 FORBIDDEN error  | You can't unpublish S Pub None.
-service user-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service user-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
+service user-partial unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Other Operation.
+service user-partial unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
 service user-partial unpublish single-pub other-operation at route  403 FORBIDDEN error  | You can't unpublish S Pub Other Operation.
 service user-partial unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service user-partial unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
@@ -6637,7 +6587,7 @@ service user-partial update collection malformed-filter at route  403 FORBIDDEN 
 service user-partial update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-partial update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service user-partial update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service user-partial update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-partial update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service user-partial update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-partial update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -7032,9 +6982,6 @@ service user-with publish collection malformed-filter at direct  404 NOT_FOUND t
 service user-with publish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection malformed-filter at route  403 FORBIDDEN error  | You can't publish c malformed filters.
 service user-with publish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service user-with publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service user-with publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with publish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection permission-spelling at route  403 FORBIDDEN error  | You can't publish c permission spellings.
@@ -7090,8 +7037,6 @@ service user-with publish single-pub false at route  403 FORBIDDEN error  | You 
 service user-with publish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service user-with publish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service user-with publish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't publish S Pub Malformed Filter.
-service user-with publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service user-with publish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service user-with publish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service user-with publish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service user-with publish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't publish S Pub Permission Spelling.
@@ -7242,9 +7187,6 @@ service user-with unpublish collection malformed-filter at direct  404 NOT_FOUND
 service user-with unpublish collection malformed-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection malformed-filter at route  403 FORBIDDEN error  | You can't unpublish c malformed filters.
 service user-with unpublish collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service user-with unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service user-with unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with unpublish collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with unpublish collection permission-spelling at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection permission-spelling at route  403 FORBIDDEN error  | You can't unpublish c permission spellings.
@@ -7300,8 +7242,6 @@ service user-with unpublish single-pub false at route  403 FORBIDDEN error  | Yo
 service user-with unpublish single-pub malformed-filter at direct  404 NOT_FOUND thrown  | Not found.
 service user-with unpublish single-pub malformed-filter at rest  404 NOT_FOUND error  | Not found.
 service user-with unpublish single-pub malformed-filter at route  403 FORBIDDEN error  | You can't unpublish S Pub Malformed Filter.
-service user-with unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
-service user-with unpublish single-pub other-operation at rest  403 FORBIDDEN error  | You can't edit S Pub Other Operation.
 service user-with unpublish single-pub permission-spelling at direct  404 NOT_FOUND thrown  | Not found.
 service user-with unpublish single-pub permission-spelling at rest  404 NOT_FOUND error  | Not found.
 service user-with unpublish single-pub permission-spelling at route  403 FORBIDDEN error  | You can't unpublish S Pub Permission Spelling.
@@ -7359,7 +7299,7 @@ service user-with update collection malformed-filter at route  403 FORBIDDEN err
 service user-with update collection malformed-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with update collection other-operation at lock  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
-service user-with update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this c other operation.
+service user-with update collection other-operation at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with update collection other-operation at route  403 FORBIDDEN error  | You can't edit c other operations.
 service user-with update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service user-with update collection permission-spelling at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8946,165 +8886,165 @@ service visitor new-pub collection true at service  403 FORBIDDEN thrown  | You 
 service visitor new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service visitor new-pub collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
-service visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
+service visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async false.
 service visitor publish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
-service visitor publish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async filter.
+service visitor publish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async false.
+service visitor publish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async filter.
 service visitor publish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async filter.
-service visitor publish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor publish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async filter.
+service visitor publish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async throws.
 service visitor publish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async throws.
 service visitor publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
 service visitor publish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
-service visitor publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
+service visitor publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c false.
 service visitor publish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
-service visitor publish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
+service visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c false.
+service visitor publish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c malformed filter.
 service visitor publish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection malformed-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
-service visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor publish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c malformed filter.
+service visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
 service visitor publish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
-service visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
+service visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
 service visitor publish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service visitor publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service visitor publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
+service visitor publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c permission spelling.
 service visitor publish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
-service visitor publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
+service visitor publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c permission spelling.
+service visitor publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c principal kind.
 service visitor publish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
-service visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor publish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c principal kind.
+service visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
 service visitor publish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
-service visitor publish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
+service visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
+service visitor publish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns empty in.
 service visitor publish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-empty-in at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
-service visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
+service visitor publish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns empty in.
+service visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns false.
 service visitor publish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
-service visitor publish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns filter.
+service visitor publish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns false.
+service visitor publish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns filter.
 service visitor publish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns filter.
-service visitor publish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
+service visitor publish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns filter.
+service visitor publish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns null.
 service visitor publish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
-service visitor publish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor publish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns null.
+service visitor publish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns string.
 service visitor publish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns string.
 service visitor publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
 service visitor publish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
-service visitor publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
+service visitor publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns undefined.
 service visitor publish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
-service visitor publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service visitor publish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns undefined.
+service visitor publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
 service visitor publish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
-service visitor publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service visitor publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
+service visitor publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role screen spelling.
 service visitor publish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
-service visitor publish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role screen spelling.
+service visitor publish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c throws.
 service visitor publish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c throws.
 service visitor publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
 service visitor publish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
-service visitor publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service visitor publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
 service visitor publish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
-service visitor publish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async False.
+service visitor publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
+service visitor publish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async False.
 service visitor publish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub async-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Filter.
+service visitor publish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async Filter.
 service visitor publish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub async-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Throws.
+service visitor publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async Throws.
 service visitor publish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async True.
 service visitor publish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub async-true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
+service visitor publish single-pub false at direct  403 FORBIDDEN thrown  | You can't publish S Pub False.
 service visitor publish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Malformed Filter.
+service visitor publish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Malformed Filter.
 service visitor publish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub malformed-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
+service visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't publish S Pub None.
 service visitor publish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
+service visitor publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't publish S Pub Other Operation.
 service visitor publish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service visitor publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't publish S Pub Permission Spelling.
 service visitor publish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
+service visitor publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't publish S Pub Principal Kind.
 service visitor publish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
+service visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Publish False.
 service visitor publish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Empty In.
+service visitor publish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Empty In.
 service visitor publish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-empty-in at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns False.
+service visitor publish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns False.
 service visitor publish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Filter.
+service visitor publish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Filter.
 service visitor publish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Null.
+service visitor publish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Null.
 service visitor publish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns String.
+service visitor publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns String.
 service visitor publish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns True.
 service visitor publish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Undefined.
+service visitor publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Undefined.
 service visitor publish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Name.
+service visitor publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Name.
 service visitor publish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub role-name at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Screen Spelling.
+service visitor publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Screen Spelling.
 service visitor publish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Throws.
+service visitor publish single-pub throws at direct  403 FORBIDDEN thrown  | You can't publish S Pub Throws.
 service visitor publish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub throws at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub true at direct  403 FORBIDDEN thrown  | You can't publish S Pub True.
 service visitor publish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
+service visitor publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't publish S Pub User Is Key Maker.
 service visitor publish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor publish single-pub user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c async false.
@@ -9282,165 +9222,165 @@ service visitor read single user-is-key-maker at rest  401 AUTH_REQUIRED error  
 service visitor read single user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read users none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read users none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
+service visitor unpublish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async false.
 service visitor unpublish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
-service visitor unpublish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async filter.
+service visitor unpublish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async false.
+service visitor unpublish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async filter.
 service visitor unpublish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async filter.
-service visitor unpublish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor unpublish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async filter.
+service visitor unpublish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async throws.
 service visitor unpublish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
+service visitor unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async throws.
 service visitor unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
 service visitor unpublish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
-service visitor unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
+service visitor unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c false.
 service visitor unpublish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
-service visitor unpublish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
+service visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c false.
+service visitor unpublish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c malformed filter.
 service visitor unpublish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection malformed-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
-service visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor unpublish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c malformed filter.
+service visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
 service visitor unpublish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
-service visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
+service visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
+service visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
 service visitor unpublish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
-service visitor unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
+service visitor unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
+service visitor unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
 service visitor unpublish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c permission spelling.
-service visitor unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
+service visitor unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
+service visitor unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c principal kind.
 service visitor unpublish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
-service visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor unpublish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c principal kind.
+service visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
 service visitor unpublish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
-service visitor unpublish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
+service visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
+service visitor unpublish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns empty in.
 service visitor unpublish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-empty-in at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
-service visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
+service visitor unpublish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns empty in.
+service visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns false.
 service visitor unpublish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns false.
-service visitor unpublish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns filter.
+service visitor unpublish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns false.
+service visitor unpublish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns filter.
 service visitor unpublish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns filter.
-service visitor unpublish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
+service visitor unpublish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns filter.
+service visitor unpublish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns null.
 service visitor unpublish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns null.
-service visitor unpublish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor unpublish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns null.
+service visitor unpublish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns string.
 service visitor unpublish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
+service visitor unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns string.
 service visitor unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
 service visitor unpublish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
-service visitor unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
+service visitor unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns undefined.
 service visitor unpublish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
-service visitor unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
+service visitor unpublish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns undefined.
+service visitor unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
 service visitor unpublish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection role-name at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role name.
-service visitor unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
+service visitor unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
+service visitor unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role screen spelling.
 service visitor unpublish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c role screen spelling.
-service visitor unpublish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role screen spelling.
+service visitor unpublish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c throws.
 service visitor unpublish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection throws at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
+service visitor unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c throws.
 service visitor unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
 service visitor unpublish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection true at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
-service visitor unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
+service visitor unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
 service visitor unpublish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
-service visitor unpublish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async False.
+service visitor unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
+service visitor unpublish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async False.
 service visitor unpublish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub async-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Filter.
+service visitor unpublish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async Filter.
 service visitor unpublish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub async-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Async Throws.
+service visitor unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async Throws.
 service visitor unpublish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub async-throws at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async True.
 service visitor unpublish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub async-true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't edit S Pub False.
+service visitor unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub False.
 service visitor unpublish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Malformed Filter.
+service visitor unpublish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Malformed Filter.
 service visitor unpublish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub malformed-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't edit S Pub None.
+service visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
 service visitor unpublish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub none at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Pub Other Operation.
+service visitor unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Other Operation.
 service visitor unpublish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub other-operation at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Permission Spelling.
+service visitor unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Permission Spelling.
 service visitor unpublish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub permission-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Pub Principal Kind.
+service visitor unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Principal Kind.
 service visitor unpublish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub principal-kind at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Publish False.
+service visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Publish False.
 service visitor unpublish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub publish-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Empty In.
+service visitor unpublish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Empty In.
 service visitor unpublish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-empty-in at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns False.
+service visitor unpublish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns False.
 service visitor unpublish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-false at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Filter.
+service visitor unpublish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Filter.
 service visitor unpublish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-filter at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Null.
+service visitor unpublish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Null.
 service visitor unpublish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-null at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns String.
+service visitor unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns String.
 service visitor unpublish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-string at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns True.
 service visitor unpublish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Pub Returns Undefined.
+service visitor unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Undefined.
 service visitor unpublish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub returns-undefined at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Name.
+service visitor unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Name.
 service visitor unpublish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub role-name at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't edit S Pub Role Screen Spelling.
+service visitor unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Screen Spelling.
 service visitor unpublish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub role-screen-spelling at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't edit S Pub Throws.
+service visitor unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Throws.
 service visitor unpublish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub throws at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub True.
 service visitor unpublish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub true at route  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S Pub User Is Key Maker.
+service visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub User Is Key Maker.
 service visitor unpublish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor unpublish single-pub user-is-key-maker at route  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
