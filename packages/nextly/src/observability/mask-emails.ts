@@ -57,8 +57,9 @@ interface LogCopyRules {
  * A copy of a value with `rules` applied: strings, the fields of plain
  * objects, list members, and an error's message, stack, cause and own fields,
  * at any depth. The value given is never changed. An object of any other class
- * goes to `rules.other`, and is kept as it is when that has nothing to say,
- * since copying it could lose what makes it that class.
+ * goes to `rules.other`; when that has nothing to say, its own fields are
+ * copied as a plain record, and a function is logged as its fields or its
+ * name, so nothing reaches a logger with a hook of its own.
  */
 function copyForLog<T>(value: T, rules: LogCopyRules): T {
   return walk(value, rules, new WeakMap()) as T;
@@ -96,19 +97,47 @@ function isReference(value: unknown): value is object {
 }
 
 /**
- * A function, once its `toJSON` has been asked. A console logger prints its
- * own fields beside its name, so one that has any is logged as a copy of
- * those fields, each judged as a field is; one without writes only its name
- * and is kept as it is.
+ * A function, once its `toJSON` has been asked. No function reaches a logger:
+ * a console logger prints its fields and calls any inspection hook it has or
+ * inherits, so one with fields is logged as a copy of them, each judged as a
+ * field is, and one without as the name a console would print for it.
  */
 function copyFunction(
   value: object,
   rules: LogCopyRules,
   seen: WeakMap<object, unknown>
 ): unknown {
-  return Object.keys(value).length === 0
-    ? value
-    : copyRecord(value, rules, seen);
+  if (Object.keys(value).length > 0) return copyRecord(value, rules, seen);
+  const name = readText(() => Reflect.get(value, "name"), "");
+  return rules.text(`[Function${name ? `: ${name}` : ""}]`);
+}
+
+/**
+ * An object of a class this copy does not know, once nothing more specific
+ * applies. Its own fields are copied into a plain record, each judged as a
+ * field is, since a console logger prints them and calls any inspection hook
+ * the class defines. Built-in values that print only their own data, such as
+ * a date or bytes, are kept as they are.
+ */
+function copyInstance(
+  value: object,
+  rules: LogCopyRules,
+  seen: WeakMap<object, unknown>
+): unknown {
+  return isPrintedAsData(value) ? value : copyRecord(value, rules, seen);
+}
+
+/** Whether `value` is a built-in a console prints as its data alone. */
+function isPrintedAsData(value: object): boolean {
+  return (
+    value instanceof Date ||
+    value instanceof RegExp ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value) ||
+    value instanceof Promise ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet
+  );
 }
 
 /** A copy of `value` by what it is, once its `toJSON` has been asked. */
@@ -131,7 +160,9 @@ function copyByKind(
   // A summary is walked like any value, so the text it keeps (a request's
   // path) is rewritten too.
   const summary = rules.other?.(value);
-  return summary === undefined ? value : walk(summary, rules, seen, true);
+  return summary === undefined
+    ? copyInstance(value, rules, seen)
+    : walk(summary, rules, seen, true);
 }
 
 /**
@@ -709,8 +740,8 @@ export function maskEmailsInText(text: string): string {
  * A copy of a value with every address in it masked: strings, the fields of
  * plain objects, list members, and an error's message, stack, cause and own
  * fields, at any depth. The value given is never changed. An object of any
- * other class is kept as it is, since copying it could lose what makes it
- * that class; a log payload is plain data and errors.
+ * other class is copied as a plain record of its own fields, and a function
+ * as its fields or its name.
  */
 export function maskEmails<T>(value: T): T {
   return copyForLog(value, { text: maskEmailsInText });

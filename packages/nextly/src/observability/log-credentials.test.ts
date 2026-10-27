@@ -441,6 +441,45 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("upload failed");
   });
 
+  it("takes them out of what a function's inspection hook would print", () => {
+    const captured = "function-hook-secret";
+    const callback = Object.defineProperty(
+      () => undefined,
+      Symbol.for("nodejs.util.inspect.custom"),
+      { value: () => `callback key=${captured}` }
+    );
+    const out = receivedBy({ callback, step: "upload" });
+    // A console logger calls a function's hook as it calls an object's.
+    expect(out).not.toContain("function-hook-secret");
+    // The control: the rest of the line remains.
+    expect(out).toContain("upload");
+  });
+
+  it("takes them out of an object of any other class: its fields and its hook", () => {
+    const captured = "class-hook-secret";
+    class Client {
+      token = "class-field-secret";
+      host = "db.example.test";
+    }
+    class Hooked {
+      [Symbol.for("nodejs.util.inspect.custom")](): string {
+        return `Hooked key=${captured}`;
+      }
+    }
+    const when = new Date("2026-10-27T00:00:00.000Z");
+    const out = receivedBy({
+      client: new Client(),
+      hooked: new Hooked(),
+      when,
+    });
+    expect(out).not.toContain("class-field-secret");
+    expect(out).not.toContain("class-hook-secret");
+    // The controls: the object's other fields remain, and a date still
+    // prints as its time.
+    expect(out).toContain("db.example.test");
+    expect(out).toContain("2026-10-27T00:00:00.000Z");
+  });
+
   it("takes them out of a function's own fields", () => {
     const out = receivedBy({
       callback: Object.assign(() => undefined, {
