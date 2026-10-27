@@ -90,7 +90,9 @@ interface DeclaredWidgetShape {
   readonly isEmpty?: (data: unknown) => boolean;
   readonly empty?: {
     readonly message?: string;
-    readonly action?: { label: string; link: string; permission?: string };
+    readonly action?:
+      | { label: string; link: string; permission?: string }
+      | { label: string; opens: "settings" };
   };
   readonly several?: boolean;
   readonly hidesWhenEmpty?: boolean;
@@ -114,19 +116,44 @@ function publishedEmpty(
   const { message, action } = empty;
   const published: NonNullable<WidgetDefinition["empty"]> = {
     ...(message === undefined ? {} : { message }),
-    ...(action === undefined
-      ? {}
-      : {
-          action: {
-            label: action.label,
-            link: action.link,
-            ...(action.permission === undefined
-              ? {}
-              : { requiredPermission: action.permission }),
-          },
-        }),
+    ...(action === undefined ? {} : { action: publishedAction(action) }),
   };
   return Object.keys(published).length === 0 ? undefined : published;
+}
+
+/** An empty state's action as a declaration states it. */
+type DeclaredEmptyAction = NonNullable<
+  NonNullable<DeclaredWidgetShape["empty"]>["action"]
+>;
+
+/**
+ * Whether an empty action opens the card's settings: by the value of `opens`, as the startup check
+ * reads it, not by the key alone. A plain JavaScript declaration may carry `opens: undefined`
+ * beside its link, which the check accepts as the link form; read by the key, it was published as
+ * a settings action with no `opens`, which the registry refuses.
+ */
+function opensSettings(
+  action: DeclaredEmptyAction
+): action is Extract<DeclaredEmptyAction, { opens: "settings" }> {
+  return "opens" in action && action.opens === "settings";
+}
+
+/**
+ * An empty state's action as published: a link with the gate's own name for its permission, or
+ * the card's settings, which need no permission here, since the admin offers the button only
+ * where the person can change that card's settings.
+ */
+function publishedAction(
+  action: DeclaredEmptyAction
+): NonNullable<NonNullable<WidgetDefinition["empty"]>["action"]> {
+  if (opensSettings(action)) return { label: action.label, opens: "settings" };
+  return {
+    label: action.label,
+    link: action.link,
+    ...(action.permission === undefined
+      ? {}
+      : { requiredPermission: action.permission }),
+  };
 }
 
 /** `{ empty }` when there is one to publish, and nothing otherwise. */

@@ -147,6 +147,62 @@ describe("registering declared widgets", () => {
     });
   });
 
+  it("publishes a link action whose JavaScript declaration also carries opens: undefined, as a link", () => {
+    // Read by the key, `opens` with no value was published as a settings action without one, which
+    // the registry refuses at startup; the startup check reads it as the link it is.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-linked",
+              empty: {
+                message: "No orders yet",
+                action: {
+                  label: "Add an order",
+                  link: "collections/orders/create",
+                  opens: undefined,
+                },
+              },
+            } as unknown as typeof ordersByState,
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-linked")?.empty?.action).toEqual({
+      label: "Add an order",
+      link: "collections/orders/create",
+    });
+  });
+
+  it("publishes an empty action that opens the card's settings as it is, with no gate", () => {
+    // Accepted by the registry's own check too: the registration would refuse an action it read
+    // as having no link.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-choose",
+              empty: {
+                message: "Pick a collection",
+                action: { label: "Choose", opens: "settings" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-choose")?.empty).toEqual({
+      message: "Pick a collection",
+      action: { label: "Choose", opens: "settings" },
+    });
+  });
+
   it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [revenue] }],

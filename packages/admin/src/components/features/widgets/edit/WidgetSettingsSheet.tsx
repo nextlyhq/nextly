@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type JSX,
@@ -83,7 +84,19 @@ export interface WidgetSettingsSheetProps {
    * `toStoredConfig` builds them, which is what Done would keep.
    */
   renderPreview?: (draft: Record<string, unknown>) => ReactNode;
+  /**
+   * Open with focus on the form's first field rather than where the sheet puts it, as a card's
+   * empty state opens it to ask for the setting it is missing.
+   */
+  focusFirstField?: boolean;
 }
+
+/**
+ * What a reader fills in, in the order the form lays them out: the first match is the first field.
+ * A select and a switch are buttons by their roles, so they are named by them.
+ */
+const SETTINGS_FIELD =
+  "input:not([type='hidden']), textarea, select, [role='combobox'], [role='switch'], [role='radio']";
 
 /** How a Done ended, told back to the sheet that asked. */
 export interface DoneSettled {
@@ -511,6 +524,7 @@ export function WidgetSettingsSheet(
   const { form, reset } = useSheetForm(open, settings, sources, defaultValues);
   const draft = useSheetDraft(form, settings, config);
   const { saving, failure, submit, changeOpen } = useSheetDone(props);
+  const formRef = useRef<HTMLFormElement>(null);
 
   return (
     <Sheet open={open} onOpenChange={changeOpen}>
@@ -525,6 +539,18 @@ export function WidgetSettingsSheet(
             ? "flex w-full flex-col overflow-hidden sm:max-w-md lg:max-w-4xl"
             : "flex w-full flex-col overflow-hidden sm:max-w-md"
         }
+        {...(props.focusFirstField
+          ? {
+              onOpenAutoFocus: (event: Event) => {
+                const first =
+                  formRef.current?.querySelector<HTMLElement>(SETTINGS_FIELD);
+                // Where there is no field to land on, the sheet's own choice stands.
+                if (!first) return;
+                event.preventDefault();
+                first.focus();
+              },
+            }
+          : {})}
       >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
@@ -542,6 +568,7 @@ export function WidgetSettingsSheet(
           ) : null}
           <FormProvider {...form}>
             <form
+              ref={formRef}
               // `handleSubmit` answers with a promise and `onSubmit` expects
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.

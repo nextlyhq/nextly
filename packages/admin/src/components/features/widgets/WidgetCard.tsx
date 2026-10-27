@@ -80,9 +80,11 @@ import {
   FRAME_FOOTER_GAP,
   FRAME_HEADER,
   FRAME_PADDING,
+  cardBodyHeightPx,
 } from "./frame/measures";
 import {
   CardEmpty,
+  EMPTY_STACKED_WITH_ACTION_PX,
   CardError,
   CardSkeleton,
   CardUnavailable,
@@ -211,6 +213,28 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
 }
 
 /**
+ * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
+ * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
+ * customising, so it can still be moved or removed.
+ */
+function hiddenFlags(
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  state: CardState,
+  customizing: boolean
+) {
+  const notShown = props.notShown === true;
+  const hidden =
+    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  return {
+    hiddenEmpty: hidden && !customizing,
+    markedHidden: hidden && customizing,
+    hiddenBecause: notShown
+      ? "Not shown for you right now"
+      : "Hidden while empty",
+  };
+}
+
+/**
  * What the frame derives from the state it shows, decided once so the markup below only reads it:
  * whether the grid should take the card out, whether customise mode marks it as hidden, whether
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
@@ -226,15 +250,9 @@ function frameFlags(
 ) {
   const { customizing } = modes;
   const refreshing = modes.refreshing || state.kind === "refreshing";
-  const notShown = props.notShown === true;
-  const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  const hidden = hiddenFlags(props, state, customizing);
   return {
-    hiddenEmpty: hidden && !customizing,
-    markedHidden: hidden && customizing,
-    hiddenBecause: notShown
-      ? "Not shown for you right now"
-      : "Hidden while empty",
+    ...hidden,
     // A quick control changes the question; before the first answer there is no question on
     // show to change, and in customise mode the card's menu stands there.
     quickInert: state.kind === "loading" || customizing,
@@ -388,12 +406,30 @@ function StateBody({
     case "empty":
       return (
         <CentredState>
-          <CardEmpty {...state.empty} />
+          <EmptyBody empty={state.empty} />
         </CentredState>
       );
     default:
       return null;
   }
+}
+
+/**
+ * The empty state, laid in one row where the card's body is too short to stack its title over its
+ * action (a two-row card's body is 46 px; stacked, they take 64). A card drawn with no height is
+ * stacked, as it was.
+ */
+function EmptyBody({
+  empty,
+}: {
+  empty: Extract<CardState, { kind: "empty" }>["empty"];
+}) {
+  const h = useContext(CardHeightContext);
+  const inline =
+    empty.action !== undefined &&
+    h !== undefined &&
+    cardBodyHeightPx(h) < EMPTY_STACKED_WITH_ACTION_PX;
+  return <CardEmpty {...empty} inline={inline} />;
 }
 
 /**
@@ -581,6 +617,11 @@ function WidgetCardFooter({
       className={cn(
         // A gap and a link's line, 28 px, as `cardBodyHeightPx` counts it.
         "flex h-7 shrink-0 items-center justify-end gap-3 border-0 bg-transparent p-0",
+        // Clicks pass through the footer's own room to what is drawn under it: in a short card
+        // the body's empty state, with its one action, runs into this room, and an empty footer
+        // laid over it took the click. Only what the footer holds, its link and anything a body
+        // draws into it, takes clicks.
+        "pointer-events-none",
         FRAME_FOOTER_GAP.className,
         // Out of reach in customise mode, and dimmed with the body so it does not look usable.
         inert && "opacity-55"
@@ -589,10 +630,13 @@ function WidgetCardFooter({
       <div
         ref={slotRef}
         data-testid="widget-card-footer-slot"
-        className="contents"
+        className="pointer-events-auto contents"
       />
       {link !== undefined && (
-        <Link href={link.href} className={CARD_FOOTER_LINK_CLASS}>
+        <Link
+          href={link.href}
+          className={cn(CARD_FOOTER_LINK_CLASS, "pointer-events-auto")}
+        >
           {link.label}
         </Link>
       )}

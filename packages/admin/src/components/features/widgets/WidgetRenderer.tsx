@@ -38,7 +38,7 @@ import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING, missingComponentMessage } from "./draw-failures";
 import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
-import type { SkeletonShape } from "./frame/states";
+import type { CardEmptyContent, SkeletonShape } from "./frame/states";
 import type { AnswerSize } from "./frame/tier";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
@@ -107,6 +107,23 @@ function answeredState(isFetching: boolean): CardState {
 }
 
 /**
+ * An empty card's content as the frame draws it: an action opening the card's settings becomes a
+ * button that does, where the card can open them, and is left out where it cannot.
+ */
+function drawnEmpty(
+  empty: Extract<WidgetOutcome, { state: "empty" }>["empty"],
+  onOpenSettings: (() => void) | undefined
+): CardEmptyContent {
+  const { action, ...words } = empty;
+  if (action === undefined || !("opensSettings" in action)) {
+    return action === undefined ? words : { ...words, action };
+  }
+  return onOpenSettings === undefined
+    ? words
+    : { ...words, action: { label: action.label, onSelect: onOpenSettings } };
+}
+
+/**
  * The card's state and body for one outcome.
  *
  * One mapping, so each state's rules sit side by side: only a failure offers Retry, and only an
@@ -114,7 +131,11 @@ function answeredState(isFetching: boolean): CardState {
  */
 function cardForOutcome(
   outcome: FramedOutcome,
-  live: { isFetching: boolean; onRetry?: (() => void) | undefined }
+  live: {
+    isFetching: boolean;
+    onRetry?: (() => void) | undefined;
+    onOpenSettings?: (() => void) | undefined;
+  }
 ): { state: CardState; body: ReactNode; notShown?: true } {
   switch (outcome.state) {
     case "not-shown":
@@ -140,7 +161,13 @@ function cardForOutcome(
         body: null,
       };
     case "empty":
-      return { state: { kind: "empty", empty: outcome.empty }, body: null };
+      return {
+        state: {
+          kind: "empty",
+          empty: drawnEmpty(outcome.empty, live.onOpenSettings),
+        },
+        body: null,
+      };
     case "ready":
       return { state: answeredState(live.isFetching), body: outcome.node };
   }
@@ -172,6 +199,12 @@ export interface WidgetRendererProps {
   customizing?: boolean;
   /** Reload this card only, offered when its data failed to load. */
   onRetry?: () => void;
+  /**
+   * Open this card's own settings, with focus on their first field: what a declared empty
+   * action of `opens: "settings"` does. Given only where the reader can change this card's
+   * settings; without it that action is not drawn, so nobody is offered a step they cannot take.
+   */
+  onOpenSettings?: () => void;
   /**
    * This widget's slot from the batch. `undefined` means the batch has not
    * answered yet — which is why a data widget with no slot is BUSY rather than
@@ -455,6 +488,8 @@ function cardFor(
     placement: WidgetRendererProps["placement"];
     isFetching: boolean;
     onRetry: (() => void) | undefined;
+    /** Opens this card's settings from its empty state, where the card can. */
+    onOpenSettings: (() => void) | undefined;
   }
 ): JSX.Element {
   if (live.missing !== undefined) {
@@ -493,6 +528,7 @@ export function WidgetRenderer({
   leading,
   customizing = false,
   onRetry,
+  onOpenSettings,
   isFetching = false,
   answerSize,
   subtitle,
@@ -535,5 +571,6 @@ export function WidgetRenderer({
     placement,
     isFetching,
     onRetry,
+    onOpenSettings,
   });
 }
