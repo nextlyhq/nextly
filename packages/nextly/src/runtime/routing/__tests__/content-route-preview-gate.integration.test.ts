@@ -32,11 +32,17 @@ const PRIVILEGED_EMAIL = "privileged@example.com";
 const PLAIN_EMAIL = "plain@example.com";
 const HIDDEN_SLUG_EMAIL = "no-slug@example.com";
 
-const pages = () =>
+/**
+ * `readable` gives the collection a read rule answering \`true\`, so boot grants
+ * the Public role its read: without it a visitor is refused the collection
+ * outright, before its lifecycle is asked.
+ */
+const pages = (readable = false) =>
   defineCollection({
     slug: "pages",
     status: true,
     versions: { drafts: true },
+    ...(readable ? { access: { read: () => true } } : {}),
     fields: [
       // The slug itself carries a read rule, because it is an ordinary field
       // and nothing stops one being declared on it. Once the preview is judged
@@ -161,7 +167,12 @@ describe("createContentRoute driven by previewDraftGate", () => {
   // document for reasons unrelated to the token — a lifecycle default, a
   // collection that never enforced status — would read as the gate working.
   it("404s that same entry for a visitor carrying no token", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // A collection visitors may read, so the 404 comes from the entry being
+    // unpublished rather than from the visitor being refused the collection.
+    current = await createTestNextly({
+      collections: [pages(true)],
+      seedPublic: true,
+    });
     await current.nextly.create({
       collection: "pages",
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },

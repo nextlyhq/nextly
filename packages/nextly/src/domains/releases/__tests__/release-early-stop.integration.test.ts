@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -774,6 +775,10 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await visibleIds(t, "articles")).toContain(kept);
 
+      // The bulk delete runs as a visitor, who needs the Public role to hold
+      // the delete as well as the rule answering \`true\`; granted as a site
+      // admin would, since who deletes is not what this case is about.
+      await grantPublic(t, ["delete-articles"]);
       const deleted = await handlerOf(t)
         .getEntryService()
         .deleteEntries({ collectionName: "articles" }, [gone]);
