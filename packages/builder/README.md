@@ -364,9 +364,11 @@ missing build wearing a different error message.
 `@nextlyhq/ui` declares it as one: an icon set resolved once by the host rather
 than bundled per package.
 
-React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
-`react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18
-host would hit an unsatisfiable peer one level down.
+React and React DOM in the supported range listed in
+[Requirements](https://nextlyhq.com/docs/getting-started/installation#requirements),
+matching the renderer it draws with. `@nextlyhq/blocks-react` requires the same
+range, and it is a dependency here rather than a peer, so a host on an older
+React would hit an unsatisfiable peer one level down.
 
 ## Install
 

@@ -20,6 +20,15 @@ name: Scaffold build
 # pull request in the repo, and the one least likely to change what a scaffold imports.
 # The cost belongs on changes to the scaffolder and its templates, which are rare.
 on:
+  # The nightly newest-minor run calls this same matrix with the newest Next.js
+  # and React minors to install before each build. A pull request passes no
+  # input, so that install step is skipped and its run is unchanged.
+  workflow_call:
+    inputs:
+      versions:
+        description: "Space-separated `name@version` specs to install into the scaffolded app before it builds"
+        type: string
+        default: ""
   pull_request:
     paths:
       # `templates/plugin/**` is deliberately absent. A plugin scaffold is a publishable
@@ -731,6 +740,19 @@ jobs:
           if [ "${{ matrix.approach }}" != visual ] && [ "${{ matrix.existing }}" != "create-next-app" ]; then
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
+
+      # Only the nightly newest-minor run sets the input (see `on.workflow_call`).
+      # The specs are passed through the environment, and the caller checks
+      # their shape, so nothing from them is read as shell syntax.
+      - name: Install the newest Next.js and React minors
+        if: inputs.versions
+        shell: bash
+        env:
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          read -ra specs <<< "$VERSIONS"
+          if [ "${{ matrix.pm }}" = pnpm ]; then pnpm add "${specs[@]}"; else npm install "${specs[@]}"; fi
 
       - name: Build the scaffolded project
         shell: bash
