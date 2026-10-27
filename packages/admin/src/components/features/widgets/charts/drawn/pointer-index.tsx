@@ -5,14 +5,15 @@
  * The engine never sees the pointer, and draws no tooltip: a tooltip state of its own would follow
  * the pointer, away from a reader reaching for it, and once it had seen the pointer it would keep
  * that point whatever the keys said. The keys and the pointer together decide the point in view
- * (`useChartReach`), and a drawing asks the engine's inverse scale which category a pixel is
- * nearest, mapping that category to its index.
+ * (`useChartReach`), and a drawing reads which mark a pixel is over through the engine's scale.
+ * The marks, the rule and this reading are on one scale, the engine's.
  *
- * Across, a point over time is at its data's position, so the nearest data point is the one in
- * view. Down, a group's row is a band, and the engine's data snap measures from each band's START:
- * the lower half of a row would read as the next group. Its tick snap measures from the rendered
- * ticks, which a category axis draws at each band's middle, so it names the row the pointer is in. The marks, the rule and this reading are on one
- * scale, the engine's.
+ * Across, a point over time sits at its data's position, so the nearest data point, the engine's
+ * data snap, is the one in view. Down, a group's row is a band, and the data snap measures from
+ * each band's start, so it would read the lower half of a row as the next group. A row is instead
+ * the band the pixel is in: the last whose start, by the engine's scale, is at or above it. The
+ * scale is ready when the bars are, where the engine's tick snap waits on its rendered ticks and
+ * read no row at all for a pointer in the browser.
  *
  * @module components/features/widgets/charts/drawn/pointer-index
  */
@@ -24,10 +25,7 @@ import {
   type MouseEvent,
   type MutableRefObject,
 } from "react";
-import {
-  useXAxisInverseDataSnapScale,
-  useYAxisInverseTickSnapScale,
-} from "recharts";
+import { useXAxisInverseDataSnapScale, useYAxisScale } from "recharts";
 
 /** The index of the mark at a point in the drawing, or `undefined` off every mark. */
 type IndexAt = (x: number, y: number) => number | undefined;
@@ -48,18 +46,39 @@ export function PointerIndex({
   into: MutableRefObject<IndexAt | undefined>;
 }): null {
   const across = useXAxisInverseDataSnapScale(axisId);
-  // Every row's tick must be drawn for this to name every row (`interval={0}`).
-  const down = useYAxisInverseTickSnapScale(axisId);
-  const invert = axis === "x" ? across : down;
+  const down = useYAxisScale(axisId);
   useEffect(() => {
-    into.current = invert
-      ? (x, y) => {
-          const index = keys.indexOf(String(invert(axis === "x" ? x : y)));
-          return index >= 0 ? index : undefined;
-        }
+    if (axis === "x") {
+      into.current = across
+        ? x => {
+            const index = keys.indexOf(String(across(x)));
+            return index >= 0 ? index : undefined;
+          }
+        : undefined;
+      return;
+    }
+    into.current = down
+      ? (_x, y) => bandAt(key => down(key, { position: "start" }), keys, y)
       : undefined;
   });
   return null;
+}
+
+/**
+ * The index of the band, of `keys` drawn top to bottom, that `pixel` is in: the last whose start
+ * by `scale` is at or above it, the first above them all, `undefined` for no keys.
+ */
+function bandAt(
+  scale: (key: string) => number | undefined,
+  keys: readonly string[],
+  pixel: number
+): number | undefined {
+  let found: number | undefined = keys.length > 0 ? 0 : undefined;
+  keys.forEach((key, index) => {
+    const start = scale(key);
+    if (start !== undefined && start <= pixel) found = index;
+  });
+  return found;
 }
 
 /**
