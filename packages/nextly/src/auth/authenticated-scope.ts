@@ -20,6 +20,7 @@ import { permissionSlug } from "../schemas/_zod/rbac";
 import type { AccessTarget } from "./access/decide";
 import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
+import { SESSION_CUTOFF_SECONDS } from "./session/session-standing";
 
 /**
  * One permission the caller holds, as the row it was resolved from.
@@ -86,23 +87,36 @@ export interface AuthenticatedScope {
 
 /**
  * The scopes authentication made for a full-access key whose maker is an
- * active super-admin: the only scopes that carry super-admin authority.
+ * active super-admin, the only scopes that carry super-admin authority, each
+ * with the moment that authority lapses.
  *
  * Kept here rather than as a field of the scope, because a scope is public
  * and can be built by hand: a field would be forged as easily as written. A
  * scope built by hand, a narrowed copy and a spread copy are each a different
  * object, so none of them carries the authority, as a narrower scope must not.
+ *
+ * The authority is the maker's standing when the key was authenticated, so a
+ * scope kept past its request (a plugin storing it, a Direct API `actor`
+ * reused later) holds it no longer than a session would go on holding a
+ * standing that changed: for {@link SESSION_CUTOFF_SECONDS}. After that it is
+ * judged on its grants alone, and the key's next authentication asks again.
+ * Timed on a monotonic clock, so setting the wall clock back cannot stretch it.
  */
-const SUPER_ADMIN_SCOPES = new WeakSet<AuthenticatedScope>();
+const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, number>();
+
+const SUPER_ADMIN_SCOPE_LIFETIME_MS = SESSION_CUTOFF_SECONDS * 1000;
 
 /**
  * Whether `scope` carries super-admin authority: authentication made it for a
- * full-access key whose maker was an active super-admin for the request.
+ * full-access key whose maker was an active super-admin, and the bound that
+ * authority holds for has not passed.
  */
 export function scopeHoldsSuperAdmin(
   scope: AuthenticatedScope | undefined
 ): boolean {
-  return scope !== undefined && SUPER_ADMIN_SCOPES.has(scope);
+  if (scope === undefined) return false;
+  const lapsesAt = SUPER_ADMIN_SCOPES.get(scope);
+  return lapsesAt !== undefined && performance.now() < lapsesAt;
 }
 
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */
@@ -172,7 +186,12 @@ export function apiKeyScopeFrom(caller: {
         permissions: [...(caller.permissions ?? [])],
         ...(caller.roles ? { roles: [...caller.roles] } : {}),
       });
-  if (caller.keyHoldsSuperAdmin === true) SUPER_ADMIN_SCOPES.add(scope);
+  if (caller.keyHoldsSuperAdmin === true) {
+    SUPER_ADMIN_SCOPES.set(
+      scope,
+      performance.now() + SUPER_ADMIN_SCOPE_LIFETIME_MS
+    );
+  }
   return scope;
 }
 

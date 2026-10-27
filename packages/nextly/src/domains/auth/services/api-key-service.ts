@@ -443,12 +443,42 @@ const LAST_USE_RESOLUTION_MS = 60_000;
  * the grants cached for the key, which may outlast the maker's role. A
  * lookup that fails answers no.
  */
-export async function keyHoldsSuperAdmin(
+async function keyHoldsSuperAdmin(
   tokenType: ApiKeyTokenType,
   userId: string
 ): Promise<boolean> {
   if (tokenType !== "full-access") return false;
   return isSuperAdmin(userId);
+}
+
+/** What a key authentication accepted is resolved to, for its request. */
+export interface ResolvedKeyCaller {
+  grants: readonly GrantedPermission[];
+  roles: string[];
+  keyHoldsSuperAdmin: boolean;
+}
+
+/**
+ * The grants, roles and super-admin authority a key authentication accepted
+ * acts with for this request. The one resolution REST authentication and
+ * `checkApiKey` share, so a scope made from either is the same scope, judged
+ * the same at every way in.
+ */
+export async function resolveKeyCaller(
+  service: Pick<ApiKeyService, "resolveApiKeyGrants" | "resolveApiKeyRoles">,
+  key: {
+    id: string;
+    userId: string;
+    tokenType: ApiKeyTokenType;
+    roleId: string | null;
+  }
+): Promise<ResolvedKeyCaller> {
+  const [grants, roles, holdsSuperAdmin] = await Promise.all([
+    service.resolveApiKeyGrants(key.tokenType, key.roleId, key.userId, key.id),
+    service.resolveApiKeyRoles(key.tokenType, key.roleId, key.userId),
+    keyHoldsSuperAdmin(key.tokenType, key.userId),
+  ]);
+  return { grants, roles, keyHoldsSuperAdmin: holdsSuperAdmin };
 }
 
 export class ApiKeyService extends BaseService {

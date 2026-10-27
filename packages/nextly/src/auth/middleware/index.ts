@@ -1,6 +1,6 @@
 import { container } from "@nextly/di/container";
 import {
-  keyHoldsSuperAdmin,
+  resolveKeyCaller,
   type ApiKeyRefusalCause,
   type ApiKeyService,
 } from "@nextly/domains/auth/services/api-key-service";
@@ -312,20 +312,10 @@ export async function requireApiKeyAuth(req: Request): Promise<
 
   // 5. Resolve effective permissions and roles for this token type, and
   //    whether the key carries its maker's super-admin authority.
-  const [grants, roles, holdsSuperAdmin] = await Promise.all([
-    apiKeyService.resolveApiKeyGrants(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId,
-      keyAuth.id
-    ),
-    apiKeyService.resolveApiKeyRoles(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId
-    ),
-    keyHoldsSuperAdmin(keyAuth.tokenType, keyAuth.userId),
-  ]);
+  const { grants, roles, keyHoldsSuperAdmin } = await resolveKeyCaller(
+    apiKeyService,
+    keyAuth
+  );
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
@@ -334,7 +324,7 @@ export async function requireApiKeyAuth(req: Request): Promise<
     permissions: grants.map(grant => grant.slug),
     grants,
     roles,
-    keyHoldsSuperAdmin: holdsSuperAdmin,
+    keyHoldsSuperAdmin,
     apiKeyId: keyAuth.id,
   };
 }

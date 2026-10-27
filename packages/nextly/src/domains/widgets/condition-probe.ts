@@ -29,6 +29,7 @@
  */
 
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
+import { scopeHoldsSuperAdmin } from "../../auth/authenticated-scope";
 import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
@@ -178,6 +179,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
         userId: caller.user.id,
         isApiKey: caller.authenticatedScope?.actorType === "apiKey",
         permissions: caller.authenticatedScope?.permissions ?? [],
+        keyHoldsSuperAdmin: scopeHoldsSuperAdmin(caller.authenticatedScope),
       });
     })();
     return createCollection;

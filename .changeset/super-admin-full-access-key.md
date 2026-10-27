@@ -34,4 +34,6 @@ A full-access API key made by an active super-admin now acts with super-admin au
 - **Only a full-access key, and only while its maker is an active super-admin.** The authority is worked out for each request from the maker's standing, so the key loses it when the maker does (the super-admin role removed or expired, or the account deactivated) and gains it when the maker becomes a super-admin, within the bound the maker's own sessions follow.
 - **Read-only and role-based keys keep their types' limits**, whoever made them, and pass no access rule a super-admin would pass.
 - **A plugin route that narrows a key's scope** (`narrowScope`) carries none of this authority: the narrowed scope is judged on its own grants.
+- **`nextly.access.checkApiKey` returns an optional `actor`** (experimental): the key's own scope, to pass as the Direct API `actor`, so a route that checks a key itself is answered as a request on that key is.
+- **A key's super-admin authority lasts no longer than the bound a session follows** when its scope is kept past its request; after that the scope is judged on its grants alone.
 - **What Nextly keeps for a signed-in person still refuses every key**, this one included: granting or taking away super-admin, creating a preview link, and marking a version as seen.
