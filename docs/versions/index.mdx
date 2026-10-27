@@ -127,8 +127,12 @@ on a component's own fields, which are judged on each instance the version holds
 depth. An API key is judged on its own grants, not its owner's.
 
 - A version read lists what it held back in `withheld`, by field name, or by a dotted
-  path below the top level (`banner.secret`).
-- A comparison shows a held-back field as `hidden` in its place, with neither value.
+  path below the top level (`banner.secret`). A field in a row of a list (a repeater or a
+  repeatable component) is named by that row's index in the version (`items.1.secret`),
+  so a rule that reads its row can hide a field in one row and show it in the next. The
+  shape of `withheld` is experimental.
+- A comparison shows a held-back field as `hidden` in its place, with neither value, and
+  only in the row that held it back: the other rows' changes to that field still show.
 - A restore never writes back a field the restorer may not read; it is reported in
   `droppedFields`.
 

@@ -45,26 +45,86 @@ const publicOnly = text({
   },
 });
 
-/** The hidden-field nodes a comparison carries, at any depth. */
-function hiddenNodes(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) return value.flatMap(hiddenNodes);
-  if (value === null || typeof value !== "object") return [];
-  const node = value as Record<string, unknown>;
-  return [
-    ...(node.kind === "hidden" ? [node] : []),
-    ...Object.values(node).flatMap(hiddenNodes),
-  ];
-}
-
-/** Every marked value the response carries, wherever it sits. */
+/** Every marked value a version read carries, wherever it sits. */
 const valuesIn = (value: unknown, mark: string): string[] =>
   (JSON.stringify(value).match(new RegExp(`${mark}-\\d`, "g")) ?? []).sort();
 
+interface DiffNode {
+  name?: string;
+  kind?: string;
+  items?: { fields: DiffNode[] }[];
+  segments?: { op: number; text: string }[];
+}
+
 /**
- * A document whose first row is public and second private, in a repeater
- * and in a repeatable component, saved twice with every secret changed.
+ * A text node's values, rebuilt from its word diff: what it was, then what it
+ * became, each left out when absent. A changed value is split into segments
+ * ("P-", then "1" and "2"), so searching the response for whole values would
+ * miss the ones it shows, and a leaked one too.
  */
-async function documentWithMixedRows(dialect: TestDialect) {
+function sidesOf(node: DiffNode | undefined): string[] {
+  const segments = node?.segments ?? [];
+  const side = (keep: (op: number) => boolean) =>
+    segments
+      .filter(segment => keep(segment.op))
+      .map(segment => segment.text)
+      .join("");
+  return [side(op => op <= 0), side(op => op >= 0)].filter(text => text !== "");
+}
+
+/**
+ * Each row of each list a comparison carries: the tiers it held in the two
+ * versions, and its secret, either hidden or the values it shows.
+ */
+function rowsIn(diff: unknown) {
+  return ((diff as { fields: DiffNode[] }).fields ?? [])
+    .filter(node => node.kind === "list")
+    .flatMap(list =>
+      (list.items ?? []).map(item => {
+        const field = (name: string) => item.fields.find(n => n.name === name);
+        const secret = field("secret");
+        return {
+          list: list.name,
+          tiers: sidesOf(field("tier")),
+          secret: secret?.kind === "hidden" ? "hidden" : sidesOf(secret),
+        };
+      })
+    );
+}
+
+/**
+ * The comparison's promise, row by row: a secret is hidden in exactly the
+ * rows private in either version, the rows public in both show what their
+ * secret was and became, and no private value appears anywhere, however a
+ * diff splits it. Returns the values the public rows show.
+ */
+function expectHiddenOnlyInPrivateRows(diff: unknown): string[] {
+  const rows = rowsIn(diff);
+  for (const row of rows) {
+    expect(row.secret === "hidden", JSON.stringify(row)).toBe(
+      row.tiers.includes("private")
+    );
+  }
+  // Both lists reached the mechanism: each hides at least one row.
+  expect(
+    new Set(rows.filter(row => row.secret === "hidden").map(row => row.list))
+  ).toEqual(new Set(["items", "cards"]));
+  expect(JSON.stringify(diff)).not.toContain("X-");
+  return rows
+    .flatMap(row => (row.secret === "hidden" ? [] : row.secret))
+    .sort();
+}
+
+/**
+ * A document with a public row and a private one, in a repeater and in a
+ * repeatable component, saved twice with every secret changed. With
+ * `reordered`, the second save holds the private row first, so a row sits at
+ * a different index in each version.
+ */
+async function documentWithMixedRows(
+  dialect: TestDialect,
+  { reordered = false }: { reordered?: boolean } = {}
+) {
   current = await createTestNextly({
     dialect,
     fieldGroups: [
@@ -103,9 +163,10 @@ async function documentWithMixedRows(dialect: TestDialect) {
     { title: "v1", items: rows(1), cards: rows(1) }
   );
   const id = (created.data as { id: string }).id;
+  const second = reordered ? rows(2).reverse() : rows(2);
   await handler.updateEntry(
     { collectionName: "notes", entryId: id, overrideAccess: true },
-    { title: "v2", items: rows(2), cards: rows(2) }
+    { title: "v2", items: second, cards: second }
   );
   return id;
 }
@@ -147,15 +208,33 @@ describe.each(getConfiguredTestDialects())(
         to: 2,
       });
 
-      // The private rows' values never reach the reader.
-      expect(valuesIn(diff, "X")).toEqual([]);
       // The public rows' change is shown, in the repeater and the component.
-      expect(valuesIn(diff, "P")).toEqual(["P-1", "P-1", "P-2", "P-2"]);
-      // One hidden node per list: the private row's, none in the public row.
-      expect(hiddenNodes(diff).map(node => node.name)).toEqual([
-        "secret",
-        "secret",
+      expect(expectHiddenOnlyInPrivateRows(diff)).toEqual([
+        "P-1",
+        "P-1",
+        "P-2",
+        "P-2",
       ]);
+    });
+
+    it("reads each version's rows by that version's own index", async () => {
+      // The second version holds its rows the other way round, so `1` names
+      // the private row in the first version and the public one in the
+      // second. Read with one set for both, every row would be hidden.
+      const id = await documentWithMixedRows(dialect, { reordered: true });
+
+      const diff = await getVersionDiffForDocument({
+        ...at(id),
+        user: READER,
+        from: 1,
+        to: 2,
+      });
+
+      // The public component instances, one in each version, still show
+      // their secret.
+      expect(expectHiddenOnlyInPrivateRows(diff)).toEqual(
+        expect.arrayContaining(["P-1", "P-2"])
+      );
     });
   }
 );

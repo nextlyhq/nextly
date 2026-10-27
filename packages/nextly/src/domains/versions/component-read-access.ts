@@ -19,13 +19,13 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   applyFieldReadAccess,
   getFieldFunctions,
-  openNestedContainer,
   type CallerGrants,
   type FieldFunctions,
   type ReadAccessRedactions,
 } from "../../shared/lib/field-level-registry";
 import {
   forEachFieldGroupInstance,
+  isRecord,
   nameOf,
   subFieldsOf,
   type ComponentFieldMap,
@@ -100,18 +100,40 @@ export async function applyComponentReadAccess(
 }
 
 /**
- * The rows a container value holds, through the same parse the redaction
- * used, so a container held as JSON text reports what was withheld inside it.
+ * The rows a container value holds, each keyed as a reader of the version
+ * addresses it: a row of a list by its index in that list (`"1"`), so an
+ * entry that is not a row still keeps its place in the count; a single group
+ * or instance by nothing (`null`). A container held as JSON text is parsed
+ * first, as the redaction parses it, so what was withheld inside it is
+ * reported too.
  */
-function containerRows(value: unknown): Record<string, unknown>[] {
-  return openNestedContainer(value)?.rows ?? [];
+function containerRows(
+  value: unknown
+): { key: string | null; row: Record<string, unknown> }[] {
+  let opened: unknown = value;
+  if (typeof value === "string") {
+    // Text that is not JSON holds no rows, as the redaction reads it.
+    try {
+      opened = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(opened)) {
+    return opened.flatMap((row: unknown, index) =>
+      isRecord(row) ? [{ key: String(index), row }] : []
+    );
+  }
+  return isRecord(opened) ? [{ key: null, row: opened }] : [];
 }
 
 /**
  * The dotted paths of the fields a redaction removed below the top level
  * (`banner.secret`, `meta.secret`), by comparing a copy taken before it with
- * the redacted entry. A field removed from any row or block of a list counts.
- * The top level is the caller's to compare: it holds keys no field declares.
+ * the redacted entry. A field removed from a row of a list is named by that
+ * row's index (`items.1.secret`), so a rule that allows a field in one row
+ * and denies it in another withholds it only where it denied it. The top
+ * level is the caller's to compare: it holds keys no field declares.
  */
 export function nestedWithheldPaths(
   before: Record<string, unknown>,
@@ -147,11 +169,14 @@ export function nestedWithheldPaths(
         paths.add(path);
         continue;
       }
-      const beforeRows = containerRows(beforeObj[name]);
-      const afterRows = containerRows(afterObj[name]);
-      beforeRows.forEach((row, index) => {
-        const afterRow = afterRows[index];
-        if (!afterRow) return;
+      // A row is paired with the redacted copy of itself by its key, which
+      // the redaction leaves in place: it removes fields, not rows.
+      const afterRows = new Map(
+        containerRows(afterObj[name]).map(({ key, row }) => [key, row])
+      );
+      for (const { key, row } of containerRows(beforeObj[name])) {
+        const afterRow = afterRows.get(key);
+        if (!afterRow) continue;
         const inner = isFieldGroupField(field)
           ? componentFields.get(
               readFieldGroupType(row) ??
@@ -159,8 +184,9 @@ export function nestedWithheldPaths(
                 ""
             )
           : sub;
-        if (inner) walk(row, afterRow, inner, path);
-      });
+        if (inner)
+          walk(row, afterRow, inner, key === null ? path : `${path}.${key}`);
+      }
     }
   };
   walk(before, after, fields, prefix);

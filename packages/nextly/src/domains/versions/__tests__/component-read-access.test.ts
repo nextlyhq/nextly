@@ -231,6 +231,49 @@ describe("malformed and serialized values", () => {
 
     expect([...paths]).toEqual(["meta.hero.secret"]);
   });
+
+  it("names a list row by its index, and a single group or instance by none", () => {
+    // The second row lost the field, the first kept it; a value that is not
+    // a row still holds its place, so the row after it is index 2, as the
+    // stored list and the admin's form both count it. A list held as JSON
+    // text is counted the same way.
+    const rows = (secret: boolean) => [
+      { title: "a", secret: "S-1" },
+      secret ? { title: "b", secret: "S-2" } : { title: "b" },
+      "not a row",
+      secret ? { title: "c", secret: "S-3" } : { title: "c" },
+    ];
+    const before = {
+      items: rows(true),
+      text: JSON.stringify(rows(true)),
+      banner: { title: "a", secret: "S-4" },
+    };
+    const after = {
+      items: rows(false),
+      text: JSON.stringify(rows(false)),
+      banner: { title: "a" },
+    };
+    const inner = [{ name: "title" }, { name: "secret" }];
+
+    const paths = nestedWithheldPaths(
+      before,
+      after,
+      fields(
+        { name: "items", type: "repeater", fields: inner },
+        { name: "text", type: "repeater", fields: inner },
+        { name: "banner", type: "group", fields: inner }
+      ),
+      new Map()
+    );
+
+    expect([...paths].sort()).toEqual([
+      "banner.secret",
+      "items.1.secret",
+      "items.3.secret",
+      "text.1.secret",
+      "text.3.secret",
+    ]);
+  });
 });
 
 describe("fieldsCarryingReadRules", () => {
