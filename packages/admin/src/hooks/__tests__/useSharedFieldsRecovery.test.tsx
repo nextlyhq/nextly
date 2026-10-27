@@ -539,6 +539,51 @@ describe("takenMessage", () => {
       "Spanish was already up to date."
     );
   });
+
+  it.each([
+    ["another language", { entryId: "e1", locale: "en" }],
+    ["another document", { entryId: "e2", locale: "es" }],
+  ])(
+    "saves and takes nothing when the editor moves to %s before the form is read",
+    async (_where, movedTo) => {
+      const save = vi.fn();
+      const rendered = renderHook(
+        ({ entryId, locale }: { entryId: string; locale: string }) =>
+          useSharedFieldsRecovery({
+            scope: { kind: "collection", slug: "authors", entryId },
+            locale,
+            fields: [{ name: "articleCount", label: "Article Count" }],
+            save: async values => save(values),
+            onTaken: async () => undefined,
+          }),
+        { initialProps: { entryId: "e1", locale: "es" } }
+      );
+      const form = formHolding({ articleCount: 3 });
+      // The editor moves while the recovery waits to read: the shared form
+      // now holds the other language's or document's values.
+      form.pendingChangeNow = vi.fn(async () => {
+        rendered.rerender(movedTo);
+        return { articleCount: 99 };
+      });
+      rendered.result.current(
+        refusal({
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        }),
+        form
+      );
+
+      actionOf(toast.error.mock.calls[0])();
+      await vi.waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          "Nothing was taken: the editor moved to another language or document. Publish again from the one you meant to take them into."
+        )
+      );
+      expect(save).not.toHaveBeenCalled();
+      expect(take).not.toHaveBeenCalled();
+      expect(form.saved).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("a recovery whose reload fails", () => {

@@ -111,6 +111,11 @@ export interface RefusedForm {
 /** How a recovery's hold ends when the editor moves to another document. */
 const LET_GO = new Error("The editor moved to another document.");
 
+/** What a recovery says when the editor moved before it could save. */
+const MOVED_BEFORE_SAVE = new Error(
+  "Nothing was taken: the editor moved to another language or document. Publish again from the one you meant to take them into."
+);
+
 /** The refusal toast of one document in one language. */
 function refusalToastId(scope: VersionScope, locale?: string): string {
   const document =
@@ -153,6 +158,10 @@ export function useSharedFieldsRecovery(args: {
   // A string, so the effect below follows the document's address rather than
   // the scope object, which callers build afresh on every render.
   const toastId = scope ? refusalToastId(scope, locale) : null;
+  // The document and language the editor shows at this render, read when a
+  // recovery is about to save: the form it reads is whichever is on screen.
+  const onScreen = useRef(toastId);
+  onScreen.current = toastId;
 
   // The toast's action saves this editor's form; once the editor shows
   // another document or language, or none, that form is not the refused one.
@@ -306,7 +315,13 @@ export function useSharedFieldsRecovery(args: {
             });
             toast.loading("Taking the live values…", { id: taking });
             // Read now, not when refused: edits made since are part of it.
-            const saved = await save(await form.pendingChangeNow());
+            const values = await form.pendingChangeNow();
+            // The form is the one on screen: if the editor has moved to
+            // another language or document since the action, what was read
+            // belongs there, not to the change this refusal was for. Checked
+            // with nothing awaited before the save, so no move slips between.
+            if (onScreen.current !== refusedFor) throw MOVED_BEFORE_SAVE;
+            const saved = await save(values);
             form.saved();
             const { item } = await versionApi.takeLiveSharedValues(
               scope,
@@ -325,6 +340,11 @@ export function useSharedFieldsRecovery(args: {
         } catch (failure) {
           // Let go by a move: nothing failed that the author must hear of.
           if (failure === LET_GO) return;
+          // Moved before it saved: nothing was written, which it says plainly.
+          if (failure === MOVED_BEFORE_SAVE) {
+            toast.error(MOVED_BEFORE_SAVE.message);
+            return;
+          }
           toast.error(
             apiErrorMessage(failure, "The live values couldn't be taken.")
           );
@@ -339,7 +359,8 @@ export function useSharedFieldsRecovery(args: {
       toast.error(
         `${named} ${one ? "was" : "were"} published by someone else after this change began.`,
         {
-          id: refusalToastId(scope, locale),
+          // The same key the move check compares against.
+          id: refusedFor,
           description: `Nothing was published. Take the live values into ${language}, then publish again.`,
           duration: Number.POSITIVE_INFINITY,
           closeButton: true,
