@@ -206,14 +206,12 @@ const CORE_WIDGET_LITERALS = [
     description:
       "The setup steps this reader could still take, detected from the install rather than ticked by hand.",
     archetype: "custom",
-    // Full width only, and tall enough for every step it shows by default: a card never scrolls,
-    // so a shorter one cut its last steps off. Measured in the browser, the steps it draws before
-    // "Show N more" (a collection, an entry, five Singles and an invite, about 580 px with that
-    // control) fit the body of eight rows. Taller for a site that opens the rest of its Singles,
-    // never shorter. The end-to-end grid spec checks that the steps fit.
+    // Full width only, and compact: it draws the whole steps its rows hold and folds the rest
+    // behind "Show N more", which grows the card in place (the admin's Get started fold). A card
+    // never scrolls, so no step is ever cut by its edge, at any height a reader gives it.
     size: {
-      default: { w: 12, h: 8 },
-      min: { w: 12, h: 8 },
+      default: { w: 12, h: 4 },
+      min: { w: 12, h: 3 },
       max: { w: 12, h: 12 },
     },
     // First: it addresses a reader who has just arrived.
