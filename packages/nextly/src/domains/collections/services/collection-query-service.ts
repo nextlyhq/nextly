@@ -2004,6 +2004,36 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * The conditions a read rule's filter adds to a read. A filter that cannot be
+   * built against the collection as it stands, one naming a field it no
+   * longer has, matches no entry: a list finds nothing. The rule's own error
+   * is logged for whoever maintains the rule, by its code alone, and never
+   * handed to the caller, to whom it would describe the rule.
+   */
+  private async ruleFilterConditions(
+    collectionName: string,
+    filter: RuleFilter,
+    schema: DynamicSchema,
+    localizedCtx: LocalizedQueryContext | null
+  ): Promise<SQLWrapper[]> {
+    try {
+      const limited = await this.resolveFilterConditions({
+        collectionName,
+        where: filter,
+        schema,
+        localizedCtx,
+      });
+      return limited.conditions;
+    } catch (error) {
+      this.logger.error("A read rule's filter could not be built", {
+        collectionName,
+        code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
+      });
+      return [sql`1 = 0`];
+    }
+  }
+
+  /**
    * Turn a settled read request into the SQL conditions that answer it.
    *
    * `listEntries` and `countEntries` are one read: the list asks this service
@@ -2221,13 +2251,14 @@ export class CollectionQueryService extends BaseService {
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
     if (params.ruleFilter) {
-      const limited = await this.resolveFilterConditions({
-        collectionName: params.collectionName,
-        where: params.ruleFilter,
-        schema,
-        localizedCtx,
-      });
-      conditions.push(...limited.conditions);
+      conditions.push(
+        ...(await this.ruleFilterConditions(
+          params.collectionName,
+          params.ruleFilter,
+          schema,
+          localizedCtx
+        ))
+      );
     }
 
     return {

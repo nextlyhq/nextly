@@ -39,6 +39,8 @@ const PLACES = "rulefilter_places";
 // A rule whose filter changes with every call, as one built from state that
 // moves between calls would.
 const SHIFTING = "rulefilter_shifting";
+// A read rule whose filter names a field the collection does not have.
+const VANISHED = "rulefilter_vanished";
 let shiftingCalls = 0;
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
@@ -82,6 +84,11 @@ async function boot(): Promise<TestNextly> {
             };
           }),
         },
+        fields: [text({ name: "title" }), text({ name: "team" })],
+      }),
+      defineCollection({
+        slug: VANISHED,
+        access: { read: answering({ vanished: { equals: "x" } }) },
         fields: [text({ name: "title" }), text({ name: "team" })],
       }),
       defineCollection({
@@ -232,6 +239,20 @@ describe("a read rule that answers a filter", () => {
     // The rule's filter names the same field, and the read is answered.
     const listed = await t.nextly.find({ collection: NOTES, ...asVisitor });
     expect(listed.meta.total).toBe(3);
+  });
+
+  it("lists nothing, rather than an error naming the rule's field, where the rule's filter cannot be built", async () => {
+    const t = await boot();
+    await seed(t, VANISHED);
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    // Not a validation error describing the rule's private configuration to
+    // the caller: the filter matches no entry.
+    const listed = await t.nextly.find({ collection: VANISHED, ...asVisitor });
+    expect(listed.items).toEqual([]);
+    expect(listed.meta.total).toBe(0);
+    expect(
+      (await t.nextly.count({ collection: VANISHED, ...asVisitor })).total
+    ).toBe(0);
   });
 
   it("refuses a filter using near, and reports it once, rather than reading every entry", async () => {
