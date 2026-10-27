@@ -30,7 +30,7 @@ import { useSuppressedChrome } from "../ChromeSuppression";
 
 import {
   CONTENT_RAIL_ID,
-  isContentSection,
+  contentSectionToOpen,
   panelSectionIds,
   railItemOf,
 } from "./lib/content-rail";
@@ -294,8 +294,12 @@ export function DualSidebar({
       setSelectedMain(id);
       return;
     }
-    if (isContentSection(selectedMain)) return;
-    setSelectedMain(hasCollectionsSection ? "collections" : "singles");
+    setSelectedMain(
+      contentSectionToOpen(selectedMain, {
+        collections: hasCollectionsSection,
+        singles: hasSinglesSection,
+      })
+    );
   };
 
   // Sync selectedMain when activeCategory changes (e.g. on navigation)

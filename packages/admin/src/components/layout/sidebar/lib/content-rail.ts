@@ -27,6 +27,22 @@ export function railItemOf(section: string): string {
 }
 
 /**
+ * The section selecting the Content item opens.
+ *
+ * The item is a button, not a link: it opens the panel and navigates nowhere.
+ * Already in a content section the reader can see, it stays there; otherwise
+ * it opens the first kind the reader may read, so a reader of Singles alone is
+ * never shown the Collections part, which they cannot open.
+ */
+export function contentSectionToOpen(
+  current: string,
+  available: Readonly<Record<ContentSection, boolean>>
+): ContentSection {
+  if (isContentSection(current) && available[current]) return current;
+  return available.collections ? "collections" : "singles";
+}
+
+/**
  * The rail ids the panel reads to decide whether it is open: the Content item
  * expanded into whichever of its sections the reader can see, since the panel
  * shows a section, not the item.

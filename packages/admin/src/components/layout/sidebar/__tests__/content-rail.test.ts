@@ -10,6 +10,7 @@ import { Feather } from "@admin/components/icons";
 
 import {
   CONTENT_RAIL_ID,
+  contentSectionToOpen,
   panelSectionIds,
   railItemOf,
 } from "../lib/content-rail";
@@ -45,5 +46,29 @@ describe("the Content rail item", () => {
     expect(
       panelSectionIds(rail, { collections: false, singles: true })
     ).toEqual(["dashboard", "singles", "media"]);
+  });
+});
+
+describe("selecting the Content item", () => {
+  const both = { collections: true, singles: true };
+
+  it("opens Singles from another section for a reader of Singles alone", () => {
+    expect(
+      contentSectionToOpen("settings", { collections: false, singles: true })
+    ).toBe("singles");
+  });
+
+  it("opens Collections from another section for a reader of both", () => {
+    expect(contentSectionToOpen("settings", both)).toBe("collections");
+  });
+
+  it("stays on the content section already showing", () => {
+    expect(contentSectionToOpen("singles", both)).toBe("singles");
+  });
+
+  it("leaves a content section the reader can't see for one they can", () => {
+    expect(
+      contentSectionToOpen("singles", { collections: true, singles: false })
+    ).toBe("collections");
   });
 });
