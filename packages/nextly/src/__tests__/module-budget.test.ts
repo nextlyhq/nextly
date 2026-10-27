@@ -18,6 +18,7 @@ import {
   HEAVY_MODULES,
   judge,
   measure,
+  moduleWithKey,
   shortestPath,
   tableFileDialect,
 } from "./module-budget-reporter";
@@ -144,6 +145,33 @@ describe("shortestPath", () => {
     expect(ids(shortestPath(start, m => m.id === "register"))).toEqual([
       "register",
     ]);
+  });
+});
+
+describe("moduleWithKey", () => {
+  // A Windows run's graph: the root and every id use `/`, as Vite spells
+  // them on every platform, while joining the root with Windows' separator
+  // would give `D:\a\...\src\di\register.ts`, an id no module has.
+  const root = "D:/a/nextly/nextly/packages/nextly";
+  const module = (id: string): GraphModule => ({
+    id,
+    importedModules: new Set(),
+  });
+  const modules = [
+    module(`${root}/src/init/first-run.ts`),
+    module(`${root}/src/di/register.ts`),
+  ];
+
+  it("finds a module by its record key, on a Windows run's ids", () => {
+    expect(moduleWithKey(modules, root, "src/di/register.ts")?.id).toBe(
+      `${root}/src/di/register.ts`
+    );
+  });
+
+  it("answers nothing for a key no module has", () => {
+    expect(
+      moduleWithKey(modules, root, "src/schemas/index.ts")
+    ).toBeUndefined();
   });
 });
 

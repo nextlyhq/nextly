@@ -68,12 +68,14 @@ export const JUDGED_PROJECT = "nextly (isolated)";
 /**
  * The judged project's pins, each a margin above what it measured when it was
  * set (62 heavy files, and a mean of 1,191 modules over the heaviest tenth,
- * over 597 files), and the heavy files of that measurement. A run that
+ * over 597 files; CI's runs measured 61 and 1,190), and the heavy files of
+ * that measurement. Each pin is the higher measurement plus its margin, at
+ * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_226 };
+export const BUDGET = { heavyFiles: 64, tailMeanModules: 1_225 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
@@ -204,6 +206,23 @@ function recordKey(root: string, moduleId: string): string {
 export interface GraphModule {
   id: string | null;
   importedModules: Set<GraphModule>;
+}
+
+/**
+ * The module among `modules` whose record key is `key`. Found by the key, the
+ * spelling every other lookup here uses, rather than by building its id: Vite's
+ * ids use `/` on every platform, so an id joined with the platform's separator
+ * names no module on Windows.
+ */
+export function moduleWithKey(
+  modules: Iterable<GraphModule>,
+  root: string,
+  key: string
+): GraphModule | undefined {
+  for (const module of modules) {
+    if (module.id && recordKey(root, module.id) === key) return module;
+  }
+  return undefined;
 }
 
 /**
@@ -554,7 +573,11 @@ export default class ModuleBudgetReporter implements Reporter {
         const line = [crossing.from, ...crossing.path].map(name).join(" → ");
         crossings.set(line, crossing);
       }
-      boot ??= graph.getModuleById(join(root, "src/di/register.ts"));
+      boot ??= moduleWithKey(
+        graph.idToModuleMap.values(),
+        root,
+        "src/di/register.ts"
+      );
     }
     const problems: string[] = [];
     for (const [line, crossing] of [...crossings].slice(0, NAMED)) {
