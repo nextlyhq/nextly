@@ -13,6 +13,7 @@ import {
   it,
   expect,
   vi,
+  beforeAll,
 } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -22,6 +23,13 @@ import {
 } from "../../../../shared/lib/field-level-registry";
 import { CollectionRelationshipService } from "../collection-relationship-service";
 import { TRUSTS_EVERY_COLLECTION } from "../../../../services/collections/trust-grant";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // Every caller here may read the related row, since what is under test is
 // what is stripped from it. No access-control service is registered in this
