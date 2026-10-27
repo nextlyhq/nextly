@@ -2,16 +2,19 @@
  * WHICH Get started steps exist, and what one can say, as a vocabulary
  * anything may name.
  *
- * Its own module, with no imports, for the reason `onboarding-steps.ts` is: the
- * admin draws a row for each kind and must name them, and the code that
- * ANSWERS a step reaches the Direct API and the database. A single module would
- * drag that whole graph into every consumer of the names.
+ * Its own module, importing only core's widget ids (which import nothing), for
+ * the reason `onboarding-steps.ts` is: the admin draws a row for each kind and
+ * must name them, and the code that ANSWERS a step reaches the Direct API and
+ * the database. A single module would drag that whole graph into every
+ * consumer of the names.
  *
  * @module domains/widgets/get-started-steps
  */
 
+import { CORE_WIDGET_ID } from "./core-widgets/ids";
+
 /** The Get started card's widget id: the one card the steps are drawn on. */
-export const GET_STARTED_WIDGET_ID = "core/get-started";
+export const GET_STARTED_WIDGET_ID = CORE_WIDGET_ID.getStarted;
 
 /** The kinds of step, in the order the card offers them. */
 export const GET_STARTED_STEP_KINDS = [
