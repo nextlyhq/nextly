@@ -143,9 +143,23 @@ export default defineConfig({
     __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
   },
   resolve: {
-    alias: {
-      "@nextly/storage": path.resolve(__dirname, "./src/storage/index.ts"),
-    },
+    alias: [
+      {
+        find: "@nextly/storage",
+        replacement: path.resolve(__dirname, "./src/storage/index.ts"),
+      },
+      // Code outside the package that imports nextly by its published names
+      // (a template's collections, read by a test) gets this package's own
+      // source: the published entries are built files a unit run never has.
+      {
+        find: /^nextly\/config$/,
+        replacement: path.resolve(__dirname, "./src/config.ts"),
+      },
+      {
+        find: /^nextly$/,
+        replacement: path.resolve(__dirname, "./src/index.ts"),
+      },
+    ],
   },
   test: {
     // What each file loaded on its last run, so `--changed` and `related` pick
