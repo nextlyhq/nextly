@@ -32,7 +32,12 @@
  */
 
 import { useDraggable } from "@dnd-kit/core";
-import { useCallback, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  type KeyboardEvent,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -76,7 +81,7 @@ export function DraggableWidgetCell({
   className,
   "data-testid": testId,
   children,
-}: DraggableWidgetCellProps) {
+}: DraggableWidgetCellProps): JSX.Element {
   const draggable = isEditing && drag !== undefined;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef } =
     useDraggable({ id, disabled: !draggable });

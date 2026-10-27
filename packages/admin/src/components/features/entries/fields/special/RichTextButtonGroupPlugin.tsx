@@ -39,6 +39,7 @@ import {
   type NodeKey,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { Plus, Trash2 } from "@admin/components/icons";
 
@@ -96,7 +97,7 @@ export interface RichTextButtonGroupPluginProps {
 
 export function RichTextButtonGroupPlugin({
   disabled = false,
-}: RichTextButtonGroupPluginProps) {
+}: RichTextButtonGroupPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [buttons, setButtons] = useState<DialogButton[]>([
     createDefaultButton(),

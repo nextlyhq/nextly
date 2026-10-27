@@ -8,6 +8,7 @@ import {
   getWidget,
   listWidgets,
   overrideWidget,
+  registerDeclaredDefinition,
   registerWidget,
 } from "../registry";
 
@@ -167,5 +168,71 @@ describe("widget registry", () => {
     expect(deregisterWidget("core/totals")).toBe(true);
     expect(deregisterWidget("core/totals")).toBe(false);
     expect(getWidget("core/totals")).toBeUndefined();
+  });
+});
+
+describe("the doors a widget whose data core builds may come through", () => {
+  // A declared widget as core publishes it: its data is built on the server, so it has no query.
+  const declared = (id: string): WidgetDefinition => {
+    const { query: _query, ...rest } = def(id);
+    return { ...rest, serverData: true };
+  };
+
+  it("comes in through core's own door, and through no public one", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+
+    expect(() => registerWidget(declared("acme/other"))).toThrow(
+      /registerWidget\(\) with serverData/
+    );
+    expect(getWidget("acme/other")).toBeUndefined();
+  });
+
+  it("is refused through a public door even untyped, as a spread of a published one carries it", () => {
+    const spread = {
+      ...def("acme/spread"),
+      serverData: "yes",
+    } as unknown as WidgetDefinition;
+    expect(() => registerWidget(spread)).toThrow(/with serverData/);
+  });
+
+  it("cannot be replaced, since its card is answered from its declaration", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(
+      /"plugin @acme\/shop" declares it/
+    );
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+    // Nor replaced by one that claims to be server-built, through the public door.
+    expect(() =>
+      overrideWidget("acme/orders", declared("acme/orders"))
+    ).toThrow(/overrideWidget\(\) with serverData/);
+  });
+
+  it("cannot be handed a query by a patch", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(() =>
+      extendWidget("acme/orders", {
+        query: { source: "collection:posts", op: "count" },
+      })
+    ).toThrow(/built on the server takes no query/);
+    expect(getWidget("acme/orders")?.query).toBeUndefined();
+  });
+
+  it("admits only what core built: a definition without the mark is refused at core's door too", () => {
+    let refused: unknown;
+    try {
+      registerDeclaredDefinition(def("acme/plain"), "plugin @acme/shop");
+    } catch (error) {
+      refused = error;
+    }
+    // Core's own fault, so an internal error whose detail is for the log only.
+    expect(refused).toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: {
+        widgetId: "acme/plain",
+        reason: "a declared widget was published without serverData",
+      },
+    });
+    expect(getWidget("acme/plain")).toBeUndefined();
   });
 });

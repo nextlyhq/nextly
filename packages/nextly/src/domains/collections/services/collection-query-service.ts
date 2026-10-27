@@ -112,9 +112,10 @@ import {
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -130,9 +131,11 @@ import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildCompanionExists,
@@ -1757,7 +1760,10 @@ export class CollectionQueryService extends BaseService {
   private denyCollectionRead<T>(params: {
     collectionName: string;
     accessUser?: UserContext;
-    /** Present only on the by-id path, which names the row it is judging. */
+    /**
+     * Present only on the by-id path, which names the row it is judging, so
+     * a refusal names that one entry.
+     */
     entryId?: string;
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
@@ -1767,6 +1773,7 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       operation: "read",
       user: params.accessUser,
+      entryId: params.entryId,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own read grant, so the session
@@ -2380,11 +2387,13 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     fields: FieldDefinition[],
     /** The SQL table the rows came from, for its contributed columns. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    const clearsPasswords = hasPasswordField(fields);
+    const clearsPasswords = reachesPasswordField(fields, reach);
     for (const row of rows) {
-      if (clearsPasswords) stripPasswordFieldValues(row, fields);
+      if (clearsPasswords) stripPasswordFieldValues(row, fields, reach);
       stripServerOnlyColumns(row, tableName);
     }
   }
@@ -2474,12 +2483,28 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // The field groups held inline in this collection's containers, whose
+    // passwords sit in those containers' values: resolved once for the read.
+    // A read of every translation returns each translated field keyed by
+    // language, the fields `decodeJsonFieldValues` decodes that way.
+    const inline = await passwordReachOf(fields, this.fieldGroupDataService);
+    const reach: FieldGroupReach =
+      params.locale === EVERY_TRANSLATION
+        ? {
+            ...inline,
+            keyedByLanguage: field =>
+              isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                true
+              ),
+          }
+        : inline;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields, tableName);
+    this.redactServerOnlyFields(rows, fields, tableName, reach);
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2588,7 +2613,7 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields, tableName);
+    this.redactServerOnlyFields(finalData, fields, tableName, reach);
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.
@@ -3924,20 +3949,11 @@ export class CollectionQueryService extends BaseService {
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      // Build the count query
-      let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
-
-      // Apply combined where conditions
-      if (whereConditions.length > 0) {
-        query = query.where(
-          whereConditions.length === 1
-            ? whereConditions[0]
-            : and(...whereConditions)
-        );
-      }
-
-      // Execute count query
-      const result = await query;
+      const result = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema)
+        // `and` of none is no filter, and of one is that condition alone.
+        .where(and(...whereConditions));
       const totalDocs = Number(result[0]?.count || 0);
 
       return {
@@ -3947,23 +3963,86 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : "Failed to count entries";
-      this.logger.error("Error counting entries", {
-        collectionName: params.collectionName,
-        error: message,
-      });
+      return this.countFailed(params.collectionName, error);
+    }
+  }
+
+  /**
+   * A count that failed, as both counts report it: logged, and returned with
+   * the error's own status and code.
+   */
+  private countFailed(
+    collectionName: string,
+    error: unknown
+  ): CollectionServiceResult<never> {
+    const message =
+      error instanceof Error ? error.message : "Failed to count entries";
+    this.logger.error("Error counting entries", {
+      collectionName,
+      error: message,
+    });
+    return {
+      success: false,
+      // Mirrors listEntries: a refusal is a 403, not a server fault, and the
+      // count must report it the same way.
+      statusCode: NextlyError.is(error) ? error.statusCode : 500,
+      message,
+      data: null,
+      // Same reason as listEntries: without the code the boundary rebuilds a
+      // typed refusal as a generic internal error.
+      ...errorEnvelopeFields(error),
+    };
+  }
+
+  /**
+   * How many rows a `countEntries` with the same request would count, read no
+   * further than `cap`: the exact number up to the cap, or the cap with
+   * `atLeast` once there are more.
+   *
+   * The same plan as the count, so the same access, read rules, hooks and
+   * workflow conditions decide the rows; only the read differs. It selects ids
+   * and stops one row past the cap rather than counting the whole set, so a
+   * caller that shows "99+" never pays for counting a large table, and "there
+   * are more" is observed rather than assumed.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: FilteredReadParams & { cap: number }
+  ): Promise<CollectionServiceResult<{ count: number; atLeast: boolean }>> {
+    try {
+      // A cap that is not a positive integer would reach the query builder as
+      // `.limit(NaN)` or a fraction, and fail the read rather than bound it.
+      if (!Number.isSafeInteger(params.cap) || params.cap < 1) {
+        throw NextlyError.internal({
+          logContext: { reason: "count-cap-not-a-positive-integer" },
+        });
+      }
+      const plan = await this.resolveReadPlan<{
+        count: number;
+        atLeast: boolean;
+      }>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      const rows = await this.db
+        .select({ id: schema.id })
+        .from(schema)
+        .where(and(...whereConditions))
+        .limit(params.cap + 1);
+
       return {
-        success: false,
-        // Mirrors listEntries: a refusal is a 403, not a server fault, and the
-        // count must report it the same way.
-        statusCode: NextlyError.is(error) ? error.statusCode : 500,
-        message,
-        data: null,
-        // Same reason as listEntries: without the code the boundary rebuilds a
-        // typed refusal as a generic internal error.
-        ...errorEnvelopeFields(error),
+        success: true,
+        statusCode: 200,
+        message: "Count retrieved successfully",
+        data: {
+          count: Math.min(rows.length, params.cap),
+          atLeast: rows.length > params.cap,
+        },
       };
+    } catch (error: unknown) {
+      // Reported as `countEntries` reports it, so a refusal stays a typed 403.
+      return this.countFailed(params.collectionName, error);
     }
   }
 

@@ -47,7 +47,9 @@ export interface ServiceOpts {
    * had no way to say it: `user` throws without a user, and everything else
    * elevated to `system`, so a public route could only read by bypassing the
    * host's configured rules. Route auth and collection access are separate
-   * questions, and `public: true` answers only the first.
+   * questions, and `public: true` answers only the first. With no rule for
+   * the operation, a read keeps the public default and a create, update or
+   * delete is refused: a write needs a rule that answers `true`.
    */
   as?: "user" | "system" | "public";
   user?: AuthUser;

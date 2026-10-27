@@ -80,9 +80,9 @@ import {
   componentsToStop,
   planReleaseMaterialisation,
 } from "../plan-release-materialisation";
-import {
-  type ReleaseCheckReads,
-  type ReleaseCheckSource,
+import type {
+  ReleaseCheckReads,
+  ReleaseCheckSource,
 } from "../readiness/check-sources";
 import {
   CORE_AUTHOR_SOURCE,
@@ -1991,6 +1991,22 @@ export class ReleasesService {
   async count(query: ReleaseCountQuery, actor: ReleaseActor): Promise<number> {
     await this.authorize(actor, "read");
     return this.deps.repository.countReleases(this.listFilters(query));
+  }
+
+  /**
+   * Whether the caller may read a release at all: one exists that the list
+   * would show them.
+   *
+   * The same authorization `find` makes and the same filters it reads through,
+   * with nothing narrowing them, so it says "yes" exactly where an unfiltered
+   * list would not be empty. One id read with a bound of one, not a count, for
+   * a question a dashboard asks on every load.
+   *
+   * @experimental
+   */
+  async anyReadable(actor: ReleaseActor): Promise<boolean> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.anyRelease(this.listFilters({}));
   }
 
   /**

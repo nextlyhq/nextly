@@ -126,7 +126,7 @@ export async function askRule(
   if (rule === undefined) return { declared: false };
   if (typeof rule === "boolean") return { declared: true, value: rule };
   try {
-    const value: unknown = await rule(ruleContext(actor, action, target, rule));
+    const value: unknown = await rule(ruleContext(actor, action, target));
     return { declared: true, value };
   } catch (error) {
     // A broken rule refuses, and is logged so it can be found and fixed.

@@ -55,7 +55,9 @@ import {
   actorForUserFailingClosed,
   userHoldsPermission,
   userIsSuperAdmin,
+  withHeldPermissions,
 } from "./resolve-actor";
+import { withRuleLanguage, type RuleLanguage } from "./rule-language";
 
 /** Where a route gate reads the rules apps declare; absent without the service. */
 export type RouteRules = CollectionQuestion["rules"];
@@ -70,7 +72,7 @@ export interface RoutePermission {
  * Who a gate judges: the user the request names and, when a key made the
  * request, the key's own scope and id.
  */
-interface GateCaller {
+export interface GateCaller {
   readonly userId: string;
   /** The key's scope; absent for a session. */
   readonly key?: AuthenticatedScope;
@@ -154,6 +156,149 @@ export function routeGateVerdict(
   return gateVerdict(callerOf(auth), action, resource, rules, () =>
     hasPermission(auth.userId, action, resource)
   );
+}
+
+/**
+ * The actions a collection's capabilities answer: every access operation, so
+ * an operation the gates gain is answered here without an edit.
+ */
+export const COLLECTION_ACTIONS = ACCESS_OPERATIONS;
+
+/** The operations a Single does not have: it is never created or deleted. */
+const NOT_ON_A_SINGLE = ["create", "delete"] as const;
+
+/** An action a Single's capabilities answer. */
+type SingleAction = Exclude<
+  (typeof ACCESS_OPERATIONS)[number],
+  (typeof NOT_ON_A_SINGLE)[number]
+>;
+
+/** The actions a Single's capabilities answer: the rest of the operations. */
+export const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
+  (operation): operation is SingleAction =>
+    !NOT_ON_A_SINGLE.some(missing => missing === operation)
+);
+
+/**
+ * The actions a REST request reaches through the entry's update route: a
+ * publish is a status change sent as an update, so its route asks update and
+ * the publish check comes on top of it.
+ */
+const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
+
+/** What the caller may do with one collection or Single. */
+export type EntityCapabilities =
+  | ({ readonly kind: "collection" } & Readonly<
+      Record<(typeof COLLECTION_ACTIONS)[number], boolean>
+    >)
+  | ({ readonly kind: "single" } & Readonly<Record<SingleAction, boolean>>);
+
+/**
+ * What the caller may do with each collection and Single. System resources
+ * are not answered here: their routes accept permissions of their own, which
+ * the caller's permission list already states.
+ */
+export interface RouteCapabilities {
+  /**
+   * Whether the caller holds super-admin authority, from the same read the
+   * cells were answered from. A key never does.
+   */
+  readonly isSuperAdmin: boolean;
+  readonly entities: Readonly<Record<string, EntityCapabilities>>;
+}
+
+/**
+ * The REST operation that performs each action on a collection or a Single,
+ * whose languages a rule is told when that request asks the gate.
+ */
+const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
+  collection: {
+    create: "createEntry",
+    read: "getEntry",
+    update: "updateEntry",
+    delete: "deleteEntry",
+    publish: "updateEntry",
+    unpublish: "updateEntry",
+  },
+  single: {
+    read: "getSingleDocument",
+    update: "updateSingleDocument",
+    publish: "updateSingleDocument",
+    unpublish: "updateSingleDocument",
+  },
+};
+
+/**
+ * What `caller` may do with each of `entities`: the route gate's answer for
+ * every action, as a REST request asking it would get, so the admin offers
+ * what the server allows and nothing else. A publish or an unpublish is
+ * allowed only where the update its request goes through is allowed too.
+ * `languageOf` gives the languages the REST operation behind an action is
+ * told, so a rule hears the languages that request would.
+ *
+ * The caller is read once for the whole answer: a key from its scope, and a
+ * signed-in user's permissions held for every cell, so an added entity adds
+ * no question about the caller, and the super-admin flag comes from that same
+ * read. A lookup that fails throws, as it does at the route gate, rather than
+ * being answered as a refusal or asked again cell by cell.
+ */
+export async function routeGateCapabilities(
+  caller: GateCaller,
+  entities: ReadonlyMap<string, "collection" | "single">,
+  rules: RouteRules,
+  languageOf: (operation: string) => RuleLanguage
+): Promise<RouteCapabilities> {
+  const answer = () => entityCapabilities(caller, entities, rules, languageOf);
+  // A key never carries super-admin authority through the gates.
+  if (caller.key) return { isSuperAdmin: false, entities: await answer() };
+  return withHeldPermissions(caller.userId, async held => ({
+    isSuperAdmin: held.superAdmin,
+    entities: await answer(),
+  }));
+}
+
+async function entityCapabilities(
+  caller: GateCaller,
+  entities: ReadonlyMap<string, "collection" | "single">,
+  rules: RouteRules,
+  languageOf: (operation: string) => RuleLanguage
+): Promise<RouteCapabilities["entities"]> {
+  const byEntity: Record<string, EntityCapabilities> = {};
+  for (const [slug, kind] of entities) {
+    const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
+    const answered: Record<string, boolean> = {};
+    for (const action of actions) {
+      // Update is answered before either lifecycle action in both lists. A
+      // refused update closes the door a publish is sent through, so its own
+      // check, and any rule it would run, is never asked.
+      if (THROUGH_UPDATE.has(action) && answered.update !== true) {
+        answered[action] = false;
+        continue;
+      }
+      answered[action] = await withRuleLanguage(
+        languageOf(OPERATION_OF[kind][action] ?? action),
+        () => capability(caller, action, slug, rules)
+      );
+    }
+    byEntity[slug] = { kind, ...answered } as EntityCapabilities;
+  }
+  return byEntity;
+}
+
+/** The route gate's answer for one action, decided as its own subject. */
+async function capability(
+  caller: GateCaller,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const verdict = await aboutSubject(permissionSlug(action, resource), () =>
+    gateVerdict(caller, action, resource, rules, () =>
+      userHoldsPermission(caller.userId, action, resource)
+    )
+  );
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  return verdict.allowed;
 }
 
 /**
@@ -423,10 +568,9 @@ async function heldPermission(
 }
 
 /**
- * A signed-in user's answer to a caller check: the route gate's, refused
- * without the access-control service, and a rule's own answer as it came.
- * A lookup that failed fails the check, as it always has, rather than
- * answering no.
+ * A signed-in user's answer to a caller check: the route gate's, a yes or a
+ * no, and refused without the access-control service. A lookup that failed
+ * fails the check, as it always has, rather than answering no.
  */
 async function sessionAnswer(
   userId: string,
@@ -440,14 +584,7 @@ async function sessionAnswer(
     Promise.resolve(false)
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
-  if (!("ruleAnswer" in verdict)) return verdict.allowed;
-  // Typed as the rule declares its answer, a yes or no; a rule that answered
-  // anything else has that handed back as it came.
-  return deviate(
-    "can-returns-raw-rule-value",
-    verdict.ruleAnswer as boolean,
-    () => verdict.allowed
-  );
+  return verdict.allowed;
 }
 
 /** An empty action or resource, refused whoever asks. */

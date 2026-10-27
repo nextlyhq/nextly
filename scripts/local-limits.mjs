@@ -66,13 +66,35 @@ export const RESERVED_FRACTION = 0.3;
 export const MAX_CONCURRENCY = 4;
 export const MAX_WORKERS = 4;
 
+/**
+ * Memory from which a `tsc` run gets TypeScript 7's default four type-checking
+ * workers (`--checkers`) rather than two, in GiB. Measured on nextly, the
+ * largest program, at 4.3, 4.7 and 5.5 GB peak for 1, 2 and 4 checkers, so four
+ * belongs on a 16 GB machine and not on an 8 GB laptop. The cut sits below 16
+ * because a machine sold as 16 GB reports less once its firmware or the VM has
+ * taken a share (GitHub's 16 GB runners report about 15.2 to 15.6 GiB), and
+ * above the 12 GiB a smaller machine has.
+ */
+export const TSC_FULL_CHECKERS_GIB = 14;
+
+/**
+ * The checkers a `tsc` run uses: 4 on a 16 GB machine, 2 below that, and 1
+ * when the test workers are held to one, which is how a constrained machine is
+ * asked to run one thing at a time.
+ */
+function tscCheckers(totalGiB, overrideWorkers) {
+  if (overrideWorkers === 1) return 1;
+  return totalGiB >= TSC_FULL_CHECKERS_GIB ? 4 : 2;
+}
+
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
 }
 
 /** An explicit override, or null when unset or not a positive integer. */
 export function parseOverride(raw) {
-  if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+  if (raw === undefined || raw === null || String(raw).trim() === "")
+    return null;
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : null;
 }
@@ -92,9 +114,17 @@ export function deriveLimits({ totalBytes, cpus, env = {} }) {
 
   // Cores bound it as well as memory: more processes than cores buys nothing
   // and costs context switching.
-  const processBudget = clamp(Math.floor(usableGiB / GIB_PER_PROCESS), 1, Math.max(1, cpus));
+  const processBudget = clamp(
+    Math.floor(usableGiB / GIB_PER_PROCESS),
+    1,
+    Math.max(1, cpus)
+  );
 
-  const derivedConcurrency = clamp(Math.floor(Math.sqrt(processBudget)), 1, MAX_CONCURRENCY);
+  const derivedConcurrency = clamp(
+    Math.floor(Math.sqrt(processBudget)),
+    1,
+    MAX_CONCURRENCY
+  );
   const derivedWorkers = clamp(
     Math.min(
       Math.floor(processBudget / derivedConcurrency),
@@ -113,6 +143,7 @@ export function deriveLimits({ totalBytes, cpus, env = {} }) {
   return {
     concurrency: overrideConcurrency ?? derivedConcurrency,
     maxWorkers: overrideWorkers ?? derivedWorkers,
+    checkers: tscCheckers(totalGiB, overrideWorkers),
     derivedConcurrency,
     derivedWorkers,
     overridden: overrideConcurrency !== null || overrideWorkers !== null,
@@ -139,7 +170,9 @@ function main() {
   // Single values, for a shell that wants to capture one.
   if (argv.includes("--concurrency")) return console.log(limits.concurrency);
   if (argv.includes("--max-workers")) return console.log(limits.maxWorkers);
-  if (argv.includes("--json")) return console.log(JSON.stringify(limits, null, 2));
+  if (argv.includes("--checkers")) return console.log(limits.checkers);
+  if (argv.includes("--json"))
+    return console.log(JSON.stringify(limits, null, 2));
 
   console.log(
     `local-limits: ${limits.concurrency} package task(s) x ${limits.maxWorkers} worker(s)` +
@@ -149,6 +182,7 @@ function main() {
     `  ${limits.totalGiB} GiB total, ${limits.usableGiB} GiB usable, ${limits.cpus} cpu(s)` +
       ` -> budget ${limits.processBudget} heavy process(es)`
   );
+  console.log(`  tsc type-checks with ${limits.checkers} checker(s)`);
   if (!limits.overridden) {
     console.log(
       "  raise it for one command with NEXTLY_LOCAL_CONCURRENCY / NEXTLY_LOCAL_MAX_WORKERS"

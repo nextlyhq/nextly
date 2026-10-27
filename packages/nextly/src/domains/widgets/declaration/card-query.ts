@@ -92,7 +92,10 @@ export function buildCardQuery(
   );
   if (unset) return undefined;
   const { collection, ...rest } = queryAnswer(data.query({ settings }));
-  return { ...rest, source: `collection:${renamed(collection, collections)}` };
+  return {
+    ...rest,
+    source: `collection:${renamedCollection(collection, collections)}`,
+  };
 }
 
 /** A refusal of what a query function answered, naming why. */
@@ -134,7 +137,7 @@ function queryAnswer(answer: unknown): ContentQuery & { collection: string } {
  * as a slug never carries spaces. `Object.hasOwn`, since a plugin may own a
  * collection named `constructor`.
  */
-function renamed(
+export function renamedCollection(
   collection: string,
   collections: Readonly<Record<string, string>> | undefined
 ): string {

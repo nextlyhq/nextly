@@ -88,6 +88,8 @@ export interface PrincipalErasureDb extends PrincipalDigestDb {
   update(table: unknown): {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
+  /** For the digests of a queued email's recipients (`queued-erasure`). */
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 /** The adapter surface a report runs through. */

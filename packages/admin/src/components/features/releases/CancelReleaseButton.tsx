@@ -11,6 +11,7 @@
  * @module components/features/releases/CancelReleaseButton
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import {
@@ -30,7 +31,11 @@ import type { Release } from "@admin/types/releases";
 import { releaseErrorMessage } from "./release-error";
 import { formatScheduledAt } from "./release-schedule";
 
-export function CancelReleaseButton({ release }: { release: Release }) {
+export function CancelReleaseButton({
+  release,
+}: {
+  release: Release;
+}): JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const cancel = useCancelRelease(release.id);
   const at = formatScheduledAt(release);

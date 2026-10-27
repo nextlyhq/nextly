@@ -3,7 +3,6 @@
   "compilerOptions": {
     "declaration": true,
     "declarationMap": true,
-    "esModuleInterop": true,
     "incremental": true,
     // `${configDir}` resolves to the directory of the config that EXTENDS this
     // one, not to this file's own directory. A plain relative path here does
@@ -20,7 +19,18 @@
     // TS5074. tsdown's declaration step writes no build info at all.
     "tsBuildInfoFile": "${configDir}/.tsbuildinfo",
     "isolatedModules": true,
-    "lib": ["es2022", "DOM", "DOM.Iterable"],
+    // An import or export that names only types says so (`import type`), and
+    // every other one is kept as written. One file at a time is all a
+    // transformer like oxc sees, so it can only drop what the syntax marks.
+    "verbatimModuleSyntax": true,
+    // TypeScript 7's defaults, written out so 5.9 checks the same way now:
+    // a side-effect import (`import "./x"`) must resolve, and `lib` files are
+    // never replaced by a package named `@typescript/lib-*`.
+    "libReplacement": false,
+    "noUncheckedSideEffectImports": true,
+    // No `DOM.Iterable`: it has been an empty file since TypeScript 6.0, with
+    // the iterable DOM declarations folded into `DOM` itself.
+    "lib": ["es2024", "DOM"],
     "module": "NodeNext",
     "moduleDetection": "force",
     "moduleResolution": "NodeNext",
@@ -28,6 +38,8 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
-    "target": "ES2022"
+    // The newest syntax the supported Node floor (22.12) runs. Only for checking:
+    // what is emitted, and for which runtime, is tsdown's `target`.
+    "target": "ES2024"
   }
 }

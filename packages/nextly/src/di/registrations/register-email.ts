@@ -11,6 +11,8 @@ import { activeEmailRetention } from "../../domains/email/retention-config";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
 import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
+import type { JobRegistry } from "../../domains/jobs/job-registry";
+import { runJobNow } from "../../domains/jobs/jobs-runner";
 import { MetaRetentionGate } from "../../domains/retention/gate";
 import {
   buildRetentionRunner,
@@ -219,7 +221,11 @@ export function registerEmailServices(ctx: RegistrationContext): void {
       templateService,
       config.email,
       attachmentSource,
-      deliveryService
+      deliveryService,
+      // A queued email's first attempt: its job, run now through the same
+      // claim a jobs trigger takes, so the two never attempt it twice.
+      jobId =>
+        runJobNow(adapter, container.get<JobRegistry>("jobRegistry"), jobId)
     );
   });
 }

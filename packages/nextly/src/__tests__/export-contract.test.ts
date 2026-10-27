@@ -1,9 +1,18 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
+
+import { compile, listedFiles } from "../../../../scripts/tsc-cli.mjs";
 
 import type {
   WidgetArchetype,
@@ -143,62 +152,300 @@ const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
 ]);
 
 /**
- * Every name each published entry point exports, types included, keyed by
- * entry point.
+ * Which of `names` each published entry point exports, types included, keyed by
+ * entry point, as the compiler answers it.
  *
- * Read from the type checker rather than from an import, because an import
- * sees only runtime values and a type-only export is erased before it runs.
- * The program is built with the package's own compiler options, so `@nextly/*`
- * paths and every `export *` chain resolve as they do in the build.
+ * Read from the compiler rather than from an import, because an import sees only
+ * runtime values and a type-only export is erased before it runs. A file per
+ * entry point imports each name with `import type`, which accepts a value or a
+ * type, and the compiler's command line checks them with the package's own
+ * options, so `@nextly/*` paths and every `export *` chain resolve as they do in
+ * the build: "has no exported member" on a line is that name's absence. Any other
+ * error, such as an entry point that did not load, is a question the compiler
+ * could not answer and stops the run rather than reading as an absence.
+ *
+ * The files sit in a directory of their own under the package's `.turbo`, which
+ * git and every scan of the tree ignore, with `rootDir` widened to hold them.
  */
-function compiledProgram(): ts.Program {
-  const configPath = path.join(packageRoot, "tsconfig.json");
-  const config = ts.readConfigFile(configPath, ts.sys.readFile);
-  const parsed = ts.parseJsonConfigFileContent(
-    config.config,
-    ts.sys,
-    packageRoot
+// TS2459 and TS2460 are a module that declares the name without exporting it,
+// or exports it under another name: absent from the surface all the same.
+const ABSENT = new Set(["TS2305", "TS2724", "TS2614", "TS2459", "TS2460"]);
+
+function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
+  const parent = path.join(packageRoot, ".turbo");
+  mkdirSync(parent, { recursive: true });
+  const scratch = mkdtempSync(path.join(parent, "export-contract-"));
+  try {
+    const probes = ENTRY_POINTS.map(([entry, source], index) => {
+      const file = path.join(scratch, `entry-${index}.ts`);
+      const specifier = source.replace(/\.ts$/, "").replaceAll("\\", "/");
+      writeFileSync(
+        file,
+        [
+          ...names.map(
+            (name, line) =>
+              `import type { ${name} as _${line} } from ${JSON.stringify(specifier)};`
+          ),
+          `export type { ${names.map((_, line) => `_${line}`).join(", ")} };`,
+          "",
+        ].join("\n")
+      );
+      return { entry, file };
+    });
+    const config = path.join(scratch, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        extends: path.join(packageRoot, "tsconfig.json"),
+        compilerOptions: { rootDir: packageRoot },
+        files: probes.map(probe => probe.file),
+        include: [],
+      })
+    );
+    const listed = new Set(listedFiles(config));
+    for (const { file } of probes) {
+      expect(listed, `${file} is not in the program`).toContain(
+        file.replaceAll("\\", "/")
+      );
+    }
+
+    const diagnostics = compile(["-p", config], scratch);
+    return new Map(
+      probes.map(({ entry, file }) => {
+        const absent = new Set<string>();
+        for (const d of diagnostics) {
+          if (d.file === undefined) continue;
+          if (path.resolve(scratch, d.file) !== file) continue;
+          const name = names[(d.line ?? 0) - 1];
+          if (ABSENT.has(d.code) && name !== undefined) absent.add(name);
+          else
+            throw new Error(`${entry}: could not ask: ${d.code} ${d.message}`);
+        }
+        return [entry, new Set(names.filter(name => !absent.has(name)))];
+      })
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** The names asked about below, in one compile of the package. */
+const ASKED = [
+  ...RETIRED_ACCOUNT_TYPES,
+  ...RETIRED_ACCOUNT_NAMES,
+  "UserListResponse",
+  "UserListResponseSchema",
+  "defaultSkipAdminApi",
+];
+
+let exportedCache: Map<string, Set<string>> | undefined;
+function exported(): Map<string, Set<string>> {
+  exportedCache ??= exportedAmong(ASKED);
+  return exportedCache;
+}
+
+/** How long the one compile of the package gets, on a slow runner. */
+const COMPILE_TIMEOUT_MS = 180_000;
+
+/** A statement that declares an exported name, with the file it sits in. */
+interface Declared {
+  file: string;
+  text: string;
+  start: number;
+  comments: ReturnType<typeof parseSource>["comments"];
+}
+
+type Statement = ReturnType<typeof parseSource>["program"]["body"][number];
+
+/** The source module a relative specifier names, as the build resolves it. */
+function moduleFile(importer: string, specifier: string): string {
+  const base = path
+    .resolve(path.dirname(importer), specifier)
+    .replace(/\.js$/, "");
+  const file = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find(
+    candidate => existsSync(candidate)
   );
-  return ts.createProgram({
-    rootNames: ENTRY_POINTS.map(([, source]) => source),
-    options: { ...parsed.options, noEmit: true },
+  if (!specifier.startsWith(".") || file === undefined) {
+    throw new Error(`${importer}: could not follow ${specifier}`);
+  }
+  return file;
+}
+
+/** The names a declaration statement binds at the top of its module. */
+function declaredNames(statement: Statement): string[] {
+  if (statement.type === "FunctionDeclaration") {
+    return statement.id ? [statement.id.name] : [];
+  }
+  if (statement.type === "VariableDeclaration") {
+    return statement.declarations.flatMap(declarator =>
+      declarator.id.type === "Identifier" ? [declarator.id.name] : []
+    );
+  }
+  return [];
+}
+
+function nameOf(node: {
+  type: string;
+  name?: string;
+  value?: unknown;
+}): string {
+  return node.type === "Identifier" ? (node.name ?? "") : String(node.value);
+}
+
+/** A parsed source module. */
+interface Module {
+  file: string;
+  text: string;
+  program: ReturnType<typeof parseSource>["program"];
+  comments: ReturnType<typeof parseSource>["comments"];
+}
+
+function readModule(file: string): Module {
+  const text = readFileSync(file, "utf8");
+  // Named rather than spread: the parse result declares these as accessors,
+  // which a spread does not carry.
+  const { program, comments } = parseSource(text, file);
+  return { file, text, program, comments };
+}
+
+function declaredAt(module: Module, statement: Statement): Declared {
+  const { file, text, comments } = module;
+  return { file, text, start: statement.start, comments };
+}
+
+/** The top-level statement declaring `binding`, exported or not. */
+function declarationOf(module: Module, binding: string): Statement | undefined {
+  return module.program.body.find(statement => {
+    const declaration =
+      statement.type === "ExportNamedDeclaration"
+        ? statement.declaration
+        : statement;
+    return declaration ? declaredNames(declaration).includes(binding) : false;
   });
 }
 
-/** The exported symbols of each published entry point, by name. */
-function compiledExports(): Map<string, Map<string, ts.Symbol>> {
-  const program = compiledProgram();
-  const checker = program.getTypeChecker();
-  const exported = new Map<string, Map<string, ts.Symbol>>();
-  for (const [entry, source] of ENTRY_POINTS) {
-    const file = program.getSourceFile(source);
-    const moduleSymbol = file ? checker.getSymbolAtLocation(file) : undefined;
-    exported.set(
-      entry,
-      new Map(
-        (moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : []).map(
-          symbol => {
-            // A re-export is an alias; its documentation is on what it names.
-            const target =
-              symbol.flags & ts.SymbolFlags.Alias
-                ? checker.getAliasedSymbol(symbol)
-                : symbol;
-            return [symbol.getName(), target];
-          }
-        )
-      )
-    );
+/** Where an imported `binding` comes from; only a named import can be followed. */
+function importOf(
+  module: Module,
+  binding: string
+): { source: string; imported: string } | undefined {
+  for (const statement of module.program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const specifier = statement.specifiers.find(s => s.local.name === binding);
+    if (specifier === undefined) continue;
+    if (specifier.type !== "ImportSpecifier") {
+      throw new Error(`${module.file}: could not follow ${binding}`);
+    }
+    return {
+      source: statement.source.value,
+      imported: nameOf(specifier.imported),
+    };
   }
-  return exported;
+  return undefined;
 }
 
-function compiledExportNames(): Map<string, Set<string>> {
-  return new Map(
-    [...compiledExports()].map(([entry, symbols]) => [
-      entry,
-      new Set(symbols.keys()),
-    ])
+/** The declarations behind a binding of this module: its own, or an import's. */
+function localDeclarations(
+  module: Module,
+  binding: string,
+  seen: Set<string>
+): Declared[] {
+  const statement = declarationOf(module, binding);
+  if (statement) return [declaredAt(module, statement)];
+  const imported = importOf(module, binding);
+  if (imported === undefined) {
+    throw new Error(`${module.file}: no binding ${binding}`);
+  }
+  return exportedDeclarations(
+    moduleFile(module.file, imported.source),
+    imported.imported,
+    seen
   );
+}
+
+/** What one `export { ... }` or `export <declaration>` publishes as `name`. */
+function namedExport(
+  module: Module,
+  statement: Extract<Statement, { type: "ExportNamedDeclaration" }>,
+  name: string,
+  seen: Set<string>
+): Declared[] {
+  const found: Declared[] = [];
+  if (
+    statement.declaration &&
+    declaredNames(statement.declaration).includes(name)
+  ) {
+    found.push(declaredAt(module, statement));
+  }
+  for (const specifier of statement.specifiers) {
+    if (nameOf(specifier.exported) !== name) continue;
+    const binding = nameOf(specifier.local);
+    found.push(
+      ...(statement.source
+        ? exportedDeclarations(
+            moduleFile(module.file, statement.source.value),
+            binding,
+            seen
+          )
+        : localDeclarations(module, binding, seen))
+    );
+  }
+  return found;
+}
+
+/**
+ * The declarations behind what `file` exports as `name`, followed through
+ * `export { a as b } from`, an export of an imported binding, and `export *`,
+ * the way the compiler follows them. Asked of the export rather than found by
+ * spelling, because a module re-exporting a different function under this
+ * name publishes THAT function, whatever else in the package shares its name.
+ * A chain this cannot follow throws rather than reading as no declaration.
+ */
+function exportedDeclarations(
+  file: string,
+  name: string,
+  seen = new Set<string>()
+): Declared[] {
+  if (seen.has(`${file}#${name}`)) return [];
+  seen.add(`${file}#${name}`);
+  const module = readModule(file);
+  return module.program.body.flatMap(statement => {
+    if (statement.type === "ExportNamedDeclaration") {
+      return namedExport(module, statement, name, seen);
+    }
+    if (statement.type === "ExportAllDeclaration" && !statement.exported) {
+      return exportedDeclarations(
+        moduleFile(file, statement.source.value),
+        name,
+        seen
+      );
+    }
+    return [];
+  });
+}
+
+/**
+ * The JSDoc of the one declaration an entry point publishes as `name`. Only a
+ * block comment opening with two asterisks, directly above it, counts: a plain
+ * block comment is not documentation, and the compiler shows a consumer no tag
+ * from one.
+ */
+function publishedDocs(entrySource: string, name: string): string {
+  const declarations = exportedDeclarations(entrySource, name);
+  expect(
+    declarations.map(d => d.file),
+    `declarations published as ${name}`
+  ).toHaveLength(1);
+  const [declared] = declarations;
+  if (declared === undefined) return "";
+  const nearest = declared.comments
+    .filter(comment => comment.end <= declared.start)
+    .at(-1);
+  if (nearest === undefined) return "";
+  const adjacent =
+    declared.text.slice(nearest.end, declared.start).trim() === "";
+  const jsdoc = nearest.type === "Block" && nearest.value.startsWith("*");
+  return adjacent && jsdoc ? nearest.value : "";
 }
 
 describe("published export surface", () => {
@@ -230,37 +477,48 @@ describe("published export surface", () => {
     }
   );
 
-  it("exports no retired linked-account type from any entry point", () => {
-    const compiled = compiledExportNames();
-    const leaked = [...compiled].flatMap(([entry, names]) =>
-      [...RETIRED_ACCOUNT_TYPES, ...RETIRED_ACCOUNT_NAMES]
-        .filter(name => names.has(name))
-        .map(name => `${entry}: ${name}`)
-    );
-    expect(leaked).toEqual([]);
+  it(
+    "exports no retired linked-account type from any entry point",
+    () => {
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        [...RETIRED_ACCOUNT_TYPES, ...RETIRED_ACCOUNT_NAMES]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
 
-    // The controls. A file the program failed to load, or a re-export chain
-    // the checker did not follow, reads as an entry point exporting nothing,
-    // which passes every absence check. So each entry point must export
-    // something, and the user types and validators that stayed beside the
-    // retired ones must be read through both `export *` hops to the root.
-    expect(compiled.size).toBe(ENTRY_POINTS.length);
-    for (const [entry, names] of compiled) {
-      expect(names.size, `${entry} exports nothing`).toBeGreaterThan(0);
-    }
-    for (const entry of ["nextly", "nextly/schemas"]) {
-      expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
-      expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
-    }
-  });
+      // The controls. An entry point the compiler could not load stops the run
+      // in `exportedAmong` rather than reading as one exporting nothing, and
+      // every entry point is asked. The user types and validators that stayed
+      // beside the retired ones must be read through both `export *` hops to
+      // the root, or a chain the compiler did not follow would pass this too.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+      for (const entry of ["nextly", "nextly/schemas"]) {
+        expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
+        expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
+      }
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
-  it("keeps publishing defaultSkipAdminApi from the root, marked deprecated", () => {
-    // No longer the REST limit's default, and kept for an app that passes it
-    // as `rateLimit.skip` until a later release removes it.
-    const symbol = compiledExports().get("nextly")?.get("defaultSkipAdminApi");
-    expect(symbol, "nextly exports defaultSkipAdminApi").toBeDefined();
-    expect(symbol?.getJsDocTags().map(tag => tag.name)).toContain("deprecated");
-  });
+  it(
+    "keeps publishing defaultSkipAdminApi from the root, marked deprecated",
+    () => {
+      // No longer the REST limit's default, and kept for an app that passes it
+      // as `rateLimit.skip` until a later release removes it.
+      expect(
+        exported().get("nextly")?.has("defaultSkipAdminApi"),
+        "nextly exports defaultSkipAdminApi"
+      ).toBe(true);
+      const root = ENTRY_POINTS.find(([entry]) => entry === "nextly")?.[1];
+      expect(root, "the root entry point").toBeDefined();
+      expect(publishedDocs(root ?? "", "defaultSkipAdminApi")).toMatch(
+        /@deprecated\b/
+      );
+    },
+    COMPILE_TIMEOUT_MS
+  );
 
   it("still publishes the user validators beside the retired ones", async () => {
     // The control: an absence check is also satisfied by an entry point that

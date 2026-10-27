@@ -10,8 +10,10 @@
  * @module components/features/widgets/edit/DashboardAddPanel
  */
 
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type {
   DashboardWidget,
@@ -86,7 +88,9 @@ export function useAddPanelState(isEditing: boolean): AddPanelState {
 const NO_WIDGET_FACTS: Readonly<Record<string, never>> = {};
 
 /** The add panel, which exists only while customising. */
-export function DashboardAddPanel(props: DashboardAddPanelProps) {
+export function DashboardAddPanel(
+  props: DashboardAddPanelProps
+): JSX.Element | null {
   return props.editor.isEditing ? <CustomizingAddPanel {...props} /> : null;
 }
 
@@ -109,6 +113,8 @@ function CustomizingAddPanel({
     if (open) lastAdded.current = null;
   }, [open]);
 
+  // The collections the reader may read: a widget offered per collection is listed once for each.
+  const sources = useBranding().widgetSources;
   const rows = useMemo(
     () =>
       addPanelRows({
@@ -116,8 +122,9 @@ function CustomizingAddPanel({
         offered: editor.available,
         widgets: layout.layout?.widgets ?? NO_WIDGET_FACTS,
         byId,
+        collections: sources ?? [],
       }),
-    [editor.placements, editor.available, layout.layout, byId]
+    [editor.placements, editor.available, layout.layout, byId, sources]
   );
 
   const titleOf = useCallback(
@@ -126,8 +133,11 @@ function CustomizingAddPanel({
   );
 
   const onAdd = useCallback(
-    (widgetId: string): AddedCard | null => {
-      const id = editor.add(widgetId);
+    (
+      widgetId: string,
+      settings?: Record<string, unknown>
+    ): AddedCard | null => {
+      const id = editor.add(widgetId, settings);
       if (id === null) return null;
       lastAdded.current = id;
       highlight(id);

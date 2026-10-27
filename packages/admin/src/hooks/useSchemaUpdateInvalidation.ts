@@ -51,7 +51,10 @@ export const ADMIN_META_KEY = ["admin-meta"] as const;
  * which also names the session state, so an invalidation by it reaches the
  * entry whichever session it was fetched under.
  */
-export const ADMIN_WORKSPACE_KEY = [...ADMIN_META_KEY, "workspace"] as const;
+export const ADMIN_WORKSPACE_KEY: readonly ["admin-meta", "workspace"] = [
+  ...ADMIN_META_KEY,
+  "workspace",
+] as const;
 
 export function useSchemaUpdateInvalidation(
   /**

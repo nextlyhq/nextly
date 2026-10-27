@@ -37,7 +37,7 @@ export const PAGE_ROOT_CLASS = "nx-pb-page";
  * repetitions IS the override contract, and a contract with two definitions has
  * none.
  */
-export const PAGE_ROOT_SELECTOR = `.${PAGE_ROOT_CLASS}.${PAGE_ROOT_CLASS}`;
+export const PAGE_ROOT_SELECTOR: `.${typeof PAGE_ROOT_CLASS}.${typeof PAGE_ROOT_CLASS}` = `.${PAGE_ROOT_CLASS}.${PAGE_ROOT_CLASS}`;
 
 /** The prefix on the shared class carrying one block type's base styles. */
 export const BLOCK_TYPE_CLASS_PREFIX = "nx-bt-";
@@ -66,7 +66,7 @@ export const BLOCK_PART_CLASS_PREFIX = "nx-bp-";
  * would constrain the ones that declined. The same argument the typographic
  * defaults make about a heading's level, one tier along.
  */
-export const CONTENT_WIDTH_CLASS = `${NODE_CLASS_PREFIX}contained`;
+export const CONTENT_WIDTH_CLASS: `${typeof NODE_CLASS_PREFIX}contained` = `${NODE_CLASS_PREFIX}contained`;
 
 /**
  * A 53-bit hash of an id, in base 36.

@@ -89,6 +89,7 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -587,11 +588,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
@@ -679,11 +676,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const {
         fields,
         confirmed,

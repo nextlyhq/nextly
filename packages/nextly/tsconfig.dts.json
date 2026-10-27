@@ -1,0 +1,30 @@
+{
+  // The declarations' first half: one `.d.ts` per source file, written to
+  // `.dts-tmp` by the TypeScript CLI. `tsdown.dts.config.ts` bundles them into
+  // the published `.d.mts`. The CLI rather than a bundler plugin, because
+  // TypeScript 7 ships no JavaScript API for a plugin to call; the CLI is the
+  // same on both sides of that upgrade.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": false,
+    // Emit, not a check: `check-types` is the type check.
+    "noCheck": true,
+    "incremental": false,
+    "rootDir": "src",
+    "outDir": ".dts-tmp"
+  },
+  // Tests and their helpers ship no declarations, and the build's cache key
+  // leaves them out (turbo.jsonc), so the build must not read them either.
+  "exclude": [
+    "dist",
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.test-d.ts",
+    "**/__tests__/**"
+  ]
+}

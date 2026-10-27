@@ -28,11 +28,11 @@ const COMMON = new Set([
  * `decoyVerifications` to see an unknown address spend a verification.
  */
 export class FakePasswordHelper implements PasswordHelper {
-  readonly ceiling = CEILING;
+  readonly ceiling: typeof CEILING = CEILING;
   /** The scheme new hashes carry. Change it and every older hash needs a rehash. */
   scheme = "fake1";
   /** The passwords the site's breached-password source knows. */
-  readonly breached = new Set<string>();
+  readonly breached: Set<string> = new Set<string>();
   /** False: the breached-password source does not answer. */
   breachedSourceUp = true;
   /** How many times `verify` spent its time against the decoy. */

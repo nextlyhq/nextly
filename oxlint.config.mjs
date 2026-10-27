@@ -7,6 +7,12 @@ import { readFileSync } from "node:fs";
 
 import { defineConfig } from "oxlint";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "./lint/import-cycles.mjs";
+
 /** Prefixes each path of a package-relative allowlist with the package. */
 const inPackage = (pkg, paths) => paths.map(path => `packages/${pkg}/${path}`);
 
@@ -190,6 +196,7 @@ export default defineConfig({
     // project. Every other configuration file is linted.
     "oxlint.config.mjs",
     "oxlint.scripts.config.mjs",
+    "oxlint.templates.config.mjs",
     "**/vitest.config.{ts,mjs}",
     "**/vitest.*.config.ts",
     "**/vitest.global-setup.{js,ts,mjs,cjs}",
@@ -290,6 +297,11 @@ export default defineConfig({
     "typescript/no-floating-promises": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "error",
+    // Under `verbatimModuleSyntax` an import whose names are all marked `type`
+    // inline (`import { type A } from "./x"`) is kept as `import "./x"`, so the
+    // bundler keeps a module the code never uses. `import type { A }` is
+    // dropped whole.
+    "typescript/no-import-type-side-effects": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-namespace": "error",
@@ -425,6 +437,27 @@ export default defineConfig({
       rules: { "nextly/api-key-scope": "error" },
     },
     {
+      // No file newly on an import cycle in nextly's source. The files already
+      // on one are exempt, and scripts/lint-config.test.mjs holds those cycles
+      // to the groups lint/import-cycles.mjs lists, so the exemption only
+      // shrinks. A new import between two files already in one group is not
+      // caught: see lint/import-cycles.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: IMPORT_CYCLES.flat().map(
+        file => `${NEXTLY_SOURCE}/${file}`
+      ),
+      rules: { "import/no-cycle": NO_CYCLE },
+    },
+    {
+      // No top-level await in nextly's source: the deadlock a cycle through a
+      // dynamic import could cause, which import/no-cycle cannot see. Every
+      // file, the cycle-exempt ones included; tests load modules at their top
+      // level on purpose. What it covers and what it does not: lint/guards.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: TESTS,
+      rules: { "nextly/no-top-level-await": "error" },
+    },
+    {
       // nextly writes through a masked logger, not the console.
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...CONSOLE_ALLOWED, ...TESTS],
@@ -505,6 +538,13 @@ export default defineConfig({
       // One owner for keyboard shortcuts: the admin's shortcut manager.
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },
+    },
+    {
+      // The Tabs primitive owns its indicator: a call site passes layout, and a
+      // different indicator is a change to the primitive. Every extension JSX
+      // is legal in, since a JavaScript app writes JSX in `.js` too.
+      files: ["packages/**/*.{tsx,jsx,js}", "apps/**/*.{tsx,jsx,js}"],
+      rules: { "nextly/tab-indicator": "error" },
     },
   ],
 });

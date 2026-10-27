@@ -11,6 +11,8 @@
  * @module components/features/widgets/edit/add-panel-model
  */
 
+import type { PublishedContentSource } from "nextly/config";
+
 import type {
   AddPanelGroup,
   DashboardWidget,
@@ -19,6 +21,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { WIDTH_NAMES } from "../sizes";
+import { askableWith } from "../widget-as-asked";
 
 /** A group the panel shows: core's four, and the reader's own removed cards first. */
 export type AddPanelSection = "removed" | AddPanelGroup;
@@ -41,16 +44,20 @@ export const ADD_PANEL_SECTIONS: ReadonlyArray<{
 ];
 
 /**
- * Whether the Content group is shown. Off until the per-collection content widgets exist: the
- * cards core generates per collection today are retired, and listing them would offer what is
- * about to go.
+ * Whether the Content group is shown. On: core groups only widgets offered per collection there,
+ * so the group lists Count for each collection the reader may read, and each further content
+ * widget joins it as core offers it.
  */
-export const SHOW_CONTENT_GROUP = false;
+export const SHOW_CONTENT_GROUP = true;
 
 /** What a row's control does, or that there is nothing to do. */
 export type AddPanelAction =
-  | { kind: "add"; widgetId: string }
-  | { kind: "add-another"; widgetId: string }
+  | { kind: "add"; widgetId: string; settings?: Record<string, unknown> }
+  | {
+      kind: "add-another";
+      widgetId: string;
+      settings?: Record<string, unknown>;
+    }
   | { kind: "add-back"; placementId: string }
   | { kind: "on-dashboard" };
 
@@ -145,8 +152,16 @@ export function addPanelRows(input: {
   offered: readonly string[];
   widgets: Readonly<Record<string, WidgetWidthFacts>>;
   byId: ReadonlyMap<string, DashboardWidget>;
+  /**
+   * The collections the reader may read, as the server published them: a widget offered per
+   * collection gets one row for each.
+   */
+  collections?: readonly PublishedContentSource[];
+  /** Whether the Content group is shown; absent, `SHOW_CONTENT_GROUP` decides. */
+  showContent?: boolean;
 }): AddPanelRow[] {
   const { placements, widgets, byId } = input;
+  const showContent = input.showContent ?? SHOW_CONTENT_GROUP;
   const offered = new Set(input.offered);
 
   const removed: AddPanelRow[] = placements.flatMap(placement => {
@@ -169,12 +184,22 @@ export function addPanelRows(input: {
     .filter(
       ([widgetId, facts]) =>
         facts.group !== undefined &&
-        (SHOW_CONTENT_GROUP || facts.group !== "content") &&
+        (showContent || facts.group !== "content") &&
         byId.has(widgetId)
     )
     .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0));
 
   const rows = grouped.flatMap(([widgetId, facts]) => {
+    if (facts.perCollection === true) {
+      return perCollectionRows(
+        widgetId,
+        facts,
+        byId.get(widgetId),
+        placements,
+        input.collections ?? [],
+        offered
+      );
+    }
     const mine = placements.filter(p => p.widgetId === widgetId);
     const placed = mine.filter(p => !p.removed).length;
     const action = widgetAction(
@@ -185,28 +210,95 @@ export function addPanelRows(input: {
       offered
     );
     if (action === undefined) return [];
-    const widget = byId.get(widgetId);
-    return [
-      {
-        key: widgetId,
-        section: facts.group as AddPanelGroup,
-        ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
-        name: widget?.title ?? widgetId,
-        ...(facts.description === undefined
-          ? {}
-          : { description: facts.description }),
-        ...(facts.category === undefined ? {} : { category: facts.category }),
-        ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-        ...(widthsLabel(facts) === undefined
-          ? {}
-          : { widths: widthsLabel(facts) }),
-        placed,
-        action,
-      },
-    ];
+    return [widgetRowOf(widgetId, facts, byId.get(widgetId), placed, action)];
   });
 
   return [...removed, ...rows];
+}
+
+/**
+ * What a widget's row says about the widget, whichever row it is: its name, and the description,
+ * category, sketch and widths core states for it, each shown and searched alike on every row.
+ */
+function rowFacts(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined
+): Pick<
+  AddPanelRow,
+  "name" | "description" | "category" | "sketch" | "widths"
+> {
+  const widths = widthsLabel(facts);
+  return {
+    name: widget?.title ?? widgetId,
+    ...(facts.description === undefined
+      ? {}
+      : { description: facts.description }),
+    ...(facts.category === undefined ? {} : { category: facts.category }),
+    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
+    ...(widths === undefined ? {} : { widths }),
+  };
+}
+
+/** One widget's row in its add-panel group, carrying only the facts it states. */
+function widgetRowOf(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined,
+  placed: number,
+  action: AddPanelAction
+): AddPanelRow {
+  return {
+    key: widgetId,
+    section: facts.group as AddPanelGroup,
+    ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
+    ...rowFacts(widgetId, facts, widget),
+    placed,
+    action,
+  };
+}
+
+/**
+ * A widget offered per collection, as one row for each collection the reader may read and its
+ * card could be asked of: each adds a card set to that collection, and counts that collection's
+ * cards already placed. A collection the card would ask nothing of (a Breakdown where nothing
+ * divides the entries) gets no row, by the rule that draws such a card as not available.
+ */
+function perCollectionRows(
+  widgetId: string,
+  facts: WidgetWidthFacts,
+  widget: DashboardWidget | undefined,
+  placements: readonly WidgetPlacement[],
+  collections: readonly PublishedContentSource[],
+  offered: ReadonlySet<string>
+): AddPanelRow[] {
+  const setting = widget?.settings?.find(s => s.type === "collection")?.name;
+  if (widget === undefined || setting === undefined || !offered.has(widgetId)) {
+    return [];
+  }
+  const askable = collections.filter(({ collection }) =>
+    askableWith(widget, { [setting]: collection }, collections)
+  );
+  return askable.map(({ collection, label }) => {
+    const placed = placements.filter(
+      p =>
+        p.widgetId === widgetId &&
+        !p.removed &&
+        p.config?.[setting] === collection
+    ).length;
+    const settings = { [setting]: collection };
+    return {
+      key: `${widgetId}:${collection}`,
+      section: "content" as const,
+      subgroup: label,
+      ...rowFacts(widgetId, facts, widget),
+      placed,
+      action:
+        placed > 0
+          ? { kind: "add-another" as const, widgetId, settings }
+          : { kind: "add" as const, widgetId, settings },
+    };
+  });
 }
 
 /** A section's heading, which search reads too. */

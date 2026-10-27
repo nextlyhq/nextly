@@ -1435,30 +1435,7 @@ describe("a stored dashboard the server could not read", () => {
 });
 
 describe("a widget that draws nothing", () => {
-  it("leaves its grid cell with no children, so `empty:hidden` can collapse it", async () => {
-    // 🔴 The cell hides itself through CSS `:empty`, which counts ELEMENT
-    // CHILDREN rather than rendered output.
-    registerCoreComponent("core#Nothing", () => null);
-    mockBranding = {
-      widgets: [
-        {
-          id: "core/silent",
-          title: "Silent",
-          archetype: "custom",
-          defaultSize: "full",
-          chrome: "none",
-          component: "core#Nothing",
-        },
-      ],
-    } as unknown as AdminBranding;
-    layoutResponse = layout([{ id: "p1", widgetId: "core/silent" }]);
-    renderGrid();
-
-    const cell = await screen.findByTestId("widget-cell-core/silent");
-    expect(cell.childElementCount).toBe(0);
-  });
-
-  it("DOES fill its cell when the same widget is framed", async () => {
+  it("still fills its cell with its frame: no card is left blank or unframed", async () => {
     registerCoreComponent("core#Nothing", () => null);
     mockBranding = {
       widgets: [
@@ -1474,20 +1451,22 @@ describe("a widget that draws nothing", () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/framed" }]);
     renderGrid();
 
+    const cell = await screen.findByTestId("widget-cell-core/framed");
     expect(
-      (await screen.findByTestId("widget-cell-core/framed")).childElementCount
-    ).toBeGreaterThan(0);
+      within(cell).getByRole("region", { name: "Framed" })
+    ).toBeInTheDocument();
   });
 
-  it("gives an unframed card a small header of its own while customising", async () => {
-    mockBranding = branding(["core/a"], { "core/a": { chrome: "none" } });
+  it("is taken out of the grid only through its frame's hidden-while-empty mark", async () => {
+    // jsdom evaluates no CSS, so the two halves are asserted: the cell's rule
+    // asks for the frame's mark, and `WidgetCard` sets the mark only for an
+    // empty card whose widget hides (its own tests).
+    mockBranding = branding(["core/a"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }]);
     renderGrid();
-    await beginEditing();
-
-    const header = screen.getByTestId("widget-edit-header");
-    expect(header).toHaveTextContent("Widget core/a");
-    expect(within(header).getByTestId("card-actions")).toBeInTheDocument();
+    const cell = await screen.findByTestId("widget-cell-core/a");
+    expect(cell).toHaveClass("has-[[data-hidden-empty]]:hidden");
+    expect(cell.className).not.toContain("empty:hidden");
   });
 });
 

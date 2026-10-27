@@ -1,6 +1,6 @@
 "use client";
 
-import { type LeftPanel } from "@nextlyhq/builder";
+import type { LeftPanel } from "@nextlyhq/builder";
 // The shell comes from its own entry: that is the one carrying `"use client"`,
 // which is why the root barrel can stay callable from a Server Component.
 import { BuilderShell } from "@nextlyhq/builder/shell";

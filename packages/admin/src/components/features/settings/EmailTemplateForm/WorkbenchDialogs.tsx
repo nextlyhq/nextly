@@ -1,6 +1,8 @@
 "use client";
 
 /** The workbench's confirmations and its review, one open at a time. */
+import type { JSX } from "react";
+
 import { TemplateDeleteDialog } from "@admin/components/features/email-hub/TemplateDialogs";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -17,7 +19,7 @@ export function WorkbenchDialogs({
   acts: OwnershipActs;
   /** Put the form back to the saved email, so an act can start from it. */
   onDiscardEdits: () => void;
-}) {
+}): JSX.Element {
   const { dialog, setDialog, owner } = acts;
   const openIf = (which: WorkbenchDialog) => (open: boolean) =>
     setDialog(open ? which : null);

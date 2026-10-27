@@ -12,6 +12,7 @@ import { expect } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 
 const FIELD_LABEL = "Job Title";
 const FIELD_NAME = "job_title";
@@ -24,7 +25,8 @@ interface ApiError {
   };
 }
 
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
 
 test("a custom field can be created", async ({ page }) => {
   await gotoAdmin(page, "/users/fields/create");

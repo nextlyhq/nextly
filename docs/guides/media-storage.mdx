@@ -3,13 +3,13 @@ title: Media & Storage
 description: Configure storage adapters (local disk, S3, Vercel Blob, Uploadthing) and named image sizes for uploaded media.
 ---
 
-Nextly's media system is plugin-based. The default is local disk storage -- zero configuration, files written to `./public/uploads/` and served by Next.js as static assets. For production deployments where the filesystem isn't durable (Vercel, container runtimes), opt into S3, Vercel Blob, or Uploadthing.
+Nextly's media system is plugin-based. The default is local disk storage -- zero configuration, files written to `./public/uploads/` and served at `/uploads/...` by your app. For production deployments where the filesystem isn't durable (Vercel, container runtimes), opt into S3, Vercel Blob, or Uploadthing.
 
 ## Storage adapters at a glance
 
 | Adapter                          | Services                                                           | When to use                          |
 |----------------------------------|--------------------------------------------------------------------|--------------------------------------|
-| Built-in (local disk)            | Local filesystem under `./public/uploads/`                          | Development, single-server self-host |
+| Built-in (local disk)            | Local filesystem under `./public/uploads/`                          | Development, single-server self-host with a persistent disk |
 | `@nextlyhq/storage-s3`           | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, Supabase Storage | Most production deployments          |
 | `@nextlyhq/storage-vercel-blob`  | Vercel Blob                                                         | Vercel deployments                    |
 | `@nextlyhq/storage-uploadthing`  | Uploadthing                                                         | Uploadthing users                     |
@@ -22,11 +22,42 @@ Upload Request -> MediaStorage -> resolve collection -> plugin adapter -> storag
 
 ## Default: local disk
 
-When no `storage` plugin is configured, Nextly uses the built-in local-disk adapter. Files are stored under `./public/uploads/{year}/{month}/` and served by Next.js at `/uploads/...` as static assets. On first upload, Nextly auto-adds `public/uploads/` to your `.gitignore`.
+When no `storage` plugin is configured, Nextly uses the built-in local-disk adapter. Files are stored under `./public/uploads/{year}/{month}/` and served at `/uploads/...`. On first upload, Nextly auto-adds `public/uploads/` to your `.gitignore`.
 
 This is what makes local development work without setting up any cloud credentials.
 
-> **Warning:** Local disk storage doesn't survive serverless restarts. If you deploy to Vercel, AWS Lambda, Cloudflare Workers, or any platform with ephemeral filesystems, switch to a cloud adapter before going to production.
+### How local uploads are served
+
+Next.js serves files in `public/` as static assets, but `next start` reads that folder once, when it starts, and serves only the files that were there. A file uploaded after a production server started is not among them. So a new project ships a route at `src/app/uploads/[...path]/route.ts`:
+
+```typescript title="src/app/uploads/[...path]/route.ts"
+import { createUploadsHandlers } from "nextly/api/uploads";
+
+import config from "@nextly-config";
+
+const handlers = createUploadsHandlers({ config });
+
+export const GET = handlers.GET;
+export const HEAD = handlers.HEAD;
+```
+
+Next.js checks `public/` before any route, so it still serves every file it has, and the route serves the rest, at the same URL. Under `next dev` Next.js reads `public/` on every request and serves them all. Either way an upload's URL works the moment the upload finishes, and it doesn't change.
+
+The route:
+
+- serves only from the local adapter's folder, and only below its `baseUrl`. It answers 404 for a path that leaves the folder, for a link inside it that points outside, and for a name starting with `.`. With S3, Vercel Blob or UploadThing holding media it answers 404 for everything, and their URLs don't change.
+- sets each file's type from its extension, with `X-Content-Type-Options: nosniff`. An SVG gets a `Content-Security-Policy` that blocks scripts, and a type Nextly doesn't accept by default downloads as `application/octet-stream`.
+- streams the file rather than reading it into memory, and answers `Range` requests, so video and audio can seek.
+- sends an `ETag` and `Last-Modified`, and answers `304` to a client whose copy is current. Uploaded files get unique names that are never rewritten, so those are cached as `public, max-age=31536000, immutable`. A file you put in the folder yourself is revalidated on each use.
+- needs no sign-in: uploads are public, as they are when Next.js serves them. It lives outside `/admin`, so the admin's session cookie and the admin API's rate limits don't apply to it.
+
+Files Next.js serves itself, under `next dev` or once a production server restarts, get Next.js's static headers instead: `Cache-Control: public, max-age=0` and no `Content-Security-Policy`. An uploaded SVG is sanitized when it's uploaded, either way.
+
+If you change `baseUrl`, move the route folder to match: for `baseUrl: "/media"`, put it at `src/app/media/[...path]/route.ts`. With an absolute `baseUrl` on another host, the route has nothing to serve.
+
+> **Note:** A project created before this route existed doesn't have it. Add the file above (in an app without a `src/` folder, at `app/uploads/[...path]/route.ts`, importing your `nextly.config` by a relative path if you have no `@nextly-config` alias). Until you do, a production server answers 404 for an upload until it restarts, and logs a warning naming the file the first time it happens.
+
+> **Warning:** Local disk storage needs a disk that persists, on one server. It doesn't survive serverless restarts. If you deploy to Vercel, AWS Lambda, Cloudflare Workers, or any platform with ephemeral filesystems, switch to a cloud adapter before going to production.
 
 ### Explicit configuration
 
@@ -324,7 +355,7 @@ You can also register **multiple plugins** in the `storage` array if different c
 
 ## Named image sizes
 
-Nextly can automatically generate resized image variants for every uploaded image, using `sharp`. Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
+Nextly can automatically generate resized image variants for every uploaded image, using `sharp`, which your app installs (see [Limits](#limits)). Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
 
 ### Size options
 
@@ -608,6 +639,13 @@ A common pattern is to switch automatically based on env vars:
 - Staging / Production -> set `S3_BUCKET` etc. -> S3.
 
 `getStorageFromEnv()` makes this a one-liner in `nextly.config.ts`.
+
+## Limits
+
+- **Image processing needs `sharp` in your app.** `sharp` is an optional peer dependency of `nextly`, so Nextly does not install it: add it to your app's dependencies (`npm install sharp`) rather than relying on another package to bring it. Without it, uploads are still stored, but images get no thumbnail, no named sizes and no width or height, and **Settings -> Image Sizes** says so and shows the install command.
+- **Four places to store files.** The built-in local disk, or one of three adapter packages: `@nextlyhq/storage-s3` for S3 and S3-compatible services, `@nextlyhq/storage-vercel-blob` and `@nextlyhq/storage-uploadthing`.
+- **Local disk is for one long-lived server.** Files written to `./public/uploads/` do not survive a restart on a serverless or ephemeral host.
+- **Switching adapters moves nothing.** Existing files and their stored URLs stay where they were; see [Migrating between adapters](#migrating-between-adapters).
 
 ## Next steps
 

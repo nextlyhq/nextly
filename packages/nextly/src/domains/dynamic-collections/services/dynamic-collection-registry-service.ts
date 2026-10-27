@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
+import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
 import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
@@ -12,7 +13,13 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
+import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
+import {
+  moveWebhookRecording,
+  renameEntity,
+} from "../../entity-rename/rename-entity";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -304,6 +311,9 @@ export class DynamicCollectionRegistryService extends BaseService {
         // Needed to keep code-first config outranking the stored row when the
         // recording switch is mirrored into the live policy below.
         source: this.dynamicCollections.source,
+        // The stored recording decision, which a rename carries to the new
+        // slug when this update does not set one.
+        webhooks: this.dynamicCollections.webhooks,
       })
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, collectionSlug))
@@ -336,19 +346,85 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     updateData.updatedAt = new Date();
 
-    // Cleared once the update has run, as after an insert.
-    try {
-      await this.db
+    // The one statement that writes the row, on whichever handle it is given:
+    // the pooled one for an ordinary update, the rename's transaction below.
+    // Matched by the id read above as well as the slug: a collection deleted
+    // and another registered under the slug since then is not the one asked
+    // for, and is left alone, as a row that is gone is.
+    const writeRow = (db: DatabaseAdapter["db"]) =>
+      db
         .update(this.dynamicCollections)
         .set(updateData)
-        .where(eq(this.dynamicCollections.slug, collectionSlug));
+        .where(
+          and(
+            eq(this.dynamicCollections.slug, collectionSlug),
+            eq(this.dynamicCollections.id, existing[0].id)
+          )
+        );
+
+    const move = {
+      kind: "collection" as const,
+      from: collectionSlug,
+      to: targetSlug,
+    };
+    // Cleared once the update has run, as after an insert, and after a
+    // rename too: the row then lives under the new slug.
+    try {
+      if (targetSlug === existing[0].slug) {
+        await writeRow(this.db);
+      } else {
+        // A changed slug is a rename. Everything keyed by the old slug (history,
+        // markers, events, release members, permissions, webhook filters) moves
+        // in the same transaction as the registry row, so the two commit
+        // together or neither does; otherwise the renamed collection would lose
+        // them and the next collection created under the old slug would inherit
+        // them.
+        const renamed = await renameEntity(this.adapter, {
+          dialect: this.dialect,
+          move,
+          writeRegistry: async tx => {
+            const written = await writeRow(
+              tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+                resolveRelations(this.dialect)
+              )
+            );
+            // No row under the old slug with the id read above any more
+            // (deleted, replaced, or renamed by another request, since the
+            // lookup): nothing is moved, so no history follows a registry row
+            // that did not move.
+            return affectedRowCount(written, this.dialect) === 0 ? null : move;
+          },
+        });
+        if (renamed === null) {
+          throw NextlyError.notFound({
+            message: `Collection "${collectionSlug}" not found`,
+            logContext: { collection: collectionSlug },
+          });
+        }
+      }
     } finally {
       clearCollectionRowCache();
     }
 
+    // A rename carries the live recording decision to the new slug and drops
+    // the old slug's entry, so a collection created there later starts from
+    // the default rather than inheriting this one's choice.
+    if (
+      targetSlug !== existing[0].slug &&
+      !isConfigOwnedSource(existing[0].source)
+    ) {
+      // The decision this update commits: the one it writes, or the one the
+      // row already held.
+      const stored =
+        updates.webhooks !== undefined
+          ? updates.webhooks
+          : existing[0].webhooks;
+      moveWebhookRecording(move, stored?.record !== false);
+    }
+
     // Mirror the stored change into the live policy so turning the switch off
     // takes effect on the next write rather than the next restart. Keyed on the
-    // slug the row is stored under rather than a requested rename target, so the
+    // slug the row is now stored under, the new one after a rename, so the
     // policy key and the persisted row can never disagree.
     if (
       updates.webhooks !== undefined &&
@@ -356,13 +432,15 @@ export class DynamicCollectionRegistryService extends BaseService {
     ) {
       setWebhookRecording(
         "collection",
-        collectionSlug,
+        targetSlug,
         updates.webhooks?.record !== false,
         "db"
       );
     }
 
-    return this.getCollection(collectionSlug);
+    // Read back under the slug the row is stored under now: after a rename the
+    // old one names nothing.
+    return this.getCollection(targetSlug);
   }
 
   /**

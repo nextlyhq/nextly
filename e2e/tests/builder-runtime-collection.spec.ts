@@ -19,6 +19,10 @@ import {
   pageWithHeading,
   removeMigrationsOf,
 } from "./support/runtime-collection";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 

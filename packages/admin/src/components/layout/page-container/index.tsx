@@ -107,56 +107,61 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * </PageContainer>
  * ```
  */
-export const PageContainer = React.forwardRef<
-  HTMLDivElement,
-  PageContainerProps
->(({ children, className, width, ...props }, ref) => {
-  // What every page gets regardless of how its content is laid out: the panel
-  // background and a floor of one viewport minus the header.
-  const surface =
-    "w-full max-w-full min-h-[calc(100vh-4rem)] admin-page-container";
+export const PageContainer: React.ForwardRefExoticComponent<
+  React.HTMLAttributes<HTMLDivElement> & {
+    children: React.ReactNode;
+    className?: string;
+    width?: "form" | "wide" | "full";
+  } & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<HTMLDivElement, PageContainerProps>(
+  ({ children, className, width, ...props }, ref) => {
+    // What every page gets regardless of how its content is laid out: the panel
+    // background and a floor of one viewport minus the header.
+    const surface =
+      "w-full max-w-full min-h-[calc(100vh-4rem)] admin-page-container";
 
-  // Vertical padding scales with the content panel rather than the viewport,
-  // which is what makes it agree with a sidebar that can open and close.
-  const rhythm = "py-6 @sm/content:py-8";
+    // Vertical padding scales with the content panel rather than the viewport,
+    // which is what makes it agree with a sidebar that can open and close.
+    const rhythm = "py-6 @sm/content:py-8";
 
-  if (width) {
+    if (width) {
+      return (
+        <PageShell
+          ref={ref}
+          data-testid="page-container"
+          width={width}
+          // No horizontal padding here. `PageShell` spends the inset as GRID
+          // COLUMNS, so padding on the same element would add to the gutter
+          // rather than replace it, and a descendant cannot cancel padding.
+          className={cn(surface, rhythm, className)}
+          {...props}
+        >
+          {children}
+        </PageShell>
+      );
+    }
+
     return (
-      <PageShell
+      <div
         ref={ref}
         data-testid="page-container"
-        width={width}
-        // No horizontal padding here. `PageShell` spends the inset as GRID
-        // COLUMNS, so padding on the same element would add to the gutter
-        // rather than replace it, and a descendant cannot cancel padding.
-        className={cn(surface, rhythm, className)}
+        className={cn(
+          surface,
+          // Horizontal padding scales with the content-panel width (not the
+          // viewport): 16px -> 24px -> 32px. This is the UNMEASURED path, where
+          // the inset is padding on this box; a measured page spends it as grid
+          // columns from `--nx-gutter` instead, which runs through the same
+          // three values on its own thresholds rather than these.
+          "px-4 @sm/content:px-6 @2xl/content:px-8",
+          rhythm,
+          className
+        )}
         {...props}
       >
         {children}
-      </PageShell>
+      </div>
     );
   }
-
-  return (
-    <div
-      ref={ref}
-      data-testid="page-container"
-      className={cn(
-        surface,
-        // Horizontal padding scales with the content-panel width (not the
-        // viewport): 16px -> 24px -> 32px. This is the UNMEASURED path, where
-        // the inset is padding on this box; a measured page spends it as grid
-        // columns from `--nx-gutter` instead, which runs through the same
-        // three values on its own thresholds rather than these.
-        "px-4 @sm/content:px-6 @2xl/content:px-8",
-        rhythm,
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-});
+);
 
 PageContainer.displayName = "PageContainer";

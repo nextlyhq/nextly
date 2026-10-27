@@ -23,6 +23,7 @@ import {
   Skeleton,
 } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
+import type { JSX } from "react";
 import { useCallback } from "react";
 
 import { AlertCircle, Loader2, ExternalLink } from "@admin/components/icons";
@@ -266,7 +267,7 @@ export function RelationshipQuickEdit({
   entryId,
   onUpdate,
   collectionLabel,
-}: RelationshipQuickEditProps) {
+}: RelationshipQuickEditProps): JSX.Element {
   const queryClient = useQueryClient();
 
   // Handle successful update

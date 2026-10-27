@@ -4,8 +4,19 @@ import {
   WIDGET_WIDTHS,
   allowedWidths,
   isWidgetWidth,
+  sizeFromWidth,
   widthFromSize,
 } from "../widths";
+
+describe("sizeFromWidth", () => {
+  it("is the other direction of the one size and width table, for every width", () => {
+    for (const width of WIDGET_WIDTHS) {
+      expect(widthFromSize(sizeFromWidth(width)), width).toBe(width);
+    }
+    expect(sizeFromWidth("quarter")).toBe("sm");
+    expect(sizeFromWidth("full")).toBe("full");
+  });
+});
 
 describe("widthFromSize", () => {
   it("maps each declared size to the width of the same span", () => {

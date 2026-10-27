@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 
 import { Plus, Trash2 } from "@admin/components/icons";
@@ -23,7 +24,7 @@ export function OptionsEditor({
 }: {
   form: UseFormReturn<UserFieldFormValues>;
   disabled?: boolean;
-}) {
+}): JSX.Element {
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "options",

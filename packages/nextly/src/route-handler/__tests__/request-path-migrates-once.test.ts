@@ -20,10 +20,12 @@ import type { SanitizedNextlyConfig } from "../../collections/config/define-conf
 const registerServices = vi.fn();
 const runProdMigrationsIfEnabled = vi.fn();
 
-vi.mock("../../di", () => ({
+vi.mock("../../di/register", () => ({
   registerServices: (config: unknown) => registerServices(config),
-  isServicesRegistered: () => false,
   shutdownServices: vi.fn(),
+}));
+vi.mock("../../di", () => ({
+  isServicesRegistered: () => false,
   // Permissive: the post-registration steps are not what is under test, and a
   // stub that throws would stop the walk before the point being observed.
   getService: () => new Proxy({}, { get: () => () => undefined }),

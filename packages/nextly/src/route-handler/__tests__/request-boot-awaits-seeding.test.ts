@@ -38,12 +38,14 @@ vi.mock("../../init/seed-permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../../init/seed-permissions")>()),
   seedPermissionsAndRolePresets,
 }));
-vi.mock("../../di", () => ({
+vi.mock("../../di/register", () => ({
   registerServices,
-  isServicesRegistered: () => registered,
   shutdownServices: vi.fn(async () => {
     registered = false;
   }),
+}));
+vi.mock("../../di", () => ({
+  isServicesRegistered: () => registered,
   // The template step is the one between registering and seeding that a test
   // can hold up; every other step resolves to nothing, since this is about the
   // order of the seeding and the boot's own return, not what they produce.

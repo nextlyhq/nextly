@@ -33,7 +33,7 @@ import {
   TabsTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, type JSX } from "react";
 
 import {
   positionInList,
@@ -295,7 +295,7 @@ export function FieldOptionsEditor({
   disabled = false,
   allowImport = true,
   idPrefix = "opt",
-}: FieldOptionsEditorProps) {
+}: FieldOptionsEditorProps): JSX.Element {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importFormat, setImportFormat] = useState<"csv" | "json">("csv");

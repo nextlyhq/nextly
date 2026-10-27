@@ -45,6 +45,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { invalidateAllPermissionCaches } from "../../../services/lib/permissions";
 import { writeFieldGroupType } from "../storage/field-group-type-key";
 
 type Doc = Record<string, unknown>;
@@ -805,6 +806,10 @@ describe.each(getConfiguredTestDialects())(
                   : { title: `p${rows}-${i}`, ...guardedValues(`p${i}`) },
             } as never);
           }
+          // Measured cold: a user's resolved access is kept between requests,
+          // so a warm read asks nothing of these tables and could not show
+          // whether a cold one asks once or once per row.
+          await invalidateAllPermissionCaches();
           let statements = 0;
           const spy = vi.spyOn(db, "select").mockImplementation((...args) => {
             const builder = select(...args) as {
@@ -832,9 +837,6 @@ describe.each(getConfiguredTestDialects())(
           }
           return statements;
         };
-        // The gate above the field rules keeps what it reads between reads, so
-        // the first read pays for it; measured after it, as every read is.
-        await count("plain", 1);
         // One resolution, as measured on a collection whose rules are its own
         // fields' alone: the field groups' rules add no lookup to it.
         const once = await count("plain", 2);

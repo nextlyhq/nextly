@@ -1,0 +1,264 @@
+name: Small checks
+
+# Four small required checks in one job, so a pull request's push and each of
+# the merge queue's entries take one runner for them, not three or four. A
+# runner start is the scarce resource on this plan: GitHub Free runs at most 20
+# jobs at once across the organisation. Each check keeps its own step, its own
+# script and its own error title, and every step runs whatever an earlier one
+# found, so one push reports every problem.
+#
+# - The title is held to Conventional Commits where it is written, and in the
+#   queue, where the squash commit is built from it (`scripts/pr-title.mjs`).
+# - A commit, a pull request or an added line that credits an AI tool is
+#   refused (`scripts/ai-credit.mjs`), as the commit-msg hook does before a
+#   commit exists. A title and a description are published the moment they are
+#   written, so an edit to either runs this again.
+# - gitleaks scans the commits a pull request, a push to `main` or the queue
+#   adds, so nothing committed past the pre-commit hook lands unscanned.
+# - In the queue, the revision being landed must have been reviewed by a model
+#   from a different family than the one that wrote it
+#   (`scripts/independent-review.mjs`). On a pull request that step is skipped:
+#   the queue is where the reviews have had their chance to arrive.
+#
+# Neither this workflow nor the code it runs comes from the change, which could
+# otherwise rewrite the rules it is judged by. On a pull request the workflow
+# is `pull_request_target`, read from `main` whatever the change does to this
+# file; in the queue the code comes from the queue's base. That code is checked
+# out at the workspace root. The change is checked out apart, under `change/`,
+# and only read, by git and by gitleaks: nothing from it runs, the token is
+# read-only, no secret is used and no cache is written.
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+  # The queue merges only what passes its required checks on the queue's own
+  # commit, so every check has to run, and judge, there too.
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+# One run per pull request at a time: a newer push or edit cancels the older
+# run, which checks a revision or text that is no longer there. Keyed by the
+# number, because under `pull_request_target` `github.ref` is the base branch,
+# which every pull request shares. Each workflow keys its own group, so the
+# workflows of one push never cancel one another; a push to `main` and the
+# queue's runs are keyed by commit and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  checks:
+    name: Small checks (title, AI credit, secret scan, review)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The review step reads a pull request's reviews and comments.
+      pull-requests: read
+      issues: read
+    outputs:
+      error_message: ${{ steps.lint_pr_title.outputs.error_message }}
+      # `success` only when the title step ran and passed. An empty message
+      # alone also follows a job that failed before the title was checked.
+      title_outcome: ${{ steps.lint_pr_title.outcome }}
+    steps:
+      # The code that judges: `main` on a pull request or a push, and in the
+      # queue its base, with the history the queued commits are read from.
+      - name: Checkout the checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_sha }}
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
+          persist-credentials: false
+
+      # What is judged: a pull request's head, the queue's commit or the
+      # pushed commit, with full history so each range's ends are present.
+      # Checkout refuses a fork's head under `pull_request_target` unless told
+      # otherwise; that is safe here only because nothing in `change/` runs.
+      - name: Checkout the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}
+          path: change
+          fetch-depth: 0
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+
+      - name: Setup Node.js
+        if: ${{ !cancelled() && github.event_name != 'push' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Validate PR title follows Conventional Commits
+        id: lint_pr_title
+        if: ${{ !cancelled() && github.event_name != 'push' }}
+        uses: ./.github/actions/pr-title
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          scopes: |
+            nextly
+            admin
+            admin-css
+            client
+            ui
+            adapter-postgres
+            adapter-mysql
+            adapter-sqlite
+            adapter-drizzle
+            storage-s3
+            storage-vercel-blob
+            storage-uploadthing
+            blocks-engine
+            blocks-react
+            builder
+            plugin-accounts
+            plugin-commerce
+            plugin-form-builder
+            plugin-mcp
+            plugin-page-builder
+            plugin-seo
+            plugin-sdk
+            create-nextly-app
+            eslint-config
+            eslint-plugin
+            module-specifiers
+            prettier-config
+            tsconfig
+            telemetry
+            playground
+            root
+            ci
+            docs
+            deps
+            release
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" starts with an uppercase character. Rewrite it lowercase to match Conventional Commits.
+
+      # git, run in `change/`, reads the change; the checker comes from the
+      # root, and imports nothing that could resolve from `change/`.
+      - name: No AI credit
+        if: ${{ !cancelled() && github.event_name != 'push' }}
+        working-directory: change
+        run: node "$GITHUB_WORKSPACE/scripts/ai-credit.mjs"
+
+      - name: Install gitleaks
+        if: ${{ !cancelled() }}
+        run: |
+          GITLEAKS_VERSION=8.21.2
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin gitleaks < /tmp/gitleaks.tar.gz
+          gitleaks version
+
+      # gitleaks passes a range that holds no commits, so a step that picked no
+      # range would pass having scanned nothing. Every event without one is
+      # refused instead, by name.
+      - name: Run gitleaks on the commits this run adds
+        if: ${{ !cancelled() }}
+        working-directory: change
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          : "${EVENT:=}" "${BASE_REF:=}" "${PUSH_BEFORE:=}" "${PUSH_AFTER:=}" "${QUEUE_BASE:=}" "${QUEUE_HEAD:=}"
+          refuse() {
+            echo "::error title=Secret scan::$1"
+            exit 1
+          }
+          case "$EVENT" in
+            pull_request_target)
+              [ -n "$BASE_REF" ] || refuse "a pull_request_target event with no base branch"
+              RANGE="origin/${BASE_REF}..HEAD"
+              ;;
+            push)
+              [ -n "$PUSH_AFTER" ] || refuse "a push event with no head commit"
+              if [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                RANGE="${PUSH_AFTER}~1..${PUSH_AFTER}"
+              else
+                RANGE="${PUSH_BEFORE}..${PUSH_AFTER}"
+              fi
+              ;;
+            merge_group)
+              [ -n "$QUEUE_BASE" ] && [ -n "$QUEUE_HEAD" ] || refuse "a merge_group event with no base or no head commit"
+              RANGE="${QUEUE_BASE}..${QUEUE_HEAD}"
+              ;;
+            *)
+              refuse "no range to scan for a ${EVENT:-unnamed} event; give it one here before triggering this workflow on it"
+              ;;
+          esac
+          COUNT=$(git rev-list --count "$RANGE") || refuse "cannot read the range $RANGE"
+          [ "$COUNT" -gt 0 ] || refuse "the range $RANGE holds no commits, so a scan of it would examine nothing"
+          echo "scanning $COUNT commit(s) in $RANGE"
+          gitleaks detect \
+            --source . \
+            --log-opts="$RANGE" \
+            --redact --no-banner --verbose
+
+      # Run from the queue base's copy of the script, so no queued change judges
+      # its own review. It installs no packages.
+      - name: Independent review of the revision being merged
+        if: ${{ !cancelled() && github.event_name == 'merge_group' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/independent-review.mjs
+
+  # The one job that can write, to post or clear the title comment, checks
+  # nothing out and runs no repository code.
+  comment:
+    name: Explain the title check on the pull request
+    needs: checks
+    if: ${{ always() && github.event_name == 'pull_request_target' && github.event.action != 'synchronize' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post sticky comment on failure
+        if: ${{ needs.checks.outputs.error_message != '' }}
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: pr-title-lint-error
+          message: |
+            ```
+            ${{ needs.checks.outputs.error_message }}
+            ```
+
+            Examples of valid titles:
+            - `feat(admin): add role manager dialog`
+            - `fix(adapter-postgres): handle connection pool exhaustion`
+            - `chore(deps): bump zod to 4.2.0`
+
+      # Only a title step that ran and passed clears the comment. The job's
+      # other steps can fail it without the title being at fault, so the job's
+      # result is not asked; and a job that failed before the title step ran
+      # leaves no verdict, so the comment stays.
+      - name: Clear sticky comment on success
+        if: ${{ needs.checks.outputs.title_outcome == 'success' }}
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: pr-title-lint-error
+          delete: true

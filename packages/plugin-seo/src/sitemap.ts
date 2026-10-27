@@ -375,7 +375,7 @@ export const MAX_SITEMAP_URLS = 50_000;
  * count is under {@link MAX_SITEMAP_URLS} (long locations can hit the byte cap
  * first).
  */
-export const MAX_SITEMAP_BYTES = 50 * 1024 * 1024;
+export const MAX_SITEMAP_BYTES: number = 50 * 1024 * 1024;
 
 /** The sitemap protocol limits a single `<loc>` to 2,048 characters. */
 export const MAX_LOC_LENGTH = 2048;

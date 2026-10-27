@@ -61,7 +61,7 @@ import type { UsageIndex, UsageSubject } from "./usage-index";
  * A test asserts the engine rejects this value, so the day that rule changes,
  * this fails rather than silently starting to collide.
  */
-export const UNDETERMINED_CLASS_ID = `undetermined:${"-".repeat(
+export const UNDETERMINED_CLASS_ID: string = `undetermined:${"-".repeat(
   MAX_NAMED_CLASS_NAME_LENGTH
 )}`;
 

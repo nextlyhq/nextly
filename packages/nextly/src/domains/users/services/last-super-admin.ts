@@ -20,27 +20,55 @@
 import { randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, ne, type Column, type SQL } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
+import { refuseUnlessSuperAdminCaller } from "../../auth/services/role-change-caller";
+import {
+  rolesConferring,
+  walkRoleGraph,
+  type RoleEdge,
+} from "../../auth/services/role-graph";
 
 const SUPER_ADMIN_ROLE_SLUG = "super-admin";
 
-/** What the refusal tells the caller, on every path. */
+/** What the refusal tells the caller of a change to an account. */
 export const LAST_SUPER_ADMIN_MESSAGE =
   "This user is the last active super-admin. Make another user super-admin first.";
 
-/** How the write would stop the account being an active super-admin. */
-export type SuperAdminRemoval =
-  /** The account is deleted. */
-  | { kind: "delete" }
-  /** The account is deactivated. */
-  | { kind: "deactivate" }
-  /** The account's roles are replaced by exactly `roleIds`. */
-  | { kind: "replaceRoles"; roleIds: readonly string[] }
+/** What the refusal tells the caller of a change to a role. */
+export const LAST_SUPER_ADMIN_ROLE_MESSAGE =
+  "This change would leave no active super-admin. Make another user super-admin first.";
+
+/** A write that could stop someone being an active super-admin. */
+export type SuperAdminChange =
+  /** The account `userId` is deleted. */
+  | { kind: "delete"; userId: string | number }
+  /** The account `userId` is deactivated. */
+  | { kind: "deactivate"; userId: string | number }
+  /** The account's roles are replaced by exactly `roleIds`, with no expiry. */
+  | {
+      kind: "replaceRoles";
+      userId: string | number;
+      roleIds: readonly string[];
+    }
   /** One role, `roleId`, is taken from the account. */
-  | { kind: "unassignRole"; roleId: string };
+  | { kind: "unassignRole"; userId: string | number; roleId: string }
+  /** `parentRoleId` stops inheriting `childRoleId`. */
+  | { kind: "removeInheritance"; parentRoleId: string; childRoleId: string }
+  /** What `roleId` inherits is replaced by exactly `childRoleIds`. */
+  | { kind: "replaceChildren"; roleId: string; childRoleIds: readonly string[] }
+  /** The role `roleId` is deleted, with its assignments and inheritance. */
+  | { kind: "deleteRole"; roleId: string };
 
 type Rows = Array<Record<string, unknown>>;
 
@@ -83,75 +111,311 @@ export interface FirstAdministratorTables extends LastSuperAdminTables {
 }
 
 /**
- * Refuse, inside `tx`'s transaction, a removal that would leave the install
+ * Refuse, inside `tx`'s transaction, a change that would leave the install
  * without an active super-admin.
  *
  * Call it before the write it guards, and before the write takes any row lock
- * of its own, so every removal takes the locks in the same order.
+ * of its own, so every change takes the locks in the same order.
  *
- * The `super-admin` role's row is the lock every removal takes first: on
- * PostgreSQL `FOR NO KEY UPDATE`, which two removals cannot hold at once but
+ * The `super-admin` role's row is the lock every such change takes first: on
+ * PostgreSQL `FOR NO KEY UPDATE`, which two changes cannot hold at once but
  * which leaves a concurrent grant's foreign-key check free to proceed; on
  * MySQL `FOR UPDATE`. SQLite takes none, because its write transactions open
  * with `BEGIN IMMEDIATE` and so run one at a time already. The second of two
- * racing removals waits there until the first commits, and only then counts.
- * The counts are locking reads, which read the latest committed rows: under
+ * racing changes waits there until the first commits, and only then reads.
+ * The reads are locking reads, which read the latest committed rows: under
  * MySQL's repeatable read a plain read would answer from a snapshot that
- * could predate the first removal's commit.
+ * could predate the first change's commit.
  *
- * What is kept is an active account holding the `super-admin` role itself, in
- * force. Not a role built on it: that role's inheritance can be edited away
- * and the role deleted, neither of which is a write to an account, so nothing
- * here would be asked. The `super-admin` role is a system role, which can be
- * neither edited nor deleted, so an account holding it directly stays a
- * super-admin until a write to that account says otherwise, and every such
- * write asks this guard. Only an active account counts, since a deactivated
- * one cannot sign in to administer anything. An account that is not one, or
- * stays one after the write, is never refused. A failed read refuses, by
- * throwing.
+ * Who counts is an active account holding super-admin authority that won't
+ * lapse: the `super-admin` role, or a role inheriting it at any depth,
+ * assigned with no expiry. One that holds it only until an expiry is not
+ * kept, since it ends with no request to guard. The set is worked out as it
+ * stands and as the change would leave it, and the change is refused when it
+ * would take the set from some to none. A failed read refuses, by throwing.
  *
- * @throws NextlyError(CONFLICT) when the account is the last active
- *   super-admin and the write would remove it.
+ * Before that, a change that would take super-admin authority from anyone,
+ * the last or not, is refused unless a super-admin person or trusted server
+ * code makes it, as giving that authority is: a role change, and deleting or
+ * deactivating the account alike. Here everyone holding it
+ * now counts, an expiring assignment or a deactivated account included, since
+ * it is theirs until it lapses or they are reactivated.
+ *
+ * @throws NextlyError(FORBIDDEN) when the change would take super-admin
+ *   authority from someone and its caller may not.
+ * @throws NextlyError(CONFLICT) when the change would leave no active
+ *   super-admin.
  */
 export async function refuseRemovingLastSuperAdmin(
   tx: LastSuperAdminTx,
-  tables: LastSuperAdminTables,
+  tables: FirstAdministratorTables,
   dialect: SupportedDialect,
-  userId: string | number,
-  removal: SuperAdminRemoval
+  requested: SuperAdminChange
 ): Promise<void> {
-  const { userRoles } = tables;
-  const target = String(userId);
-
-  const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
+  const lockedRoleId = await lockSuperAdminRole(tx, tables, dialect);
   // No role, no super-admin to protect.
-  if (superAdminRoleId === undefined) return;
+  if (lockedRoleId === undefined) return;
+  // Every id below, the change's and the rows', is compared by one key that
+  // matches as the database does.
+  const key = idKey(dialect);
+  const superAdminRoleId = key(lockedRoleId);
+  const change = keyedChange(requested, key);
 
-  // The active accounts holding, in force, the `super-admin` role itself.
-  const holders = (who: SQL) =>
-    superAdminHolders(tx, tables, [superAdminRoleId], who, {
-      activeOnly: true,
-    });
+  const { roleInherits } = tables;
+  const edges = (
+    await latestRows(
+      tx
+        .select({
+          parentRoleId: roleInherits.parentRoleId,
+          childRoleId: roleInherits.childRoleId,
+        })
+        .from(roleInherits)
+        .where(undefined),
+      dialect
+    )
+  ).map(row => ({
+    parent: key(String(row.parentRoleId)),
+    child: key(String(row.childRoleId)),
+  }));
 
-  const held = await latestRows(holders(eq(userRoles.userId, target)), dialect);
-  if (held.length === 0) return;
-  if (keepsTheRole(removal, superAdminRoleId)) return;
-
-  const others = await latestRows(
-    holders(ne(userRoles.userId, target)).limit(1),
-    dialect
+  const before = await rolesConferring(edges, superAdminRoleId);
+  const after = await rolesConferring(
+    edgesAfter(edges, change),
+    superAdminRoleId
   );
-  if (others.length > 0) return;
+  if (change.kind === "deleteRole") after.delete(change.roleId);
+  const roleIds = new Set([...before, ...after]);
 
+  // Who may make the change comes first: a caller who may not is refused
+  // whether or not the last super-admin would go. Every kind of change asks
+  // it, an account's deletion or deactivation as much as a role change,
+  // since each takes the authority from whoever it removes.
+  const held = holdersAround(
+    keyed(await assignments(tx, tables, dialect, roleIds, "in-force"), key),
+    before,
+    after,
+    change
+  );
+  const losing = [...held.before].filter(userId => !held.after.has(userId));
+  if (losing.length > 0) {
+    await refuseUnlessSuperAdminCaller(tx, {
+      reason: "super-admin-removal-refused",
+      change: change.kind,
+      userIds: losing,
+    });
+  }
+
+  const kept = holdersAround(
+    keyed(await assignments(tx, tables, dialect, roleIds, "permanent"), key),
+    before,
+    after,
+    change
+  );
+  // Nobody to keep: the install already has no permanent super-admin.
+  if (kept.before.size === 0) return;
+  if (kept.after.size > 0) return;
+
+  const toAccount =
+    change.kind === "delete" ||
+    change.kind === "deactivate" ||
+    change.kind === "replaceRoles" ||
+    change.kind === "unassignRole";
   throw NextlyError.conflict({
     reason: "state",
-    message: LAST_SUPER_ADMIN_MESSAGE,
+    message: toAccount
+      ? LAST_SUPER_ADMIN_MESSAGE
+      : LAST_SUPER_ADMIN_ROLE_MESSAGE,
     logContext: {
       refusal: "last-active-super-admin",
-      removal: removal.kind,
-      userId: target,
+      change: change.kind,
+      ...(toAccount ? { userId: String(change.userId) } : {}),
+      ...("roleId" in change ? { roleId: change.roleId } : {}),
     },
   });
+}
+
+/**
+ * The form an id is compared in, matching ids as the database does.
+ *
+ * MySQL matches ids case-insensitively, so one row can be named, and stored
+ * in the rows that point at it, in spellings that differ only in case: an id
+ * a request passes, an assignment row written with the spelling its request
+ * gave, and the account's own row. Compared as given, those would not match.
+ * So on MySQL every id is compared lower-cased, from the change and from the
+ * rows alike. PostgreSQL and SQLite match ids exactly, and so do the
+ * comparisons there.
+ */
+function idKey(dialect: SupportedDialect): (id: string) => string {
+  return dialect === "mysql" ? id => id.toLowerCase() : id => id;
+}
+
+/** `change` with every id it names in its comparison form. */
+function keyedChange(
+  change: SuperAdminChange,
+  key: (id: string) => string
+): SuperAdminChange {
+  switch (change.kind) {
+    case "delete":
+    case "deactivate":
+      return { ...change, userId: key(String(change.userId)) };
+    case "replaceRoles":
+      return {
+        ...change,
+        userId: key(String(change.userId)),
+        roleIds: change.roleIds.map(id => key(String(id))),
+      };
+    case "unassignRole":
+      return {
+        ...change,
+        userId: key(String(change.userId)),
+        roleId: key(change.roleId),
+      };
+    case "removeInheritance":
+      return {
+        ...change,
+        parentRoleId: key(change.parentRoleId),
+        childRoleId: key(change.childRoleId),
+      };
+    case "replaceChildren":
+      return {
+        ...change,
+        roleId: key(change.roleId),
+        childRoleIds: change.childRoleIds.map(id => key(String(id))),
+      };
+    case "deleteRole":
+      return { ...change, roleId: key(change.roleId) };
+  }
+}
+
+/** `held` with each assignment's ids in their comparison form. */
+function keyed(
+  held: readonly Assignment[],
+  key: (id: string) => string
+): Assignment[] {
+  return held.map(a => ({ userId: key(a.userId), roleId: key(a.roleId) }));
+}
+
+/** The inheritance as the change would leave it. */
+function edgesAfter(
+  edges: readonly RoleEdge[],
+  change: SuperAdminChange
+): RoleEdge[] {
+  switch (change.kind) {
+    case "removeInheritance":
+      return edges.filter(
+        e =>
+          !(e.parent === change.parentRoleId && e.child === change.childRoleId)
+      );
+    case "replaceChildren":
+      return [
+        ...edges.filter(e => e.parent !== change.roleId),
+        ...change.childRoleIds.map(child => ({
+          parent: change.roleId,
+          child: String(child),
+        })),
+      ];
+    case "deleteRole":
+      return edges.filter(
+        e => e.parent !== change.roleId && e.child !== change.roleId
+      );
+    default:
+      return [...edges];
+  }
+}
+
+/** An account's assignment of a role. */
+interface Assignment {
+  userId: string;
+  roleId: string;
+}
+
+/**
+ * The assignments of `roleIds`: `permanent`, those of active accounts with no
+ * expiry, the super-admins the guard keeps; `in-force`, every assignment not
+ * yet lapsed, whatever the account, the super-admins a change can take the
+ * authority from.
+ */
+async function assignments(
+  tx: LastSuperAdminTx,
+  tables: LastSuperAdminTables,
+  dialect: SupportedDialect,
+  roleIds: ReadonlySet<string>,
+  held: "permanent" | "in-force"
+): Promise<Assignment[]> {
+  const { users, userRoles } = tables;
+  const rows = await latestRows(
+    tx
+      .select({ userId: userRoles.userId, roleId: userRoles.roleId })
+      .from(userRoles)
+      .innerJoin(users, eq(users.id, userRoles.userId))
+      .where(
+        held === "permanent"
+          ? and(
+              inArray(userRoles.roleId, [...roleIds]),
+              isNull(userRoles.expiresAt),
+              eq(users.isActive, true)
+            )
+          : and(
+              inArray(userRoles.roleId, [...roleIds]),
+              roleAssignmentInForce(userRoles, new Date())
+            )
+      ),
+    dialect
+  );
+  return rows.map(row => ({
+    userId: String(row.userId),
+    roleId: String(row.roleId),
+  }));
+}
+
+/**
+ * Who holds super-admin authority through `held`: `before` the change, over
+ * the roles that confer it now, and `after`, over the roles that will, through
+ * the assignments the change leaves and any it gives.
+ */
+function holdersAround(
+  held: readonly Assignment[],
+  before: ReadonlySet<string>,
+  after: ReadonlySet<string>,
+  change: SuperAdminChange
+): { before: Set<string>; after: Set<string> } {
+  const holdersBefore = new Set(
+    held.filter(a => before.has(a.roleId)).map(a => a.userId)
+  );
+  const holdersAfter = new Set(
+    held
+      .filter(a => after.has(a.roleId) && survives(a, change))
+      .map(a => a.userId)
+  );
+  if (
+    change.kind === "replaceRoles" &&
+    change.roleIds.some(id => after.has(String(id)))
+  ) {
+    holdersAfter.add(String(change.userId));
+  }
+  return { before: holdersBefore, after: holdersAfter };
+}
+
+/** Whether `assignment` is still held once the change lands. */
+function survives(assignment: Assignment, change: SuperAdminChange): boolean {
+  switch (change.kind) {
+    case "delete":
+    case "deactivate":
+      return assignment.userId !== String(change.userId);
+    case "replaceRoles":
+      // Replaced whole; what it is replaced by is added by the caller.
+      return assignment.userId !== String(change.userId);
+    case "unassignRole":
+      return !(
+        assignment.userId === String(change.userId) &&
+        assignment.roleId === change.roleId
+      );
+    case "deleteRole":
+      return assignment.roleId !== change.roleId;
+    case "removeInheritance":
+    case "replaceChildren":
+      return true;
+  }
 }
 
 /**
@@ -270,24 +534,19 @@ async function rolesConferringSuperAdmin(
   superAdminRoleId: string
 ): Promise<string[]> {
   const { roleInherits } = tables;
-  const conferring = new Set([superAdminRoleId]);
-  let frontier = [superAdminRoleId];
-  while (frontier.length > 0) {
-    const parents = (await db
-      .select({ parentRoleId: roleInherits.parentRoleId })
-      .from(roleInherits)
-      .where(inArray(roleInherits.childRoleId, frontier))) as Array<{
-      parentRoleId: unknown;
-    }>;
-    frontier = [];
-    for (const { parentRoleId } of parents) {
-      const id = String(parentRoleId);
-      if (conferring.has(id)) continue;
-      conferring.add(id);
-      frontier.push(id);
-    }
-  }
-  return [...conferring];
+  // Up the inheritance, unbounded as it always was: the role table is the
+  // install's own, and a holder anywhere above counts.
+  const { ids } = await walkRoleGraph([superAdminRoleId], async batch =>
+    (
+      (await db
+        .select({ parentRoleId: roleInherits.parentRoleId })
+        .from(roleInherits)
+        .where(inArray(roleInherits.childRoleId, [...batch]))) as Array<{
+        parentRoleId: unknown;
+      }>
+    ).map(row => row.parentRoleId)
+  );
+  return [superAdminRoleId, ...ids];
 }
 
 const FIRST_ADMINISTRATOR_TAKEN = "first-administrator-taken";
@@ -384,23 +643,4 @@ export async function grantFirstAdministratorInTx(
     expiresAt: null,
   });
   return true;
-}
-
-/**
- * Whether the account still holds the `super-admin` role once the write lands.
- */
-function keepsTheRole(
-  removal: SuperAdminRemoval,
-  superAdminRoleId: string
-): boolean {
-  switch (removal.kind) {
-    case "delete":
-    case "deactivate":
-      return false;
-    case "replaceRoles":
-      // The replacement assigns exactly these, without an expiry.
-      return removal.roleIds.some(id => String(id) === superAdminRoleId);
-    case "unassignRole":
-      return removal.roleId !== superAdminRoleId;
-  }
 }

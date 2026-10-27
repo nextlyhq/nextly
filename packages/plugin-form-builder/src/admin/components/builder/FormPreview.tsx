@@ -33,7 +33,7 @@ import {
   Textarea,
 } from "@nextlyhq/ui";
 import { Eye, Monitor, Paperclip, RotateCcw, Smartphone } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type JSX, useMemo, useState } from "react";
 
 import type { AnyFormField, CustomFormField, FormField } from "../../../types";
 import { isKnownFormField } from "../../../types";
@@ -269,7 +269,10 @@ function Confirmation({
   );
 }
 
-export function FormPreview({ fields, formData }: FormPreviewProps) {
+export function FormPreview({
+  fields,
+  formData,
+}: FormPreviewProps): JSX.Element {
   const { settings } = useFormBuilder();
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");

@@ -1,6 +1,8 @@
 import type React from "react";
 
-export const SendlayerLogo = (props: React.SVGProps<SVGSVGElement>) => (
+export const SendlayerLogo = (
+  props: React.SVGProps<SVGSVGElement>
+): React.JSX.Element => (
   <svg
     {...props}
     width="100%"

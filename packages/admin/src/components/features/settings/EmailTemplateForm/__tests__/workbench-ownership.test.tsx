@@ -44,6 +44,24 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
 }));
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
+// What these assert is whose field is editable, not how the editor edits
+// (liquid-editor.test.tsx has that): an input carrying the editor's name,
+// value and read-only state keeps five CodeMirror views out of every mount.
+vi.mock("../liquid/LazyLiquidEditor", () => ({
+  LazyLiquidEditor: (props: {
+    label: string;
+    value: string;
+    readOnly: boolean;
+    onChange: (value: string) => void;
+  }) => (
+    <input
+      aria-label={props.label}
+      value={props.value}
+      readOnly={props.readOnly}
+      onChange={event => props.onChange(event.target.value)}
+    />
+  ),
+}));
 
 function template(over: Partial<EmailTemplateRecord>): EmailTemplateRecord {
   return {

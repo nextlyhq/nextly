@@ -23,6 +23,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -38,7 +39,7 @@ type Props = {
   onChange: (next: BuilderSettingsValues) => void;
 };
 
-export function AdvancedTab({ fields, values, onChange }: Props) {
+export function AdvancedTab({ fields, values, onChange }: Props): JSX.Element {
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]

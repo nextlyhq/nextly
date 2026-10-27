@@ -88,7 +88,7 @@ function modifierLabels(chord: KeyChord, apple: boolean): string[] {
  */
 export function keyHint(
   spec: string,
-  apple = detectApplePlatform()
+  apple: boolean = detectApplePlatform()
 ): string | null {
   let chords;
   try {

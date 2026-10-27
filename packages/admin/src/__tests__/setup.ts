@@ -59,6 +59,30 @@ Element.prototype.setPointerCapture = () => undefined;
 Element.prototype.releasePointerCapture = () => undefined;
 Element.prototype.scrollIntoView = () => undefined;
 
+// Range geometry, which CodeMirror measures text with. jsdom has Ranges but no
+// layout, so it leaves both methods out, and every editor in a test throws
+// `getClientRects is not a function` on its first measure. Empty geometry is
+// what a layout-free document would report.
+const emptyRect = (): DOMRect =>
+  ({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    toJSON: () => ({}),
+  }) as DOMRect;
+Range.prototype.getBoundingClientRect = emptyRect;
+Range.prototype.getClientRects = () =>
+  ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: [][Symbol.iterator],
+  }) as unknown as DOMRectList;
+
 // jsdom implements no media queries at all, and the theme provider calls matchMedia
 // while mounting, so a provider test dies on `matchMedia is not a function`
 // before reaching an assertion. This stub always answers "no match", which

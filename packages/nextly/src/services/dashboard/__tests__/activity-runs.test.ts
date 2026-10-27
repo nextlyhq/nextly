@@ -9,7 +9,9 @@ import { describe, expect, it } from "vitest";
 import {
   changedFieldsOf,
   changesStatus,
+  isContentSave,
   isStatusOnlyChange,
+  publishes,
 } from "../activity-changes";
 import { RUN_GAP_MS, runsOf } from "../activity-runs";
 
@@ -152,6 +154,38 @@ describe("a run of saves", () => {
     ).toEqual([2, 1, 1, 1, 1]);
   });
 
+  it("keeps a promotion of pending edits as its own row, and a Single's publish, though neither changes the status", () => {
+    // 🔴 A promotion leaves the status published, so its changed fields hold
+    // the edits it put live and no `status`: only its mark says it published.
+    const promotion = row({
+      createdAt: before(1),
+      metadata: JSON.stringify({
+        changedFields: ["title", "updatedAt"],
+        published: true,
+      }),
+    });
+    expect(
+      counts([
+        row({ createdAt: before(0) }),
+        promotion,
+        row({ createdAt: before(2) }),
+      ])
+    ).toEqual([1, 1, 1]);
+    const single = (minutes: number, metadata: unknown) =>
+      row({
+        createdAt: before(minutes),
+        subjectKind: "single",
+        metadata: JSON.stringify(metadata),
+      });
+    expect(
+      counts([
+        single(0, { changedFields: ["headline"] }),
+        single(1, { published: true }),
+        single(2, { changedFields: ["headline"] }),
+      ])
+    ).toEqual([1, 1, 1]);
+  });
+
   it("keeps an entry's update that records no changed fields out of a run", () => {
     // Written before changed fields were recorded, or by a save that changed
     // nothing: either way it cannot show it was not a publish.
@@ -163,7 +197,7 @@ describe("a run of saves", () => {
     ).toEqual([1, 1]);
   });
 
-  it("still joins a Single's saves, which record no changed fields yet", () => {
+  it("still joins a Single's saves written before they recorded changed fields", () => {
     expect(
       counts([
         row({ createdAt: before(0), subjectKind: "single", metadata: null }),
@@ -222,5 +256,49 @@ describe("what a row changed", () => {
     expect(isStatusOnlyChange(fields(["updatedAt"]))).toBe(false);
     expect(changesStatus(null)).toBe(false);
     expect(isStatusOnlyChange(null)).toBe(false);
+  });
+
+  it("reads a publish from its mark, apart from whether the status changed", () => {
+    expect(publishes('{"changedFields":["title"],"published":true}')).toBe(
+      true
+    );
+    expect(publishes({ published: "yes" })).toBe(false);
+    expect(publishes({ changedFields: ["status"] })).toBe(false);
+    expect(publishes(null)).toBe(false);
+    // `changesStatus` stays literal: a promotion published, and changed no status.
+    expect(changesStatus({ changedFields: ["title"], published: true })).toBe(
+      false
+    );
+  });
+
+  it("tells a save of a document's content from a change to whether it is live", () => {
+    const update = (metadata: unknown) => isContentSave("update", metadata);
+    expect(isContentSave("create", null)).toBe(true);
+    expect(isContentSave("delete", null)).toBe(false);
+    // A save, and a save and first publish together, made by one person.
+    expect(update({ changedFields: ["title", "updatedAt"] })).toBe(true);
+    expect(
+      update({ changedFields: ["status", "title"], published: true })
+    ).toBe(true);
+    // A publish or an unpublish on its own is not a save.
+    expect(update({ changedFields: ["status", "updatedAt"] })).toBe(false);
+    expect(
+      update({ changedFields: ["firstPublishedAt", "status"], published: true })
+    ).toBe(false);
+    // 🔴 Nor is a promotion, though its changed fields name content: the edits
+    // it put live were each recorded when they were saved.
+    expect(update({ changedFields: ["title"], published: true })).toBe(false);
+    expect(update({ published: true })).toBe(false);
+    // Unless the promoting request carried content of its own, which no
+    // earlier save recorded: that publish is a save too.
+    expect(
+      update({
+        changedFields: ["title"],
+        published: true,
+        publishedWithEdits: true,
+      })
+    ).toBe(true);
+    // A row that does not say what it changed was a save by somebody.
+    expect(update(null)).toBe(true);
   });
 });

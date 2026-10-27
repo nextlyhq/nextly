@@ -30,7 +30,7 @@ export const NAMED_CLASS_PREFIX = "nx-c-";
  * same shape as a block type for the same reason: a name that is not a slug is not a class this
  * engine can style, and quietly rewriting it would emit a class no renderer puts on an element.
  */
-export const NAMED_CLASS_SLUG_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+export const NAMED_CLASS_SLUG_RE: RegExp = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
  * The longest slug or id this engine will accept from the stored library.
