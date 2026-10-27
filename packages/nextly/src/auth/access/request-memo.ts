@@ -20,6 +20,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import type { RuleFilter } from "./rule-answer";
+
 /**
  * What a request has looked up about one user, the revision of the role and
  * permission rows it was read under, and the moment it stops holding: the
@@ -36,10 +38,42 @@ const lookups = new AsyncLocalStorage<Map<string, KeptForUser>>();
 /**
  * What a collection's read rule answered in this request, by the question it
  * was asked: the target, who asked, and in which language. Kept only where a
- * read that applies the rule's filter asks it, so a route's question and the
- * service's re-ask of the same read run the rule once.
+ * read that applies the rule's filter asks it, so the reads of one request
+ * that apply it, a list and its count, run the rule once.
  */
 const ruleOutcomes = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
+
+/**
+ * A route's verdict on an action it let its caller through on: every entry,
+ * or the entries a read rule's filter matches.
+ */
+export type RouteVerdict =
+  | { readonly all: true }
+  | { readonly filter: RuleFilter };
+
+/**
+ * The verdicts the routes of this request gave, for the reads they authorized
+ * to apply: by caller, target and action, and within those by the language
+ * the route's rules were told. Kept apart from the lookups and rule outcomes
+ * above, which a write in the request clears: the route's verdict is what
+ * lets the read run, so it stands for the whole request, as the route's allow
+ * does.
+ */
+const routeVerdicts = new AsyncLocalStorage<
+  Map<string, Map<string, RouteVerdict>>
+>();
+
+/** Which caller a route judged, on which target and action, in which language. */
+export interface RouteVerdictQuestion {
+  readonly userId: string;
+  readonly slug: string;
+  readonly action: string;
+  /** The rule language, as `ruleLanguageKey` names it. */
+  readonly language: string;
+}
+
+const routeVerdictKey = (q: RouteVerdictQuestion): string =>
+  JSON.stringify([q.userId, q.slug, q.action]);
 
 /**
  * Runs `operation` with a memo for the request. A memo already open is kept,
@@ -47,7 +81,41 @@ const ruleOutcomes = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
  */
 export function runWithAccessMemo<T>(operation: () => T): T {
   if (lookups.getStore()) return operation();
-  return lookups.run(new Map(), () => ruleOutcomes.run(new Map(), operation));
+  return lookups.run(new Map(), () =>
+    ruleOutcomes.run(new Map(), () => routeVerdicts.run(new Map(), operation))
+  );
+}
+
+/**
+ * Keeps a route's verdict, for the read it authorized. `false` outside a
+ * request, where nothing can carry it to that read, so a route letting its
+ * caller through on a filter refuses rather than let the read run unfiltered.
+ */
+export function rememberRouteVerdict(
+  question: RouteVerdictQuestion,
+  verdict: RouteVerdict
+): boolean {
+  const kept = routeVerdicts.getStore();
+  if (!kept) return false;
+  const key = routeVerdictKey(question);
+  const byLanguage = kept.get(key) ?? new Map<string, RouteVerdict>();
+  byLanguage.set(question.language, verdict);
+  kept.set(key, byLanguage);
+  return true;
+}
+
+/**
+ * The verdict a route in this request gave on `question`: the verdict kept in
+ * its language; `"other-language"` where the route judged this caller,
+ * target and action only in other languages, whose verdicts say nothing of
+ * this one; `undefined` where no route in the request judged them.
+ */
+export function routeVerdictFor(
+  question: RouteVerdictQuestion
+): RouteVerdict | "other-language" | undefined {
+  const byLanguage = routeVerdicts.getStore()?.get(routeVerdictKey(question));
+  if (!byLanguage) return undefined;
+  return byLanguage.get(question.language) ?? "other-language";
 }
 
 /**

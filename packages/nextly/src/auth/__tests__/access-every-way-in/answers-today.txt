@@ -4772,11 +4772,11 @@ no-service  user-with                read       collection  returns-true        
 no-service  user-without             read       collection  returns-true          404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  returns-true          A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       collection  returns-false         .     A       .        .      .    .        .       .       .           .       .       .     .
-no-service  user-with                read       collection  returns-false         404   A       .        .      R    .        R       .       .           .       R       .     =absent
+no-service  user-with                read       collection  returns-false         A     A       .        .      R    .        R       .       .           .       R       .     =absent
 no-service  user-without             read       collection  returns-false         404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  returns-false         A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       collection  returns-null          .     A       .        .      .    .        .       .       .           .       .       .     .
-no-service  user-with                read       collection  returns-null          404   A       .        .      R    .        R       .       .           .       R       .     =absent
+no-service  user-with                read       collection  returns-null          A     A       .        .      R    .        R       .       .           .       R       .     =absent
 no-service  user-without             read       collection  returns-null          404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  returns-null          A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       collection  returns-filter        .     A       .        .      .    .        .       .       .           .       .       .     .
@@ -4788,11 +4788,11 @@ no-service  user-with                read       collection  async-filter        
 no-service  user-without             read       collection  async-filter          404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  async-filter          A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       collection  returns-empty-in      .     A       .        .      .    .        .       .       .           .       .       .     .
-no-service  user-with                read       collection  returns-empty-in      404   A       .        .      R    .        R       .       .           .       R       .     =absent
+no-service  user-with                read       collection  returns-empty-in      A     A       .        .      R    .        R       .       .           .       R       .     =absent
 no-service  user-without             read       collection  returns-empty-in      404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  returns-empty-in      A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       collection  malformed-filter      .     A       .        .      .    .        .       .       .           .       .       .     .
-no-service  user-with                read       collection  malformed-filter      404   A       .        .      R    .        R       .       .           .       R       .     =absent
+no-service  user-with                read       collection  malformed-filter      A     A       .        .      R    .        R       .       .           .       R       .     =absent
 no-service  user-without             read       collection  malformed-filter      404   403     .        .      R    .        R       .       .           .       R       .     =absent
 no-service  key-role-based           read       collection  malformed-filter      A     A       .        .      A    .        A       .       .           .       A       .     A
 no-service  visitor                  read       single      none                  .     A       .        .      .    .        .       .       .           .       .       .     .

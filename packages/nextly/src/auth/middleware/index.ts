@@ -27,6 +27,7 @@ import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
+import { rememberRouteVerdict } from "../access/request-memo";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -38,6 +39,7 @@ import {
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
+  ruleLanguageKey,
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
@@ -519,18 +521,33 @@ async function authorizeBy(
   scope: RefusalScope,
   appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
-  const verdict = await verdictOf(
+  const answered = await verdictOf(
     authResult,
     action,
     resource,
     getRBACService(),
     appliesFilter
   );
-  // The handler limits the read to the entries the filter matches, asking
-  // the rule again in the request, where it runs once.
-  if (!verdict.allowed && verdict.refusal === "only-matching-entries") {
-    return authResult;
+  // The route keeps its verdict for the request, every entry or the entries
+  // a read rule's filter matches, so the handler it authorizes applies it
+  // without asking the rule again. A request that cannot keep a filter
+  // refuses the caller, as a route that applies no filter does, rather than
+  // let the read run unfiltered.
+  const question = {
+    userId: authResult.userId,
+    slug: resource,
+    action,
+    language: ruleLanguageKey(),
+  };
+  if (answered.allowed) rememberRouteVerdict(question, { all: true });
+  if (!answered.allowed && answered.refusal === "only-matching-entries") {
+    const kept = rememberRouteVerdict(question, { filter: answered.filter });
+    if (kept) return authResult;
   }
+  const verdict: GateVerdict =
+    !answered.allowed && answered.refusal === "only-matching-entries"
+      ? { allowed: false, refusal: "insufficient" }
+      : answered;
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
