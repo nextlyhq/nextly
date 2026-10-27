@@ -480,6 +480,34 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("2026-10-27T00:00:00.000Z");
   });
 
+  it("logs no built-in as itself: a promise, a symbol, bytes or a date with fields", async () => {
+    const settled = Promise.resolve({ token: "promise-value-secret" });
+    await settled;
+    const when = Object.assign(new Date("2026-10-27T00:00:00.000Z"), {
+      token: "date-field-secret",
+    });
+    const out = receivedBy({
+      settled,
+      marker: Symbol("Bearer symbol-value-secret"),
+      byKey: new Map([[Symbol("Bearer symbol-key-secret"), "kept"]]),
+      bytes: new TextEncoder().encode("bytes-value-secret"),
+      when,
+    });
+    for (const secret of [
+      "promise-value-secret",
+      "symbol-value-secret",
+      "symbol-key-secret",
+      "date-field-secret",
+    ]) {
+      expect(out).not.toContain(secret);
+    }
+    // Bytes are logged as their kind and length, never their contents.
+    expect(out).not.toMatch(/62 79 74 65 73/);
+    // The controls: a date still prints as its time, and a map's value stays.
+    expect(out).toContain("2026-10-27T00:00:00.000Z");
+    expect(out).toContain("kept");
+  });
+
   it("takes them out of a function's own fields", () => {
     const out = receivedBy({
       callback: Object.assign(() => undefined, {

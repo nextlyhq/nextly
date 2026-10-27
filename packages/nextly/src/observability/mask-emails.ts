@@ -72,6 +72,8 @@ function walk(
   serialised = false
 ): unknown {
   if (typeof value === "string") return rules.text(value);
+  // A console prints a symbol's description, so it is logged as that text.
+  if (typeof value === "symbol") return rules.text(value.toString());
   if (!isReference(value)) return value;
   const known = seen.get(value);
   if (known !== undefined) return known;
@@ -114,30 +116,36 @@ function copyFunction(
 
 /**
  * An object of a class this copy does not know, once nothing more specific
- * applies. Its own fields are copied into a plain record, each judged as a
- * field is, since a console logger prints them and calls any inspection hook
- * the class defines. Built-in values that print only their own data, such as
- * a date or bytes, are kept as they are.
+ * applies. Nothing leaves as the object it was given, since a console prints
+ * an object's fields and calls any inspection hook it has or inherits: a
+ * built-in is logged as its data alone, and any other object as a plain
+ * record of its own fields, each judged as a field is.
  */
 function copyInstance(
   value: object,
   rules: LogCopyRules,
   seen: WeakMap<object, unknown>
 ): unknown {
-  return isPrintedAsData(value) ? value : copyRecord(value, rules, seen);
+  return builtInForm(value, rules) ?? copyRecord(value, rules, seen);
 }
 
-/** Whether `value` is a built-in a console prints as its data alone. */
-function isPrintedAsData(value: object): boolean {
-  return (
-    value instanceof Date ||
-    value instanceof RegExp ||
-    value instanceof ArrayBuffer ||
-    ArrayBuffer.isView(value) ||
-    value instanceof Promise ||
-    value instanceof WeakMap ||
-    value instanceof WeakSet
-  );
+/**
+ * What a built-in is logged as, or undefined for any other object. A date is
+ * a fresh one holding only its time, a pattern its text, and bytes their kind
+ * and length, never their contents. A promise, a weak map or a weak set is
+ * logged by kind alone: a console would print what a promise settled to.
+ */
+function builtInForm(value: object, rules: LogCopyRules): unknown {
+  if (value instanceof Date) return new Date(value.getTime());
+  if (value instanceof RegExp) return rules.text(value.toString());
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const kind = value.constructor?.name ?? "bytes";
+    return `[${kind} ${value.byteLength} bytes]`;
+  }
+  if (value instanceof Promise) return "[Promise]";
+  if (value instanceof WeakMap) return "[WeakMap]";
+  if (value instanceof WeakSet) return "[WeakSet]";
+  return undefined;
 }
 
 /** A copy of `value` by what it is, once its `toJSON` has been asked. */
