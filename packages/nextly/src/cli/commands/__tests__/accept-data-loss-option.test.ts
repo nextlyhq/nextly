@@ -17,6 +17,26 @@ import { registerPruneCommand } from "../prune";
 
 const uninstall = vi.hoisted(() => vi.fn(async () => {}));
 
+// `../program` imports every command, `migrate` with its whole graph among
+// them; the commands under test need only its context factory.
+vi.mock("../../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
+// `migrate` is the largest command module, and nothing here runs it.
+vi.mock("../migrate", () => ({
+  runMigrate: vi.fn(),
+  parseSqlSections: vi.fn(),
+}));
+
 vi.mock("../plugin-lifecycle-runner", () => ({
   runPluginUninstall: uninstall,
 }));

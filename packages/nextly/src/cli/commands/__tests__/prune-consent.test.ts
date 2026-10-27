@@ -14,6 +14,20 @@ import {
 } from "../../../domains/schema/migrate/data-loss-consent";
 import { pruneApproval, pruneConsent, runPrune } from "../prune";
 
+// `../program` imports every command, `migrate` with its whole graph among
+// them; the commands under test need only its context factory.
+vi.mock("../../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
 /** Two orphaned collections, one of them localized. */
 function orphanedDatabase() {
   const executed: string[] = [];
