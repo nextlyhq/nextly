@@ -28,7 +28,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { CollectionAccessControl } from "../../shared/types/access";
 import { routeVerdictFor, runWithAccessMemo } from "../access/request-memo";
-import { ruleLanguageKey } from "../access/rule-language";
+import { currentRuleLanguage } from "../access/rule-language";
 import type { GrantedPermission } from "../authenticated-scope";
 
 import { authorizeCaller, authorizeCallerForAny, type AuthContext } from ".";
@@ -343,7 +343,7 @@ describe("a read whose rule answers a filter, at a route that applies it", () =>
         userId: "editor",
         slug: POSTS,
         action: "read",
-        language: ruleLanguageKey(),
+        language: currentRuleLanguage(),
       }),
     }));
     expect(said(result)).toBe("A");
