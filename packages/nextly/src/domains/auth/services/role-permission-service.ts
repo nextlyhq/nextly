@@ -419,6 +419,46 @@ export class RolePermissionService extends BaseService {
   }
 
   /**
+   * Takes off the role the permissions `pick` chooses among `ids`, in one
+   * transaction under the same lock on the role's row as
+   * {@link addRolePermissionsOnce}, so no edit of its permissions lands
+   * between the choice and the removal. `pick` is handed the ids among `ids`
+   * the role holds and the transaction's executor, so what it records commits
+   * or rolls back with the removal; it returns the ids to remove.
+   *
+   * @returns The permission ids removed
+   */
+  async withdrawRolePermissions(
+    roleId: string,
+    ids: readonly string[],
+    pick: (
+      held: readonly string[],
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ): Promise<string[]> {
+    let removed: string[] = [];
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      const holding = [...new Set(ids)].filter(id => held.has(id));
+      if (holding.length === 0) return;
+      const picked = new Set(await pick(holding, tx.getDrizzle()));
+      removed = holding.filter(id => picked.has(id));
+      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+      for (const batch of batches(removed, maxParams - 1)) {
+        await tx.delete("role_permissions", {
+          and: [
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: batch },
+          ],
+        });
+      }
+    });
+    if (removed.length > 0) await afterRoleGrantsChanged(roleId);
+    return removed;
+  }
+
+  /**
    * The ids among `wanted` whose permission row, locked on transaction `tx`,
    * still grants the action and resource it is wanted for.
    */

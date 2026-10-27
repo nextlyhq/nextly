@@ -339,6 +339,8 @@ function seedPublicRoleGrants(): Promise<void> {
     declared: () => collectPublicGrants(getService("config").plugins ?? []),
     addOnce: (roleId, wanted, pick) =>
       grants.addRolePermissionsOnce(roleId, wanted, pick),
+    withdraw: (roleId, ids, pick) =>
+      grants.withdrawRolePermissions(roleId, ids, pick),
     meta: getService("metaService"),
     logger,
   });
