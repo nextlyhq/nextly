@@ -591,7 +591,11 @@ function declaredActionOf(
   action: NonNullable<RegisteredWidgetMeta["empty"]>["action"]
 ): NonNullable<DashboardWidget["declaredEmpty"]>["action"] {
   if (action === undefined) return undefined;
-  if ("opens" in action) return { label: action.label, opensSettings: true };
+  // By the value, as the server published it; never by the key alone.
+  if ("opens" in action && action.opens === "settings") {
+    return { label: action.label, opensSettings: true };
+  }
+  if (!("link" in action)) return undefined;
   const href = adminHref(action.link);
   return href === undefined ? undefined : { label: action.label, href };
 }
