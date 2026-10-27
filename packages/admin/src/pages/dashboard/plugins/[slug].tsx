@@ -103,6 +103,9 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
   const entry = activeSlug
     ? entries.find(e => pluginSlug(e.id) === activeSlug)
     : undefined;
+  // A plugin not installed has no branding entry to name it, so the tab takes
+  // the catalogue's name, the one this page shows for it.
+  useDocumentTitle(entry?.name);
 
   if (entry) {
     return (

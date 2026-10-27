@@ -141,6 +141,35 @@ describe("the name each route gives its screen", () => {
     clearPluginPages();
   });
 
+  it("matches a plugin's menu entry by its path, whatever query, hash or trailing slash it carries", () => {
+    clearPluginPages();
+    registerPluginPage({ slug: "acme", path: "reports", component: "x" });
+    registerPluginPage({ slug: "acme", path: "inbox", component: "y" });
+    const plugins = [
+      {
+        name: "acme",
+        collections: [],
+        menu: [
+          {
+            label: "Open Reports",
+            to: "/admin/plugins/acme/reports?status=open",
+          },
+          { label: "Inbox", to: "/admin/plugins/acme/inbox/#unread" },
+        ],
+      },
+    ] as PluginMetadata[];
+
+    const nameAt = (pathname: string) =>
+      resolveScreenName(resolveRoute(pathname, "").screenName, {
+        pathname,
+        plugins,
+      });
+
+    expect(nameAt("/admin/plugins/acme/reports")).toBe("Open Reports");
+    expect(nameAt("/admin/plugins/acme/inbox")).toBe("Inbox");
+    clearPluginPages();
+  });
+
   it("names an address no route answers", () => {
     const route = resolveRoute("/admin/no-such-screen", "");
 

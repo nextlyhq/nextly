@@ -18,7 +18,7 @@ import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav"
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
 import type { NavSection } from "@admin/constants/nav-sections";
 import type { PluginMenuItemMeta, PluginMetadata } from "@admin/types/branding";
-import type { ApiCollection, ApiSingle } from "@admin/types/entities";
+import type { ApiSingle } from "@admin/types/entities";
 
 /**
  * The data a screen's name may depend on, beyond the route itself.
@@ -27,9 +27,21 @@ import type { ApiCollection, ApiSingle } from "@admin/types/entities";
  * collection or Single a content route opens, as the sidebar's lists carry
  * them, and the plugin list from admin-meta. Each is absent until it arrives.
  */
+/**
+ * What naming a collection reads: the fields its sidebar label is made from.
+ * Stated as that shape rather than one of the admin's collection types, since
+ * the label may come from the sidebar's list or from a screen's own read of
+ * the collection, and those answers are typed differently.
+ */
+export interface NamedCollection {
+  name: string;
+  label?: string;
+  labels?: { plural?: string };
+}
+
 export interface ScreenNameSources {
   pathname: string;
-  collection?: Pick<ApiCollection, "name" | "label" | "labels">;
+  collection?: NamedCollection;
   single?: Pick<ApiSingle, "slug" | "label">;
   plugins?: readonly PluginMetadata[];
 }
@@ -95,14 +107,28 @@ function flattenMenu(
 }
 
 /**
+ * The path an address names: no query, no hash, and no trailing slash. A menu
+ * entry may link to a filtered view (`?status=open`) or a place on the page
+ * (`#unread`), but the route is resolved from the path alone, so the two are
+ * compared on that.
+ */
+function pathOf(address: string): string {
+  const path = address.split(/[?#]/, 1)[0] ?? "";
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+/**
  * A plugin's page is called by the menu entry that links to it, and by its
  * address when the plugin gave it none. The admin knows nothing else about a
  * plugin's page, and the address is at least what the reader can see.
  */
-export const pluginPageScreen: ScreenName = ({ pathname, plugins }) =>
-  flattenMenu((plugins ?? []).flatMap(plugin => plugin.menu ?? [])).find(
-    item => item.to === pathname
-  )?.label ?? pathname;
+export const pluginPageScreen: ScreenName = ({ pathname, plugins }) => {
+  const path = pathOf(pathname);
+  const entry = flattenMenu(
+    (plugins ?? []).flatMap(plugin => plugin.menu ?? [])
+  ).find(item => pathOf(item.to) === path);
+  return entry?.label ?? pathname;
+};
 
 /** The separator between a title's parts, as in "Posts · Golden Shop". */
 const SEPARATOR = " · ";

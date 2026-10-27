@@ -257,4 +257,57 @@ describe("the admin's tab title", () => {
     expect(listGet).not.toHaveBeenCalled();
     expect(itemRequests()).toEqual([]);
   });
+
+  it("names a collection or Single beyond the sidebar's lists from what its screen already loaded", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const meta = { total: 101, page: 1, limit: 100, totalPages: 2 };
+    // The sidebar's first page, which these three are not on.
+    client.setQueryData(collectionKeys.list(NAV_COLLECTIONS_PARAMS), {
+      items: [POSTS],
+      meta,
+    });
+    client.setQueryData(singleKeys.list(NAV_SINGLES_PARAMS), {
+      items: [ABOUT],
+      meta,
+    });
+    // What each screen loads for itself: the editor its collection's schema,
+    // the entry list its collection, the Single's page its schema.
+    client.setQueryData(collectionKeys.schema("archive"), {
+      name: "archive",
+      label: "Archive",
+      labels: { singular: "Archive", plural: "Archives" },
+    });
+    client.setQueryData(collectionKeys.detail("ledger"), {
+      name: "ledger",
+      label: "Ledger",
+      labels: { singular: "Ledger", plural: "Ledgers" },
+    });
+    client.setQueryData(singleKeys.schema("legal"), {
+      slug: "legal",
+      label: "Legal Notice",
+    });
+
+    renderAt("/admin/collections/archive/e1", client);
+    await waitFor(() => expect(document.title).toBe("Archives · Golden Shop"));
+
+    navigate("/admin/collections/ledger");
+    await waitFor(() => expect(document.title).toBe("Ledgers · Golden Shop"));
+
+    navigate("/admin/singles/legal");
+    await waitFor(() =>
+      expect(document.title).toBe("Legal Notice · Golden Shop")
+    );
+
+    // A collection nothing has loaded yet: the title waits for the screen's own
+    // answer rather than asking for one, so it names the site alone and no
+    // request for the collection goes out on the title's account.
+    navigate("/admin/collections/unloaded/e9");
+    await waitFor(() => expect(document.title).toBe("Golden Shop"));
+
+    expect(listGet).not.toHaveBeenCalled();
+    expect(itemRequests()).toEqual([]);
+  });
 });

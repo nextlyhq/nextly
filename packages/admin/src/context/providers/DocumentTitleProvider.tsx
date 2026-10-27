@@ -24,11 +24,14 @@ import {
 
 import {
   NAV_COLLECTIONS_PARAMS,
+  useCollection,
   useCollections,
+  useCollectionSchema,
 } from "@admin/hooks/queries/useCollections";
 import {
   NAV_SINGLES_PARAMS,
   useSingles,
+  useSingleSchema,
 } from "@admin/hooks/queries/useSingles";
 import {
   formatDocumentTitle,
@@ -53,36 +56,55 @@ export const DocumentTitleContext = createContext<DocumentTitleItems | null>(
 );
 
 /**
- * The screen's name, reading the open collection or Single when the route
- * opens one.
+ * The collection a route opens, from answers the admin already holds.
  *
- * The label comes from the sidebar's own lists of collections and Singles,
- * asked with the sidebar's params and so under the sidebar's cache keys. The
- * sidebar loads both on every signed-in screen, so naming the tab reads an
- * answer already in hand and sends nothing: a read of the one collection or
- * Single would fetch a whole schema for its label alone. The lists are only
- * asked for on a route that opens a collection or a Single; while one has not
- * arrived the tab names the site alone.
+ * First the sidebar's own collection list, asked with the sidebar's params and
+ * so under the sidebar's cache key: the sidebar loads it on every signed-in
+ * screen, so this reuses that request rather than adding one. Only asked for
+ * on a route that opens a collection.
+ *
+ * That list is one bounded page, so a site with more collections than it holds
+ * falls back to what the screen loaded for itself: the editor and create
+ * screens read the collection's schema, the entry list the collection. Both
+ * are OBSERVED here, never fetched (`enabled: false`), through the screens'
+ * own hooks so the cache keys stay theirs; they fill as the screen's request
+ * answers. Until something arrives the tab names the site alone.
  */
+function useOpenCollection(slug: string | undefined, opens: boolean) {
+  const name = opens ? slug : undefined;
+  const { data: listed } = useCollections(NAV_COLLECTIONS_PARAMS, {
+    enabled: opens,
+  });
+  const { data: schema } = useCollectionSchema(name, { enabled: false });
+  const { data: detail } = useCollection(name, { enabled: false });
+  if (!name) return undefined;
+  return listed?.items.find(item => item.name === name) ?? schema ?? detail;
+}
+
+/**
+ * The Single a route opens: from the sidebar's Single list, else from the
+ * schema the Single's screen loaded for itself, observed without fetching, as
+ * `useOpenCollection` does for collections.
+ */
+function useOpenSingle(slug: string | undefined, opens: boolean) {
+  const name = opens ? slug : undefined;
+  const { data: listed } = useSingles(NAV_SINGLES_PARAMS, { enabled: opens });
+  const { data: schema } = useSingleSchema(name, { enabled: false });
+  if (!name) return undefined;
+  return listed?.items.find(item => item.slug === name) ?? schema;
+}
+
+/** The screen's name, reading the open collection or Single on a route that opens one. */
 function useScreenName(
   route: RouteResult,
   pathname: string
 ): string | undefined {
   const slug = route.entityAccess?.slug;
-  const opensCollection = route.accessSubject === "collection";
-  const opensSingle = route.accessSubject === "single";
-  const { data: collections } = useCollections(NAV_COLLECTIONS_PARAMS, {
-    enabled: opensCollection,
-  });
-  const { data: singles } = useSingles(NAV_SINGLES_PARAMS, {
-    enabled: opensSingle,
-  });
-  const collection = opensCollection
-    ? collections?.items.find(item => item.name === slug)
-    : undefined;
-  const single = opensSingle
-    ? singles?.items.find(item => item.slug === slug)
-    : undefined;
+  const collection = useOpenCollection(
+    slug,
+    route.accessSubject === "collection"
+  );
+  const single = useOpenSingle(slug, route.accessSubject === "single");
   const { plugins } = useBranding();
   return resolveScreenName(route.screenName, {
     pathname,
