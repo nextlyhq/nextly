@@ -31,6 +31,6 @@
 
 A collection's `update`, `publish` and `unpublish` access rules may answer a filter instead of `true`. A write through the Direct API or a plugin service, by a signed-in user or an API key, then changes an entry only if it matches the filter. An entry outside the filter is left as it was and refused: with a 403 where the caller may read it, and as a missing entry (404) where it may not. The entry is matched under the write's lock, and a write inside the caller's own transaction is matched in that transaction.
 
-A write that changes an entry's data must leave it matching every filter that judged it. An update that would move the entry out of its filter is refused with a 403 and changes nothing, and so is a publish that would promote a held edit doing the same. A filter on a translated field is matched in the language being written.
+A write that changes an entry's data must leave it matching every filter that judged it. An update that would move the entry out of its filter is refused with a 403 and changes nothing, and so is a publish that would promote a held edit doing the same. A filter on a translated field is matched in the language being written. An edit held as a pending change on a published entry is shown to a caller whose update filter matches the entry, as the save was matched.
 
-Over REST, for the bulk and batch writes, and for a publish or unpublish of every language at once, an update, publish or unpublish rule's filter is still refused, as before.
+Over REST, for the bulk and batch writes, for a release's members, and for a publish or unpublish of every language at once, an update, publish or unpublish rule's filter is still refused, as before.
