@@ -97,6 +97,9 @@ const SETUP_STEPS = new Set([
   "Restore unit test records",
   "Stamp unit test records",
   "Save unit test records",
+  // pnpm's package store: restored on every event, saved after a push only.
+  "Restore pnpm store",
+  "Save pnpm store",
 ]);
 
 /**

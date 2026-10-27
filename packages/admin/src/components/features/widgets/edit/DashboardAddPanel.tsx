@@ -34,7 +34,7 @@ export interface DashboardAddPanelProps {
     LayoutEditor,
     "isEditing" | "placements" | "available" | "atCapacity" | "add"
   >;
-  /** The layout read, whose widget facts (widths, group and rank) the rows are built from. */
+  /** The layout read, whose widget facts (group and rank) the rows are built from. */
   layout: Pick<UseDashboardLayoutResult, "layout">;
   byId: ReadonlyMap<string, DashboardWidget>;
   isDrawn: IsDrawn;
@@ -141,11 +141,11 @@ function CustomizingAddPanel({
       if (id === null) return null;
       lastAdded.current = id;
       highlight(id);
-      // At the end: the list as it will be once the add lands. A width counts for nothing in a
+      // At the end: the list as it will be once the add lands. A size counts for nothing in a
       // position, so the card stands in at any.
       const after = [
         ...editor.placements,
-        { id, widgetId, width: "full" as const, removed: false },
+        { id, widgetId, w: 12, h: 2, removed: false },
       ];
       return {
         title: titleOf(widgetId),

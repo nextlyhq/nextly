@@ -6,36 +6,14 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../errors/nextly-error";
+import { loadedDialect } from "../../database/dialect-tables";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
 export { ONE_TIME_SECRETS_TABLE } from "./table-name";
-
-function secretsForDialect(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return pg.nextlyOneTimeSecrets;
-    case "mysql":
-      return my.nextlyOneTimeSecrets;
-    case "sqlite":
-      return sl.nextlyOneTimeSecrets;
-    default: {
-      const _exhaustive: never = dialect;
-      throw NextlyError.internal({
-        logContext: {
-          reason: "no one-time secrets table for this dialect",
-          dialect: String(_exhaustive),
-        },
-      });
-    }
-  }
-}
 
 /** The table, keyed as `getCoreSchema` spreads it. */
 export function oneTimeSecretsTables(dialect: SupportedDialect) {
-  return { nextlyOneTimeSecrets: secretsForDialect(dialect) };
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { nextlyOneTimeSecrets } = loadedDialect(dialect).tables;
+  return { nextlyOneTimeSecrets };
 }

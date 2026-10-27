@@ -28,6 +28,7 @@ import {
 } from "../../users/services/last-super-admin";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
+import { refuseLinkingPublicRole } from "./public-role";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
@@ -101,6 +102,14 @@ export class UserRoleService extends BaseService {
       // assignment is read back by comparing ids.
       const storedUserId = String(user.id);
       const storedRoleId = String(roleRow[0].id);
+      // The Public role is what visitors hold, never anyone's role.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [storedRoleId],
+        "assign",
+        { userId: storedUserId }
+      );
       const { userRoles } = this.tables;
       const userRoleData: UserRoleInsertData = {
         id: randomUUID(),
@@ -296,6 +305,14 @@ export class UserRoleService extends BaseService {
   ): Promise<boolean> {
     const db = tx as typeof this.db;
     const { roles, userRoles } = this.tables;
+    // The Public role is what visitors hold, never anyone's role.
+    await refuseLinkingPublicRole(
+      tx as LastSuperAdminTx,
+      this.dialect,
+      roleIds,
+      "assign",
+      { userId }
+    );
     // Compared against the roles held now. A lapsed assignment counted as
     // held made re-granting that role look like no change, so nothing was
     // written and the role stayed lapsed while the caller believed it given.

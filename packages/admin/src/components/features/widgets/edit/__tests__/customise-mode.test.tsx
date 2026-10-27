@@ -15,7 +15,7 @@ import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
-  WidgetWidthFacts,
+  WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
@@ -91,6 +91,13 @@ registerCoreComponent("core#LinkedBody", LinkedBody);
 registerCoreComponent("core#LinkedSection", LinkedSection);
 registerCoreComponent("core#NotesBody", NotesBody);
 
+/** Full width three rows high by default, and resizable from 3 by 2 up to 12 by 6. */
+const RESIZABLE = {
+  default: { w: 12, h: 3 },
+  min: { w: 3, h: 2 },
+  max: { w: 12, h: 6 },
+};
+
 /**
  * Four widgets: a framed card, an unframed section, a card with a setting, and
  * one the reader has not placed.
@@ -102,14 +109,14 @@ function branding(): AdminBranding {
         id: "core/a",
         title: "Posts",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
       {
         id: "core/b",
         title: "Home page",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         chrome: "none",
         component: "core#LinkedSection",
       },
@@ -117,7 +124,7 @@ function branding(): AdminBranding {
         id: "core/c",
         title: "Notes",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#NotesBody",
         settings: [{ name: "heading", type: "text", label: "Heading" }],
       },
@@ -125,27 +132,25 @@ function branding(): AdminBranding {
         id: "core/d",
         title: "Team",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
     ],
   } as unknown as AdminBranding;
 }
 
-/** Every width, one card, listed in the add panel's Overview group as core lists it. */
-function facts(): WidgetWidthFacts {
+/** One card, listed in the add panel's Overview group as core lists it. */
+function facts(): WidgetLayoutFacts {
   return {
-    allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-    defaultWidth: "full",
     allowsSeveral: false,
     group: "overview",
   };
 }
 
 const OPENED: WidgetPlacement[] = [
-  { id: "p1", widgetId: "core/a", width: "full", removed: false },
-  { id: "p2", widgetId: "core/b", width: "full", removed: false },
-  { id: "p3", widgetId: "core/c", width: "full", removed: false },
+  { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+  { id: "p2", widgetId: "core/b", w: 12, h: 3, removed: false },
+  { id: "p3", widgetId: "core/c", w: 12, h: 3, removed: false },
 ];
 
 function layout(
@@ -161,8 +166,8 @@ function layout(
     },
     available: ["core/d"],
     defaultPlacements: [
-      { id: "core/c", widgetId: "core/c", width: "half", removed: false },
-      { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+      { id: "core/c", widgetId: "core/c", w: 6, h: 3, removed: false },
+      { id: "core/a", widgetId: "core/a", w: 6, h: 3, removed: false },
     ],
     version: 3,
     source: "own",
@@ -238,9 +243,9 @@ function drawnOrder(): string[] {
     .filter((id): id is string => id !== undefined);
 }
 
-function widthLabels(): string[] {
+function sizeLabels(): string[] {
   return screen
-    .queryAllByTestId("card-width-label")
+    .queryAllByTestId("card-size-label")
     .map(label => label.textContent ?? "");
 }
 
@@ -282,7 +287,7 @@ function saveButton(): HTMLElement {
 const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a move", user => choose(user, "Posts", "Move later")],
   [
-    "a width",
+    "a resize",
     async user => {
       await user.click(
         screen.getByRole("button", { name: "Card actions for Posts" })
@@ -296,7 +301,9 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       });
       // By keyboard: jsdom has no geometry, so a pointer crossing into the
       // submenu reads as leaving it.
-      within(widths).getByRole("menuitemradio", { name: "Half width" }).focus();
+      within(widths)
+        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
+        .focus();
       await user.keyboard("{Enter}");
     },
   ],
@@ -349,16 +356,16 @@ describe("customise mode writes nothing before Save", () => {
       renderDashboard();
       const user = await beginEditing();
       const order = drawnOrder();
-      const widths = widthLabels();
+      const sizes = sizeLabels();
 
       await change(user);
       await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
 
       expect(drawnOrder()).toEqual(order);
       expect(writes()).toBe(0);
-      // Back in customise mode, the widths are the ones it opened with.
+      // Back in customise mode, the sizes are the ones it opened with.
       await beginEditing();
-      expect(widthLabels()).toEqual(widths);
+      expect(sizeLabels()).toEqual(sizes);
     }
   );
 });

@@ -121,12 +121,14 @@ async function placeGetStartedCard(page: Page): Promise<void> {
       getStarted?: unknown;
     };
     // The array order IS the dashboard's order, so the card goes first by
-    // being first in the list; it is drawn full width, as Get started is.
+    // being first in the list; it is drawn full width, as Get started is. A
+    // mocked read, so the size is the card's drawn one, not checked by a write.
     layout.placements = [
       {
         id: "e2e-get-started",
         widgetId: GET_STARTED_WIDGET_ID,
-        width: "full",
+        w: 12,
+        h: 4,
         removed: false,
       },
       ...layout.placements.filter(p => p.widgetId !== GET_STARTED_WIDGET_ID),

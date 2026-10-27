@@ -12,10 +12,17 @@
  * @module components/features/widgets/edit/drag/drop-geometry
  */
 
-import { drawnSpan, gridColumnGapPx, GRID_ROW_GAP_PX } from "../../sizes";
+import { GRID_COLUMNS } from "nextly/config";
 
-/** The grid's columns, which a row's spans fill: as many as a full-width card spans. */
-const COLUMNS = drawnSpan("full", "wide");
+import {
+  cardHeightPx,
+  columnGapPx,
+  ROW_GAP_PX,
+  ROW_HEIGHT_PX,
+} from "../../sizes";
+
+/** The grid's columns, which a row's spans fill. */
+const COLUMNS = GRID_COLUMNS;
 
 /**
  * How much more a vertical distance counts than a horizontal one when finding
@@ -24,10 +31,13 @@ const COLUMNS = drawnSpan("full", "wide");
  */
 const VERTICAL_WEIGHT = 4;
 
-/** A card as drawn: its rectangle relative to the grid, and its span. */
+/** A card as drawn: its rectangle relative to the grid, its span and its rows. */
 export interface DrawnCard {
   id: string;
+  /** The columns it spans at this width. */
   span: number;
+  /** The rows it spans, its `h`: the same in every band. */
+  rows: number;
   rect: { left: number; top: number; right: number; bottom: number };
 }
 
@@ -79,21 +89,52 @@ export function finalPositionAt(
   return gap > from ? gap - 1 : gap;
 }
 
-/** Whether the card moved to `final` would start a row there. */
-function startsRow(
-  others: readonly DrawnCard[],
-  moved: DrawnCard,
-  final: number
-): boolean {
-  const order = [...others];
-  order.splice(final, 0, moved);
-  let column = 0;
+/** Where a card is placed on the grid: its first column and row, in grid units. */
+interface GridCell {
+  column: number;
+  row: number;
+}
+
+/**
+ * Where each card in `order` is placed, as the grid's own auto-placement does it: in order and
+ * never backfilled (the grid is not `dense`), each card at the first place at or after the last
+ * one's where its span and rows are free. Rows as well as columns: after a tall half and a short
+ * half, the next half fits beside the tall one, under the short one, which a count of columns
+ * alone would start on a row of its own.
+ */
+function placements(order: readonly DrawnCard[]): GridCell[] {
+  const taken = new Set<string>();
+  const free = (column: number, row: number, span: number, rows: number) => {
+    for (let r = row; r < row + rows; r++) {
+      for (let c = column; c < column + span; c++) {
+        if (taken.has(`${r}:${c}`)) return false;
+      }
+    }
+    return true;
+  };
+  const cells: GridCell[] = [];
+  let cursor = { column: 0, row: 0 };
   for (const card of order) {
-    if (column + card.span > COLUMNS) column = 0;
-    if (card === moved) return column === 0;
-    column += card.span;
+    // Held to what the grid can draw, so the walk below always finds a place: a span of one to
+    // twelve columns and at least one row.
+    const span = Math.min(Math.max(Math.trunc(card.span) || 1, 1), COLUMNS);
+    const rows = Math.max(Math.trunc(card.rows) || 1, 1);
+    let { column, row } = cursor;
+    // Along the cursor's row, then down a row from the first column, as the grid moves on.
+    while (column + span > COLUMNS || !free(column, row, span, rows)) {
+      column += 1;
+      if (column + span > COLUMNS) {
+        column = 0;
+        row += 1;
+      }
+    }
+    for (let r = row; r < row + rows; r++) {
+      for (let c = column; c < column + span; c++) taken.add(`${r}:${c}`);
+    }
+    cells.push({ column, row });
+    cursor = { column: column + span, row };
   }
-  return false;
+  return cells;
 }
 
 /**
@@ -112,34 +153,33 @@ export function dropLineFor(
 ): DropLine | undefined {
   const moved = cards[from];
   if (moved === undefined || final === from) return undefined;
-  const others = cards.filter((_, index) => index !== from);
-  const before = others[final - 1];
-  if (before !== undefined && !startsRow(others, moved, final)) {
+  const order = cards.filter((_, index) => index !== from);
+  order.splice(final, 0, moved);
+  const cell = placements(order)[final];
+  if (cell === undefined) return undefined;
+  // The place the card will take, in pixels, by the grid's own measures: twelve columns with
+  // the gap across that this width draws (`columnGapPx`), and rows of `ROW_HEIGHT_PX` with
+  // `ROW_GAP_PX` between them.
+  const gap = columnGapPx(gridWidth);
+  const columnWidth = (gridWidth - (COLUMNS - 1) * gap) / COLUMNS;
+  const rowPitch = ROW_HEIGHT_PX + ROW_GAP_PX;
+  const top = cell.row * rowPitch;
+  if (cell.column > 0) {
+    // Beside the card before it on its row: centred in the gap across, as tall as it will be.
     return {
       orientation: "vertical",
-      x: before.rect.right + gridColumnGapPx(gridWidth) / 2,
-      top: before.rect.top,
-      length: before.rect.bottom - before.rect.top,
+      x: Math.round(cell.column * (columnWidth + gap) - gap / 2),
+      top,
+      length: cardHeightPx(Math.max(Math.trunc(moved.rows) || 1, 1)),
     };
   }
-  const next = others[final];
-  if (next !== undefined) {
-    return {
-      orientation: "horizontal",
-      y: next.rect.top - GRID_ROW_GAP_PX / 2,
-      x: 0,
-      length: gridWidth,
-    };
-  }
-  const last = others[others.length - 1];
-  return last === undefined
-    ? undefined
-    : {
-        orientation: "horizontal",
-        y: last.rect.bottom + GRID_ROW_GAP_PX / 2,
-        x: 0,
-        length: gridWidth,
-      };
+  // It starts a row: the line runs across the grid, centred in the gap above that row.
+  return {
+    orientation: "horizontal",
+    y: top - ROW_GAP_PX / 2,
+    x: 0,
+    length: gridWidth,
+  };
 }
 
 /**

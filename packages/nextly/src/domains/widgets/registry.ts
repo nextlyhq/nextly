@@ -27,10 +27,7 @@ export type WidgetPatch = Partial<
     | "description"
     | "icon"
     | "category"
-    | "defaultSize"
-    | "minSize"
-    | "maxSize"
-    | "defaultHeight"
+    | "size"
     | "requiredPermission"
     | "query"
     | "link"
@@ -201,9 +198,10 @@ export function overrideWidget(
  * archetype or inject behaviour. That keeps "customize a core widget"
  * expressible without making core widgets unversionable.
  *
- * Re-validates the MERGED result, not the patch alone: two individually valid
- * values -- a widget's existing `maxSize` and a patch's `minSize` -- can
- * compose into an invalid definition, and that is only visible after merging.
+ * Re-validates the MERGED result, not the patch alone: a patch's value is
+ * judged beside the fields it leaves in place -- a patched `size` replaces the
+ * whole declaration, and a patched `query` must still suit the widget's
+ * archetype -- and a combination is only visible after merging.
  */
 export function extendWidget(
   id: string,

@@ -1,10 +1,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
+import { loadedDialect } from "../../database/dialect-tables";
 
-export { pg, my, sl };
 export {
   getI18nArchiveDdl,
   getI18nArchiveIndexRepairDdl,
@@ -16,16 +13,8 @@ export {
 
 /** Returns the `nextly_i18n_archive` table binding for the given dialect. */
 export function nextlyI18nArchiveTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return { nextlyI18nArchive: pg.nextlyI18nArchive };
-    case "mysql":
-      return { nextlyI18nArchive: my.nextlyI18nArchive };
-    case "sqlite":
-      return { nextlyI18nArchive: sl.nextlyI18nArchive };
-    default: {
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { nextlyI18nArchive } = loadedDialect(dialect).tables;
+  return { nextlyI18nArchive };
 }

@@ -8,6 +8,8 @@
  * two publish paths. Every refusal is paired with what stayed live, and every
  * success with what went live.
  */
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +23,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { untilSomeoneWaitsOnALock } from "../../versions/__tests__/helpers/lock-wait";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -30,6 +33,7 @@ afterEach(async () => {
 });
 
 const SLUG = "site";
+const TABLE = `single_${SLUG}`;
 
 async function boot(
   dialect: TestDialect,
@@ -69,6 +73,34 @@ async function boot(
             name: "ranking",
             access: {
               update: ({ locale }: { locale?: string }) => locale !== "es",
+            },
+          }),
+          // A rule that reads a sibling: the price may be written only while
+          // the document's lock is open.
+          text({ name: "lockState", localized: false }),
+          number({
+            name: "price",
+            localized: false,
+            access: {
+              update: ({ data }) =>
+                (data as { lockState?: unknown } | undefined)?.lockState ===
+                "open",
+            },
+          }),
+          // The same pair, where the sibling the rule reads is one the caller
+          // may never write: the fee may be written only while the gate is
+          // open, and the gate is nobody's to open.
+          text({
+            name: "gate",
+            localized: false,
+            access: { update: () => false },
+          }),
+          number({
+            name: "fee",
+            localized: false,
+            access: {
+              update: ({ data }) =>
+                (data as { gate?: unknown } | undefined)?.gate === "open",
             },
           }),
         ],
@@ -436,6 +468,256 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await pendingSnapshot("en")).details as { note?: unknown }
       ).toMatchObject({ note: "admin edit" });
+    });
+
+    it("takes the live values only into the Single named, and leaves another's change alone", async () => {
+      const singles = await boot(dialect);
+      await spanishPublishesThirteen(singles);
+
+      // A Single whose row was replaced after the caller was authorised for
+      // the one they named: nothing is taken.
+      const refused = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        entryId: "a-document-replaced-since",
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect({
+        success: refused.success,
+        statusCode: refused.statusCode,
+        message: refused.message,
+      }).toEqual({
+        success: false,
+        statusCode: 404,
+        message: "This document no longer exists.",
+      });
+      expect((await pendingSnapshot("en")).articleCount).toBe(10);
+
+      // The document as it is, named: taken.
+      const id = (
+        (await singles.get(SLUG, { locale: "en", overrideAccess: true }))
+          .data as { id: string }
+      ).id;
+      const taken = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        entryId: id,
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
+    });
+
+    // The row can be replaced while the take waits for its lock. A read taken
+    // before the lock, compared after it, still holds the id it read, and the
+    // lock itself holds a row that is gone. SQLite runs one writer at a time,
+    // so the two cannot overlap there.
+    // Whether or not the caller names the document, the answer is the same
+    // on every dialect: a direct call that names none acts on the document
+    // the Single holds when it begins, not on one put in its place meanwhile.
+    for (const [naming, named] of [
+      ["naming the document", true],
+      ["naming no document", false],
+    ] as const) {
+      it.skipIf(dialect === "sqlite")(
+        `refuses when the document is replaced while the take waits for the lock, ${naming}`,
+        async () => {
+          const singles = await boot(dialect);
+          await spanishPublishesThirteen(singles);
+          const authorised = (
+            (await singles.get(SLUG, { locale: "en", overrideAccess: true }))
+              .data as { id: string }
+          ).id;
+
+          let release = (): void => {};
+          const held = new Promise<void>(resolve => {
+            release = resolve;
+          });
+          // Resolved once the writer holds the row's lock, so the call under
+          // test starts only after it: started first, the call would take the
+          // lock itself, nothing would wait, and the case would time out.
+          let locked: () => void = () => {};
+          const lockTaken = new Promise<void>(resolve => {
+            locked = resolve;
+          });
+          // Another writer replaces the document under its lock, and holds the
+          // lock until the take is parked on it.
+          const replacing = current!.adapter.transaction(async tx => {
+            await tx.lockRow(TABLE, authorised);
+            locked();
+            const row = await tx.selectOne<Record<string, unknown>>(TABLE, {});
+            await tx.delete(TABLE, {
+              and: [{ column: "id", op: "=", value: authorised }],
+            });
+            await tx.insert(TABLE, {
+              ...row,
+              // A new document's id, of the shape an id column holds: a
+              // suffixed one is longer than MySQL's column and is refused.
+              id: randomUUID(),
+            });
+            await held;
+          });
+
+          try {
+            await lockTaken;
+            const taking = singles.takeLiveSharedValues({
+              slug: SLUG,
+              ...(named ? { entryId: authorised } : {}),
+              locale: "en",
+              overrideAccess: true,
+            });
+            await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+            release();
+            await replacing;
+
+            const refused = await taking;
+            // Refused for the document, by the check that reads it under its
+            // own lock. Read before the lock instead, the take carries on into
+            // a document that is gone and fails far downstream, where the
+            // version pins are written and the message is about pinning.
+            expect({
+              success: refused.success,
+              statusCode: refused.statusCode,
+              message: refused.message,
+            }).toEqual({
+              success: false,
+              statusCode: 404,
+              message: "This document no longer exists.",
+            });
+            // The change the caller named kept the count it began from: the
+            // live values were taken into no document at all.
+            expect((await pendingSnapshot("en")).articleCount).toBe(10);
+          } finally {
+            release();
+            await replacing.catch(() => {});
+          }
+        }
+      );
+    }
+
+    // A field rule that reads a sibling is judged on the change as it will
+    // be, the sibling included, not on the fields taken alone.
+    it.each([
+      ["leaves the lock open, so the price is taken", "open", ["price"], []],
+      ["closes the lock, so the price is left", "closed", [], ["price"]],
+    ])(
+      "judges a sibling-dependent rule on the whole change: English %s",
+      async (_label, lockState, taken, outOfDate) => {
+        const singles = await boot(dialect);
+        await live(singles);
+        expect(
+          (
+            await save(singles, "en", {
+              lockState: "open",
+              price: 10,
+              status: "published",
+            })
+          ).success
+        ).toBe(true);
+        expect(
+          (await save(singles, "en", { siteName: "EN edited", lockState }))
+            .success
+        ).toBe(true);
+        expect((await save(singles, "es", { price: 13 })).success).toBe(true);
+        expect(
+          (await save(singles, "es", { status: "published" })).success
+        ).toBe(true);
+
+        const result = await singles.takeLiveSharedValues({
+          slug: SLUG,
+          locale: "en",
+          overrideAccess: false,
+          user: { id: "u1" },
+        });
+
+        expect(result.data).toEqual({ taken, outOfDate });
+      }
+    );
+
+    // Judging every candidate at once answers for a document that will not
+    // exist once a candidate is left behind. The fee's rule reads the gate;
+    // judged beside the gate's live "open" the fee may be written, but the
+    // gate itself is nobody's to write, so taking only the fee would leave
+    // the change holding its own closed gate beside the live fee — the one
+    // combination the rule refuses. Nothing is taken.
+    it("takes nothing when the only field that allowed another is itself left behind", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (
+          await save(singles, "en", {
+            gate: "closed",
+            fee: 5,
+            status: "published",
+          })
+        ).success
+      ).toBe(true);
+      // English begins a change from the closed gate and the fee of 5.
+      expect(
+        (await save(singles, "en", { siteName: "EN edited" })).success
+      ).toBe(true);
+      // Spanish publishes an open gate and a new fee, so both are out of date.
+      expect(
+        (await save(singles, "es", { gate: "open", fee: 20 })).success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const result = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      expect(result.data).toEqual({ taken: [], outOfDate: ["gate", "fee"] });
+      const pending = await pendingSnapshot("en");
+      expect({ gate: pending.gate, fee: pending.fee }).toEqual({
+        gate: "closed",
+        fee: 5,
+      });
+    });
+
+    // The other way round: judged beside the gate's live "closed" the fee is
+    // refused, but the gate is left behind, so the change keeps its own open
+    // gate, and beside that the fee may be written. The fee is taken.
+    it("takes a field refused only beside a sibling that is itself left behind", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (
+          await save(singles, "en", {
+            gate: "open",
+            fee: 5,
+            status: "published",
+          })
+        ).success
+      ).toBe(true);
+      // English begins a change from the open gate and the fee of 5.
+      expect(
+        (await save(singles, "en", { siteName: "EN edited" })).success
+      ).toBe(true);
+      // Spanish publishes a closed gate and a new fee, so both are out of date.
+      expect(
+        (await save(singles, "es", { gate: "closed", fee: 20 })).success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const result = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: false,
+        user: { id: "u1" },
+      });
+
+      expect(result.data).toEqual({ taken: ["fee"], outOfDate: ["gate"] });
+      const pending = await pendingSnapshot("en");
+      expect({ gate: pending.gate, fee: pending.fee }).toEqual({
+        gate: "open",
+        fee: 20,
+      });
     });
 
     it("judges taking the live values by the rules of the language asked for", async () => {
