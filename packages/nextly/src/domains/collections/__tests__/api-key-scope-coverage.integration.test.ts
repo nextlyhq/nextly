@@ -19,6 +19,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -46,6 +47,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -91,6 +94,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const created = await handler.createEntry(
@@ -135,6 +140,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const source = await handler.createEntry(
@@ -189,6 +196,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     await handler.createEntry(
@@ -245,6 +254,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const entryService = current
       .getService<CollectionsHandler>("collectionsHandler")
       .getEntryService();
@@ -302,6 +313,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const entryService = current
       .getService<CollectionsHandler>("collectionsHandler")
       .getEntryService();
@@ -352,6 +365,8 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         }),
       ],
     });
+    // The owner, a super-admin the gate finds by lookup.
+    await superAdminUser(current, "admin");
     const entryService = current
       .getService<CollectionsHandler>("collectionsHandler")
       .getEntryService();

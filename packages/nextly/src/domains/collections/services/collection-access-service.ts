@@ -29,7 +29,6 @@ import {
 } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { AccessOperation } from "../../../services/access";
-import { isSuperAdminContext } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -72,18 +71,6 @@ export class CollectionAccessService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService
   ) {
     super(adapter, logger);
-  }
-
-  /**
-   * Whether the caller's authorized role set makes them a super-admin.
-   *
-   * Public wrapper over the module predicate so other services honor the same
-   * "bypass the gate on every transport" contract without re-deriving
-   * super-admin status. Keyed on authorized scope (`role`/`roles`), never the
-   * account id.
-   */
-  isSuperAdmin(user?: UserContext): boolean {
-    return isSuperAdminContext(user);
   }
 
   /**

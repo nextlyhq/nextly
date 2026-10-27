@@ -13,7 +13,6 @@
  */
 import type { Principal } from "../../plugins/principals/types";
 import { permissionSlug } from "../../schemas/_zod/rbac";
-import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
@@ -60,7 +59,11 @@ import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "./rule-answer-log";
-import { askReadAsPlainRead, ruleLanguageKey } from "./rule-language";
+import {
+  askReadAsPlainRead,
+  currentRuleLanguage,
+  ruleLanguageKey,
+} from "./rule-language";
 
 /**
  * Allowed, refused with the kind of refusal the gate words, or allowed only
@@ -283,33 +286,21 @@ async function gateVerdict(
   return staffOrVisitorVerdict(kind, q, target);
 }
 
-/** The verdict for a signed-in user, an API key or a visitor. */
+/**
+ * The verdict for a signed-in user, an API key or a visitor. A user is judged
+ * by the roles their lookup finds: role names on the `user` a caller hands in
+ * grant nothing, so super-admin authority is decided in one place.
+ */
 async function staffOrVisitorVerdict(
   kind: "collection" | "single",
   q: GateQuestion,
   target: AccessTarget
 ): Promise<GateVerdict> {
   const keyScope = q.scope?.actorType === "apiKey" ? q.scope : undefined;
-  if (!keyScope && (await claimedSuperAdmin(q, target))) return ALLOWED;
   if (q.routeAuthorized) return routeAuthorizedVerdict(kind, q, target);
   if (!q.user) return visitorVerdict(kind, q, target);
   if (keyScope) return keyVerdict(q, target, keyScope, q.user);
   return userVerdict(q, target, q.user);
-}
-
-/**
- * A super-admin role named on the `user` a caller hands in passes without a
- * lookup, as it always has.
- */
-async function claimedSuperAdmin(
-  q: GateQuestion,
-  target: AccessTarget
-): Promise<boolean> {
-  const user = q.user;
-  if (!user || !isSuperAdminContext(user)) return false;
-  return deviate("claimed-super-admin", true, () =>
-    decided(actorForUser(user.id, { executor: q.executor }), q.action, target)
-  );
 }
 
 /**
@@ -332,7 +323,7 @@ async function routeAuthorizedVerdict(
       userId: q.user.id,
       slug: q.slug,
       action: q.action,
-      language: ruleLanguageKey(),
+      language: currentRuleLanguage(),
     });
     // A route that judged this read only in another language said nothing
     // of this one.
