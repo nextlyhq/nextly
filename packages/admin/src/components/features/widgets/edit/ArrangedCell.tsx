@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * One cell of the grid: its width, its spacing, its customise controls and the
+ * One cell of the grid: its size, its spacing, its customise controls and the
  * widget inside it.
  *
  * Its own component because the split is by SUBJECT: everything here is about
@@ -10,7 +10,7 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import {
   useMemo,
   useState,
@@ -24,12 +24,12 @@ import { cn } from "@admin/lib/utils";
 import type {
   DashboardWidget,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import type { AnswerSize } from "../frame/tier";
 import type { MoveDirection } from "../layout-editor";
-import { cardSpanClass, drawnWidth } from "../sizes";
+import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
 import {
   settingsAsAsked,
   titleAsAsked,
@@ -37,7 +37,7 @@ import {
 } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
-import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
+import { CardActionsMenu, CardSizeLabel } from "./CardActionsMenu";
 import { CardMenu } from "./CardMenu";
 import {
   CardControlsOverlay,
@@ -61,8 +61,8 @@ export interface ArrangedCellProps {
   highlighted?: boolean;
   /** Its handle's drag, while dragging is on; absent at one column. */
   drag?: CellDrag;
-  /** Lists the card menu's widths in the menu itself: where the dashboard draws one column. */
-  widthsInPlace?: boolean;
+  /** Lists the card menu's sizes in the menu itself: where the dashboard draws one column. */
+  sizesInPlace?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -93,8 +93,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
-    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
-    answerTier?: SizeTier;
+    /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerSize?: AnswerSize;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
@@ -116,7 +116,7 @@ export interface ArrangedCellProps {
    */
   on: {
     move: (direction: MoveDirection) => void;
-    setWidth: (width: WidgetWidth) => void;
+    setSize: (size: GridSize) => void;
     remove: () => void;
     /**
      * Send this card away from the card itself, outside customise mode.
@@ -173,33 +173,34 @@ function dismissAffordance(
   );
 }
 
-/** A card's width and its one menu, side by side, while customising. */
+/** A card's size and its one menu, side by side, while customising. */
 function CardEditActions(props: {
   row: ArrangedCellProps["row"];
-  width: WidgetWidth;
+  /** The size the card is drawn at. */
+  size: GridSize;
   can: ArrangedCellProps["can"];
   isWriting: boolean;
   refs: ArrangedCellProps["refs"];
   on: ArrangedCellProps["on"];
   /** Present only when the widget offers settings. */
   openSettings?: () => void;
-  widthsInPlace: boolean;
+  sizesInPlace: boolean;
 }) {
-  const { row, width, can, isWriting, refs, on, openSettings } = props;
+  const { row, size, can, isWriting, refs, on, openSettings } = props;
   return (
     <span className="flex items-center gap-1" data-testid="card-edit-actions">
-      <CardWidthLabel width={width} />
+      <CardSizeLabel size={size} />
       <CardActionsMenu
         title={row.widget.title}
-        width={width}
-        allowedWidths={row.allowedWidths}
+        size={size}
+        bounds={row.widget.size}
         can={can}
         disabled={isWriting}
         triggerRef={refs.menu}
-        widthsInPlace={props.widthsInPlace}
+        sizesInPlace={props.sizesInPlace}
         on={{
           move: on.move,
-          setWidth: on.setWidth,
+          setSize: on.setSize,
           remove: on.remove,
           ...(openSettings ? { openSettings } : {}),
         }}
@@ -358,19 +359,18 @@ function doneFor(props: ArrangedCellProps): {
   };
 }
 
-/** The cell's classes: its width, its leaving the grid while hidden, and its spacing. */
-function cellClassName(
-  row: ArrangedCellProps["row"],
-  isEditing: boolean
-): string {
+/** The cell's classes: its columns, its leaving the grid while hidden, and its spacing. */
+function cellClassName(size: GridSize, isEditing: boolean): string {
   return cn(
     // `relative` so the drag handle, which is absolutely positioned, lands
-    // on this cell rather than on the grid.
-    "relative",
-    // 🔴 The PLACEMENT's width, drawn at the nearest width its widget
-    // allows. The stored width IS the reader's arrangement, so it is never
+    // on this cell rather than on the grid. `min-h-0` and `overflow-hidden`
+    // so a body taller than the card's rows stays inside them: the card is as
+    // tall as its `h`, never as tall as its content.
+    "relative min-h-0 overflow-hidden",
+    // 🔴 The PLACEMENT's size, drawn at the nearest size its widget's bounds
+    // allow. The stored size IS the reader's arrangement, so it is never
     // replaced by the declaration's default here.
-    cardSpanClass(row.width, row.allowedWidths),
+    cardSpanClass(size.w),
     // A card whose widget hides when empty leaves the grid while its answer is: the frame marks
     // it (`data-hidden-empty`) only outside customise mode, so the cell needs no state of its own.
     "has-[[data-hidden-empty]]:hidden",
@@ -382,24 +382,24 @@ function cellClassName(
   );
 }
 
-/** The card's width and menu while customising, or nothing at rest. */
+/** The card's size and menu while customising, or nothing at rest. */
 function editActionsOf(
   props: ArrangedCellProps,
-  width: WidgetWidth,
+  size: GridSize,
   openSettings: (() => void) | undefined
 ): ReactNode {
   if (!props.isEditing) return null;
   const { row, can, isWriting, refs, on } = props;
   return (
     <CardEditActions
-      {...{ row, width, can, isWriting, refs, on }}
-      widthsInPlace={props.widthsInPlace === true}
+      {...{ row, size, can, isWriting, refs, on }}
+      sizesInPlace={props.sizesInPlace === true}
       {...(openSettings ? { openSettings } : {})}
     />
   );
 }
 
-/** The card's width and menu while customising, drawn over its header's right end. */
+/** The card's size and menu while customising, drawn over its header's right end. */
 function CellEditActions({ actions }: { actions: ReactNode }) {
   if (!actions) return null;
   return <CardControlsOverlay>{actions}</CardControlsOverlay>;
@@ -470,6 +470,13 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       ? asked
       : { ...asked, title: heading.title };
   }, [row.widget, row.config, sources, heading.title]);
+  // The size the card is drawn at: its stored size, held to its widget's
+  // current bounds. One reading for its span, its rows, its menu and the size
+  // a declared component is handed.
+  const size = useMemo(
+    () => drawnSize(row.size, row.widget.size),
+    [row.size, row.widget.size]
+  );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
@@ -480,31 +487,22 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => ({
       id: row.placementId,
       settings: settingsAsAsked(row.widget, row.config, sources),
-      // The width the card is drawn at, which a declared component is handed.
-      width: drawnWidth(row.width, row.allowedWidths),
+      size,
     }),
-    [
-      row.placementId,
-      row.widget,
-      row.config,
-      row.width,
-      row.allowedWidths,
-      sources,
-    ]
+    [row.placementId, row.widget, row.config, size, sources]
   );
   const {
     quick,
     header: restingControls,
     done,
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
-  const width = drawnWidth(row.width, row.allowedWidths);
 
-  // While customising, the card's width and its one menu, side by side, over
+  // While customising, the card's size and its one menu, side by side, over
   // its own header's right end, outside the fence that puts the card's own
   // content out of reach.
   const editActions = editActionsOf(
     props,
-    width,
+    size,
     hasSettings ? () => setSettingsOpen(true) : undefined
   );
   // While customising, the card's header keeps the room its controls are drawn
@@ -519,7 +517,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(row, isEditing)}
+      className={cellClassName(size, isEditing)}
+      style={cardRowStyle(size.h)}
     >
       <CellEditActions actions={editActions} />
       {/* Mounted whenever the widget offers settings, not only while

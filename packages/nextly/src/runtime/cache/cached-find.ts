@@ -12,6 +12,9 @@
  */
 import { createRequire } from "node:module";
 
+import { container } from "../../di/container";
+import type { LanguageRegistry } from "../../domains/i18n/language-registry";
+
 /** The subset of `unstable_cache` this helper uses. */
 export type UnstableCache = <T>(
   cb: () => Promise<T>,
@@ -141,11 +144,30 @@ export function applyCache<T>(
   options: CachedFindOptions
 ): Promise<T> {
   if (!unstableCache) return reader();
-  const cached = unstableCache(reader, options.keyParts, {
+  const cached = unstableCache(afterLanguagesRead(reader), options.keyParts, {
     tags: options.tags,
     revalidate: options.revalidate ?? false,
   });
   return runCachedOrDirect(cached, reader);
+}
+
+/**
+ * `reader`, run once the site's languages have been read afresh. Only a miss runs it, and what it
+ * returns is cached until a tag is flushed: a change to the languages flushes every content tag,
+ * but this instance may still trust a list it read within its interval, and a read rendered on
+ * that list would cache the former default language again. A failed read of the languages never
+ * blocks the read itself, which then runs on the list this instance has.
+ */
+function afterLanguagesRead<T>(reader: () => Promise<T>): () => Promise<T> {
+  return async () => {
+    if (container.has("languageRegistry")) {
+      await container
+        .get<LanguageRegistry>("languageRegistry")
+        .refresh({ force: true })
+        .catch(() => undefined);
+    }
+    return reader();
+  };
 }
 
 /**

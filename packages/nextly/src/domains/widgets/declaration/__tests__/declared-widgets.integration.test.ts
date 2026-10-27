@@ -60,8 +60,7 @@ function recentOrders(startingItems: number) {
     title: "Recent orders",
     description: "The newest orders",
     category: "Shop",
-    widths: ["half", "full"],
-    width: "full",
+    size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
     permission: `read-${ORDERS}`,
     settings: {
       collection: settings.collection(),
@@ -102,7 +101,8 @@ function card(id: string, config: Record<string, unknown>): WidgetPlacement {
   return {
     id,
     widgetId: "acme/recent-orders",
-    width: "full",
+    w: 12,
+    h: 4,
     removed: false,
     config,
   };
@@ -189,7 +189,12 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       contributes: {
         dashboard: {
           widgets: [
-            { ...recentOrders(5), id: "core/orders", width: "quarter" },
+            {
+              ...recentOrders(5),
+              id: "core/orders",
+              // Below the minimum it states beside it.
+              size: { default: { w: 3, h: 4 }, min: { w: 6, h: 4 } },
+            },
           ] as unknown as NonNullable<
             NonNullable<
               Parameters<typeof definePlugin>[0]["contributes"]
@@ -212,7 +217,7 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       'plugin "@test/broken", widget "core/orders": id "core/orders" is in the reserved "core/" namespace'
     );
     expect(message).toContain(
-      'plugin "@test/broken", widget "core/orders": width "quarter" is not one of the widths it allows'
+      'plugin "@test/broken", widget "core/orders": size.min must not be larger than size.default'
     );
   });
 });
@@ -232,8 +237,7 @@ function listingPlugin(name: string, collection: string, sort: string) {
             title: "Listing",
             description: "Entries of one collection",
             category: "Shop",
-            widths: ["full"],
-            width: "full",
+            size: { default: { w: 12, h: 4 } },
             settings: {
               collection: {
                 ...settings.collection(),

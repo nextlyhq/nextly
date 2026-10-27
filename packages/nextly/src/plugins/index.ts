@@ -48,6 +48,13 @@ export {
   type PluginHookRegistry,
   type PluginSettingsApi,
 } from "./plugin-context";
+export type {
+  PluginPinOptions,
+  PluginPinTransaction,
+  PluginVersionPin,
+  PluginVersionPinHolder,
+  PluginVersionPins,
+} from "./plugin-version-pins";
 export {
   PasswordTooLongError,
   type PasswordCheck,

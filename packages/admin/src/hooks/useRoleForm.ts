@@ -11,6 +11,7 @@ import { toast } from "@admin/components/ui";
 import { debugError, debugLog } from "@admin/lib/debug";
 import { navigateTo } from "@admin/lib/navigation";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
+import { assignableRoles } from "@admin/lib/roles/assignable";
 
 import { PAGINATION } from "../constants/pagination";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
@@ -84,6 +85,16 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
   return { nextMap, allPermissions: Array.from(allPermissions) };
 };
 
+/** The grammar a slug the form sets is held to. */
+const newSlugSchema: z.ZodString = z
+  .string()
+  .min(3, { message: "Slug must be at least 3 characters." })
+  .max(50, { message: "Slug must not exceed 50 characters." })
+  .regex(/^[a-z0-9_-]+$/, {
+    message:
+      "Slug must contain only lowercase letters, numbers, underscores, and hyphens.",
+  });
+
 const roleFormSchema: z.ZodObject<{
   name: z.ZodString;
   slug: z.ZodString;
@@ -99,18 +110,29 @@ const roleFormSchema: z.ZodObject<{
       message:
         "Role name can only contain letters, numbers, spaces, underscores and hyphens.",
     }),
-  slug: z
-    .string()
-    .min(3, { message: "Slug must be at least 3 characters." })
-    .max(50, { message: "Slug must not exceed 50 characters." })
-    .regex(/^[a-z0-9_-]+$/, {
-      message:
-        "Slug must contain only lowercase letters, numbers, underscores, and hyphens.",
-    }),
+  slug: newSlugSchema,
   description: z.string().optional(),
   permissions: z.array(z.string()),
   baseRoleId: z.string().optional(),
 });
+
+/**
+ * The form for an existing role. Its stored slug is accepted as it is: a role
+ * an app or plugin declared may hold one outside the grammar a new slug is
+ * held to. A slug changed in the form is held to that grammar.
+ */
+function roleEditFormSchema(storedSlug: () => string | undefined) {
+  return roleFormSchema.extend({
+    slug: z.string().superRefine((slug, ctx) => {
+      if (slug === storedSlug()) return;
+      const checked = newSlugSchema.safeParse(slug);
+      if (checked.success) return;
+      for (const issue of checked.error.issues) {
+        ctx.addIssue({ code: "custom", message: issue.message });
+      }
+    }),
+  });
+}
 
 export type RoleFormValuesType = z.infer<typeof roleFormSchema>;
 
@@ -150,8 +172,13 @@ export interface UseRoleFormReturn {
  */
 export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const queryClient = useQueryClient();
+  // The slug the edited role is stored with, once it has loaded.
+  const storedSlug = useRef<string | undefined>(undefined);
+  const [schema] = useState(() =>
+    roleId ? roleEditFormSchema(() => storedSlug.current) : roleFormSchema
+  );
   const form = useForm<RoleFormValuesType>({
-    resolver: zodResolver(roleFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       name: "",
       slug: "",
@@ -380,13 +407,18 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const roleWithPermissions: RoleWithPermissions = {
           id: roleData.id,
           name: roleData.roleName,
-          slug: roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
+          // The slug as stored: one rebuilt from the name differs wherever the
+          // two were set apart, and a save would send it as a slug change.
+          slug:
+            roleData.slug ??
+            roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
           description: roleData.description,
           isSystemRole: roleData.type === "System",
           permissions: normalizedRolePermissionIds.map(id => ({ id })),
           users: [],
         };
 
+        storedSlug.current = roleWithPermissions.slug;
         setRole(roleWithPermissions);
         setLoadingState(prev => ({
           ...prev,
@@ -473,14 +505,17 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           populate: ["permissions"],
         } as FetchRolesParams);
 
-        const rolesWithPermissions = (res?.items || []).map(r => ({
-          id: r.id,
-          name: r.roleName,
-          slug: r.slug,
-          permissions: normalizePermissions(r.permissions),
-          description: r.description,
-          isSystem: r.type === "System",
-        }));
+        // Only roles another role may build on: never the Public role.
+        const rolesWithPermissions = assignableRoles(res?.items || []).map(
+          r => ({
+            id: r.id,
+            name: r.roleName,
+            slug: r.slug,
+            permissions: normalizePermissions(r.permissions),
+            description: r.description,
+            isSystem: r.type === "System",
+          })
+        );
 
         const filteredRoles = rolesWithPermissions.filter(r => {
           // A role cannot be built on itself.

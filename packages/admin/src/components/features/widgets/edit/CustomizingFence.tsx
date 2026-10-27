@@ -8,7 +8,7 @@
  * go from one card's controls to the next rather than through every link and
  * button inside each card. `inert` does both, for pointer, keyboard and
  * assistive technology alike, and it is applied to the CONTENT only: the drag
- * handle, the width and the card menu are drawn outside it.
+ * handle, the size label and the card menu are drawn outside it.
  *
  * @module components/features/widgets/edit/CustomizingFence
  */
@@ -50,16 +50,16 @@ export function CustomizingFence({
 /**
  * Room in a framed card's header for the controls drawn over it.
  *
- * The card's width and menu sit over the header's right end, outside the
+ * The card's size label and menu sit over the header's right end, outside the
  * fence, so the header reserves their space and its title truncates before
- * them rather than running underneath. Sized for the widest label, "Full".
+ * them rather than running underneath. Sized for the widest label, "12×12".
  */
 export function CardControlsSpace(): JSX.Element {
   return <span aria-hidden className="block h-7 w-16" />;
 }
 
 /**
- * The framed card's width and menu, placed over its header's right end.
+ * The framed card's size label and menu, placed over its header's right end.
  *
  * `inset-px` stands in for the card's one-pixel border, so `top-5 right-5`
  * lands exactly where the header's own padding puts its last item. The outer

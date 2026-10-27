@@ -72,7 +72,7 @@ function seedWidget(id: string): void {
       id,
       title: id,
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }

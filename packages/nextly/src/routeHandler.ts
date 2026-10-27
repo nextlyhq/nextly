@@ -139,6 +139,7 @@ import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
@@ -163,6 +164,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
+import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
 import {
@@ -890,6 +892,56 @@ const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The action a status write route's request asks, read only once every
+ * action has refused it, so the refusal names that action: the gate the
+ * services judge the write by ({@link writeGateFor}). A bulk route carries
+ * the write as its body's `data`. The body is read from a copy, and a body or
+ * lookup that cannot be read is answered as update, since only the refusal's
+ * words depend on it.
+ */
+function actionAskedBy(
+  req: Request,
+  method: string,
+  entity: "collection" | "single",
+  slug: string
+): () => Promise<"update" | "publish" | "unpublish"> {
+  return async () => {
+    try {
+      const body: unknown = JSON.parse(await req.clone().text());
+      const write =
+        method === "bulkUpdateEntries" || method === "bulkUpdateByQuery"
+          ? (body as { data?: unknown } | null)?.data
+          : body;
+      if (typeof write !== "object" || write === null || Array.isArray(write)) {
+        return "update";
+      }
+      // The entity's lifecycle, from the record the services read it from.
+      const lifecycle = async () =>
+        hasLifecycle(
+          entity === "single"
+            ? await container
+                .get<{
+                  getSingleBySlug(slug: string): Promise<unknown>;
+                }>("singleRegistryService")
+                .getSingleBySlug(slug)
+            : await container
+                .get<{
+                  getCollectionBySlug(slug: string): Promise<unknown>;
+                }>("collectionRegistryService")
+                .getCollectionBySlug(slug)
+        );
+      return await writeGateFor(
+        write as Record<string, unknown>,
+        entity,
+        lifecycle
+      );
+    } catch {
+      return "update";
+    }
+  };
+}
+
+/**
  * The routes that change only the status of every language, each admitted on
  * its own action's grant rather than update; the service asks that action's
  * rule in each language the change puts live.
@@ -927,7 +979,12 @@ async function resolveAuthorization(
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
-        return requireCollectionWriteAccess(req, slug, route);
+        return requireCollectionWriteAccess(
+          req,
+          slug,
+          route,
+          actionAskedBy(req, method, "collection", slug)
+        );
       }
       const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
       if (lifecycle) {
@@ -982,7 +1039,12 @@ async function resolveAuthorization(
         namesOne: true,
       };
       if (STATUS_WRITE_METHODS.has(method)) {
-        return requireCollectionWriteAccess(req, slug, route);
+        return requireCollectionWriteAccess(
+          req,
+          slug,
+          route,
+          actionAskedBy(req, method, "single", slug)
+        );
       }
       const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
       if (lifecycle) {
@@ -1895,7 +1957,6 @@ const NO_WIDGETS: WidgetAudience = {
   heldActionGates: new Set(),
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
-  registeredCollections: undefined,
   readableCollections: new Set(),
 };
 

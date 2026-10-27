@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { textBody } from "./text";
+import { gridBounds } from "../__tests__/grid-bounds";
 
 beforeAll(() => {
   // Lexical scrolls the selection into view on some updates; jsdom has no
@@ -28,7 +29,7 @@ function widget(content: string): DashboardWidget {
     id: "acme/notes",
     title: "Notes",
     archetype: "text",
-    size: "md",
+    size: gridBounds(4),
     content,
   } as DashboardWidget;
 }
