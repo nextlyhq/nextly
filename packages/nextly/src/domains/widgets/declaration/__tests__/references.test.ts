@@ -25,7 +25,7 @@ import { clearWidgets } from "../../registry";
 import { clearSources } from "../../sources";
 import {
   clearDeclaredWidgets,
-  registerWidgetDeclarations,
+  registerDashboardWidgets,
 } from "../declared-widgets";
 import { defineWidget } from "../define-widget";
 import { checkDeclaredWidgetReferences } from "../references";
@@ -91,7 +91,9 @@ afterEach(() => {
 });
 
 async function check(...widgets: ReturnType<typeof listing>[]) {
-  registerWidgetDeclarations([{ owner: SHOP, declarations: widgets }]);
+  registerDashboardWidgets({
+    groups: [{ owner: SHOP, declarations: widgets }],
+  });
   await checkDeclaredWidgetReferences(CODE);
 }
 
@@ -168,9 +170,9 @@ describe("a declared widget's starting query, once content is synced", () => {
       ...listing("acme/null", "orders", "state"),
       data: { query: () => null },
     };
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [throwing, answersNothing] },
-    ]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [throwing, answersNothing] }],
+    });
     let refused: unknown;
     try {
       await checkDeclaredWidgetReferences(CODE);
@@ -194,7 +196,9 @@ describe("a declared widget's starting query, once content is synced", () => {
       ...listing("acme/a", "orders", "state"),
       display: "metric",
     };
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [metricOfList] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [metricOfList] }],
+    });
     let refused: unknown;
     try {
       await checkDeclaredWidgetReferences(CODE);
@@ -258,9 +262,11 @@ describe("a declared widget's starting query, once content is synced", () => {
     // refusal protects: every content query is the database's, warned about.
     vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
     clearSources();
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [listing("acme/a", "notes", "title")] },
-    ]);
+    registerDashboardWidgets({
+      groups: [
+        { owner: SHOP, declarations: [listing("acme/a", "notes", "title")] },
+      ],
+    });
     await expect(
       checkDeclaredWidgetReferences({
         collections: new Set(),
@@ -273,9 +279,11 @@ describe("a declared widget's starting query, once content is synced", () => {
   it("waits when the registry cannot be read because the database is not set up", async () => {
     vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
     clearSources();
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [listing("acme/a", "orders", "missing")] },
-    ]);
+    registerDashboardWidgets({
+      groups: [
+        { owner: SHOP, declarations: [listing("acme/a", "orders", "missing")] },
+      ],
+    });
     await expect(
       checkDeclaredWidgetReferences({ ...CODE, databaseNotSetUp: true })
     ).resolves.toBe(undefined);
@@ -288,9 +296,9 @@ describe("a declared widget's starting query, once content is synced", () => {
       ...listing("acme/a", "orders", "state"),
       data: { query: () => ({ collection: "orders", op: "list" }) },
     };
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [selectsNothing] },
-    ]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [selectsNothing] }],
+    });
     let refused: unknown;
     try {
       await checkDeclaredWidgetReferences(CODE);
@@ -307,7 +315,9 @@ describe("a declared widget's starting query, once content is synced", () => {
       ...listing("acme/a", "orders", "state"),
       data: { query: () => ({ collection: "orders", op: "list", select: [] }) },
     };
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [selectsEmpty] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [selectsEmpty] }],
+    });
     await expect(checkDeclaredWidgetReferences(CODE)).rejects.toThrow(
       NextlyError
     );
@@ -320,7 +330,9 @@ describe("a declared widget's starting query, once content is synced", () => {
       ...listing("acme/a", "orders", "state"),
       data: { query: () => ({ collection: "orders", op: 1n }) },
     };
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [badOp] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [badOp] }],
+    });
     let refused: unknown;
     try {
       await checkDeclaredWidgetReferences(CODE);
@@ -340,13 +352,15 @@ describe("a declared widget's starting query, once content is synced", () => {
     registerBuiltInSources([
       { slug: "sales", fields: [{ name: "state", type: "text" }] },
     ]);
-    registerWidgetDeclarations([
-      {
-        owner: SHOP,
-        declarations: [listing("acme/a", "orders", "missing")],
-        collections: { orders: "sales" },
-      },
-    ]);
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [listing("acme/a", "orders", "missing")],
+          collections: { orders: "sales" },
+        },
+      ],
+    });
     let refused: unknown;
     try {
       await checkDeclaredWidgetReferences({

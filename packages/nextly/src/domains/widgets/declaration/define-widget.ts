@@ -188,7 +188,7 @@ export interface WidgetDeclarationInput<
   /** `namespace/name`, unique across core, every plugin and the site. */
   id: Id;
   title: string;
-  /** One line, at most 80 characters, shown in the add panel. */
+  /** One line, shown in the add panel, which truncates a long one. */
   description: string;
   category: string;
   /**

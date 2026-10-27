@@ -52,9 +52,6 @@ export interface WidgetDeclarationGroup {
  */
 const RESERVED_NAMESPACES = ["core", "collection", "single"] as const;
 
-/** The longest description the add panel shows on one line. */
-const MAX_DESCRIPTION = 80;
-
 /**
  * A permission as core stores and seeds it, `action-resource` (`read-orders`).
  * A widget names the stored form, the one spelling a permission has, and a
@@ -202,16 +199,17 @@ function idProblem(id: unknown): string | undefined {
   return undefined;
 }
 
-/** Why `description` breaks the one-line, 80-character rule, or `undefined`. */
+/**
+ * Why `description` is not one line of text, or `undefined`.
+ *
+ * Its length is no fault: the add gallery truncates a long one, and refusing
+ * to start over a sentence's length stops a whole site for a cosmetic reason.
+ */
 export function descriptionProblem(description: unknown): string | undefined {
   if (description === undefined) return "description is required";
   const parsed = nonBlank.safeParse(description);
   if (!parsed.success) return "description must be a non-empty string";
-  const text = parsed.data;
-  if (!oneLine(text)) return "description must be one line";
-  if (text.length > MAX_DESCRIPTION) {
-    return `description must be at most ${MAX_DESCRIPTION} characters, has ${text.length}`;
-  }
+  if (!oneLine(parsed.data)) return "description must be one line";
   return undefined;
 }
 

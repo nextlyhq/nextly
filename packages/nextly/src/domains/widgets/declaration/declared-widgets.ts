@@ -24,13 +24,14 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
-import type { WidgetDefinition } from "../definition";
+import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetQuery } from "../query";
 import {
   deregisterWidget,
   getWidget,
   registerDeclaredDefinition,
+  registerWidget,
   widgetSource,
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
@@ -265,38 +266,73 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
   }
 }
 
-/**
- * Checks every declaration, then keeps them all, or refuses startup naming
- * every fault and keeps none.
- *
- * `legacy` is the ids each plugin declares in today's shape. `references`
- * checks what names these widgets (the site config's dashboard, a plugin's
- * suggestions), handed each well-formed declaration as the definition it
- * becomes and the groups as they were snapshotted, so ownership is read from
- * the same copy that is kept, and its faults are refused with the
- * declarations' own, at once. `checkedOnly` are declarations checked with the
- * rest, duplicates and references included, but not kept or published.
- */
-export function registerWidgetDeclarations(
-  given: readonly DeclaredWidgetGroup[],
-  legacy: readonly LegacyWidgetIds[] = [],
+/** The owner core's own widgets are reported and registered under. */
+export const CORE_OWNER = "core";
+
+/** Every widget a dashboard can show, by owner, as the one call takes them. */
+export interface DashboardWidgets {
+  /**
+   * Core's own widgets: the definitions core ships, until each is declared
+   * with `defineWidget` as a plugin's is.
+   */
+  core?: readonly WidgetDefinition[];
+  /** Each plugin's declarations, kept and published. */
+  groups?: readonly DeclaredWidgetGroup[];
+  /** The ids each plugin declares in today's shape. */
+  legacy?: readonly LegacyWidgetIds[];
+  /**
+   * What names these widgets (the site config's dashboard, a plugin's
+   * suggestions), handed each well-formed declaration as the definition it
+   * becomes and the groups as they were snapshotted, so ownership is read from
+   * the same copy that is kept, and its faults are refused with the
+   * declarations' own, at once.
+   */
   references?: (
     declared: ReadonlyMap<string, WidgetDefinition>,
     groups: readonly DeclaredWidgetGroup[]
-  ) => readonly WidgetDeclarationFault[],
-  checkedOnly: readonly DeclaredWidgetGroup[] = []
-): void {
+  ) => readonly WidgetDeclarationFault[];
+  /** Declarations checked with the rest, duplicates and references included, but not kept or published. */
+  checkedOnly?: readonly DeclaredWidgetGroup[];
+}
+
+/**
+ * The one way a widget reaches the dashboard: core's own, every plugin's and
+ * the site's all come through here.
+ *
+ * Checks every widget of every owner first, then keeps them all, or refuses
+ * startup naming every fault of every owner in one message and keeps none. One
+ * door, so a rule checked here holds for every widget, and a fault in one
+ * owner never leaves the dashboard half registered from the others.
+ */
+export function registerDashboardWidgets({
+  core = [],
+  groups: given = [],
+  legacy = [],
+  references,
+  checkedOnly = [],
+}: DashboardWidgets): void {
   const groups = given.map(snapshot);
   const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
+    ...coreWidgetFaults(core),
     ...collectWidgetDeclarationFaults(checked),
     ...sharedWithLegacy(checked, legacy),
   ];
   if (references !== undefined) {
-    faults.push(...references(wellFormedDefinitions(checked, faults), checked));
+    // Core's widgets among them: nothing is kept until every check has passed,
+    // so what names a core widget finds it here rather than in the registry.
+    const declared = new Map([
+      ...core.map(definition => [definition.id, definition] as const),
+      ...wellFormedDefinitions(checked, faults),
+    ]);
+    faults.push(...references(declared, checked));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);
+
+  for (const definition of core) {
+    registerWidget(definition, { source: CORE_OWNER });
+  }
 
   for (const { owner, declarations, collections } of groups) {
     // Every group is a list by now: one that was not is a fault, refused above.
@@ -314,6 +350,40 @@ export function registerWidgetDeclarations(
       registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
+}
+
+/**
+ * Every fault in core's own list, as the faults of every other owner are
+ * reported: an id it lists twice, and a definition the registry would refuse.
+ * Core's list is checked by the same rules as everyone's, so a mistake in it
+ * stops startup with the rest rather than as a separate throw after some of
+ * the dashboard was already registered.
+ */
+function coreWidgetFaults(
+  core: readonly WidgetDefinition[]
+): WidgetDeclarationFault[] {
+  const faults: WidgetDeclarationFault[] = [];
+  const seen = new Set<string>();
+  for (const definition of core) {
+    if (seen.has(definition.id)) {
+      faults.push({
+        owner: CORE_OWNER,
+        widget: definition.id,
+        problem: `id "${definition.id}" is already declared by ${CORE_OWNER}`,
+      });
+    }
+    seen.add(definition.id);
+    try {
+      validateWidgetDefinition(definition);
+    } catch (error) {
+      faults.push({
+        owner: CORE_OWNER,
+        widget: definition.id,
+        problem: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return faults;
 }
 
 /**

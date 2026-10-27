@@ -278,14 +278,17 @@ describe("a widget declaration as startup receives it", () => {
     );
   });
 
-  it("refuses a description of more than one line or 80 characters", () => {
+  it("refuses a description of more than one line, and never over its length", () => {
     expect(problemsOf(valid({ description: "One\nTwo" }))[0]).toContain(
       "one line"
     );
-    expect(problemsOf(valid({ description: "x".repeat(81) }))[0]).toContain(
-      "80"
-    );
-    expect(problemsOf(valid({ description: "x".repeat(80) }))).toEqual([]);
+    // 🔴 A long title or description starts: the add gallery truncates it, and
+    // refusing to start over a sentence's length stops a whole site for nothing.
+    expect(
+      problemsOf(
+        valid({ title: "T".repeat(500), description: "x".repeat(2000) })
+      )
+    ).toEqual([]);
   });
 
   describe("refuses invalid settings", () => {
