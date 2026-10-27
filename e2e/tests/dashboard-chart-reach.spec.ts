@@ -2,7 +2,7 @@
  * A dashboard chart's values reached in a real browser: by pointer, by keyboard and by a screen
  * reader's live region, with axe over the charts themselves.
  *
- * Drawn with the generated "Posts by status" and "Posts over time" cards, over posts this file
+ * Drawn with Breakdown, by status, and Over time, each set to posts, over posts this file
  * creates. The pointer cases are here rather than in the component tests because jsdom's pointer
  * events carry no related target, so React reads every move as leaving: whether a tooltip STAYS
  * while the pointer moves onto it (WCAG 2.2 1.4.13) can only be seen in a browser.
@@ -24,8 +24,13 @@ import { LOCK } from "./support/locks";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
 
-const BREAKDOWN = "collection/posts-breakdown";
-const TIMELINE = "collection/posts-timeline";
+const BREAKDOWN = "core/breakdown";
+const TIMELINE = "core/over-time";
+/** Each chart's settings: set to posts, and Breakdown divided by status, as a converted card is. */
+const CONFIG: Record<string, Record<string, unknown>> = {
+  [BREAKDOWN]: { collection: "posts", groupBy: "status" },
+  [TIMELINE]: { collection: "posts" },
+};
 const ENTRIES = "/admin/api/collections/posts/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
@@ -36,16 +41,14 @@ const created: string[] = [];
 interface Layout {
   version: number;
   scope: string;
-  /**
-   * Every widget this reader may see, by id. Generated collection cards are never offered in
-   * `available`, but one placed is still drawn, and the layout write accepts any visible widget.
-   */
+  /** Every widget this reader may see, by id. */
   widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
     width: string;
     removed?: boolean;
+    config?: Record<string, unknown>;
   }>;
 }
 
@@ -90,21 +93,36 @@ test.afterAll(async ({ playwright }, testInfo) => {
   }
 });
 
-/** Place both chart cards, full width, at the top of the saved layout. */
+/**
+ * Place both chart cards at the top of the saved layout, each at its widest: Breakdown allows a
+ * quarter to a half, Over time a third to the full row. Any other card of either widget is left
+ * off, so each widget's cell is the one placed here.
+ */
 async function placeCharts(page: Page): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
   for (const id of [BREAKDOWN, TIMELINE]) {
-    const placed = layout.placements.some(p => p.widgetId === id);
-    if (!placed && !(id in layout.widgets))
-      throw new Error(`the generated ${id} card is not visible to this reader`);
+    if (!(id in layout.widgets))
+      throw new Error(`the ${id} widget is not visible to this reader`);
   }
   const others = layout.placements.filter(
     p => p.widgetId !== BREAKDOWN && p.widgetId !== TIMELINE
   );
   const placements = [
-    { id: "e2e-breakdown", widgetId: BREAKDOWN, width: "full", removed: false },
-    { id: "e2e-timeline", widgetId: TIMELINE, width: "full", removed: false },
+    {
+      id: "e2e-breakdown",
+      widgetId: BREAKDOWN,
+      width: "half",
+      removed: false,
+      config: CONFIG[BREAKDOWN],
+    },
+    {
+      id: "e2e-timeline",
+      widgetId: TIMELINE,
+      width: "full",
+      removed: false,
+      config: CONFIG[TIMELINE],
+    },
     ...others,
   ];
   const write = await page.request.put("/admin/api/dashboard/layout", {

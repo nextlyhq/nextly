@@ -2,7 +2,7 @@
  * A dashboard card lays itself out by its OWN width: small below 340 px, medium to 699 px,
  * large from 700 px, whatever the window is.
  *
- * Drawn with the generated "Recent posts" list card at every width on a 1,200 px and a 900 px
+ * Drawn with a Recent entries card set to posts at every width on a 1,200 px and a 900 px
  * dashboard and in a 358 px phone column, and at the transitions the bands create: a half card
  * on 680 and 720 px dashboards, and the single column at 330 and 350 px. The dashboard's width
  * is the container's, not the window's, so the window is sized until the container measures
@@ -17,63 +17,63 @@ import { LOCK } from "./support/locks";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
 
-const RECENT_POSTS = "collection/posts-recent";
+const RECENT_ENTRIES = "core/recent-entries";
+/**
+ * The generated card core once drew for posts' recent entries. The layout write refuses a new
+ * Recent entries card at a width the widget does not allow, so a quarter card can only be one
+ * saved before it: this card, which a read converts to Recent entries set to posts, keeping its
+ * width.
+ */
+const GENERATED_RECENT_POSTS = "collection/posts-recent";
 type Width = "quarter" | "third" | "half" | "twoThirds" | "full";
 
 interface Layout {
   version: number;
   scope: string;
-  /**
-   * Every widget this reader may see, by id. A generated collection card is never offered in
-   * `available` (the add panel retired them), but one placed is still drawn, so it is placed here
-   * through the layout write, which accepts any widget the reader may see.
-   */
+  /** Every widget this reader may see, by id. */
   widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
     width: string;
     removed?: boolean;
+    config?: Record<string, unknown>;
   }>;
 }
 
-/** Put the Recent posts card at `width` in the saved layout. */
+/**
+ * Put one Recent entries card, set to posts, at `width` in the saved layout: at a quarter, as the
+ * generated card it converts from. Recent entries is never on the default dashboard, and any
+ * other card of it is left off, so its cell is this one.
+ */
 async function placeRecentPosts(page: Page, width: Width): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
-  const placed = layout.placements.some(
-    placement => placement.widgetId === RECENT_POSTS
-  );
-  // A generated collection card is not on the default dashboard, so a fresh install places it
-  // here; one already placed is moved to the width.
-  if (!placed && !(RECENT_POSTS in layout.widgets))
+  const card =
+    width === "quarter"
+      ? { widgetId: GENERATED_RECENT_POSTS }
+      : { widgetId: RECENT_ENTRIES, config: { collection: "posts" } };
+  if (!(card.widgetId in layout.widgets))
     throw new Error(
-      "the generated Recent posts card is not visible to this reader"
+      `the ${card.widgetId} widget is not visible to this reader`
     );
-  const placements = placed
-    ? layout.placements.map(placement =>
-        placement.widgetId === RECENT_POSTS
-          ? { ...placement, width, removed: false }
-          : placement
-      )
-    : [
-        ...layout.placements,
-        {
-          id: "e2e-recent-posts",
-          widgetId: RECENT_POSTS,
-          width,
-          removed: false,
-        },
-      ];
+  const placements = [
+    ...layout.placements.filter(
+      placement =>
+        placement.widgetId !== RECENT_ENTRIES &&
+        placement.widgetId !== GENERATED_RECENT_POSTS
+    ),
+    { id: "e2e-recent-posts", width, removed: false, ...card },
+  ];
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: { placements, version: layout.version, scope: layout.scope },
   });
   expect(write.ok()).toBe(true);
 }
 
-/** The Recent posts card's cell, which the grid names by the widget it draws. */
+/** The Recent entries card's cell, which the grid names by the widget it draws. */
 function recentPostsCell(page: Page) {
-  return page.getByTestId(`widget-cell-${RECENT_POSTS}`);
+  return page.getByTestId(`widget-cell-${RECENT_ENTRIES}`);
 }
 
 /** Size the window until the dashboard's own container is `target` pixels wide. */
@@ -115,7 +115,6 @@ test.afterEach(async ({ page }) => {
 });
 
 const CASES: Array<[number, Width, string]> = [
-  [1200, "quarter", "small"],
   [1200, "third", "medium"],
   [1200, "half", "medium"],
   [1200, "twoThirds", "large"],
@@ -140,6 +139,23 @@ for (const [dashboardWidth, width, tier] of CASES) {
     await expectTierAt(page, dashboardWidth, tier);
   });
 }
+
+// Recent entries allows a third to the full row (RECENT_ENTRIES_WIDTHS), so a card saved at a
+// quarter is drawn at the nearest width it allows. On a 1,200 px dashboard that is a third, which
+// is medium, not the small a quarter there would be; the small tier is the 680 px crossing below.
+test("a quarter card on a 1200px dashboard is drawn at a third, and is medium", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeRecentPosts(page, "quarter");
+  await page.reload();
+  await expectTierAt(page, 1200, "medium");
+  // A third is four of the grid's twelve tracks at this width, and a quarter three.
+  const span = await recentPostsCell(page).evaluate(
+    element => getComputedStyle(element).gridColumnEnd
+  );
+  expect(span).toBe("span 4");
+});
 
 test("a full card on a 900px dashboard draws its rows as a table", async ({
   page,
