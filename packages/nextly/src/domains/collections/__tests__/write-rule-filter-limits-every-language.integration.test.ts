@@ -11,6 +11,10 @@
  *
  * @module domains/collections/__tests__/write-rule-filter-limits-every-language.integration.test
  */
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -18,11 +22,15 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
 import type { AccessControlContext } from "../../../shared/types/access";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
@@ -45,6 +53,7 @@ const ownEntries = ({ user }: { user: { id: string } | null }) =>
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
   clearRuleFilterReports();
@@ -215,6 +224,99 @@ describe("a publish of every language whose rule answers a filter", () => {
     expect(refused.success).toBe(false);
     expect(refused.statusCode).toBe(403);
     expect(await stored(t, GERMAN_REFUSED, own)).toEqual(before);
+  });
+});
+
+/** A REST write as the author, answered with its status. */
+async function rest(
+  method: "PATCH" | "POST",
+  path: string[],
+  body: unknown,
+  query = ""
+): Promise<number> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: AUTHOR,
+      email: `${AUTHOR}@example.test`,
+      name: AUTHOR,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  const handlers = createDynamicHandlers() as unknown as Record<
+    string,
+    (request: Request, context: unknown) => Promise<Response>
+  >;
+  const res = await handlers[method]!(
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
+      method,
+      headers: {
+        cookie: `nextly_session=${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return res.status;
+}
+
+describe("a publish of every language over REST", () => {
+  // Admitted at the route on the publish grant alone, and judged by the
+  // service in each language it puts live, which applies the filter.
+  const entry = (id: string) => ["collections", POSTS, "entries", id];
+
+  it("publishes the author's own entry by publish-all, and refuses another's", async () => {
+    const t = await boot();
+    const own = await seed(t, POSTS, AUTHOR);
+    const others = await seed(t, POSTS, OTHER);
+    const before = await stored(t, POSTS, others);
+
+    expect(await rest("POST", [...entry(own), "publish-all"], {})).toBe(200);
+    expect(await rest("POST", [...entry(others), "publish-all"], {})).toBe(403);
+    expect(
+      ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
+        ?.status
+    ).toBe("published");
+    expect(await stored(t, POSTS, others)).toEqual(before);
+  });
+
+  it("unpublishes the author's own entry by unpublish-all, and refuses another's", async () => {
+    const t = await boot();
+    const own = await seed(t, POSTS, AUTHOR, "published");
+    const others = await seed(t, POSTS, OTHER, "published");
+    const before = await stored(t, POSTS, others);
+
+    expect(await rest("POST", [...entry(own), "unpublish-all"], {})).toBe(200);
+    expect(await rest("POST", [...entry(others), "unpublish-all"], {})).toBe(
+      403
+    );
+    expect(
+      ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
+        ?.status
+    ).toBe("draft");
+    expect(await stored(t, POSTS, others)).toEqual(before);
+  });
+
+  it("publishes the author's own entry by a status-only write to every language, and refuses another's", async () => {
+    const t = await boot();
+    const own = await seed(t, POSTS, AUTHOR);
+    const others = await seed(t, POSTS, OTHER);
+    const before = await stored(t, POSTS, others);
+
+    expect(
+      await rest("PATCH", entry(own), { status: "published" }, "?locale=*")
+    ).toBe(200);
+    expect(
+      await rest("PATCH", entry(others), { status: "published" }, "?locale=*")
+    ).toBe(403);
+    expect(
+      ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
+        ?.status
+    ).toBe("published");
+    expect(await stored(t, POSTS, others)).toEqual(before);
   });
 });
 

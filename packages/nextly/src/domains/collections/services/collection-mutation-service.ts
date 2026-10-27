@@ -6462,8 +6462,13 @@ export class CollectionMutationService extends BaseService {
       // attests no lifecycle gate. A scoped API key is judged on its own
       // `<action>-<slug>` grant. The languages going live read this
       // collection's own translations, whose readiness is resolved above.
+      // Each filter the lifecycle's rule answered, in the language it was
+      // asked in: a publish's in each language going live, an unpublish's
+      // once, matched in the default language. The entry is matched against
+      // each now, again under the row lock, and once it is written.
+      const lifecycleChecks: FilteredWriteCheck[] = [];
       const lifecycleDenied = () =>
-        this.accessService.checkCollectionAccess({
+        this.refusalOfLifecycleInLanguage(lifecycleChecks, schema, {
           collectionName: params.collectionName,
           operation: direction.accessAction,
           entryId: params.entryId,
@@ -6660,9 +6665,19 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // No under-lock re-check: the transition gate judges the caller and
-          // the operation, not the row, so re-reading the row-locked document
-          // could not change its answer.
+          // Each filter the lifecycle's rule answered, matched again on the row
+          // as it is locked, so a change since it was judged above moves
+          // nothing.
+          const outsideUnderLock = await this.refusalOutsideWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            lifecycleChecks
+          );
+          if (outsideUnderLock) {
+            publishDocDenied = outsideUnderLock;
+            throw new StatusTransitionDeniedError();
+          }
           // Each locale's committed per-locale status BEFORE the bulk companion
           // flip below, so a real draft->published transition can be told from a
           // locale that was already live. Read under the lock and inside the
@@ -7086,6 +7101,19 @@ export class CollectionMutationService extends BaseService {
               from: priorLocaleStatus,
               data: localeData,
             });
+          }
+
+          // The move may not leave the entry outside a filter that judged it,
+          // matched once every language it moved is written.
+          const movedOut = await this.refusalMovedOutOfWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            lifecycleChecks
+          );
+          if (movedOut) {
+            publishDocDenied = movedOut;
+            throw new StatusTransitionDeniedError();
           }
 
           // One history event for the whole publish, naming the languages it
