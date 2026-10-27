@@ -28,7 +28,7 @@ import {
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useCan } from "@admin/hooks/useCan";
-import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
@@ -203,8 +203,10 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // on a localization-enabled app — drives the list's translation-completeness column.
   // Asked only of a user the server lets read every language's state: the
   // overview reads them all, so without that the whole list would be refused
-  // rather than shown without its translation column.
-  const asksTranslationStatus = useAsksTranslationStatus(collectionSlug);
+  // rather than shown without its translation column. The list's read carries
+  // no language, so the server judges it in the default language.
+  const asksTranslationStatus =
+    useDefaultLanguageAsksTranslationStatus(collectionSlug);
   const wantsTranslationStatus =
     asksTranslationStatus &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
