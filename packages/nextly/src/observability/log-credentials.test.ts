@@ -427,6 +427,19 @@ describe("credentials anywhere in a log value", () => {
     expect(JSON.stringify(received)).not.toContain("error-json-secret");
   });
 
+  it("takes them out of a function's own fields", () => {
+    const out = receivedBy({
+      callback: Object.assign(() => undefined, {
+        token: "function-field-secret",
+        step: "upload",
+      }),
+    });
+    // A console logger prints a function's own fields beside its name.
+    expect(out).not.toContain("function-field-secret");
+    // The control: the rest of its fields remain.
+    expect(out).toContain("upload");
+  });
+
   it("takes them out of what a function's toJSON would write", () => {
     const callback = Object.assign(() => undefined, {
       toJSON: () => ({ token: "function-json-secret", step: "upload" }),

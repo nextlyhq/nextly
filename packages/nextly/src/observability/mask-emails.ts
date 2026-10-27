@@ -95,14 +95,29 @@ function isReference(value: unknown): value is object {
   );
 }
 
+/**
+ * A function, once its `toJSON` has been asked. A console logger prints its
+ * own fields beside its name, so one that has any is logged as a copy of
+ * those fields, each judged as a field is; one without writes only its name
+ * and is kept as it is.
+ */
+function copyFunction(
+  value: object,
+  rules: LogCopyRules,
+  seen: WeakMap<object, unknown>
+): unknown {
+  return Object.keys(value).length === 0
+    ? value
+    : copyRecord(value, rules, seen);
+}
+
 /** A copy of `value` by what it is, once its `toJSON` has been asked. */
 function copyByKind(
   value: object,
   rules: LogCopyRules,
   seen: WeakMap<object, unknown>
 ): unknown {
-  // A function without a `toJSON` writes nothing, so it is kept as it is.
-  if (typeof value === "function") return value;
+  if (typeof value === "function") return copyFunction(value, rules, seen);
   if (value instanceof Error) return copyError(value, rules, seen);
   if (Array.isArray(value)) return copyList(value, rules, seen);
   if (isPlainObject(value)) return copyRecord(value, rules, seen);
@@ -210,7 +225,7 @@ function copyList(
 
 /** A plain object copied field by field. */
 function copyRecord(
-  value: Record<string, unknown>,
+  value: object,
   rules: LogCopyRules,
   seen: WeakMap<object, unknown>
 ): Record<string, unknown> {
