@@ -257,6 +257,80 @@ defineCollection({
 });
 
 // ---------------------------------------------------------------------------
+// A write rule's filter is typed by the collection's fields too
+// ---------------------------------------------------------------------------
+
+// Each write rule a filter limits answers one typed as a read rule's is,
+// sync or async, beside a read rule of its own.
+defineCollection({
+  slug: "typed-writes",
+  fields,
+  access: {
+    read: () => ({ team: { equals: "a" } }),
+    update: ({ user }) => (user ? { owner: { equals: user.id } } : false),
+    delete: async ({ user }) =>
+      user ? { team: { equals: await teamOf(user.id) } } : false,
+    publish: () => ({ rank: { greater_than: 2 } }),
+    unpublish: () => ({ open: true }),
+  },
+});
+
+// The stored rule type holds a typed write rule, as it holds a read rule.
+expectTypeOf<
+  CollectionFilterRule<[ReturnType<typeof text<"team">>]>
+>().toExtend<
+  Extract<CollectionAccessControl["update"], CollectionFilterRule>
+>();
+expectTypeOf<
+  CollectionFilterRule<[ReturnType<typeof text<"team">>]>
+>().toExtend<
+  Extract<CollectionAccessControl["delete"], CollectionFilterRule>
+>();
+expectTypeOf<
+  CollectionFilterRule<[ReturnType<typeof text<"team">>]>
+>().toExtend<
+  Extract<CollectionAccessControl["publish"], CollectionFilterRule>
+>();
+expectTypeOf<
+  CollectionFilterRule<[ReturnType<typeof text<"team">>]>
+>().toExtend<
+  Extract<CollectionAccessControl["unpublish"], CollectionFilterRule>
+>();
+
+defineCollection({
+  slug: "wrong",
+  fields,
+  access: {
+    // @ts-expect-error `teem` is not a field: misspelt in an update rule
+    update: () => ({ teem: { equals: "a" } }),
+  },
+});
+defineCollection({
+  slug: "wrong",
+  fields,
+  access: {
+    // @ts-expect-error `teem` is not a field: misspelt in a delete rule
+    delete: () => ({ teem: { equals: "a" } }),
+  },
+});
+defineCollection({
+  slug: "wrong",
+  fields,
+  access: {
+    // @ts-expect-error a number field compared with a string, in a publish rule
+    publish: () => ({ rank: { equals: "two" } }),
+  },
+});
+defineCollection({
+  slug: "wrong",
+  fields,
+  access: {
+    // @ts-expect-error `equal` is not an operator, in an unpublish rule
+    unpublish: () => ({ team: { equal: "a" } }),
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Only a collection's read rule may answer a filter
 // ---------------------------------------------------------------------------
 
@@ -266,14 +340,6 @@ defineCollection({
   access: {
     // @ts-expect-error a create rule answers true or false
     create: () => ({ team: "a" }),
-  },
-});
-defineCollection({
-  slug: "wrong",
-  fields,
-  access: {
-    // @ts-expect-error an update rule answers true or false, for now
-    update: () => ({ team: "a" }),
   },
 });
 defineSingle({
