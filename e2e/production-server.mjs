@@ -4,6 +4,9 @@
  * the same build (the component-map refusal, which must not take the main
  * server's admin down with it).
  *
+ * Plain JavaScript, so the visual check (`scripts/visual-check`) can load it
+ * on every Node version `engines` allows, with no type stripping.
+ *
  * @module production-server
  */
 import path from "node:path";
@@ -18,7 +21,7 @@ export const NEXTLY_ROOT = path.resolve(HERE, "..");
  */
 export const PORT = Number(process.env.E2E_PROD_PORT) || 3101;
 export const BASE_URL = `http://localhost:${PORT}`;
-export const E2E_DB_RELATIVE = "file:./data/e2e-prod.db";
+const E2E_DB_RELATIVE = "file:./data/e2e-prod.db";
 
 /**
  * What readies the main server's database, run from the repository root with
@@ -39,8 +42,13 @@ export const BUILD_COMMAND = "pnpm --filter playground exec next build";
 /** The production server of that build, on `PORT`. */
 export const START_COMMAND = "pnpm --filter playground exec next start";
 
-/** The environment a production server of the playground is started with. */
-export function productionServerEnv(port: number): Record<string, string> {
+/**
+ * The environment a production server of the playground is started with.
+ *
+ * @param {number} port
+ * @returns {Record<string, string>}
+ */
+export function productionServerEnv(port) {
   return {
     PORT: String(port),
     DB_DIALECT: "sqlite",

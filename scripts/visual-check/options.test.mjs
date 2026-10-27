@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_PORTS } from "../worktree.mjs";
+
 import {
   captureName,
   capturePlan,
@@ -65,6 +67,42 @@ describe("what the visual check is asked to do", () => {
     );
   });
 
+  /*
+   * Each of these passes a plain character check, and git refuses each as a
+   * branch name; refused while parsing, they cost no build.
+   */
+  it("refuses a topic git cannot take as a branch name, before anything runs", () => {
+    for (const topic of ["foo.", "foo.lock", "a..b"]) {
+      expect(() => parseOptions(["/admin", "--publish", topic]), topic).toThrow(
+        /pr-screenshots\//
+      );
+      expect(() => parseOptions(["--unpublish", topic]), topic).toThrow(
+        UsageError
+      );
+    }
+    expect(parseOptions(["/admin", "--publish", "posts.list_2"]).publish).toBe(
+      "posts.list_2"
+    );
+  });
+
+  it("takes --unpublish alone, with no route to capture", () => {
+    expect(parseOptions(["--unpublish", "posts-list"])).toEqual(
+      expect.objectContaining({ unpublish: "posts-list", routes: [] })
+    );
+    expect(() => parseOptions(["/admin", "--unpublish", "posts-list"])).toThrow(
+      UsageError
+    );
+    expect(() => parseOptions(["--publish", "a", "--unpublish", "b"])).toThrow(
+      UsageError
+    );
+  });
+
+  it("answers --help with the usage, and nothing else to do", () => {
+    expect(parseOptions(["--help"])).toEqual(
+      expect.objectContaining({ help: true })
+    );
+  });
+
   it("refuses two routes whose captures would share a name", () => {
     expect(() => parseOptions(["/admin/a-b", "/admin/a/b"])).toThrow(
       /same capture names/
@@ -90,6 +128,6 @@ describe("what the visual check is asked to do", () => {
     expect(
       prodPort({ E2E_PROD_PORT: "3452" }, { env: { E2E_PROD_PORT: "3212" } })
     ).toBe(3452);
-    expect(prodPort({}, undefined)).toBe(3101);
+    expect(prodPort({}, undefined)).toBe(DEFAULT_PORTS.E2E_PROD_PORT);
   });
 });

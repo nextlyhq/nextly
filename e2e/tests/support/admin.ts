@@ -1,5 +1,8 @@
 import { expect, type Page } from "@playwright/test";
 
+// Where the chosen theme is stored, shared with the visual check.
+import { THEME_STORAGE_KEY } from "./theme.mjs";
+
 /**
  * The playground's `admin.devAutoLogin` issues a real session for this user on
  * the first `/admin` visit, so the suite never signs in. That is a deliberate
@@ -9,13 +12,6 @@ import { expect, type Page } from "@playwright/test";
 export const ADMIN = "/admin";
 
 export type Theme = "light" | "dark";
-
-/**
- * Where the admin keeps the chosen theme in local storage, which it reads
- * before its first paint. Shared with the visual check, which opens each
- * screen in both themes the same way.
- */
-export const THEME_STORAGE_KEY = "nextly-theme";
 
 /**
  * Open an admin page in a known theme.

@@ -7,8 +7,8 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 
-import { THEME_STORAGE_KEY } from "../../e2e/tests/support/admin.ts";
-import { settleTransitions } from "../../e2e/tests/support/axe.ts";
+import { THEME_STORAGE_KEY } from "../../e2e/tests/support/theme.mjs";
+import { settleTransitions } from "../../e2e/tests/support/axe-scan.mjs";
 
 import { capturePlan } from "./options.mjs";
 import {

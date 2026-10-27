@@ -55,8 +55,20 @@ touches, read them, and put them in the pull request.
    with no history in common with `main`, under your own git credentials, and
    prints the "The look" section, 390 px first. Paste it into the pull request
    body. A capture over 1 MB is refused by name; capture without `--full`, or a
-   shorter page. Publishing again under the same topic replaces the images the
-   section links to.
+   shorter page. Publishing again under the same topic, from the same branch,
+   replaces the images the section links to. The branch records which branch
+   published it, and a topic another branch published is refused, naming that
+   branch: pick another topic.
+
+7. Once the pull request is merged or closed, delete its captures:
+
+   ```sh
+   pnpm visual-check --unpublish posts-list
+   ```
+
+   Deleting them breaks the images in that pull request's body, which is why
+   it waits until the pull request is done. A topic never published, or
+   already deleted, deletes nothing and says so.
 
 ## What the reader checks that the tool cannot
 

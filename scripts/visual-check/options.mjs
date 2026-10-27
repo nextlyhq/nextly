@@ -5,7 +5,10 @@
  *
  * @module scripts/visual-check/options
  */
+import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
+
+import { DEFAULT_PORTS } from "../worktree.mjs";
 
 /**
  * The viewports each route is captured at: a phone, a tablet in landscape or a
@@ -21,20 +24,23 @@ const VIEWPORTS = [
 /** Every visual change in the admin has to work in both, so both are always captured. */
 const SCHEMES = ["light", "dark"];
 
-/** The production suite's own default port, which slot 0 keeps. */
-const DEFAULT_PROD_PORT = 3101;
+/** Where every topic's captures are published, as `pr-screenshots/<topic>`. */
+export const SCREENSHOT_BRANCHES = "pr-screenshots/";
 
 /** A wrong invocation, answered with the usage rather than a stack. */
 export class UsageError extends Error {}
 
 export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --keep] [--publish <topic>] [--out <dir>]
+       pnpm visual-check --unpublish <topic>
 
-  <route>            an admin path, such as /admin or /admin/collections/posts
-  --full             capture the whole page, not only the first screen
-  --reuse            use the server already running on this checkout's port; build nothing
-  --keep             leave the server this run starts running, for later runs with --reuse
-  --publish <topic>  push the captures to pr-screenshots/<topic> and print "The look"
-  --out <dir>        where the captures go (default e2e/.playwright/visual-check)`;
+  <route>              an admin path, such as /admin or /admin/collections/posts
+  --full               capture the whole page, not only the first screen
+  --reuse              use the server already running on this checkout's port; build nothing
+  --keep               leave the server this run starts running, for later runs with --reuse
+  --publish <topic>    push the captures to pr-screenshots/<topic> and print "The look"
+  --out <dir>          where the captures go (default e2e/.playwright/visual-check)
+  --unpublish <topic>  delete pr-screenshots/<topic>, once its pull request is merged or closed
+  --help               print this`;
 
 /**
  * A topic becomes one path segment of a branch name and of every raw URL, so
@@ -71,15 +77,35 @@ export function capturePlan(routes) {
 }
 
 /**
- * The routes and flags of one run.
+ * Refuses a topic that cannot be the last part of `pr-screenshots/<topic>`.
  *
- * Two routes that slug to the same name would write over each other's captures
- * and leave one route silently uncaptured, so that is refused up front.
+ * Git is asked, since its rules are longer than any pattern here (no trailing
+ * dot, no `.lock`, no `..`, and more); the pattern above keeps the topic to one
+ * path segment a URL takes as it is. Run while parsing, so a bad topic costs
+ * no build.
  */
-export function parseOptions(argv) {
-  let parsed;
+function checkTopic(topic) {
+  if (!TOPIC.test(topic)) {
+    throw new UsageError(
+      `"${topic}" cannot name a branch: use letters, digits, ".", "_" and "-".`
+    );
+  }
+  const checked = spawnSync(
+    "git",
+    ["check-ref-format", "--branch", `${SCREENSHOT_BRANCHES}${topic}`],
+    { encoding: "utf8" }
+  );
+  if (checked.status !== 0) {
+    throw new UsageError(
+      `git refuses ${SCREENSHOT_BRANCHES}${topic} as a branch name; choose another topic.`
+    );
+  }
+}
+
+/** The flags as `parseArgs` reads them, a parsing failure answered as a usage error. */
+function readArgs(argv) {
   try {
-    parsed = parseArgs({
+    return parseArgs({
       args: argv,
       allowPositionals: true,
       options: {
@@ -87,7 +113,9 @@ export function parseOptions(argv) {
         reuse: { type: "boolean", default: false },
         keep: { type: "boolean", default: false },
         publish: { type: "string" },
+        unpublish: { type: "string" },
         out: { type: "string" },
+        help: { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -95,21 +123,19 @@ export function parseOptions(argv) {
       error instanceof Error ? error.message : String(error)
     );
   }
-  const { values, positionals: routes } = parsed;
+}
+
+/**
+ * Refuses routes that are not paths, and two routes that slug to the same
+ * name, which would write over each other's captures and leave one route
+ * silently uncaptured.
+ */
+function checkRoutes(routes) {
   if (routes.length === 0) throw new UsageError("Name at least one route.");
-  // With --reuse this run starts no server, so there would be nothing to keep.
-  if (values.reuse && values.keep)
-    throw new UsageError(
-      "--keep leaves this run's server running, and --reuse starts none."
-    );
   const notPaths = routes.filter(route => !route.startsWith("/"));
-  if (notPaths.length > 0)
+  if (notPaths.length > 0) {
     throw new UsageError(
       `A route is a path starting with "/": ${notPaths.join(", ")}`
-    );
-  if (values.publish !== undefined && !TOPIC.test(values.publish)) {
-    throw new UsageError(
-      `"${values.publish}" cannot name a branch: use letters, digits, ".", "_" and "-".`
     );
   }
   const byName = new Map();
@@ -122,6 +148,32 @@ export function parseOptions(argv) {
     }
     byName.set(name, route);
   }
+}
+
+/**
+ * The routes and flags of one run. `--unpublish` is a run of its own, with no
+ * route; `--help` asks for nothing else.
+ */
+export function parseOptions(argv) {
+  const { values, positionals: routes } = readArgs(argv);
+  if (values.help) return { help: true, routes: [] };
+  if (values.unpublish !== undefined) {
+    if (routes.length > 0 || values.publish !== undefined) {
+      throw new UsageError(
+        "--unpublish deletes a published topic, and takes no route and no --publish."
+      );
+    }
+    checkTopic(values.unpublish);
+    return { unpublish: values.unpublish, routes: [] };
+  }
+  checkRoutes(routes);
+  // With --reuse this run starts no server, so there would be nothing to keep.
+  if (values.reuse && values.keep) {
+    throw new UsageError(
+      "--keep leaves this run's server running, and --reuse starts none."
+    );
+  }
+  if (values.publish !== undefined) checkTopic(values.publish);
   return {
     routes: [...new Set(routes)],
     full: values.full,
@@ -135,12 +187,12 @@ export function parseOptions(argv) {
 /**
  * The port this checkout's production server uses: `E2E_PROD_PORT` from the
  * environment, else the one its worktree slot recorded in
- * `.claude/settings.local.json`, else the production suite's default. The
- * settings file matters because a plain terminal never loaded it, and the
- * default there would be another checkout's server.
+ * `.claude/settings.local.json`, else slot 0's, which the worktree allocator
+ * owns. The settings file matters because a plain terminal never loaded it,
+ * and the default there would be another checkout's server.
  */
 export function prodPort(env, settings) {
   const port =
     Number(env.E2E_PROD_PORT) || Number(settings?.env?.E2E_PROD_PORT);
-  return port || DEFAULT_PROD_PORT;
+  return port || DEFAULT_PORTS.E2E_PROD_PORT;
 }

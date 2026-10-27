@@ -16,6 +16,9 @@
  * `--keep` leaves the server it started running, so later runs can pass
  * `--reuse` and skip the build; it prints how to stop it.
  *
+ * `--unpublish <topic>` deletes that branch again, once a pull request is
+ * merged or closed; `--help` prints the usage.
+ *
  * `--publish <topic>` pushes the captures to `pr-screenshots/<topic>` and
  * prints a pull request's "The look" section.
  *
@@ -25,7 +28,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { signIn as signInThroughForm } from "../../e2e/tests/support/session.ts";
+import { signIn as signInThroughForm } from "../../e2e/tests/support/session.mjs";
 import { isCliEntry } from "../cli-entry.mjs";
 
 import { chromium, ROOT } from "./browser.mjs";
@@ -34,11 +37,12 @@ import {
   capturePlan,
   parseOptions,
   prodPort,
+  SCREENSHOT_BRANCHES,
   USAGE,
   UsageError,
 } from "./options.mjs";
-import { lookSection, publishCaptures } from "./publish.mjs";
-import { startProductionServer } from "./server.mjs";
+import { lookSection, publishCaptures, unpublishCaptures } from "./publish.mjs";
+import { startProductionServer, stopCommand } from "./server.mjs";
 
 /** Where captures go by default: beside the suite's own output, which git ignores. */
 const DEFAULT_OUT = path.join(ROOT, "e2e", ".playwright", "visual-check");
@@ -78,11 +82,19 @@ async function serveAndCapture({
   log,
 }) {
   const baseURL = `http://localhost:${port}`;
-  // The session holds a live sign-in, so it is kept out of the capture folder and removed after.
+  // The session holds a live sign-in, so it is kept out of the capture folder
+  // and removed after: on the way out of this function, and on an exit an
+  // interrupt forces before that.
   const sessionDir = mkdtempSync(path.join(tmpdir(), "visual-check-session-"));
+  const removeSession = () =>
+    rmSync(sessionDir, { recursive: true, force: true });
+  process.once("exit", removeSession);
   const storageState = path.join(sessionDir, "session.json");
-  const server = options.reuse ? undefined : await startServer({ port, log });
+  let server;
   try {
+    if (!options.reuse) {
+      server = await startServer({ port, keep: options.keep, log });
+    }
     await signIn(baseURL, storageState);
     const browser = await chromium.launch();
     try {
@@ -98,13 +110,14 @@ async function serveAndCapture({
       await browser.close();
     }
   } finally {
-    rmSync(sessionDir, { recursive: true, force: true });
+    process.off("exit", removeSession);
+    removeSession();
     if (server && options.keep) {
       server.release();
       log(
         `The server is left running on ${baseURL}: pass --reuse to capture from it.`
       );
-      log(`Stop it with: kill -TERM -${server.pid}`);
+      log(`Stop it with: ${stopCommand(server.pid)}`);
     } else {
       await server?.stop();
     }
@@ -147,6 +160,26 @@ async function publishAndPrint({ captures, topic, repoDir, publish, log }) {
 }
 
 /**
+ * Deletes a published topic and says what was deleted: a teardown, so a
+ * topic never published is said and is not a failure, and a failed delete is.
+ */
+async function unpublishAndSay({ topic, repoDir, unpublish, log }) {
+  const branch = `${SCREENSHOT_BRANCHES}${topic}`;
+  try {
+    const { deleted, source } = await unpublish({ cwd: repoDir, topic });
+    if (!deleted) log(`${branch} is not published: nothing to delete.`);
+    else
+      log(
+        `Deleted ${branch}, published from ${source ?? "an unrecorded branch"}.`
+      );
+    return 0;
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
+
+/**
  * One run, from its arguments to its exit code: 0 when every route was
  * captured and nothing was found, 1 when anything failed or was found, 2 for
  * a wrong invocation.
@@ -161,6 +194,7 @@ export async function visualCheck(argv, deps = {}) {
     startServer = startProductionServer,
     signIn = signInAsSeededUser,
     publish = publishCaptures,
+    unpublish = unpublishCaptures,
     repoDir = ROOT,
   } = deps;
 
@@ -171,6 +205,18 @@ export async function visualCheck(argv, deps = {}) {
     if (!(error instanceof UsageError)) throw error;
     log(`${error.message}\n${USAGE}`);
     return 2;
+  }
+  if (options.help) {
+    log(USAGE);
+    return 0;
+  }
+  if (options.unpublish !== undefined) {
+    return unpublishAndSay({
+      topic: options.unpublish,
+      repoDir,
+      unpublish,
+      log,
+    });
   }
 
   const outDir = path.resolve(options.out ?? DEFAULT_OUT);

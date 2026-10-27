@@ -7,7 +7,9 @@ import {
   describeFinding,
   readOverflow,
   routeFailure,
+  routeFromTable,
   seriousViolations,
+  SIGN_IN_PATH,
 } from "./page-checks.mjs";
 
 /*
@@ -107,6 +109,36 @@ describe("what is read of each page", () => {
     } finally {
       await page.close();
     }
+  });
+});
+
+describe("where the admin sends a visitor with no session", () => {
+  const TABLE = "routes.ts";
+
+  it("is read from the route table's LOGIN entry, not restated", () => {
+    const source = `import x from "y";\nexport const ROUTES = {\n  SETUP: "/a/setup",\n  LOGIN: "/a/sign-in",\n} as const;\n`;
+    expect(routeFromTable(source, TABLE, "LOGIN")).toBe("/a/sign-in");
+    expect(routeFromTable(source, TABLE, "SETUP")).toBe("/a/setup");
+  });
+
+  it("refuses a table it cannot read the entry from, rather than guessing", () => {
+    expect(() =>
+      routeFromTable(`export const ROUTES = { HOME: "/a" };`, TABLE, "LOGIN")
+    ).toThrow(/LOGIN/);
+    expect(() =>
+      routeFromTable(`export const OTHER = { LOGIN: "/a" };`, TABLE, "LOGIN")
+    ).toThrow(/ROUTES/);
+    expect(() =>
+      routeFromTable(
+        `export const ROUTES = { LOGIN: base + "/x" };`,
+        TABLE,
+        "LOGIN"
+      )
+    ).toThrow(/LOGIN/);
+  });
+
+  it("is the admin's own sign-in route", () => {
+    expect(SIGN_IN_PATH).toMatch(/^\/admin\/\w/);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   NEXTLY_ROOT,
   PORT,
   productionServerEnv,
-} from "../../production-server";
+} from "../../production-server.mjs";
 
 /**
  * A production build whose committed component map lacks a dashboard widget's

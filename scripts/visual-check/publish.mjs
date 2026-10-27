@@ -15,6 +15,8 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { SCREENSHOT_BRANCHES } from "./options.mjs";
+
 /**
  * The largest capture published. GitHub draws an image in a pull request body
  * through its camo proxy, and a large one there loads slowly or not at all on
@@ -27,7 +29,7 @@ const DEFAULT_RAW_BASE = "https://raw.githubusercontent.com/nextlyhq/nextly";
 
 /** The branch a topic's captures are published to. */
 function branchFor(topic) {
-  return `pr-screenshots/${topic}`;
+  return `${SCREENSHOT_BRANCHES}${topic}`;
 }
 
 /** Each capture over the limit, with its size. */
@@ -130,14 +132,88 @@ function remoteTip(cwd, remote, ref) {
   return tip;
 }
 
+/** The trailer a publish records its source branch in. */
+const SOURCE_TRAILER = "Source-Branch";
+
+/**
+ * The branch checked out in `cwd`, which a publish records as its source. A
+ * detached HEAD names none, so it is refused rather than recorded as nothing.
+ */
+function currentBranch(cwd) {
+  try {
+    return git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  } catch {
+    throw new Error(
+      "Not published: HEAD is detached, so there is no branch to record as the source. Check out the change's branch first."
+    );
+  }
+}
+
+/** The source branch a published commit records, or "" when it records none. */
+function sourceBranchOf(cwd, commit) {
+  return git(cwd, [
+    "log",
+    "-1",
+    `--format=%(trailers:key=${SOURCE_TRAILER},valueonly)`,
+    commit,
+  ]);
+}
+
+/**
+ * Refuses to publish over a topic another branch owns.
+ *
+ * Topics are short and readable, so two changes can pick the same one, and a
+ * publish over another change's captures would replace the images its pull
+ * request shows without a word. A branch that records no source (one made by
+ * hand) could belong to anyone, so it is refused too.
+ */
+function checkOwner(cwd, topic, tip, source) {
+  const owner = sourceBranchOf(cwd, tip);
+  if (!owner) {
+    throw new Error(
+      `Not published: ${branchFor(topic)} exists and records no source branch, so it may hold another change's captures. Choose another topic.`
+    );
+  }
+  if (owner !== source) {
+    throw new Error(
+      `Not published: ${branchFor(topic)} was published from ${owner}, not ${source}. Choose another topic.`
+    );
+  }
+}
+
+/** Builds a tree of `files`, by their base names, in a temporary index. */
+function treeOf(cwd, files) {
+  const scratch = mkdtempSync(path.join(tmpdir(), "visual-check-index-"));
+  try {
+    const index = { GIT_INDEX_FILE: path.join(scratch, "index") };
+    for (const file of files) {
+      const blob = git(cwd, ["hash-object", "-w", file]);
+      git(
+        cwd,
+        [
+          "update-index",
+          "--add",
+          "--cacheinfo",
+          `100644,${blob},${path.basename(file)}`,
+        ],
+        index
+      );
+    }
+    return git(cwd, ["write-tree"], index);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 /**
  * Commits `files` as the whole tree of `pr-screenshots/<topic>` and pushes it
- * to `remote`.
+ * to `remote`, recording the branch checked out in `cwd` as its source.
  *
  * The first publish of a topic is a commit with no parent; a later one sits on
  * the branch's tip, so the push is an ordinary fast-forward and needs no force.
- * Either way nothing of `main` is in its history. A capture over the size limit
- * refuses the whole publish before anything is written.
+ * Either way nothing of `main` is in its history. Everything that can refuse
+ * the publish (a capture over the size limit, a detached HEAD, a topic another
+ * branch owns) is checked before anything is written.
  */
 export async function publishCaptures({
   cwd,
@@ -155,40 +231,45 @@ export async function publishCaptures({
       `Not published: over the ${MAX_CAPTURE_BYTES / 1024 / 1024} MB limit: ${named.join(", ")}`
     );
   }
+  const source = currentBranch(cwd);
   const ref = `refs/heads/${branchFor(topic)}`;
-  const scratch = mkdtempSync(path.join(tmpdir(), "visual-check-index-"));
-  try {
-    const index = { GIT_INDEX_FILE: path.join(scratch, "index") };
-    for (const file of files) {
-      const blob = git(cwd, ["hash-object", "-w", file]);
-      git(
-        cwd,
-        [
-          "update-index",
-          "--add",
-          "--cacheinfo",
-          `100644,${blob},${path.basename(file)}`,
-        ],
-        index
-      );
-    }
-    const tree = git(cwd, ["write-tree"], index);
-    const parent = remoteTip(cwd, remote, ref);
-    const message = `Screenshots for ${topic}`;
-    const commit = git(cwd, [
-      "commit-tree",
-      tree,
-      ...(parent ? ["-p", parent] : []),
-      "-m",
-      message,
-    ]);
-    git(cwd, ["push", "--quiet", remote, `${commit}:${ref}`]);
-    return {
-      branch: branchFor(topic),
-      commit,
-      rawBase: rawBaseFor(git(cwd, ["remote", "get-url", remote])),
-    };
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  const parent = remoteTip(cwd, remote, ref);
+  if (parent) checkOwner(cwd, topic, parent, source);
+  const commit = git(cwd, [
+    "commit-tree",
+    treeOf(cwd, files),
+    ...(parent ? ["-p", parent] : []),
+    "-m",
+    `Screenshots for ${topic}`,
+    "-m",
+    `${SOURCE_TRAILER}: ${source}`,
+  ]);
+  git(cwd, ["push", "--quiet", remote, `${commit}:${ref}`]);
+  return {
+    branch: branchFor(topic),
+    commit,
+    rawBase: rawBaseFor(git(cwd, ["remote", "get-url", remote])),
+  };
+}
+
+/**
+ * Deletes `pr-screenshots/<topic>` from `remote`, once a pull request that
+ * showed it is merged or closed, and says which branch had published it.
+ *
+ * The delete is leased on the tip just read, so a publish that lands in
+ * between is not deleted unseen. A topic never published deletes nothing.
+ */
+export async function unpublishCaptures({ cwd, topic, remote = "origin" }) {
+  const ref = `refs/heads/${branchFor(topic)}`;
+  const tip = remoteTip(cwd, remote, ref);
+  if (!tip) return { deleted: false };
+  const source = sourceBranchOf(cwd, tip) || undefined;
+  git(cwd, [
+    "push",
+    "--quiet",
+    `--force-with-lease=${ref}:${tip}`,
+    remote,
+    `:${ref}`,
+  ]);
+  return { deleted: true, source };
 }

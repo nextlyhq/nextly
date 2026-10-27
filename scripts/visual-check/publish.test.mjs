@@ -11,6 +11,7 @@ import {
   oversizedCaptures,
   publishCaptures,
   rawBaseFor,
+  unpublishCaptures,
 } from "./publish.mjs";
 
 const RAW = "https://raw.githubusercontent.com/nextlyhq/nextly";
@@ -148,5 +149,69 @@ describe("publishing the captures", () => {
       })
     ).rejects.toThrow(/admin-1440-light\.png/);
     expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
+  });
+
+  const BRANCH = "refs/heads/pr-screenshots/posts-list";
+  const sourceOf = ref =>
+    git(
+      bare,
+      "log",
+      "-1",
+      "--format=%(trailers:key=Source-Branch,valueonly)",
+      ref
+    );
+
+  it("records which branch published the captures", async () => {
+    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    expect(sourceOf(BRANCH)).toBe("main");
+  });
+
+  it("refuses a topic another branch published, naming that branch, and pushes nothing", async () => {
+    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    const tip = git(bare, "rev-parse", BRANCH);
+    git(author, "checkout", "--quiet", "-b", "other-change");
+    await expect(
+      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+    ).rejects.toThrow(/pr-screenshots\/posts-list.*\bmain\b/);
+    expect(git(bare, "rev-parse", BRANCH)).toBe(tip);
+  });
+
+  it("refuses a topic whose branch records no publishing branch, and pushes nothing", async () => {
+    const tree = git(author, "write-tree");
+    const untagged = git(author, "commit-tree", tree, "-m", "made by hand");
+    git(author, "push", "--quiet", "origin", `${untagged}:${BRANCH}`);
+    await expect(
+      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+    ).rejects.toThrow(/records no source branch/);
+    expect(git(bare, "rev-parse", BRANCH)).toBe(untagged);
+  });
+
+  it("refuses to publish from a detached HEAD, which names no branch to record", async () => {
+    git(author, "checkout", "--quiet", "--detach");
+    await expect(
+      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+    ).rejects.toThrow(/branch/);
+    expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
+  });
+
+  it("deletes a published topic, saying which branch had published it", async () => {
+    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    expect(
+      await unpublishCaptures({ cwd: author, topic: "posts-list" })
+    ).toEqual({
+      deleted: true,
+      source: "main",
+    });
+    expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
+    expect(git(bare, "branch", "--list")).toMatch(/main/);
+  });
+
+  it("deletes nothing, and says so, for a topic not published", async () => {
+    expect(
+      await unpublishCaptures({ cwd: author, topic: "posts-list" })
+    ).toEqual({
+      deleted: false,
+    });
+    expect(git(bare, "branch", "--list")).toMatch(/main/);
   });
 });

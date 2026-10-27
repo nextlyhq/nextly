@@ -8,7 +8,7 @@ import {
   PREPARE_COMMANDS,
   productionServerEnv,
   START_COMMAND,
-} from "./production-server";
+} from "./production-server.mjs";
 import {
   EMPTY_INSTALL_DB_RELATIVE,
   EMPTY_INSTALL_PORT,
@@ -79,7 +79,7 @@ export default defineConfig({
     // It starts in the background just before the first; the setup spec waits
     // for it to answer.
     //
-    // The main server's steps are named in `production-server.ts`, so the
+    // The main server's steps are named in `production-server.mjs`, so the
     // visual check builds and serves the playground exactly as this does.
     command: [
       ...PREPARE_COMMANDS,

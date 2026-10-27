@@ -118,6 +118,22 @@ describe("the visual check, run against a stubbed server", () => {
     expect(lines.join("\n")).toContain("kill -TERM -4242");
   });
 
+  it("deletes a published topic with --unpublish, starting and capturing nothing", async () => {
+    const asked = [];
+    const code = await visualCheck(["--unpublish", "posts-list"], {
+      ...deps(),
+      unpublish: async options => {
+        asked.push(options.topic);
+        return { deleted: true, source: "feature-x" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(asked).toEqual(["posts-list"]);
+    expect(calls.started).toBe(0);
+    expect(calls.signedIn).toEqual([]);
+    expect(lines.join("\n")).toMatch(/pr-screenshots\/posts-list.*feature-x/);
+  });
+
   it("captures the whole page with --full", async () => {
     expect(await run("/admin", "--full")).toBe(0);
     expect(pngHeight(path.join(out, "admin-390-light.png"))).toBeGreaterThan(

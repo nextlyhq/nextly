@@ -5,14 +5,82 @@
  *
  * @module scripts/visual-check/page-checks
  */
-import { scanAxe } from "../../e2e/tests/support/axe.ts";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
+
+import { scanAxe } from "../../e2e/tests/support/axe-scan.mjs";
+
+import { ROOT } from "./browser.mjs";
+
+/** The admin's route table, the one place its paths are written. */
+const ROUTE_TABLE = path.join(
+  ROOT,
+  "packages",
+  "admin",
+  "src",
+  "constants",
+  "routes.ts"
+);
+
+/** An expression without the `as const` (or other assertion) wrapped round it. */
+function unwrapped(node) {
+  return node?.type === "TSAsExpression" ||
+    node?.type === "TSSatisfiesExpression"
+    ? unwrapped(node.expression)
+    : node;
+}
+
+/** The name a property is keyed by, written bare or quoted. */
+function keyName(property) {
+  return property.key?.type === "Identifier"
+    ? property.key.name
+    : literalText(property.key);
+}
 
 /**
- * Where the admin sends a visitor with no session (`ROUTES.LOGIN` in
- * `packages/admin/src/constants/routes.ts`). A capture of it in place of the
- * route asked for is a capture of the wrong page.
+ * The path `ROUTES[key]` holds in a route table's source.
+ *
+ * Read with the repository's own parser rather than imported: the table is
+ * TypeScript that imports `nextly`, which the check must not need built or
+ * transpiled. Anything other than one literal path under that key is refused,
+ * so a renamed table or a computed path fails the run instead of being guessed.
  */
-export const SIGN_IN_PATH = "/admin/login";
+export function routeFromTable(text, fileName, key) {
+  let table;
+  walk(parseSource(text, fileName).program, node => {
+    if (node.type === "VariableDeclarator" && node.id?.name === "ROUTES") {
+      table = unwrapped(node.init);
+    }
+  });
+  if (table?.type !== "ObjectExpression") {
+    throw new Error(
+      `${fileName} declares no ROUTES object to read ${key} from.`
+    );
+  }
+  const entry = table.properties.find(property => keyName(property) === key);
+  const value = literalText(entry?.value);
+  if (value === null) {
+    throw new Error(`${fileName} has no literal ROUTES.${key} path.`);
+  }
+  return value;
+}
+
+/**
+ * Where the admin sends a visitor with no session, read from its route table
+ * (`ROUTES.LOGIN`). A capture of it in place of the route asked for is a
+ * capture of the wrong page.
+ */
+export const SIGN_IN_PATH = routeFromTable(
+  readFileSync(ROUTE_TABLE, "utf8"),
+  ROUTE_TABLE,
+  "LOGIN"
+);
 
 /** The impacts worth failing a run over; axe's "moderate" and "minor" are left to the reader. */
 const FAILING_IMPACTS = new Set(["serious", "critical"]);
