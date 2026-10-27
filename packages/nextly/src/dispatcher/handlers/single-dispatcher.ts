@@ -40,6 +40,7 @@ import { assertLocalizationConfigured } from "../../domains/i18n/config/require-
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
@@ -87,8 +88,8 @@ import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
   leavingSettingsStep,
-  namedLeavingSettings,
   pushAndReconcileCompanion,
+  refuseRefusedLeavingSettings,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -1071,18 +1072,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         statusRequested: b.status !== undefined,
       });
 
-      // Leaving settings the database refused: the record already holds the fields without them,
-      // as the table does, and the admin is told which setting on which field was not applied.
-      if (refusedSettings.length > 0) {
-        const named = namedLeavingSettings(refusedSettings);
-        throw new NextlyError({
-          code: "NEXTLY_MIGRATION_APPLY_FAILED",
-          publicMessage:
-            `The fields were saved as shared, but the database refused ${named} once the values ` +
-            "were shared, so the fields were saved without them. Save again to apply them.",
-          logContext: { op: "leavingFieldSettings", entity: slug },
-        });
-      }
+      // Leaving settings the database refused: the admin is told which setting on which field.
+      refuseRefusedLeavingSettings(slug, refusedSettings);
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
@@ -1121,17 +1112,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       desired.singles[slug] = {
         slug,
         tableName,
-        // A Required or Unique field leaving translation is diffed without its setting, as the
-        // apply's first push creates it, so the dialog does not ask how existing rows fill a
-        // required column the copy fills from the default language.
-        fields: (fieldsWithLeavingSettingsDeferred({
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
           oldFields: currentFields,
           newFields: fields as FieldDefinition[],
-          wasLocalized: (single as { localized?: boolean }).localized === true,
-          isLocalized:
-            readRequestLocalized(body) ??
-            (single as { localized?: boolean }).localized === true,
-        }) ?? fields) as DesiredSingle["fields"],
+          entity: single,
+          requestedLocalized: readRequestLocalized(body),
+        }) as DesiredSingle["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: single.status === true,

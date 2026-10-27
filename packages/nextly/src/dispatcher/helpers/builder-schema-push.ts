@@ -218,8 +218,27 @@ export function isLeavingSettingsRefusal(error: unknown): boolean {
   return error instanceof Error && leavingSettingsRefusals.has(error);
 }
 
+/**
+ * Refuses a Single's schema save whose leaving settings the database refused. The record already
+ * holds the fields without them, as the table does, so the error tells the admin which setting on
+ * which field was not applied and that saving again applies it. Nothing when none was refused.
+ */
+export function refuseRefusedLeavingSettings(
+  entity: string,
+  refused: readonly { field: string; setting: "required" | "unique" }[]
+): void {
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage:
+      `The fields were saved as shared, but the database refused ${namedLeavingSettings(refused)} ` +
+      "once the values were shared, so the fields were saved without them. Save again to apply them.",
+    logContext: { op: "leavingFieldSettings", entity },
+  });
+}
+
 /** Each setting by name and field, as "Required on code and Unique on code". */
-export function namedLeavingSettings(
+function namedLeavingSettings(
   settings: readonly { field: string; setting: "required" | "unique" }[]
 ): string {
   return settings

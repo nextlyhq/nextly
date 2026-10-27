@@ -698,6 +698,31 @@ export function fieldsWithLeavingSettingsDeferred<
 }
 
 /**
+ * The fields a schema dialog's preview diffs: the ones the apply's first push creates, a Required
+ * or Unique field leaving translation without its setting (`fieldsWithLeavingSettingsDeferred`).
+ * Diffed with the setting, the dialog would ask how existing rows fill a required column that the
+ * copy fills from the default language.
+ */
+export function fieldsAsFirstPushed<F extends LeavingFieldLike>(args: {
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly F[];
+  /** The registry record, which says whether the entity is translated now. */
+  entity: { localized?: unknown };
+  /** The request's localized flag, when the Builder sent one. */
+  requestedLocalized: boolean | undefined;
+}): readonly F[] {
+  const wasLocalized = args.entity.localized === true;
+  return (
+    fieldsWithLeavingSettingsDeferred({
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      wasLocalized,
+      isLocalized: args.requestedLocalized ?? wasLocalized,
+    }) ?? args.newFields
+  );
+}
+
+/**
  * The shared fields that become translated in this change while their storage changes, judged
  * against the column each one's value sits in now, which its old definition describes.
  */

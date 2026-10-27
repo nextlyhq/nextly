@@ -37,6 +37,7 @@ import { assertLocalizationConfigured } from "../../domains/i18n/config/require-
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
@@ -622,18 +623,13 @@ const COLLECTIONS_METHODS: Record<
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        // A Required or Unique field leaving translation is diffed without its setting, as the
-        // apply's first push creates it, so the dialog does not ask how existing rows fill a
-        // required column the copy fills from the default language.
-        fields: (fieldsWithLeavingSettingsDeferred({
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
           oldFields: currentFields,
           newFields: fields as FieldDefinition[],
-          wasLocalized:
-            (collection as { localized?: boolean }).localized === true,
-          isLocalized:
-            previewLocalized ??
-            (collection as { localized?: boolean }).localized === true,
-        }) ?? fields) as DesiredCollection["fields"],
+          entity: collection,
+          requestedLocalized: previewLocalized,
+        }) as DesiredCollection["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
