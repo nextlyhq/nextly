@@ -227,8 +227,8 @@ function pageOf<T>(all: T[], limit: number, offset: number) {
 /**
  * POST handler for creating a new UI collection.
  *
- * Requires super-admin or `manage-settings` permission. Creates a new
- * collection with `source="ui"` and `locked=false`.
+ * Requires super-admin, or create, update and delete on settings. Creates a
+ * new collection with `source="ui"` and `locked=false`.
  *
  * Response Codes:
  * - 201 Created: Collection created successfully

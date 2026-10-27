@@ -130,9 +130,9 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a Single's schema/metadata.
  *
- * Requires manage-settings, matching the dispatcher's `updateSingleSchema`
- * authorization. The registry returns 403 if the Single is locked
- * (code-first Singles cannot be modified via API).
+ * Requires create, update and delete on settings, matching the dispatcher's
+ * `updateSingleSchema` authorization. The registry returns 403 if the Single
+ * is locked (code-first Singles cannot be modified via API).
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -272,8 +272,8 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a Single.
  *
- * Requires manage-settings, matching the dispatcher's `deleteSingle`
- * authorization. The registry returns 403 if the Single is locked
+ * Requires create, update and delete on settings, matching the dispatcher's
+ * `deleteSingle` authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be deleted via API). Singles require
  * `force: true` to delete because they represent persistent site-wide
  * configuration.

@@ -154,7 +154,7 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a collection.
  *
- * Requires `manage-settings` (or super-admin). The registry throws
+ * Requires create, update and delete on settings (or super-admin). The registry throws
  * `NextlyError.forbidden` with `reason: "collection-locked"` if the
  * collection is locked (code-first collections cannot be modified via API).
  */
@@ -339,7 +339,7 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a collection.
  *
- * Requires `manage-settings` (or super-admin). The registry throws
+ * Requires create, update and delete on settings (or super-admin). The registry throws
  * `NextlyError.forbidden` with `reason: "collection-locked-delete"` if the
  * collection is locked (code-first collections cannot be deleted via API).
  */
