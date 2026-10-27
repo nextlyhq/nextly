@@ -26,33 +26,40 @@ describe("the Windows gate jobs", () => {
   });
 });
 
-describe("the gates whose failure lets later gates run", () => {
-  const steps = workflow.jobs["windows-gates"].steps;
-  const byId = new Map(steps.filter(step => step.id).map(step => [step.id, step]));
-  const isGate = step => /\bpnpm\b/.test(step.run ?? "");
-  // The steps a step needs to have succeeded, through every step those need in turn.
-  const needs = (step, seen = new Set()) => {
-    for (const [, id] of String(step.if ?? "").matchAll(/steps\.([\w-]+)\.outcome == 'success'/g)) {
-      if (!seen.has(id)) {
-        seen.add(id);
-        needs(byId.get(id), seen);
+describe("the steps whose failure lets later work run", () => {
+  // A step that runs a command, whatever the command, can be the one that fails.
+  const isWork = step => typeof step.run === "string";
+  const freeing = steps => {
+    const byId = new Map(steps.filter(step => step.id).map(step => [step.id, step]));
+    // The steps a step needs to have succeeded, through every step those need in turn.
+    const needs = (step, seen = new Set()) => {
+      for (const [, id] of String(step.if ?? "").matchAll(/steps\.([\w-]+)\.outcome == 'success'/g)) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          needs(byId.get(id), seen);
+        }
       }
-    }
-    return seen;
+      return seen;
+    };
+    // Later work that runs past a failure and doesn't need this step to have succeeded.
+    const freesLaterWork = index =>
+      steps
+        .slice(index + 1)
+        .some(later => isWork(later) && /!cancelled\(\)|always\(\)/.test(later.if ?? "") && !needs(later).has(steps[index].id));
+    return steps.flatMap((step, index) => (isWork(step) && freesLaterWork(index) ? [step] : []));
   };
-  // A gate whose failure leaves a later gate free to run: one that runs past a failure and
-  // doesn't need this gate to have succeeded.
-  const freesLaterGates = index =>
-    steps
-      .slice(index + 1)
-      .some(later => isGate(later) && /!cancelled\(\)|always\(\)/.test(later.if ?? "") && !needs(later).has(steps[index].id));
-  const freeing = steps.flatMap((step, index) => (isGate(step) && freesLaterGates(index) ? [step] : []));
+  const cases = WINDOWS_JOBS.flatMap(id => freeing(workflow.jobs[id].steps).map(step => [id, step.name, step]));
 
   it("are found from the steps' own conditions", () => {
-    expect(freeing.map(step => step.id)).toEqual(["design-lint", "workspace-lint", "scripts-lint", "lint", "typecheck"]);
+    expect(Object.fromEntries(WINDOWS_JOBS.map(id => [id, freeing(workflow.jobs[id].steps).map(step => step.id)]))).toEqual({
+      "windows-gates": ["limits", "design-lint", "workspace-lint", "scripts-lint", "lint", "typecheck"],
+      "windows-gates-admin": [],
+      "windows-gates-nextly": [],
+    });
   });
 
-  it.each(freeing.map(step => [step.name, step]))("%s is followed at once by a look at the runner, on its own failure", (_, step) => {
+  it.each(cases)("%s: %s is followed at once by a look at the runner, on its own failure", (id, _, step) => {
+    const steps = workflow.jobs[id].steps;
     const next = steps[steps.indexOf(step) + 1];
     expect(next.uses).toBe(ACTION);
     expect(next.if).toBe(`\${{ !cancelled() && steps.${step.id}.outcome == 'failure' }}`);
@@ -62,70 +69,53 @@ describe("the gates whose failure lets later gates run", () => {
 
 describe("the windows-runner-state action", () => {
   const script = load(read(".github/actions/windows-runner-state/action.yml")).runs.steps.map(step => step.run ?? "").join("\n");
-  // The script with its comments and quoted strings removed, so only code is judged.
+  // Its lines of code, without whole-line comments or indentation.
   const code = script
     .split("\n")
-    .map(line => line.replace(/#.*$/, "").replace(/'[^']*'/g, "''"))
-    .join("\n");
+    .map(line => line.replace(/^\s*#.*$/, "").trim())
+    .filter(Boolean);
 
   /**
-   * Every command the script may run. A positive list, not a list of forbidden
-   * spellings: PowerShell reads the environment and files in more ways than any
-   * blacklist names (`${env:X}`, `Get-Item env:X`, aliases, .NET calls), and each
-   * is a command or construct this list does not hold.
+   * Every line the script may run, in full. A list of complete invocations, not
+   * of command names: an allowed cmdlet reads what its arguments name
+   * (`Get-ChildItem env:` lists the environment), and an allowed formatter
+   * prints what its arguments pick (`Select-Object CommandLine` prints how each
+   * process was started). Each line here was reviewed to print the machine,
+   * never what a step was handed, so changing what the action runs means
+   * changing this list, where that review is asked for again.
    */
-  const COMMANDS = [
-    "Format-List",
-    "Format-Table",
-    "Get-ChildItem",
-    "Get-CimInstance",
-    "Get-Date",
-    "Get-Process",
-    "Get-PSDrive",
-    "Get-WinEvent",
-    "Out-String",
-    "Select-Object",
-    "Sort-Object",
-    "Where-Object",
+  const REVIEWED = [
+    "$ErrorActionPreference = 'Continue'",
+    "'== Disks'",
+    "Get-PSDrive -PSProvider FileSystem |",
+    "Format-Table Name, @{ n = 'UsedGB'; e = { [math]::Round($_.Used / 1GB, 1) } }, @{ n = 'FreeGB'; e = { [math]::Round($_.Free / 1GB, 1) } } -AutoSize |",
+    "Out-String -Width 200",
+    "'== Memory and commit charge'",
+    "$os = Get-CimInstance Win32_OperatingSystem",
+    "'Physical: {0:N1} GB free of {1:N1} GB' -f ($os.FreePhysicalMemory / 1MB), ($os.TotalVisibleMemorySize / 1MB)",
+    "'Commit: {0:N1} GB free of {1:N1} GB' -f ($os.FreeVirtualMemory / 1MB), ($os.TotalVirtualMemorySize / 1MB)",
+    "'== The ten processes holding the most memory (names only)'",
+    "Get-Process |",
+    "Sort-Object WorkingSet64 -Descending |",
+    "Select-Object -First 10 Name, Id, @{ n = 'WorkingSetMB'; e = { [math]::Round($_.WorkingSet64 / 1MB) } } |",
+    "Format-Table -AutoSize | Out-String -Width 200",
+    "'== Application errors in the last hour'",
+    "Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 1, 2; StartTime = (Get-Date).AddHours(-1) } -MaxEvents 20 -ErrorAction SilentlyContinue |",
+    "Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 200",
+    "'== Crash reports from the last two hours (names only)'",
+    "$since = (Get-Date).AddHours(-2)",
+    "Get-ChildItem -Path $env:TEMP -Recurse -File -Include 'report-*.toml', '*turbo*' -ErrorAction SilentlyContinue |",
+    "Where-Object { $_.LastWriteTime -ge $since } |",
+    "Select-Object -First 10 FullName, Length, LastWriteTime |",
+    "Format-Table -AutoSize | Out-String -Width 200",
+    "exit 0",
   ];
-  /** Every variable it may read: its own, and the temporary directory's path. */
-  const VARIABLES = ["$ErrorActionPreference", "$_", "$env:TEMP", "$os", "$since"];
 
-  it("runs only the commands on the list", () => {
-    const used = [...new Set(code.match(/\b[A-Z][a-z]+-[A-Za-z]+\b/g) ?? [])];
-    expect(used.length).toBeGreaterThan(5);
-    expect(used.filter(command => !COMMANDS.includes(command))).toEqual([]);
-  });
-
-  it("starts every statement with a listed command, a string, an assignment of its own, or exit", () => {
-    const statements = code
-      .split(/\n|\|/)
-      .map(statement => statement.trim())
-      .filter(Boolean)
-      // A line that continues the one before it (a property list, a calculated column) is not a statement.
-      .filter(statement => !/^[,@{}()]/.test(statement));
-    const odd = statements.filter(
-      statement =>
-        !COMMANDS.some(command => statement.startsWith(command)) &&
-        !statement.startsWith("''") &&
-        !/^\$(ErrorActionPreference|os|since) = /.test(statement) &&
-        statement !== "exit 0"
-    );
-    expect(odd).toEqual([]);
-  });
-
-  it("reads no variable but its own and the temporary directory, in any spelling", () => {
-    expect(code).not.toMatch(/\$\{/);
-    const variables = [...new Set(code.match(/\$[\w:]+/g) ?? [])];
-    expect(variables.filter(variable => !VARIABLES.includes(variable))).toEqual([]);
-  });
-
-  it("calls no .NET type but rounding, which could read a file or the environment past the command list", () => {
-    expect(code).toMatch(/\[math\]::Round\(/);
-    expect(code.replaceAll("[math]::Round(", "")).not.toMatch(/::|\[[A-Za-z][\w.]*\]/);
+  it("runs exactly the reviewed lines, in order", () => {
+    expect(code).toEqual(REVIEWED);
   });
 
   it("always exits 0, whatever its commands met", () => {
-    expect(script.trim().split("\n").at(-1).trim()).toBe("exit 0");
+    expect(code.at(-1)).toBe("exit 0");
   });
 });

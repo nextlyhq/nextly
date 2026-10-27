@@ -1227,6 +1227,13 @@ jobs:
           echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
           echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      # This step's failure lets the lints after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after sizing failed
+        if: ${{ !cancelled() && steps.limits.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Design lint
         id: design-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
