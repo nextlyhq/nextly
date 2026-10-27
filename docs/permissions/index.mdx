@@ -124,8 +124,45 @@ collection at all answers yes: `ctx.caller.can`, `GET /me/capabilities`, which c
 dashboard and its widgets count and list, and the entity reader behind versions, translations
 and content events. What those then read is limited to the entries the filter matches, and a
 document lock is read only for a document the filter matches. Every other REST route still
-refuses a caller whose rule answers with a filter, as it did before. The rule's type still
-says it returns a boolean.
+refuses a caller whose rule answers with a filter, as it did before.
+
+`defineCollection` types the filter by the collection's own fields, so a misspelt field or
+operator, or a value of the wrong kind, fails to compile. A rule may be `async` and look
+things up before it answers; the filter it returns names fields of its own collection:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+import { teamOf } from "./teams";
+
+export const Notes = defineCollection({
+  slug: "notes",
+  fields: [text({ name: "title" }), text({ name: "team", index: true })],
+  access: {
+    // A reader sees the notes of their own team, and no others.
+    read: async ({ user }) => {
+      if (!user) return false;
+      const team = await teamOf(user.id);
+      return team ? { team: { equals: team } } : false;
+    },
+  },
+});
+```
+
+The keys are the collection's top-level fields, declared with a field factory or written
+inline, and the system fields `id`, `title`, `slug`, `createdAt`, `updatedAt`, `createdBy`
+and `status` (which matches only on a collection with `status: true`). A field inside a
+group (`"seo.title"`) isn't typed yet, and rich text, JSON, password, chips, repeater, group
+and component fields aren't keys. Where the checker can't know the field names, because the
+fields are built at runtime or typed as `FieldConfig[]`, the filter is untyped and is checked
+when the rule runs.
+
+Only a collection's `read` rule may answer a filter. Its `create`, `update`, `delete`,
+`publish` and `unpublish` rules, a Single's rules and a field's rules answer `true` or
+`false`: a filter from one is a type error, and is refused when the rule runs.
+
+The filter is part of every read of the collection, so index the fields it names
+(`index: true`), as the example does.
 
 A rule's filter can't use `near` or `within` yet, nor a field inside a component, nor the
 keys a list's `where` reserves for a request's own view: `_translated`, `_pendingChange` and
