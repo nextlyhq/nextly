@@ -26,6 +26,8 @@ import { DrawFailureContext } from "../draw-failures";
 import { CardTierContext } from "../frame/tier";
 import { WidgetRenderer } from "../WidgetRenderer";
 
+import { gridBounds } from "./grid-bounds";
+
 afterEach(() => {
   clearRegistry();
   vi.restoreAllMocks();
@@ -38,7 +40,7 @@ const declared: DashboardWidget = {
   id: "acme/revenue",
   title: "Revenue",
   archetype: "custom",
-  size: "md",
+  size: gridBounds(4),
   component: PATH,
   serverData: true,
 };
@@ -99,7 +101,11 @@ describe("a declared widget drawn by its own component", () => {
       <WidgetRenderer
         definition={declared}
         slot={dataSlot({ total: 42 })}
-        placement={{ id: "card-1", settings: { range: "30d" }, width: "third" }}
+        placement={{
+          id: "card-1",
+          settings: { range: "30d" },
+          size: { w: 6, h: 3 },
+        }}
         isFetching
         onRetry={onRetry}
       />
@@ -113,7 +119,9 @@ describe("a declared widget drawn by its own component", () => {
       data: { total: 42 },
       refreshing: true,
     });
-    expect(props.size.width).toBe("third");
+    // The card's drawn size in grid units, beside the tier: no named width, no `class`.
+    expect(props.size).toMatchObject({ w: 6, h: 3 });
+    expect(Object.keys(props.size).sort()).toEqual(["h", "tier", "w"]);
     props.retry();
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
@@ -124,7 +132,7 @@ describe("a declared widget drawn by its own component", () => {
       <CardTierContext.Provider value={tier}>
         <DeclaredComponent
           definition={declared}
-          placement={{ id: "card-1", settings: {}, width: "quarter" }}
+          placement={{ id: "card-1", settings: {}, size: { w: 3, h: 3 } }}
           data={1}
           refreshing={false}
           onCaught={() => undefined}
@@ -132,10 +140,83 @@ describe("a declared widget drawn by its own component", () => {
       </CardTierContext.Provider>
     );
     const { rerender } = render(card("small"));
-    expect(seen.at(-1)?.size).toEqual({ width: "quarter", class: "small" });
+    expect(seen.at(-1)?.size).toEqual({ w: 3, h: 3, tier: "small" });
     rerender(card("large"));
     // 🔴 The size is read on every draw, not fixed at the first.
-    expect(seen.at(-1)?.size.class).toBe("large");
+    expect(seen.at(-1)?.size.tier).toBe("large");
+  });
+
+  it("hands a card drawn outside an arrangement its widget's default size", () => {
+    const seen = recording();
+    render(
+      <DeclaredComponent
+        definition={{ ...declared, size: gridBounds(8, 5) }}
+        placement={undefined}
+        data={1}
+        refreshing={false}
+        onCaught={() => undefined}
+      />
+    );
+    expect(seen.at(-1)?.size).toMatchObject({ w: 8, h: 5 });
+  });
+
+  it("takes the tier from each card's own rendered width, at three widths in one window", () => {
+    // jsdom lays nothing out: each card measures the width its container states, so one
+    // window holds cards 339, 340, 699 and 700 px wide, either side of both thresholds.
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const stated = this.dataset.cardId
+          ? this.closest<HTMLElement>("[data-at]")?.dataset.at
+          : undefined;
+        if (stated === undefined) return original.call(this);
+        const width = Number(stated);
+        return {
+          width,
+          height: 0,
+          top: 0,
+          left: 0,
+          right: width,
+          bottom: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        };
+      }
+    );
+    const seen = new Map<string, DeclaredComponentProps["size"]>();
+    registerComponent(PATH, (props: DeclaredComponentProps): JSX.Element => {
+      seen.set(props.placementId, props.size);
+      return <p>{props.size.tier}</p>;
+    });
+    const widths = [339, 340, 699, 700];
+    render(
+      <>
+        {widths.map(width => (
+          <div key={width} data-at={width}>
+            <WidgetRenderer
+              definition={declared}
+              slot={dataSlot(1)}
+              placement={{
+                id: `at-${width}`,
+                settings: {},
+                size: { w: 6, h: 3 },
+              }}
+            />
+          </div>
+        ))}
+      </>
+    );
+    // 🔴 The same size in grid units at every width: only the card's own width moves its tier.
+    expect(widths.map(width => seen.get(`at-${width}`)?.tier)).toEqual([
+      "small",
+      "medium",
+      "medium",
+      "large",
+    ]);
+    for (const width of widths) {
+      expect(seen.get(`at-${width}`)).toMatchObject({ w: 6, h: 3 });
+    }
   });
 
   it("hands a widget whose data is a query the query's own answer as its data", () => {

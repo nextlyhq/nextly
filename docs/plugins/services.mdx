@@ -130,7 +130,7 @@ its methods.
 | `users` | `PluginUserService` | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile` |
 | `media` | `PluginMediaService` | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
 | `email` | `PluginEmailService` | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate` |
-| `versions` | `PluginVersionsService` | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows` |
+| `versions` | `PluginVersionsService` | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin)) |
 
 `ctx.services` also has `singles` (the declared Singles), `jobs` (queue
 background work) and `plugins` (services other plugins contribute). The

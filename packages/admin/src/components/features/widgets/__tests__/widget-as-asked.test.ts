@@ -15,6 +15,7 @@ import {
   titleAsAsked,
   widgetAsAsked,
 } from "../widget-as-asked";
+import { gridBounds } from "./grid-bounds";
 
 const settings: DashboardWidget["settings"] = [
   {
@@ -30,7 +31,7 @@ const recentlyEdited: DashboardWidget = {
   id: "core/recently-edited",
   title: "Recently edited",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "system:recent-edits", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
@@ -83,7 +84,7 @@ describe("a custom card asking through cells", () => {
     id: "core/count",
     title: "Count",
     archetype: "custom",
-    size: "sm",
+    size: gridBounds(3),
     settings: [
       { name: "collection", label: "Collection", type: "collection" },
       { name: "filter", label: "Filter", type: "filter", of: "collection" },

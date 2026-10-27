@@ -12,7 +12,7 @@ const valid = {
   id: "core/recent-entries",
   title: "Recently edited",
   archetype: "list" as const,
-  defaultSize: "lg" as const,
+  size: { default: { w: 6, h: 4 } },
   query: { source: "collection:posts", op: "list" as const, limit: 5 },
 };
 
@@ -29,53 +29,114 @@ describe("validateWidgetDefinition", () => {
     );
   });
 
-  it("refuses a size outside the enum", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultSize: "gigantic" })
-    ).toThrow(/defaultSize/);
+  it("requires a size", () => {
+    // The resolved widget: a card with no size has nowhere on the grid to
+    // start. A contribution may leave it out; a registration may not.
+    const unsized = {
+      id: valid.id,
+      title: valid.title,
+      archetype: valid.archetype,
+      query: valid.query,
+    };
+    expect(() => validateWidgetDefinition(unsized)).toThrow(
+      /size is required, as \{ default: \{ w, h \}, min\?, max\? \}/
+    );
   });
 
-  it("refuses a minSize larger than maxSize", () => {
+  it("refuses a named size where grid units are taken", () => {
+    // 🔴 There is one size vocabulary. A named width or size is refused, not
+    // translated, so no second vocabulary can reach the grid.
+    expect(() => validateWidgetDefinition({ ...valid, size: "lg" })).toThrow(
+      /size must be \{ default: \{ w, h \}, min\?, max\? \}/
+    );
     expect(() =>
-      validateWidgetDefinition({ ...valid, minSize: "xl", maxSize: "sm" })
-    ).toThrow(/minSize/);
+      validateWidgetDefinition({ ...valid, size: { default: "full" } })
+    ).toThrow(/size\.default must be \{ w, h \}/);
   });
 
-  it("refuses a defaultSize below minSize", () => {
+  it("refuses a width outside the twelve columns and a height below one row", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, size: { default: { w: 13, h: 4 } } })
+    ).toThrow(/size\.default\.w must be a whole number from 1 to 12/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, size: { default: { w: 6, h: 0 } } })
+    ).toThrow(/size\.default\.h must be a whole number from 2 to 12/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        size: { default: { w: 6, h: 4 }, min: { w: 2.5, h: 4 } },
+      })
+    ).toThrow(/size\.min\.w must be a whole number/);
+  });
+
+  it("refuses a minimum above the default", () => {
     // The bounds are what a user may resize BETWEEN, and the default is what
     // they start at. A default under the floor means the widget renders at a
     // size no resize can return it to -- accepted at registration and
     // unreachable for the rest of its life.
     expect(() =>
-      validateWidgetDefinition({ ...valid, defaultSize: "sm", minSize: "lg" })
-    ).toThrow(/defaultSize/);
+      validateWidgetDefinition({
+        ...valid,
+        size: { default: { w: 4, h: 3 }, min: { w: 6, h: 3 } },
+      })
+    ).toThrow(/size\.min must not be larger than size\.default/);
   });
 
-  it("refuses a defaultSize above maxSize", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultSize: "full", maxSize: "md" })
-    ).toThrow(/defaultSize/);
-  });
-
-  it("accepts a defaultSize sitting on either bound", () => {
-    // The bounds are INCLUSIVE: `minSize` is a size the user may resize to, so
-    // a default equal to it is inside the range, not outside it.
+  it("refuses a default above the maximum, in either direction", () => {
     expect(() =>
       validateWidgetDefinition({
         ...valid,
-        defaultSize: "sm",
-        minSize: "sm",
-        maxSize: "lg",
+        size: { default: { w: 8, h: 3 }, max: { w: 6, h: 3 } },
+      })
+    ).toThrow(/size\.default must not be larger than size\.max/);
+    // Within the maximum's width but taller than it.
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        size: { default: { w: 4, h: 4 }, max: { w: 12, h: 3 } },
+      })
+    ).toThrow(/size\.default must not be larger than size\.max/);
+    // An unstated maximum is the full row at the default's height, so the
+    // default always fits it.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, size: { default: { w: 12, h: 6 } } })
+    ).not.toThrow();
+  });
+
+  it("accepts a default sitting on either bound", () => {
+    // The bounds are INCLUSIVE: the minimum is a size the user may resize to,
+    // so a default equal to it is inside the range, not outside it.
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        size: {
+          default: { w: 3, h: 2 },
+          min: { w: 3, h: 2 },
+          max: { w: 6, h: 4 },
+        },
       })
     ).not.toThrow();
     expect(() =>
       validateWidgetDefinition({
         ...valid,
-        defaultSize: "lg",
-        minSize: "sm",
-        maxSize: "lg",
+        size: {
+          default: { w: 6, h: 4 },
+          min: { w: 3, h: 2 },
+          max: { w: 6, h: 4 },
+        },
       })
     ).not.toThrow();
+  });
+
+  it("judges a stated size the same way through the shared rule", () => {
+    // `widgetValueProblem` is what the contributions channel asks, so a size
+    // refused here is refused there with the same words.
+    expect(
+      widgetValueProblem({
+        size: { default: { w: 8, h: 3 }, max: { w: 6, h: 3 } },
+      })
+    ).toBe("size.default must not be larger than size.max");
+    expect(widgetValueProblem({})).toBeUndefined();
   });
 
   it("requires a component for the custom archetype and forbids one otherwise", () => {
@@ -98,7 +159,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/notes",
         title: "Notes",
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         content: "Some notes.",
       })
     ).not.toThrow();
@@ -112,7 +173,7 @@ describe("validateWidgetDefinition", () => {
       id: "core/notes",
       title: "Notes",
       archetype: "text" as const,
-      defaultSize: "md" as const,
+      size: { default: { w: 4, h: 3 } },
     };
     expect(() => validateWidgetDefinition(notes)).toThrow(
       /requires non-empty content/
@@ -143,7 +204,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/n",
         title: "N",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:posts", op: "count" },
         content: "Prose nobody draws.",
       })
@@ -162,7 +223,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/notes",
         title: "Notes",
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         // Carries its prose, so it reaches the QUERY rule rather than being
         // refused earlier for describing an empty card.
         content: "Some notes.",
@@ -179,7 +240,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         actions: [{ label: "New post", href: "/admin/posts/new" }],
         query: { source: "collection:posts", op: "count", limit: 5 },
       })
@@ -193,7 +254,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
       })
     ).toThrow(/requires a non-empty actions array/);
   });
@@ -207,7 +268,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/posts",
         title: "Posts",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:posts", op: "count" },
         actions: [{ label: "New post", href: "/admin/posts/new" }],
       })
@@ -222,7 +283,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         actions: [{ label: "   ", href: "/admin/posts/new" }],
       })
     ).toThrow(/requires a non-empty label/);
@@ -232,7 +293,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         actions: [{ label: "New post", href: "" }],
       })
     ).toThrow(/requires a non-empty href/);
@@ -246,7 +307,7 @@ describe("validateWidgetDefinition", () => {
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         actions: [
           { label: "New post", href: "/admin/posts/new" },
           {
@@ -269,60 +330,11 @@ describe("validateWidgetDefinition", () => {
         id: "core/chart",
         title: "Chart",
         archetype: "custom",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         component: "pkg#Chart",
         query: { source: "collection:posts", op: "count", limit: 5 },
       })
     ).not.toThrow();
-  });
-});
-
-describe("defaultHeight is checked against the height vocabulary", () => {
-  // `WIDGET_HEIGHTS` has two values and nothing compared `defaultHeight`
-  // against them, so the field was enforced by the TYPE alone -- which reaches
-  // a TypeScript caller and nothing else. A plugin authored in JavaScript, or
-  // one whose definition arrives as parsed JSON, registered `"medium"` at boot
-  // and the grid resolved a height that does not exist.
-  it("accepts each declared height", () => {
-    for (const defaultHeight of ["short", "tall"]) {
-      expect(() =>
-        validateWidgetDefinition({ ...valid, defaultHeight })
-      ).not.toThrow();
-    }
-  });
-
-  it("accepts a definition that declares no height", () => {
-    expect(() => validateWidgetDefinition(valid)).not.toThrow();
-  });
-
-  it("refuses a height outside the vocabulary", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultHeight: "medium" })
-    ).toThrow(/defaultHeight must be one of short, tall/);
-  });
-
-  it("refuses a non-string height, on SHAPE rather than vocabulary", () => {
-    // The shape rule is shared by both declaration channels — a height is a
-    // string in every version — so it is checked before the closed vocabulary,
-    // which is the registry's alone. The message says which of the two refused.
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultHeight: 2 })
-    ).toThrow(/defaultHeight, when given, must be a string/);
-  });
-
-  it("refuses a BLANK height", () => {
-    // Blank names no height in any version, so it is shape rather than
-    // vocabulary — and it is refused rather than read as absent, because the
-    // two channels disagreed about which it was.
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultHeight: "" })
-    ).toThrow(/defaultHeight, when given, must not be empty/);
-  });
-
-  it("refuses a BLANK size for the same reason", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultSize: "" })
-    ).toThrow(/defaultSize, when given, must not be empty/);
   });
 });
 
@@ -331,7 +343,7 @@ describe("a custom widget's component must be able to resolve", () => {
     id: "acme/chart",
     title: "Chart",
     archetype: "custom" as const,
-    defaultSize: "lg" as const,
+    size: { default: { w: 6, h: 4 } },
   };
 
   it("accepts a real component path", () => {
@@ -362,7 +374,7 @@ describe("defaultOrder places a widget without depending on which channel it cam
     id: "core/notes",
     title: "Notes",
     archetype: "text" as const,
-    defaultSize: "md" as const,
+    size: { default: { w: 4, h: 3 } },
     content: "Some notes.",
   };
 
@@ -407,7 +419,7 @@ describe("every widget is framed", () => {
     id: "core/team",
     title: "Team",
     archetype: "custom" as const,
-    defaultSize: "lg" as const,
+    size: { default: { w: 6, h: 4 } },
     component: "core#TeamSummary",
   };
 
@@ -432,7 +444,7 @@ describe("hidesWhenEmpty", () => {
     id: "core/team",
     title: "Team",
     archetype: "custom" as const,
-    defaultSize: "lg" as const,
+    size: { default: { w: 6, h: 4 } },
     component: "core#TeamSummary",
   };
 
@@ -517,7 +529,7 @@ describe("a stats widget draws from cells, not from one query", () => {
     id: "core/content-health",
     title: "Content health",
     archetype: "stats" as const,
-    defaultSize: "md" as const,
+    size: { default: { w: 4, h: 3 } },
   };
   const cell = (key: string) => ({
     key,
@@ -662,7 +674,7 @@ describe("an archetype draws one kind of result", () => {
       validateWidgetDefinition({
         id: "core/x",
         title: "X",
-        defaultSize: "lg",
+        size: { default: { w: 6, h: 4 } },
         archetype: "metric",
         query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
       })
@@ -675,7 +687,7 @@ describe("an archetype draws one kind of result", () => {
       validateWidgetDefinition({
         id: "core/x",
         title: "X",
-        defaultSize: "lg",
+        size: { default: { w: 6, h: 4 } },
         archetype: "list",
         query: { source: "collection:posts", op: "count" },
       })
@@ -690,7 +702,7 @@ describe("an archetype draws one kind of result", () => {
       validateWidgetDefinition({
         id: "plugin/x",
         title: "X",
-        defaultSize: "lg",
+        size: { default: { w: 6, h: 4 } },
         archetype: "custom",
         component: "plugin/x/Body",
         query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
@@ -765,41 +777,11 @@ describe("a widget whose data core builds on the server", () => {
   });
 });
 
-describe("a widget's width terms", () => {
-  it("states its widths in the arrangement's words, gaps allowed", () => {
+describe("a widget's add panel terms", () => {
+  it("accepts a widget that allows several cards", () => {
     expect(() =>
-      validateWidgetDefinition({
-        ...valid,
-        allowedWidths: ["quarter", "full"],
-        defaultWidth: "full",
-        allowsSeveral: true,
-      })
+      validateWidgetDefinition({ ...valid, allowsSeveral: true })
     ).not.toThrow();
-  });
-
-  it("refuses a width the arrangement does not have, an empty list and a repeated width", () => {
-    expect(() =>
-      validateWidgetDefinition({ ...valid, allowedWidths: ["1/4"] })
-    ).toThrow(/allowedWidths must hold only/);
-    expect(() =>
-      validateWidgetDefinition({ ...valid, allowedWidths: [] })
-    ).toThrow(/at least one width/);
-    expect(() =>
-      validateWidgetDefinition({ ...valid, allowedWidths: ["full", "full"] })
-    ).toThrow(/names a width twice/);
-  });
-
-  it("starts a card at one of its widths, never outside them", () => {
-    expect(() =>
-      validateWidgetDefinition({
-        ...valid,
-        allowedWidths: ["quarter", "half"],
-        defaultWidth: "full",
-      })
-    ).toThrow(/is not one of its allowedWidths/);
-    expect(() =>
-      validateWidgetDefinition({ ...valid, defaultWidth: "wide" })
-    ).toThrow(/defaultWidth must be one of/);
   });
 
   it("sketches its row with one of core's displays, or not at all", () => {
@@ -855,7 +837,7 @@ describe("a custom card's cells", () => {
     title: "Count",
     archetype: "custom" as const,
     component: "core#Count",
-    defaultSize: "sm" as const,
+    size: { default: { w: 3, h: 2 } },
   };
   const split = {
     key: "split",
@@ -1016,7 +998,7 @@ describe("a limit setting beside a ranged query", () => {
         id: "acme/over-time",
         title: "Over time",
         archetype: "timeseries",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         query: {
           source: "collection:posts",
           op: "timeseries",

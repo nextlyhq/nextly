@@ -65,6 +65,7 @@ vitest.global-setup.*        @mobeenabdullah
 /packages/admin/src/__tests__/setup.ts @mobeenabdullah
 /packages/nextly/src/__tests__/setup.ts @mobeenabdullah
 /packages/nextly/src/__tests__/shared-module-guards.ts @mobeenabdullah
+/packages/nextly/src/__tests__/shared-module-guards-policy.ts @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escapes.ts @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escapes-inventory.ts @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escape-baseline.ts @mobeenabdullah

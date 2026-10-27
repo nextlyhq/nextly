@@ -14,7 +14,8 @@
  */
 import { expectTypeOf } from "vitest";
 
-import type { WidgetResultField } from "../../result";
+import type { WidgetSizeDeclaration } from "../../grid-size";
+import type { WidgetRenderSize, WidgetResultField } from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
 import type { QueryAnswer } from "../displays";
 import {
@@ -42,8 +43,7 @@ const everySetting = defineWidget({
   title: "Every setting",
   description: "Holds one setting of each kind",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: {
     collection: settings.collection(),
     filter: settings.filter({ of: "collection" }),
@@ -101,8 +101,7 @@ defineWidget({
   title: "Query",
   description: "A query written from its settings",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: {
     collection: settings.collection(),
     items: settings.items(),
@@ -137,6 +136,22 @@ expectTypeOf<WidgetProps<typeof revenue>["data"]>().toEqualTypeOf<
 expectTypeOf<Parameters<typeof RevenueCard>[0]>().toEqualTypeOf<
   WidgetProps<typeof revenue>
 >();
+
+// 🔴 Its size in the grid's units and nothing else: columns and rows, and the
+// tier the card's drawn width falls in. No named width rides beside them.
+expectTypeOf<
+  WidgetProps<typeof revenue>["size"]
+>().toEqualTypeOf<WidgetRenderSize>();
+expectTypeOf<keyof WidgetRenderSize>().toEqualTypeOf<"w" | "h" | "tier">();
+expectTypeOf<WidgetRenderSize["w"]>().toEqualTypeOf<number>();
+expectTypeOf<WidgetRenderSize["h"]>().toEqualTypeOf<number>();
+expectTypeOf<WidgetRenderSize["tier"]>().toEqualTypeOf<
+  "small" | "medium" | "large"
+>();
+
+// A declaration states its size in the grid's own type, the one the site
+// config, a stored placement and the admin read.
+expectTypeOf<(typeof revenue)["size"]>().toEqualTypeOf<WidgetSizeDeclaration>();
 
 // The frame's empty test reads the same data the component draws.
 expectTypeOf<
@@ -177,8 +192,7 @@ defineWidget({
   title: "Orders",
   description: "Rows typed by an interface",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ items: rows }),
   display: "list",
 });
@@ -190,8 +204,7 @@ defineWidget({
   title: "Orders",
   description: "A data function reading the batch's scope",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async ({ scope }) => {
     expectTypeOf(scope).toEqualTypeOf<WidgetScope>();
     return { total: await scope.getOrCompute("orders", async () => 3) };
