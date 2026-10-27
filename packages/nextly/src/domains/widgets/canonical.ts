@@ -213,6 +213,21 @@ const REGISTRATION_FIELDS = [
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
 
+/**
+ * The gate a declared widget's empty-state action is offered under: a link's permission, when
+ * it names one. An action opening the card's settings has none here; the admin offers it only
+ * where the reader can change that card's settings.
+ */
+function emptyActionGate(
+  action: NonNullable<WidgetDefinition["empty"]>["action"]
+): string[] {
+  return action !== undefined &&
+    "requiredPermission" in action &&
+    action.requiredPermission !== undefined
+    ? [action.requiredPermission]
+    : [];
+}
+
 /** The summary of one registered widget. */
 function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
   const stated = REGISTRATION_FIELDS.filter(
@@ -224,9 +239,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     // gate is resolved with them, before the payload decides what to withhold.
     actionGates: [
       ...actionGatesOf(definition.actions),
-      ...(definition.empty?.action?.requiredPermission === undefined
-        ? []
-        : [definition.empty.action.requiredPermission]),
+      ...emptyActionGate(definition.empty?.action),
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),

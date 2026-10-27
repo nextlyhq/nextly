@@ -355,8 +355,10 @@ export interface WidgetDefinition {
   sketch?: DataWidgetArchetype;
   /**
    * What a declared widget's empty state says and offers in place of the
-   * frame's own: one line, and one action, a path relative to the admin,
-   * offered only to a reader holding its `requiredPermission`.
+   * frame's own: one line, and one action: a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`, or the card's
+   * own settings (`opens: "settings"`), offered where the reader can change
+   * them.
    *
    * 🔴 Published by core for a declared widget alone (with `serverData`), from
    * a declaration startup already held to the empty state's rules. Whether
@@ -364,7 +366,9 @@ export interface WidgetDefinition {
    */
   empty?: {
     message?: string;
-    action?: { label: string; link: string; requiredPermission?: string };
+    action?:
+      | { label: string; link: string; requiredPermission?: string }
+      | { label: string; opens: "settings" };
   };
   /**
    * The settings the widget's source narrows by rather than being replaced by
@@ -1458,12 +1462,19 @@ function validateEmpty(d: Partial<WidgetDefinition>): void {
 const isText = (value: unknown) =>
   typeof value === "string" && value.trim() !== "";
 
-/** An empty state's action, when stated: a label and a link, each of them text. */
+/**
+ * An empty state's action, when stated: a label, each of them text, and either a link that is
+ * text or `opens: "settings"`.
+ */
 function emptyActionIsText(action: unknown): boolean {
   if (action === undefined) return true;
   if (typeof action !== "object" || action === null) return false;
-  const { label, link } = action as { label?: unknown; link?: unknown };
-  return isText(label) && isText(link);
+  const { label, link, opens } = action as {
+    label?: unknown;
+    link?: unknown;
+    opens?: unknown;
+  };
+  return isText(label) && (opens === "settings" || isText(link));
 }
 
 /**

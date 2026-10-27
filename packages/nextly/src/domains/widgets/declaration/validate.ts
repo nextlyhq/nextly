@@ -189,7 +189,7 @@ const CHECKS: readonly ((
   d => loadProblem(d.load),
   d => viewProblem(d.view),
   d => isEmptyProblem(d.isEmpty, d.view),
-  d => emptyProblems(d.empty),
+  d => emptyProblems(d.empty, d.settings),
   d => previewProblems(d.preview, d.view),
   d => summaryProblems(d.summary),
 ];
@@ -430,8 +430,11 @@ function viewProblem(view: unknown): string | undefined {
   return `view must be one of core's views (${Object.keys(CORE_VIEWS).join(", ")}) or { component: "<module>#<Export>" }, got ${quote(view)}`;
 }
 
-/** Every problem with a declaration's empty state: its message and its one action. */
-function emptyProblems(empty: unknown): string[] {
+/**
+ * Every problem with a declaration's empty state: its message and its one action. Handed the
+ * declaration's settings, since an action that opens them needs some to open.
+ */
+function emptyProblems(empty: unknown, settings: unknown): string[] {
   if (empty === undefined) return [];
   if (!isRecord(empty)) return ["empty must be { message?, action? }"];
   return [
@@ -445,7 +448,7 @@ function emptyProblems(empty: unknown): string[] {
           : `${quote(key)} is not a field of empty, which holds a message and an action`
       ),
     ...optional(emptyMessageProblem(empty.message)),
-    ...emptyActionProblems(empty.action),
+    ...emptyActionProblems(empty.action, settings),
   ];
 }
 
@@ -471,11 +474,17 @@ function emptyMessageProblem(message: unknown): string | undefined {
     : "empty.message must be one line of text";
 }
 
-function emptyActionProblems(action: unknown): string[] {
+/**
+ * Every problem with an empty state's one action: a link relative to the admin, with the
+ * permission it is offered under, or `opens: "settings"`, the card's own settings sheet. One
+ * or the other, never both, so the frame never has to choose which one a click takes.
+ */
+function emptyActionProblems(action: unknown, settings: unknown): string[] {
   if (action === undefined) return [];
   if (!isRecord(action) || !nonBlank.safeParse(action.label).success) {
     return ["empty.action must have a label"];
   }
+  if (action.opens !== undefined) return opensActionProblems(action, settings);
   return [
     ...optional(
       isAdminRelativePath(action.link)
@@ -486,6 +495,31 @@ function emptyActionProblems(action: unknown): string[] {
       action.permission === undefined || isPermissionName(action.permission)
         ? undefined
         : `empty.action.permission must be a permission name such as "create-orders", got ${quote(action.permission)}`
+    ),
+  ];
+}
+
+/** Every problem with an action that opens the card's settings, as `opens` says. */
+function opensActionProblems(
+  action: Record<string, unknown>,
+  settings: unknown
+): string[] {
+  if (action.opens !== "settings") {
+    return [
+      `empty.action.opens must be "settings", the card's own settings, got ${quote(action.opens)}`,
+    ];
+  }
+  return [
+    ...optional(
+      action.link === undefined && action.permission === undefined
+        ? undefined
+        : 'empty.action opens the card\'s settings, so it takes no link or permission: give either { label, link, permission? } or { label, opens: "settings" }'
+    ),
+    // Nothing to open: the button would open an empty sheet, or none at all.
+    ...optional(
+      isRecord(settings) && Object.keys(settings).length > 0
+        ? undefined
+        : "empty.action opens the card's settings, but the widget declares none: declare the setting it asks for, or give a link instead"
     ),
   ];
 }

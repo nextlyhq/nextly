@@ -95,7 +95,8 @@ describe("core's Note, declared", () => {
       serverData: true,
       allowsSeveral: true,
       empty: {
-        message: "Nothing written yet. Write it in the card's settings.",
+        message: "Nothing written yet.",
+        action: { label: "Write a note", opens: "settings" },
       },
       settings: [
         expect.objectContaining({

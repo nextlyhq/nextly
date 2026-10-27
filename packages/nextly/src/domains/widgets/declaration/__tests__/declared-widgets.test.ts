@@ -147,6 +147,32 @@ describe("registering declared widgets", () => {
     });
   });
 
+  it("publishes an empty action that opens the card's settings as it is, with no gate", () => {
+    // Accepted by the registry's own check too: the registration would refuse an action it read
+    // as having no link.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-choose",
+              empty: {
+                message: "Pick a collection",
+                action: { label: "Choose", opens: "settings" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-choose")?.empty).toEqual({
+      message: "Pick a collection",
+      action: { label: "Choose", opens: "settings" },
+    });
+  });
+
   it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [revenue] }],

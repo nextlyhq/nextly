@@ -602,6 +602,63 @@ describe("a widget declaration as startup receives it", () => {
         "empty.action"
       );
     });
+
+    it("with an action opening anything but the card's settings", () => {
+      expect(
+        problemsOf(
+          valid({ empty: { action: { label: "Open", opens: "sheet" } } })
+        )
+      ).toEqual([
+        'empty.action.opens must be "settings", the card\'s own settings, got "sheet"',
+      ]);
+    });
+
+    it.each([
+      ["a link", { link: "collections/orders" }],
+      ["a permission", { permission: "update-orders" }],
+    ])(
+      "with an action that opens the settings and also names %s",
+      (_label, extra) => {
+        // One or the other: the frame would otherwise have to pick what a click does.
+        expect(
+          problemsOf(
+            valid({
+              empty: {
+                action: { label: "Choose", opens: "settings", ...extra },
+              },
+            })
+          )
+        ).toEqual([
+          'empty.action opens the card\'s settings, so it takes no link or permission: give either { label, link, permission? } or { label, opens: "settings" }',
+        ]);
+      }
+    );
+
+    it("with an action that opens the settings of a widget that declares none", () => {
+      expect(
+        problemsOf(
+          validComponent({
+            empty: { action: { label: "Choose", opens: "settings" } },
+          })
+        )
+      ).toEqual([
+        "empty.action opens the card's settings, but the widget declares none: declare the setting it asks for, or give a link instead",
+      ]);
+    });
+  });
+
+  it("accepts an empty action that opens the card's own settings", () => {
+    // The control for the refusals above: a widget with settings, and the action alone.
+    expect(
+      problemsOf(
+        valid({
+          empty: {
+            message: "Pick what to group by",
+            action: { label: "Choose", opens: "settings" },
+          },
+        })
+      )
+    ).toEqual([]);
   });
 
   it("refuses a field a widget declaration does not have", () => {
