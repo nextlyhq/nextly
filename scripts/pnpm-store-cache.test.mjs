@@ -62,15 +62,33 @@ describe("the pnpm store cache", () => {
     expect(unrestored).toEqual([]);
   });
 
-  it("is saved only on a push, and only where a push means main", () => {
+  it("is saved only on a push, after an install that ran, and only where a push means main", () => {
     const saves = allLists.flatMap(list =>
-      list.steps.filter(step => step.uses === STORE && step.with?.save === "true").map(step => ({ list, step }))
+      list.steps
+        .map((step, index) => ({ step, index }))
+        .filter(({ step }) => step.uses === STORE && step.with?.save === "true")
+        .map(({ step, index }) => ({ list, step, install: list.steps.slice(0, index).reverse().find(isInstall) }))
     );
     expect(saves.length).toBeGreaterThan(0);
-    for (const { list, step } of saves) {
-      expect(step.if, list.where).toBe("github.event_name == 'push'");
+    for (const { list, step, install } of saves) {
+      const expected = install?.if ? `${install.if} && github.event_name == 'push'` : "github.event_name == 'push'";
+      expect(step.if, list.where).toBe(expected);
       if (!list.composite) expect(list.push, list.where).toEqual({ branches: ["main"] });
     }
+  });
+
+  it("is restored only where pnpm was set up, by the same condition", () => {
+    const mismatched = allLists.flatMap(list =>
+      list.steps
+        .map((step, index) => ({ step, index }))
+        .filter(({ step }) => step.uses === STORE && step.with?.save !== "true")
+        .filter(({ step, index }) => {
+          const setup = list.steps.slice(0, index).reverse().find(entry => String(entry.uses ?? "").startsWith("pnpm/action-setup@"));
+          return (setup?.if ?? null) !== (step.if ?? null);
+        })
+        .map(() => list.where)
+    );
+    expect(mismatched).toEqual([]);
   });
 
   it("is saved by the integration setup only for workflows that push to main alone", () => {
@@ -84,13 +102,18 @@ describe("the pnpm-store action", () => {
   const steps = read(".github/actions/pnpm-store/action.yml").runs.steps;
   const named = name => steps.find(step => step.name === name);
 
-  it("restores and saves under one key, and restores an older store by prefix", () => {
+  it("restores and saves under one key, by that key alone", () => {
     const restore = named("Restore the store");
     const lookup = named("Ask whether this store is saved already");
     const save = named("Save the store");
     expect(restore.with.key).toBe(save.with.key);
     expect(lookup.with.key).toBe(save.with.key);
-    expect(restore.with.key.startsWith(restore.with["restore-keys"].trim())).toBe(true);
+    // No prefix restore: a store holds one lockfile's packages, so it never grows past it.
+    expect(restore.with["restore-keys"]).toBeUndefined();
+  });
+
+  it("never prunes the store, which would empty one pnpm copied or cloned into node_modules", () => {
+    expect(steps.some(step => /store\s+prune/.test(String(step.run ?? "")))).toBe(false);
   });
 
   it("saves only when asked to, after finding the key unsaved", () => {

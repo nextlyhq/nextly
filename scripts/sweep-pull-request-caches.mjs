@@ -10,12 +10,17 @@
  *   still finish an upload afterwards, and a pull request closed with a merge
  *   conflict starts no `pull_request` workflow at all. Every cache under a
  *   closed one's ref goes; one whose state cannot be read keeps its caches.
- * - **Superseded.** A job saves under a key ending in the commit or lockfile
- *   it ran on, and the next push of the same pull request saves the same
- *   family again under a new ending. A restore takes the newest by prefix, so
- *   every older key of a family on that ref is dead: only the newest is kept.
+ * - **Superseded.** A job saves under a key ending in the commit it ran on,
+ *   and the next push of the same pull request saves the same family again
+ *   under a new ending. Where every restore of that family is by prefix, it
+ *   takes the newest, so every older key of the family on that ref is dead:
+ *   only the newest is kept. A family restored by its exact key (a lockfile
+ *   hash, say) is never taken as superseded, since an older key is read again
+ *   when the lockfile goes back.
  * - **A copy of `main`'s.** A pull request restores `main`'s entries, so an
- *   entry under its own ref with a key `main` also holds is never read.
+ *   entry under its own ref with the key AND version `main` holds is never
+ *   read. The version is GitHub's, from the cached paths and compression: the
+ *   same key with another version is a different cache.
  *
  * 🔴 Nothing outside a pull request's merge ref is ever deleted: not `main`,
  * the merge queue, a tag, nor a ref this cannot read as a pull request's. A
@@ -32,18 +37,28 @@ import { commandText } from "./workflow-context.mjs";
 /** GitHub lists at most 100 caches a page; the repository's allowance holds far fewer than this many pages. */
 const MAX_PAGES = 30;
 
+/**
+ * The cache namespaces every workflow restores by prefix (`restore-keys`), the
+ * only ones whose older keys a newer push makes dead. A test holds this list to
+ * the workflows' own `restore-keys`.
+ */
+export const PREFIX_RESTORED = ["turbo-v2-", "unit-records-v1-"];
+
 /** Whether a ref is a pull request's merge ref, the only refs this deletes from. */
 export function isPullRequestRef(ref) {
   return /^refs\/pull\/\d+\/merge$/.test(String(ref ?? ""));
 }
 
 /**
- * The family a key belongs to: the key without its last `-` segment, when
- * that segment is a commit SHA or a content hash (20 or more hex digits).
- * Null for any other key, which is then never taken as superseded.
+ * The family a key belongs to: the key without its last `-` segment, when the
+ * key is in a namespace restored by prefix and that segment is a commit SHA or
+ * a content hash (20 or more hex digits). Null for any other key, which is then
+ * never taken as superseded.
  */
 export function familyOf(key) {
-  const match = /^(.+)-[0-9a-f]{20,}$/.exec(String(key ?? ""));
+  const text = String(key ?? "");
+  if (!PREFIX_RESTORED.some(prefix => text.startsWith(prefix))) return null;
+  const match = /^(.+)-[0-9a-f]{20,}$/.exec(text);
   return match ? match[1] : null;
 }
 
@@ -55,7 +70,8 @@ export function familyOf(key) {
  * whatever its age.
  */
 export function sweepPlan(caches, { closed = new Set() } = {}) {
-  const mainKeys = new Set(caches.filter(cache => cache.ref === "refs/heads/main").map(cache => cache.key));
+  const identity = cache => `${cache.key}\u0000${cache.version}`;
+  const mainCaches = new Set(caches.filter(cache => cache.ref === "refs/heads/main").map(identity));
   const doomed = new Map();
   const families = new Map();
   for (const cache of caches.filter(entry => isPullRequestRef(entry.ref))) {
@@ -63,7 +79,7 @@ export function sweepPlan(caches, { closed = new Set() } = {}) {
       doomed.set(cache.id, { cache, reason: "a closed pull request's" });
       continue;
     }
-    if (mainKeys.has(cache.key)) {
+    if (mainCaches.has(identity(cache))) {
       doomed.set(cache.id, { cache, reason: "a copy of main's" });
       continue;
     }
@@ -79,9 +95,15 @@ export function sweepPlan(caches, { closed = new Set() } = {}) {
   return [...doomed.values()];
 }
 
-/** Every cache in the repository, and whether the list came back shorter than GitHub's total. */
+/**
+ * Every cache in the repository, each once, and whether the list came back
+ * shorter than GitHub's total. The list is ordered by last access, which other
+ * runs change while it is read, so an entry can appear on two pages (and
+ * another be skipped): taken twice, one copy would read as superseding the
+ * other. Entries are kept by id, and the count compared is of distinct ones.
+ */
 async function allCaches(repository, context) {
-  const caches = [];
+  const byId = new Map();
   let total = 0;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const { total_count: count, actions_caches: items } = await githubJson(
@@ -89,9 +111,10 @@ async function allCaches(repository, context) {
       context
     );
     total = Math.max(total, count ?? 0);
-    caches.push(...items);
+    for (const item of items) byId.set(item.id, item);
     if (items.length < 100) break;
   }
+  const caches = [...byId.values()];
   return { caches, short: caches.length < total };
 }
 

@@ -10,7 +10,9 @@ name: Sweep pull request caches
 # (`cancel-closed-pull-request-runs.yml`).
 #
 # Scheduled, never on a pull request's event: this job holds `actions: write`,
-# and only the default branch's code runs with it.
+# and only the default branch's code runs with it. A dispatch can name any
+# branch, whose own copy of this file and the script would then run, so the job
+# refuses every ref but `main`.
 on:
   schedule:
     - cron: "41 * * * *"
@@ -25,7 +27,7 @@ concurrency:
 jobs:
   sweep:
     name: Delete pull request caches nothing reads
-    if: github.repository == 'nextlyhq/nextly'
+    if: github.repository == 'nextlyhq/nextly' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

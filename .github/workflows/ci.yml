@@ -2009,7 +2009,9 @@ jobs:
         with:
           node-version-file: .nvmrc
 
+      # Only where pnpm was set up: an out-of-scope change skips both.
       - name: Restore pnpm store
+        if: steps.decide.outputs.inert != 'true'
         uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
@@ -2017,7 +2019,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Save pnpm store
-        if: github.event_name == 'push'
+        if: steps.decide.outputs.inert != 'true' && github.event_name == 'push'
         uses: ./.github/actions/pnpm-store
         with:
           save: "true"

@@ -2,12 +2,12 @@
  * Which caches the scheduled sweep deletes, and that it never reaches past a
  * pull request's merge ref, against a stand-in for the GitHub API.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { load } from "js-yaml";
 import { describe, expect, it, vi } from "vitest";
 
-import { familyOf, isPullRequestRef, main, sweepPlan } from "./sweep-pull-request-caches.mjs";
+import { PREFIX_RESTORED, familyOf, isPullRequestRef, main, sweepPlan } from "./sweep-pull-request-caches.mjs";
 
 const REPO = "nextlyhq/nextly";
 const SHA = n => String(n).repeat(40).slice(0, 40);
@@ -15,15 +15,20 @@ const PR = "refs/pull/7/merge";
 const OTHER_PR = "refs/pull/8/merge";
 const MAIN = "refs/heads/main";
 let nextId = 1;
-const cache = (ref, key, created, size = 1024 * 1024) => ({ id: nextId++, ref, key, created_at: created, size_in_bytes: size });
+const cache = (ref, key, created, size = 1024 * 1024, version = "v1") => ({ id: nextId++, ref, key, created_at: created, size_in_bytes: size, version });
 const planned = caches => sweepPlan(caches).map(({ cache: entry, reason }) => `${entry.ref} ${entry.key} ${reason}`);
 
 describe("familyOf", () => {
-  it("drops a trailing commit or content hash, and has no family for any other key", () => {
+  it("drops a trailing commit or content hash in a namespace restored by prefix, and has no family for any other key", () => {
     expect(familyOf(`turbo-v2-Linux-ci-${SHA(1)}`)).toBe("turbo-v2-Linux-ci");
-    expect(familyOf(`pnpm-store-v1-Linux-X64-${"a".repeat(64)}`)).toBe("pnpm-store-v1-Linux-X64");
+    expect(familyOf(`unit-records-v1-Linux-ci-${SHA(1)}`)).toBe("unit-records-v1-Linux-ci");
     expect(familyOf("playwright-Linux-1.52.0")).toBeNull();
     expect(familyOf(`turbo-v2-Linux-ci-${"g".repeat(40)}`)).toBeNull();
+  });
+
+  it("has no family for a namespace restored by its exact key, whose older keys are read again", () => {
+    expect(familyOf(`pnpm-store-v1-Linux-X64-${"a".repeat(64)}`)).toBeNull();
+    expect(familyOf(`playwright-Linux-${"b".repeat(64)}`)).toBeNull();
   });
 });
 
@@ -54,6 +59,12 @@ describe("sweepPlan", () => {
       cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z"),
       cache(OTHER_PR, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T02:00:00Z"),
     ];
+    expect(planned(caches)).toEqual([]);
+  });
+
+  it("keeps a pull request's entry whose key main holds under another version, which is another cache", () => {
+    const key = `playwright-Linux-${"c".repeat(64)}`;
+    const caches = [cache(MAIN, key, "2026-10-27T01:00:00Z", 1024, "v-main"), cache(PR, key, "2026-10-27T05:00:00Z", 1024, "v-pr")];
     expect(planned(caches)).toEqual([]);
   });
 
@@ -139,6 +150,14 @@ describe("main", () => {
     expect(printed).toContainEqual(expect.stringContaining("1 of 101 cache(s) deleted, 1.0 MB"));
   });
 
+  it("takes an entry listed on two pages once, so it does not supersede itself", async () => {
+    const only = cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z");
+    const filler = Array.from({ length: 99 }, (_, index) => cache(MAIN, `main-${index}`, "2026-10-27T00:00:00Z"));
+    const stub = api([{ total_count: 100, actions_caches: [only, ...filler] }, { total_count: 100, actions_caches: [{ ...only }] }]);
+    expect((await run(stub)).code).toBe(0);
+    expect(stub.deleted).toEqual([]);
+  });
+
   it("counts a cache already gone as deleted, and fails naming one it could not delete", async () => {
     const a = cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z");
     const b = cache(PR, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T02:00:00Z");
@@ -178,11 +197,45 @@ describe("the sweep workflow", () => {
     expect(Object.keys(on).sort()).toEqual(["schedule", "workflow_dispatch"]);
   });
 
+  it("runs only on main, so a dispatch of another branch cannot run that branch's script with write access", () => {
+    const [job] = Object.values(workflow.jobs);
+    expect(job.if).toBe("github.repository == 'nextlyhq/nextly' && github.ref == 'refs/heads/main'");
+  });
+
   it("grants actions: write to its one job only, and runs the sweep there", () => {
     expect(workflow.permissions).toEqual({});
     const jobs = Object.values(workflow.jobs);
     expect(jobs).toHaveLength(1);
     expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
     expect(jobs[0].steps.at(-1).run).toBe("node scripts/sweep-pull-request-caches.mjs");
+  });
+});
+
+describe("the namespaces restored by prefix", () => {
+  /** Every `restore-keys` prefix the workflows' and composite actions' steps give, up to its first expression. */
+  function restoredPrefixes() {
+    const files = [
+      ...readdirSync(new URL("../.github/workflows/", import.meta.url)).map(name => `.github/workflows/${name}`),
+      ...readdirSync(new URL("../.github/actions/", import.meta.url)).map(name => `.github/actions/${name}/action.yml`),
+    ];
+    const prefixes = new Set();
+    for (const path of files) {
+      const file = load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+      const steps = file.runs ? file.runs.steps ?? [] : Object.values(file.jobs ?? {}).flatMap(job => job.steps ?? []);
+      for (const step of steps) {
+        for (const line of String(step.with?.["restore-keys"] ?? "").split("\n").map(entry => entry.trim()).filter(Boolean)) {
+          prefixes.add(line.split("${{")[0]);
+        }
+      }
+    }
+    return [...prefixes].sort();
+  }
+
+  it("are found in the workflows", () => {
+    expect(restoredPrefixes().length).toBeGreaterThan(0);
+  });
+
+  it("are exactly the ones the sweep takes as superseded", () => {
+    expect(restoredPrefixes()).toEqual([...PREFIX_RESTORED].sort());
   });
 });
