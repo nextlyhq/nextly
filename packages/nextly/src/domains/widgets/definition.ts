@@ -529,6 +529,15 @@ export interface WidgetDefinition {
   serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
+  /**
+   * Who declared a widget drawn by its own component, as faults name an owner (`plugin "name"`),
+   * so its card can say whose component is missing in development.
+   *
+   * 🔴 Published by core for a declared widget alone, as `serverData` is: the public
+   * registration doors refuse it, since a registration naming an owner would claim a plugin's
+   * name for a card that plugin never declared.
+   */
+  owner?: string;
   /** Required for `actions`; forbidden otherwise. */
   actions?: WidgetAction[];
   /**

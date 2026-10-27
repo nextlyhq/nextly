@@ -47,18 +47,29 @@ types (D60):
 
 The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
 they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
-checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
-the admin: its server log names the plugin, the widget and the command that fixes it, and the
-public site keeps serving. Other components missing from the map are logged.
+checkout or a test run, and the server log then names each missing component and the switch.
+
+Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
+exits 1 naming each missing component and each path no longer declared, or 2 when it cannot
+load the config:
+
+```bash
+npx nextly generate:types --check
+```
+
+Production never reads, checks or writes the map. A dashboard widget whose component is missing
+from it draws its own card's error state, and every other card and page draws as usual. In
+development the error names the widget, its owner and the missing path; in production it says
+only that the card could not be drawn. Other components missing from the map draw empty.
 
 After a map change in development, the request that finds the map out of date is already
 being served when the map is rewritten, so that one render can still draw the new widget's
-card empty. The rewritten map is what the next render loads.
+card in its error state. The rewritten map is what the next render loads.
 
-**The check runs once the admin layout calls it.** New apps import the map in their admin
-page; the layout's call is two lines to add. An app made from an older template has neither,
-and keeps drawing a missing component as an empty card, with a console warning, until it adds
-them:
+**`next dev` keeps the map current once the admin layout calls the check.** New apps import the
+map in their admin page; the layout's call is two lines to add. An app made from an older
+template has neither, so a plugin's components are not registered: its widget cards draw their
+error state, and its other components draw empty, until it adds them:
 
 ```tsx
 // src/app/admin/[[...params]]/page.tsx: with the other imports

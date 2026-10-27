@@ -214,6 +214,8 @@ describe("registering declared widgets", () => {
       archetype: "custom",
       component: revenue.view.component,
       serverData: true,
+      // Who declared it, so a card whose component is missing can say whose it is.
+      owner: SHOP,
     });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -241,6 +243,8 @@ describe("registering declared widgets", () => {
       archetype: "metric",
       category: "Other",
     });
+    // Core draws it, so there is no component, and no owner of one to name.
+    expect(getWidget("acme/figure")?.owner).toBeUndefined();
     // The control: a category the declaration names is kept as written.
     expect(getWidget(ordersByState.id)).toMatchObject({
       archetype: "bars",

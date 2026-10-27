@@ -123,6 +123,11 @@ export interface DashboardWidget {
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
   /**
+   * Who declared a widget drawn by its own component (`plugin "name"`), as core publishes it,
+   * so a card whose component is missing can say whose it is. Absent for any other widget.
+   */
+  owner?: string;
+  /**
    * Present for `actions`, already filtered to the shortcuts this reader may
    * use — `resolve-widgets` drops the rest, so the renderer never sees one it
    * must hide.
