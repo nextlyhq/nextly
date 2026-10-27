@@ -1076,21 +1076,19 @@ export function SingleForm({
                       isSubmitting={isSubmitting}
                     />
                     {documentView ? (
-                      <>
-                        {/* A document view has no header, so the banner sits
-                            above it: an author working in the view still sees
-                            the document is in a scheduled release. */}
-                        {documentBanner}
-                        <DocumentViewBody
-                          view={documentView}
-                          target={{ singleSlug: schema.slug }}
-                          form={form}
-                          lock={lock}
-                          recovery={recovery}
-                          viewingVersion={viewingVersion}
-                          fields={schema.fields}
-                        />
-                      </>
+                      <DocumentViewBody
+                        view={documentView}
+                        target={{ singleSlug: schema.slug }}
+                        form={form}
+                        lock={lock}
+                        recovery={recovery}
+                        viewingVersion={viewingVersion}
+                        fields={schema.fields}
+                        // A document view has no header, so the banner goes
+                        // in among its own: an author working in the view
+                        // still sees the document is in a scheduled release.
+                        banner={documentBanner}
+                      />
                     ) : (
                       <div className={cn("space-y-0", className)}>
                         {/* Its native submit — Enter in a field, or a

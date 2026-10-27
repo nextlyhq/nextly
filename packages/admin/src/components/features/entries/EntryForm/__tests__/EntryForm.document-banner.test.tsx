@@ -14,7 +14,11 @@ import { render, screen } from "@admin/__tests__/utils";
 
 vi.mock(
   "@admin/components/features/entries/EntryForm/DocumentViewBody",
-  () => ({ DocumentViewBody: () => <div data-testid="document-view" /> })
+  () => ({
+    DocumentViewBody: ({ banner }: { banner?: unknown }) => (
+      <div data-testid="document-view">{banner as never}</div>
+    ),
+  })
 );
 vi.mock(
   "@admin/components/features/entries/EntryForm/EntrySystemHeader",
@@ -47,7 +51,7 @@ describe("the entry editor's document banner", () => {
     expect(header.nextElementSibling).toBe(banner);
   });
 
-  it("is drawn above a document view, which has no header of its own", () => {
+  it("is drawn inside a document view's frame, which has no header of its own", () => {
     render(
       <EntryForm
         collection={collection}
@@ -58,10 +62,10 @@ describe("the entry editor's document banner", () => {
       />
     );
 
-    const view = screen.getByTestId("document-view");
-    const banner = screen.getByText("Scheduled for Friday");
-    expect(
-      banner.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    // Inside the view's own frame, which shares the screen between its banners
+    // and the view, rather than above a view already the screen's height.
+    expect(screen.getByTestId("document-view")).toContainElement(
+      screen.getByText("Scheduled for Friday")
+    );
   });
 });
