@@ -6,7 +6,8 @@
  *
  * - **0** the map agrees.
  * - **1** it does not: each missing component (with its owner, and its widget for a widget),
- *   each path no longer declared, and each file absent or unreadable, then the fix.
+ *   each path no longer declared, each file absent or unreadable, and a map that does not
+ *   register what its list names, then the fix.
  * - **2** the check could not be asked: the config did not load, or a file there could not be
  *   read. Not an answer about the map, so never read as one.
  *
@@ -77,6 +78,11 @@ function outOfDateReport(found: ComponentMapAgreement, cwd: string): string[] {
     ...(found.listReadable
       ? []
       : [`- not a list the generator writes: ${list}`]),
+    ...(found.mapMatchesList
+      ? []
+      : [
+          `- the map does not register exactly the paths its list names: ${map}`,
+        ]),
     ...found.missing.map(each => `- missing: ${describeComponentUse(each)}`),
     ...found.obsolete.map(path => `- no longer declared: ${path}`),
     "Run `npx nextly generate:types` and commit both files.",

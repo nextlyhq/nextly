@@ -190,20 +190,32 @@ async function rewriteInDevelopment(
       added: [...new Set(missing.map(each => each.path))],
       removed: obsolete,
     });
-  } catch {
-    warnStale({ missing, obsolete }, place, "unwritable");
+  } catch (error) {
+    // Only a refused write is the folder's: any other failure (a full disk, a generator that
+    // threw) is named by its own message, or the warning would prescribe the wrong fix.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const refused = code === "EACCES" || code === "EPERM" || code === "EROFS";
+    warnStale(
+      { missing, obsolete },
+      place,
+      refused ? "unwritable" : "failed",
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 
 /** Why a map that is out of date was left as it is, which picks the warning's cause. */
-type LeftStale = "write-off" | "unwritable";
+type LeftStale = "write-off" | "unwritable" | "failed";
 
-const CAUSES: Record<LeftStale, (place: MapFolder) => string> = {
-  "write-off": () =>
-    "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0). Run `npx nextly generate:types`, or unset NEXTLY_GENERATED_FILES_WRITE to let `next dev` update the map.",
-  unwritable: place =>
-    `\`${place.folder}/\` is not writable. Make the folder writable, or run \`npx nextly generate:types\`.`,
-};
+const CAUSES: Record<LeftStale, (place: MapFolder, detail: string) => string> =
+  {
+    "write-off": () =>
+      "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0). Run `npx nextly generate:types`, or unset NEXTLY_GENERATED_FILES_WRITE to let `next dev` update the map.",
+    unwritable: place =>
+      `\`${place.folder}/\` is not writable. Make the folder writable, or run \`npx nextly generate:types\`.`,
+    failed: (_place, detail) =>
+      `writing it failed: ${detail}. Run \`npx nextly generate:types\` to see the failure in full.`,
+  };
 
 const WARNED = new Set<string>();
 
@@ -226,7 +238,9 @@ function warnStale(
     obsolete: readonly string[];
   },
   place: MapFolder,
-  cause: LeftStale
+  cause: LeftStale,
+  /** The write's own error, for a write that failed. */
+  detail = ""
 ): void {
   const lines = [
     ...stale.missing.map(each => `- missing: ${describeComponentUse(each)}`),
@@ -238,7 +252,7 @@ function warnStale(
   getNextlyLogger().warn({
     kind: "admin-component-map-stale",
     message:
-      `The admin's component map in ${place.folder}/ is out of date and was not written again: ${CAUSES[cause](place)}\n` +
+      `The admin's component map in ${place.folder}/ is out of date and was not written again: ${CAUSES[cause](place, detail)}\n` +
       lines.join("\n") +
       "\nA widget whose component is missing draws its card's error state; any other missing component draws empty. Uninstalling a package the map still imports breaks the admin's build.",
   });

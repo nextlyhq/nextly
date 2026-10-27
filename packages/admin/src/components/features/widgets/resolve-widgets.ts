@@ -206,8 +206,15 @@ function resolveTitle(title: string | undefined, id: string): string {
  */
 function declaredWidgets(
   plugins: PluginMetadata[] | undefined
-): ReadableWidgetDeclaration[] {
-  return (plugins ?? []).flatMap(plugin => plugin.widgets ?? []);
+): (ReadableWidgetDeclaration & { owner?: string })[] {
+  // Each carries the plugin that declared it, worded as core's own faults name an owner
+  // (`plugin "<name>"`), so a card whose component is missing can say whose it is.
+  return (plugins ?? []).flatMap(plugin =>
+    (plugin.widgets ?? []).map(widget => ({
+      ...widget,
+      owner: `plugin "${plugin.name}"`,
+    }))
+  );
 }
 
 /**
@@ -240,7 +247,7 @@ function boundsOf(
  * mounted must not cause a request on the user's behalf.
  */
 function resolveOne(
-  meta: ReadableWidgetDeclaration,
+  meta: ReadableWidgetDeclaration & { owner?: string },
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
   if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
@@ -259,6 +266,9 @@ function resolveOne(
     query: meta.query,
     settings: meta.settings,
     component: meta.component,
+    ...(meta.component !== undefined && meta.owner !== undefined
+      ? { owner: meta.owner }
+      : {}),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -369,9 +379,9 @@ function preferRegistered<T>(
 }
 
 function mergeCollision(
-  contribution: ReadableWidgetDeclaration,
+  contribution: ReadableWidgetDeclaration & { owner?: string },
   registration: RegisteredWidgetMeta
-): ReadableWidgetDeclaration {
+): ReadableWidgetDeclaration & { owner?: string } {
   return {
     id: registration.id,
     // Named field by field rather than spread. `{ ...contribution,
@@ -402,8 +412,10 @@ function mergeCollision(
     settings: preferRegistered(registration.settings, contribution.settings),
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
-    // Only core publishes an owner, on a registration; a contribution names none.
-    ...(registration.owner === undefined ? {} : { owner: registration.owner }),
+    // Core's published owner where there is one, else the contributing plugin's.
+    ...((registration.owner ?? contribution.owner) === undefined
+      ? {}
+      : { owner: registration.owner ?? contribution.owner }),
     actions: preferRegistered(registration.actions, contribution.actions),
     // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
     // a contributed stats card colliding with a registered metric would hand

@@ -54,12 +54,20 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** Commits the map and a list of `paths`, laid out a path a line, as a formatter leaves it. */
+/** A map registering `paths`, in the shape the generator writes its `registered` object. */
+const mapOf = (paths: readonly string[]) =>
+  [
+    "export const componentMapAgreesWithList = true;",
+    "",
+    "const registered = {",
+    ...paths.map((path, index) => `  ${JSON.stringify(path)}: _p0.C${index},`),
+    "};",
+    "",
+  ].join("\n");
+
+/** Commits a map registering `paths`, and a list of them laid out a path a line, as a formatter leaves it. */
 async function commit(paths: readonly string[]): Promise<void> {
-  await writeFile(
-    join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME),
-    "// the map\n"
-  );
+  await writeFile(join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME), mapOf(paths));
   await writeFile(
     join(root, DIR, COMPONENT_PATHS_FILENAME),
     `export const registeredComponentPaths = [\n${paths
@@ -138,10 +146,7 @@ describe("a committed map that does not", () => {
   });
 
   it("does not agree with a list it cannot read, however its paths happen to read", async () => {
-    await writeFile(
-      join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME),
-      "// the map\n"
-    );
+    await writeFile(join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME), mapOf([]));
     await writeFile(
       join(root, DIR, COMPONENT_PATHS_FILENAME),
       "export const registeredComponentPaths = PATHS as const;\n"
@@ -149,6 +154,40 @@ describe("a committed map that does not", () => {
     const found = await check();
     expect(found.listReadable).toBe(false);
     expect(componentMapAgrees(found)).toBe(false);
+  });
+});
+
+describe("a map that no longer registers what its list names", () => {
+  it("does not agree when the map is emptied though its list still agrees", async () => {
+    await commit(["@acme/shop/admin#Reports", "@acme/shop/admin#Revenue"]);
+    await writeFile(
+      join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME),
+      "// the map\n"
+    );
+    const found = await check();
+    expect(found.missing).toEqual([]);
+    expect(found.mapMatchesList).toBe(false);
+    expect(componentMapAgrees(found)).toBe(false);
+  });
+
+  it("does not agree when the map registers other paths than its list", async () => {
+    await commit(["@acme/shop/admin#Reports", "@acme/shop/admin#Revenue"]);
+    await writeFile(
+      join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME),
+      mapOf(["@acme/shop/admin#Reports"])
+    );
+    expect((await check()).mapMatchesList).toBe(false);
+  });
+
+  it("agrees with a map the generator wrote, its widget notes included", async () => {
+    for (const artifact of buildImportMapArtifacts(
+      [shop],
+      TYPES,
+      "../../nextly.config"
+    )) {
+      await writeFile(join(root, artifact.path), artifact.code);
+    }
+    expect((await check()).mapMatchesList).toBe(true);
   });
 });
 
@@ -181,6 +220,14 @@ describe("a list read back", () => {
         `export const registeredComponentPaths = [${JSON.stringify('a"b#C')}] as const;`
       )
     ).toEqual(['a"b#C']);
+  });
+
+  it("reads a path whose route folder holds brackets whole, as one path", () => {
+    expect(
+      listedPathsOf(
+        'export const registeredComponentPaths = [\n  "@/app/[slug]/Widget#default",\n  "b#B",\n] as const;\n'
+      )
+    ).toEqual(["@/app/[slug]/Widget#default", "b#B"]);
   });
 
   it("reads nothing from a list holding anything but strings", () => {

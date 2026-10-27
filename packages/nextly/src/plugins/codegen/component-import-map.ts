@@ -419,23 +419,66 @@ export function componentImportMapPaths(
 const pathListExport = (paths: readonly string[]): string =>
   `export const registeredComponentPaths = ${JSON.stringify(paths)} as const;`;
 
+/** A JSON string literal, read at one position (`y`): a `]` or `}` inside it is part of it. */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/y;
+
 /**
  * The paths a generated list holds, read back from {@link pathListExport}'s line as written or
  * as a formatter lays it out (one path a line, a trailing comma), or `undefined` for a list in
- * any other shape. Each path is a JSON string, so it is read back with `JSON.parse`.
+ * any other shape.
+ *
+ * 🔴 Read string by string, never by matching up to the first `]`: a component path is any
+ * string, and a route folder such as `[slug]` puts one inside it.
  */
 export function listedPathsOf(listCode: string): string[] | undefined {
-  const array =
-    /export const registeredComponentPaths = \[([^\]]*)\] as const;/.exec(
-      listCode
-    )?.[1];
-  if (array === undefined) return undefined;
-  const strings = array.match(/"(?:[^"\\]|\\.)*"/g) ?? [];
-  // Anything between the strings but commas and spaces is a shape this does not read.
-  if (array.replace(/"(?:[^"\\]|\\.)*"/g, "").replace(/[\s,]/g, "") !== "") {
+  const opening = "export const registeredComponentPaths = [";
+  const from = listCode.indexOf(opening);
+  if (from === -1) return undefined;
+  const paths: string[] = [];
+  let at = from + opening.length;
+  while (at < listCode.length) {
+    const char = listCode.charAt(at);
+    if (/[\s,]/.test(char)) {
+      at += 1;
+      continue;
+    }
+    if (char === "]") {
+      return listCode.startsWith("] as const;", at) ? paths : undefined;
+    }
+    JSON_STRING.lastIndex = at;
+    const literal = JSON_STRING.exec(listCode)?.[0];
+    if (literal === undefined) return undefined;
+    paths.push(JSON.parse(literal) as string);
+    at += literal.length;
+  }
+  return undefined;
+}
+
+/**
+ * The paths a generated map registers, read back from its `registered` object, one entry a line
+ * as {@link buildComponentImportMap} writes it (`"<path>": _p0.Member,` and any note after it),
+ * or `undefined` for a map without that object or its check against its list: one emptied or
+ * edited into another shape registers nothing, whatever its list says.
+ */
+export function mapRegisteredPathsOf(mapCode: string): string[] | undefined {
+  if (!mapCode.includes("export const componentMapAgreesWithList")) {
     return undefined;
   }
-  return strings.map(each => JSON.parse(each) as string);
+  const opening = mapCode.indexOf("\nconst registered = {\n");
+  if (opening === -1) return undefined;
+  const paths: string[] = [];
+  for (const line of mapCode
+    .slice(opening + 1)
+    .split("\n")
+    .slice(1)) {
+    if (line.startsWith("}")) return paths;
+    const key = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.[A-Za-z_$][\w$]*,/.exec(
+      line
+    )?.[1];
+    if (key === undefined) return undefined;
+    paths.push(JSON.parse(key) as string);
+  }
+  return undefined;
 }
 
 /**
@@ -561,8 +604,11 @@ export function buildComponentImportMap(
  * which card it is about. Nothing for any other entry.
  */
 function widgetNote(entry: ComponentMapEntry | undefined): string {
+  // On one line whatever a plugin is called: a line break in its name would end the comment and
+  // leave the rest of the name as source.
+  const owner = entry?.owner.replace(/[\r\n\u2028\u2029]+/g, " ");
   return entry?.use === "widget"
-    ? ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${entry.owner}`
+    ? ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
     : "";
 }
 

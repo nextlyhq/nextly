@@ -59,10 +59,6 @@ function context(): CommandContext {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "nextly-map-check-cli-"));
   await mkdir(join(root, DIR), { recursive: true });
-  await writeFile(
-    join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME),
-    "// the map\n"
-  );
   vi.mocked(loadConfig).mockResolvedValue({
     config: {
       plugins: [shop],
@@ -75,11 +71,25 @@ afterEach(async () => {
   vi.mocked(loadConfig).mockReset();
 });
 
-const list = (paths: string[]) =>
-  writeFile(
+/** A map registering `paths`, in the shape the generator writes its `registered` object. */
+const mapOf = (paths: readonly string[]) =>
+  [
+    "export const componentMapAgreesWithList = true;",
+    "",
+    "const registered = {",
+    ...paths.map((path, index) => `  ${JSON.stringify(path)}: _p0.C${index},`),
+    "};",
+    "",
+  ].join("\n");
+
+/** Commits a list of `paths`, and a map registering the same. */
+const list = async (paths: string[]) => {
+  await writeFile(join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME), mapOf(paths));
+  await writeFile(
     join(root, DIR, COMPONENT_PATHS_FILENAME),
     `export const registeredComponentPaths = ${JSON.stringify(paths)} as const;\n`
   );
+};
 
 describe("the check's verdict", () => {
   it("exits 0 when the map agrees, and says so", async () => {
@@ -115,7 +125,8 @@ describe("the check's verdict", () => {
   });
 
   it("writes nothing, even where it finds the map out of date", async () => {
-    // No list at all: a writer would create it.
+    // A map and no list at all: a writer would create the list.
+    await writeFile(join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME), mapOf([]));
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.outOfDate
     );

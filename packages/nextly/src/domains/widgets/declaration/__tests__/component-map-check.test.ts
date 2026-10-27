@@ -201,6 +201,20 @@ describe("in development", () => {
     expect(message).toContain("- no longer declared: @gone/old/admin#Chart");
   });
 
+  it("names a write that failed for any other reason by its own error, not as a folder to fix", async () => {
+    vi.mocked(writeComponentMapFiles).mockRejectedValueOnce(
+      Object.assign(new Error("ENOSPC: no space left on device"), {
+        code: "ENOSPC",
+      })
+    );
+    await check(["@acme/shop/admin#Reports"]);
+    const message = staleWarning();
+    expect(message).toContain(
+      "writing it failed: ENOSPC: no space left on device."
+    );
+    expect(message).not.toContain("is not writable");
+  });
+
   it("warns about one out-of-date map once, and again for a different one", async () => {
     vi.stubEnv("NEXTLY_GENERATED_FILES_WRITE", "0");
     await check(["@acme/shop/admin#Reports"]);

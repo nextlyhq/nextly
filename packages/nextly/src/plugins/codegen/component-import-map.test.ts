@@ -169,6 +169,27 @@ describe("the map's check against the site's config", () => {
     expect(code).toContain('"@acme/shop/admin#Reports": _p0.Reports,\n');
   });
 
+  it("keeps a widget note on its line whatever the plugin is called", () => {
+    const named = {
+      name: "@acme/shop\nconst injected = 1;",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([named], "../../nextly.config");
+    expect(code).not.toMatch(/^const injected = 1;/m);
+    expect(code).toContain('of plugin "@acme/shop const injected = 1;"');
+  });
+
   it("writes the map unchecked, as before, where there is no config file", () => {
     const code = buildComponentImportMap([shop]);
     expect(code).not.toContain("siteConfig");
