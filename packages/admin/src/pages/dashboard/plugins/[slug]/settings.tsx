@@ -109,8 +109,11 @@ function unresolvedPluginList(
   return undefined;
 }
 
-/** The permission the plugin's metadata names for its settings, or core's. */
-function settingsPermissionAt(
+/**
+ * The permission the plugin's metadata names for its settings, or core's.
+ * Exported so a test can ask what the guard asks.
+ */
+export function settingsPermissionAt(
   plugins: PluginMetadata[] | undefined,
   activeSlug: string | undefined
 ): string {
