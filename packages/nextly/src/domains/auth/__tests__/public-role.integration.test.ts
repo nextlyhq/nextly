@@ -183,6 +183,14 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
       [...listed.entries()].every(([other, can]) => other === id || can)
     ).toBe(true);
     expect((await roles.getRoleById(id)).assignable).toBe(false);
+
+    // And through the Direct API, which maps roles for its own callers.
+    const found = await nextly.nextly.roles.find({ limit: 100 });
+    expect(found.items.find(role => role.id === id)?.assignable).toBe(false);
+    expect(found.items.some(role => role.id !== id && role.assignable)).toBe(
+      true
+    );
+    expect((await nextly.nextly.roles.findByID({ id })).assignable).toBe(false);
   });
 
   it("can't be deleted or renamed", async () => {

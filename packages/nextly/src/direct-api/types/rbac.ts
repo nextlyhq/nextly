@@ -39,6 +39,11 @@ export interface Role {
   level: number;
   /** Whether this role is a built-in system role */
   isSystem: boolean;
+  /**
+   * Whether this role may be given to a user or an API key, or built on by
+   * another role. False for the built-in Public role.
+   */
+  assignable: boolean;
 }
 
 /**
