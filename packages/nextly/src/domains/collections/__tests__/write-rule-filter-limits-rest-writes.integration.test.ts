@@ -130,7 +130,8 @@ async function stored(
 async function rest(
   method: "PATCH" | "POST" | "PUT" | "DELETE",
   path: string[],
-  body?: unknown
+  body?: unknown,
+  query = ""
 ): Promise<number> {
   const token = await signAccessToken(
     buildClaims({
@@ -148,7 +149,7 @@ async function rest(
     (request: Request, context: unknown) => Promise<Response>
   >;
   const res = await handlers[method]!(
-    new Request(`http://localhost/api/${path.join("/")}`, {
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
       method,
       headers: {
         cookie: `nextly_session=${token}`,
@@ -216,6 +217,51 @@ describe("a REST update or delete whose rule answers a filter", () => {
   });
 });
 
+describe("a REST update in one language whose rule answers a filter", () => {
+  // The route judges the write in the languages it writes, which hold the one
+  // the update writes, so its kept filter answers the update's question.
+  const LOCALIZED = "restfilter_localized_posts";
+
+  it("updates the author's own entry in German, and refuses another's", async () => {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: LOCALIZED,
+          localized: true,
+          status: true,
+          access: { read: () => true, update: ownEntries },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
+    await grantTo(t, AUTHOR, "update", [LOCALIZED]);
+    const { own, others } = await seed(t, LOCALIZED);
+
+    expect(
+      await rest(
+        "PATCH",
+        entry(LOCALIZED, own),
+        { title: "deutsch" },
+        "?locale=de"
+      )
+    ).toBe(200);
+    expect(
+      await rest(
+        "PATCH",
+        entry(LOCALIZED, others),
+        { title: "deutsch" },
+        "?locale=de"
+      )
+    ).toBe(403);
+  });
+});
+
 describe("an editor's write through an entry's versions whose update rule answers a filter", () => {
   it("restores a version of the author's own entry, and refuses another's", async () => {
     const t = await boot();
@@ -262,6 +308,55 @@ describe("an editor's write through an entry's versions whose update rule answer
         "working-draft",
       ])
     ).toBe(403);
+  });
+
+  it("takes the live shared values into the author's own held edit, and refuses another's", async () => {
+    // A held edit in German on each published entry, so each has a pending
+    // change to bring up to date.
+    const LOCALIZED_DRAFTS = "restfilter_localized_drafts";
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: LOCALIZED_DRAFTS,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: ownEntries },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [LOCALIZED_DRAFTS]);
+    await grantTo(t, AUTHOR, "update", [LOCALIZED_DRAFTS]);
+    const { own, others } = await seed(t, LOCALIZED_DRAFTS, "published");
+    for (const id of [own, others]) {
+      await t.nextly.update({
+        collection: LOCALIZED_DRAFTS,
+        id,
+        locale: "de",
+        data: { title: "entwurf" },
+      } as never);
+    }
+    const takeLive = (id: string) =>
+      rest(
+        "POST",
+        [
+          ...entry(LOCALIZED_DRAFTS, id),
+          "versions",
+          "working-draft",
+          "take-live",
+        ],
+        {},
+        "?locale=de"
+      );
+
+    expect(await takeLive(own)).toBe(200);
+    expect(await takeLive(others)).toBe(403);
   });
 
   it("autosaves the author's own entry, and refuses another's", async () => {

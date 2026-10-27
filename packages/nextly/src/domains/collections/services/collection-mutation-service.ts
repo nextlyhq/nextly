@@ -3989,15 +3989,17 @@ export class CollectionMutationService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<TakenLiveValues>> {
     try {
-      const accessDenied =
-        await this.accessService.checkCollectionAccess<TakenLiveValues>({
-          collectionName: params.collectionName,
-          operation: "update",
-          user: params.overrideAccess ? undefined : params.user,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
-          authenticatedScope: params.authenticatedScope,
-        });
+      // An update of this entry: a rule that answers a filter allows it only
+      // where the filter matches the entry as it is stored.
+      const accessDenied = await this.refusalOfStoredUpdate<TakenLiveValues>({
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) return accessDenied;
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -7478,7 +7480,7 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const access = await this.accessService.checkCollectionWrite({
+    const denied = await this.refusalOfStoredUpdate({
       collectionName: params.collectionName,
       operation: "update",
       entryId: params.entryId,
@@ -7491,26 +7493,38 @@ export class CollectionMutationService extends BaseService {
       // super-admin bypass does not apply to a super-admin-owned key here.
       authenticatedScope: params.authenticatedScope,
     });
-    if (access.denied) return false;
-    // A rule that answers a filter lets the caller update only the entries
-    // it matches: this one, matched as it is stored.
-    const schema = await this.fileManager.loadDynamicSchema(
+    return denied === null;
+  }
+
+  /**
+   * The refusal of an update of `params.entryId` as it is stored, or `null`
+   * where the caller may make it: the update gate's own refusal, or, where
+   * its rule answers a filter, that of an entry the filter does not match, in
+   * words where the caller may read it and as a missing entry where it may
+   * not.
+   */
+  private async refusalOfStoredUpdate<T>(
+    params: FilteredWriteCheck["params"]
+  ): Promise<CollectionServiceResult<T> | null> {
+    const access = await this.accessService.checkCollectionWrite<T>(params);
+    if (access.denied) return access.denied;
+    const schema = (await this.fileManager.loadDynamicSchema(
       params.collectionName
-    );
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
     const match = await this.prepareFilteredWrite(
       params.collectionName,
-      "update",
+      params.operation,
       schema,
       access
     );
-    if (!match) return true;
-    const found = await this.storedWriteMatch(
+    if (!match) return null;
+    return this.refusalOutsideWriteFilter<T>(
       this.db,
-      schema as Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
-      params.entryId,
-      match
+      schema,
+      String(params.entryId),
+      match,
+      params
     );
-    return found.exists && found.writes;
   }
 
   /**
