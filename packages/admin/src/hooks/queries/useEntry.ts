@@ -28,8 +28,9 @@ import type {
   NoInfer,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { isKnownSingle } from "@admin/hooks/current-user-access";
 import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
@@ -172,6 +173,7 @@ export function useEntry<T = Entry>({
   translationStatus,
   queryOptions,
 }: UseEntryOptions<T>): UseQueryResult<NoInfer<T>, Error> {
+  const queryClient = useQueryClient();
   return useQuery<T, Error>({
     // Locale is part of the cache identity — switching languages must refetch the
     // entry (the localized field values differ per locale), not serve the previous language.
@@ -208,10 +210,13 @@ export function useEntry<T = Entry>({
 
       // Type assertion needed because entryApi.findByID returns Entry
       // but we want to support generic entry types
+      // A 404 is read again as a Single only for a slug the capabilities
+      // answer names one; for any other slug it is the server's answer.
       const result = await entryApi.findByID(
         collectionSlug,
         entryId,
-        Object.keys(options).length > 0 ? options : undefined
+        Object.keys(options).length > 0 ? options : undefined,
+        { knownSingle: isKnownSingle(queryClient, collectionSlug) }
       );
       return result as T;
     },

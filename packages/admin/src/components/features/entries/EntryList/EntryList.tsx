@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
@@ -32,6 +32,7 @@ import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequ
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
@@ -285,7 +286,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   ]);
 
   // Fetch entries with pagination and filters
-  const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
+  const {
+    data: entriesResponse,
+    isLoading: entriesLoading,
+    error: entriesError,
+  } = useEntries({
     collectionSlug,
     params: {
       page,
@@ -652,6 +657,15 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
+      ) : entriesError ? (
+        // A list the server refused says so in its own words where the rows
+        // would be. Without this a failed read has no rows and is not
+        // loading, which draws the empty state and calls the collection empty.
+        <Alert variant="destructive">
+          <AlertDescription>
+            {apiErrorMessage(entriesError, "The entries couldn't be loaded.")}
+          </AlertDescription>
+        </Alert>
       ) : entries.length === 0 && !entriesLoading && !search ? (
         <EntryEmptyState
           collectionName={labels.plural}

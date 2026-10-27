@@ -25,11 +25,13 @@
 
 import {
   useQuery,
+  useQueryClient,
   keepPreviousData,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { isKnownSingle } from "@admin/hooks/current-user-access";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   entryApi,
@@ -170,12 +172,17 @@ export function useEntries<T = Entry>({
   enabled = true,
   queryOptions,
 }: UseEntriesOptions<T>): UseQueryResult<ListResponse<T>, Error> {
+  const queryClient = useQueryClient();
   return useQuery<ListResponse<T>, Error>({
     queryKey: entryKeys.list(collectionSlug, params),
     queryFn: async () => {
       // Type assertion needed because entryApi.find returns ListResponse<Entry>
       // but we want to support generic entry types
-      const result = await entryApi.find(collectionSlug, params);
+      // A 404 is read again as a Single only for a slug the capabilities
+      // answer names one; for any other slug it is the server's answer.
+      const result = await entryApi.find(collectionSlug, params, {
+        knownSingle: isKnownSingle(queryClient, collectionSlug),
+      });
       return result as ListResponse<T>;
     },
     enabled: enabled && !!collectionSlug,

@@ -14,6 +14,7 @@ import type {
   BulkMutationResult,
   UseBulkMutationReturn,
 } from "../types/hooks/bulk-mutation";
+import type { CapabilitiesResponse } from "../types/permissions";
 
 /** The query key of the user's permission slugs. */
 export const CURRENT_USER_PERMISSIONS_KEY = ["currentUserPermissions"] as const;
@@ -34,6 +35,21 @@ export function currentUserCapabilitiesKey(
   locale: string | undefined
 ): readonly unknown[] {
   return [...CURRENT_USER_CAPABILITIES_KEY, locale ?? null];
+}
+
+/**
+ * Whether a capabilities answer already held names the slug a Single.
+ *
+ * Whether an entity is a collection or a Single is the same in every content
+ * language, so the answer of any language says. With no answer held, nothing
+ * says the slug is a Single, and it is not taken for one.
+ */
+export function isKnownSingle(queryClient: QueryClient, slug: string): boolean {
+  return queryClient
+    .getQueriesData<CapabilitiesResponse>({
+      queryKey: CURRENT_USER_CAPABILITIES_KEY,
+    })
+    .some(([, answer]) => answer?.entities[slug]?.kind === "single");
 }
 
 /**

@@ -52,6 +52,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -490,9 +491,10 @@ export default function EditEntryPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see posts."). */}
           <AlertDescription>
-            Failed to load entry:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The entry couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
