@@ -1,6 +1,6 @@
 /**
- * A chart before the chart engine arrives: it holds the height its marks will take, so nothing
- * below it moves when they do, and it can already be read -- its name, description and table are
+ * A chart before the chart engine arrives: it holds at least the height its marks will take, and
+ * fills the card's body as they will, so nothing below it moves when they do, and it can already be read -- its name, description and table are
  * drawn without the engine.
  *
  * The drawing modules are replaced by ones that never finish loading, so every test here sees the
@@ -49,23 +49,26 @@ describe("a chart while the engine loads", () => {
   it.each([
     ["small", CHART_PLOT_HEIGHT],
     ["medium", CHART_PLOT_HEIGHT + CHART_DATES_HEIGHT],
-  ] as const)("over time holds its marks' height at %s", (tier, height) => {
-    render(
-      <CardTierContext.Provider value={tier}>
-        <OverTimeChart
-          title="Posts created"
-          intervals={DAYS}
-          series={[POSTS]}
-        />
-      </CardTierContext.Provider>
-    );
-    expect(screen.getByTestId("chart-pending").style.height).toBe(
-      `${height}px`
-    );
-    expect(screen.queryByTestId("chart-drawing")).toBeNull();
-  });
+  ] as const)(
+    "over time holds at least its marks' height at %s",
+    (tier, height) => {
+      render(
+        <CardTierContext.Provider value={tier}>
+          <OverTimeChart
+            title="Posts created"
+            intervals={DAYS}
+            series={[POSTS]}
+          />
+        </CardTierContext.Provider>
+      );
+      expect(screen.getByTestId("chart-pending").style.minHeight).toBe(
+        `${height}px`
+      );
+      expect(screen.queryByTestId("chart-drawing")).toBeNull();
+    }
+  );
 
-  it("of groups holds one row's height for each group it will draw", () => {
+  it("of groups holds at least one row's height for each group it will draw", () => {
     render(
       <CardTierContext.Provider value="medium">
         <GroupsChart
@@ -79,7 +82,7 @@ describe("a chart while the engine loads", () => {
         />
       </CardTierContext.Provider>
     );
-    expect(screen.getByTestId("chart-pending").style.height).toBe(
+    expect(screen.getByTestId("chart-pending").style.minHeight).toBe(
       `${3 * CHART_ROW_HEIGHT}px`
     );
   });

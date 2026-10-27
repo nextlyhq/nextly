@@ -105,8 +105,10 @@ export function ChartFrame({
   const titleId = `${base}-title`;
   const descId = `${base}-desc`;
 
+  // Filling the card's body, whose height the card's size fixes, so the chart is drawn at that
+  // height rather than as a strip at its top.
   return (
-    <figure className="m-0 flex min-w-0 flex-col gap-2">
+    <figure className="m-0 flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       {children({ titleId, descId, title, description })}
 
       {/* A cap is DISCLOSED rather than silently applied. A chart drawn from a

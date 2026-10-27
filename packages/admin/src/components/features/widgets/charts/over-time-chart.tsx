@@ -35,6 +35,7 @@ import {
   latestMarker,
   overTimeSummary,
 } from "./chart-text";
+import { withUnit, type ChartUnit } from "./chart-unit";
 import type { OverTimeLatest } from "./drawn/over-time-drawing";
 
 const OverTimeDrawing = lazy(() => import("./drawn/over-time-drawing"));
@@ -78,6 +79,8 @@ export interface OverTimeChartProps {
    * lines, since bars side by side in one interval would no longer read as a sequence.
    */
   chartStyle?: "line" | "bars";
+  /** What the numbers count, written after each in the tooltip ("12 new posts"); bare without. */
+  unit?: ChartUnit;
 }
 
 /** How many dates a large card writes under its lines, ends included. */
@@ -94,6 +97,7 @@ export function OverTimeChart({
   series: given,
   labelHeading = "Interval",
   chartStyle = "line",
+  unit,
 }: OverTimeChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
@@ -159,7 +163,7 @@ export function OverTimeChart({
           describedBy={descId}
           announcement={announcement}
         >
-          <div className="flex flex-col gap-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-1">
             {series.length > 1 ? <SeriesLegend series={series} /> : null}
             {series.length === 1 && first ? (
               <OverTimeSummary points={first.points} />
@@ -176,8 +180,9 @@ export function OverTimeChart({
                 <div
                   aria-hidden="true"
                   data-testid="chart-pending"
-                  // design-lint-ok: holds the drawing's own height while the engine loads.
-                  style={{ height }}
+                  // design-lint-ok: holds the drawing's least height while the engine loads.
+                  className="min-h-0 flex-1"
+                  style={{ minHeight: height }}
                 />
               }
             >
@@ -203,13 +208,13 @@ export function OverTimeChart({
                         key: line.key,
                         name: series.length > 1 ? line.name : undefined,
                         slot: seriesSlot(index),
-                        value: valueAt(line, shownAt.key),
+                        value: drawnValueAt(line, shownAt.key, unit),
                       }))}
                       className="static"
                     />
                   ) : null
                 }
-                height={height}
+                minHeight={height}
               />
             </Suspense>
           </div>
@@ -234,6 +239,18 @@ function rangeOfIntervals(domain: Domain): string {
   const to = domain.labels[domain.labels.length - 1];
   if (from === undefined || to === undefined) return "no range";
   return from === to ? from : `${from} to ${to}`;
+}
+
+/** A series' value in the interval `key` as drawn, with what it counts, or that it has none. */
+function drawnValueAt(
+  line: OverTimeSeries,
+  key: string | undefined,
+  unit: ChartUnit | undefined
+): string {
+  const point = line.points.find(candidate => candidate.key === key);
+  return point
+    ? withUnit(cardNumber(point.value).text, point.value, unit)
+    : "no value";
 }
 
 /** A series' value in the interval `key`, as the table writes it, or that it has none there. */

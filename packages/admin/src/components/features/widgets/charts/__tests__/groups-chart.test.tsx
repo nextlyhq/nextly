@@ -8,7 +8,8 @@
  * The bars are the chart engine's, read from what it draws.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
@@ -31,7 +32,11 @@ function group(
 async function drawAt(
   tier: SizeTier,
   groups: GroupsChartGroup[],
-  options: { truncated?: boolean; floors?: boolean } = {}
+  options: {
+    truncated?: boolean;
+    floors?: boolean;
+    unit?: { one: string; other: string };
+  } = {}
 ): Promise<HTMLElement> {
   render(
     <CardTierContext.Provider value={tier}>
@@ -259,5 +264,53 @@ describe("motion", () => {
     expect(
       drawing.querySelectorAll(".recharts-bar-rectangle path")
     ).toHaveLength(0);
+  });
+});
+
+describe("the tooltip of the group in view", () => {
+  const POSTS = { one: "post", other: "posts" };
+  const statuses = () => [
+    group("published", 7, "Published"),
+    group("draft", 3, "Draft"),
+    group("archived", 1, "Archived"),
+  ];
+  const focus = async () =>
+    act(() =>
+      screen.getByRole("group", { name: /Use the arrow keys/ }).focus()
+    );
+  const tip = () =>
+    screen
+      .getByTestId("chart-tooltip")
+      .closest<HTMLElement>("[data-chart-tooltip]");
+
+  it("names the group over its count and what it counts, as the design writes it", async () => {
+    await drawAt("medium", statuses(), { unit: POSTS });
+    await focus();
+    const tooltip = screen.getByTestId("chart-tooltip");
+    expect(tooltip).toHaveTextContent(/^Published7 posts$/);
+  });
+
+  it("writes one as one", async () => {
+    await drawAt("medium", [group("draft", 1, "Draft")], { unit: POSTS });
+    await focus();
+    expect(screen.getByTestId("chart-tooltip")).toHaveTextContent("1 post");
+  });
+
+  it("sits in the row under a group in the top half, ending at its long bar's end", async () => {
+    await drawAt("medium", statuses(), { unit: POSTS });
+    await focus();
+    // The first of three rows, its bar the longest: the tooltip is in the second row, and
+    // ends where the bar ends, so it covers neither that bar nor the names.
+    expect(tip()?.style.top).toBe(`${(1 / 3) * 100}%`);
+    expect(tip()?.style.right).toMatch(/^calc\(/);
+    expect(tip()?.style.left).toBe("");
+  });
+
+  it("sits in the row over a group in the bottom half, starting at its short bar's end", async () => {
+    await drawAt("medium", statuses(), { unit: POSTS });
+    await focus();
+    await userEvent.setup().keyboard("{End}");
+    expect(tip()?.style.bottom).toBe(`${(1 / 3) * 100}%`);
+    expect(tip()?.style.left).toMatch(/^calc\(80px \+ 8px|^calc\(88px/);
   });
 });

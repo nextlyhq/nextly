@@ -64,6 +64,7 @@ async function drawAt(
   {
     intervals = days(spanOf(lines)),
     chartStyle = "line" as "line" | "bars",
+    unit = undefined as { one: string; other: string } | undefined,
   } = {}
 ): Promise<HTMLElement> {
   render(
@@ -74,6 +75,7 @@ async function drawAt(
           intervals={intervals}
           series={lines}
           chartStyle={chartStyle}
+          {...(unit ? { unit } : {})}
         />
       </CardTierContext.Provider>
     </ShortcutProvider>
@@ -415,5 +417,45 @@ describe("the table's rows", () => {
     expect(
       errors.mock.calls.some(call => String(call[0]).includes("same key"))
     ).toBe(false);
+  });
+});
+
+describe("the tooltip of the interval in view", () => {
+  const NEW_POSTS = { one: "new post", other: "new posts" };
+  const focus = () =>
+    act(() =>
+      screen.getByRole("group", { name: /Use the arrow keys/ }).focus()
+    );
+  const tip = () =>
+    screen
+      .getByTestId("chart-tooltip")
+      .closest<HTMLElement>("[data-chart-tooltip]");
+
+  it("names the interval over its value and what it counts, as the design writes it", async () => {
+    await drawAt("medium", [series("Posts", [2, 9, 12])], { unit: NEW_POSTS });
+    focus();
+    expect(screen.getByTestId("chart-tooltip")).toHaveTextContent(
+      /^Day 312 new posts$/
+    );
+  });
+
+  it("sits low beside a high point and high beside a low one, never over it", async () => {
+    // The keys start on the latest interval: 12, the highest, so the tooltip sits low.
+    await drawAt("medium", [series("Posts", [2, 9, 12])], { unit: NEW_POSTS });
+    focus();
+    expect(tip()?.style.bottom).not.toBe("");
+    expect(tip()?.style.top).toBe("");
+    // The first interval, 2: low, so the tooltip sits high.
+    await userEvent.setup().keyboard("{Home}");
+    expect(tip()?.style.top).not.toBe("");
+    expect(tip()?.style.bottom).toBe("");
+  });
+
+  it("sits on the side of the chart with room: left of an interval on the right, right of one on the left", async () => {
+    await drawAt("medium", [series("Posts", [2, 9, 12])], { unit: NEW_POSTS });
+    focus();
+    expect(tip()?.style.right).not.toBe("");
+    await userEvent.setup().keyboard("{Home}");
+    expect(tip()?.style.left).not.toBe("");
   });
 });

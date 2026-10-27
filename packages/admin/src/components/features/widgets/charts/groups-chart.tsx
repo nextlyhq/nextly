@@ -22,7 +22,6 @@ import { lazy, Suspense, type JSX } from "react";
 
 import { ChartFrame, type ChartRow } from "../archetypes/chart-frame";
 import { barFractions } from "../archetypes/chart-scale";
-import { CardFigure } from "../frame/figure";
 import { cardLocale, cardNumber } from "../frame/format";
 import { useCardTier } from "../frame/tier";
 import { GROUPS_DRAWN } from "../tier-query";
@@ -31,6 +30,7 @@ import { chartSlotsFor, orderGroups, type ChartSlot } from "./chart-colour";
 import { CHART_ROW_HEIGHT, type ChartConfig } from "./chart-config";
 import { ChartReachArea, ChartTooltip, useChartReach } from "./chart-reach";
 import { chartName, currentPointText, groupsSummary } from "./chart-text";
+import { withUnit, type ChartUnit } from "./chart-unit";
 
 const GroupsDrawing = lazy(() => import("./drawn/groups-drawing"));
 
@@ -50,6 +50,8 @@ export interface GroupsChartProps {
   truncated?: boolean;
   /** Every count is a lower bound: drawn "N+", and no group is called the highest. */
   floors?: boolean;
+  /** What the counts count, written after each in the tooltip ("7 posts"); bare without. */
+  unit?: ChartUnit;
 }
 
 export function GroupsChart({
@@ -58,6 +60,7 @@ export function GroupsChart({
   groups,
   truncated = false,
   floors = false,
+  unit,
 }: GroupsChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
@@ -124,8 +127,9 @@ export function GroupsChart({
               <div
                 aria-hidden="true"
                 data-testid="chart-pending"
-                // design-lint-ok: holds the drawing's own height while the engine loads.
-                style={{ height: drawn.length * CHART_ROW_HEIGHT }}
+                // design-lint-ok: holds the drawing's least height while the engine loads.
+                className="min-h-0 flex-1"
+                style={{ minHeight: drawn.length * CHART_ROW_HEIGHT }}
               />
             }
           >
@@ -142,7 +146,7 @@ export function GroupsChart({
               config={configOf(drawn, slots)}
               shown={reach.shown?.index}
               onHover={index => reach.hover({ series: 0, index })}
-              tooltip={tooltipFor(drawn, reach.shown?.index, slots)}
+              tooltip={tooltipFor(drawn, reach.shown?.index, slots, unit)}
             />
           </Suspense>
         </ChartReachArea>
@@ -187,7 +191,8 @@ function configOf(
 function tooltipFor(
   drawn: readonly GroupsChartGroup[],
   index: number | undefined,
-  slots: readonly ChartSlot[]
+  slots: readonly ChartSlot[],
+  unit: ChartUnit | undefined
 ) {
   const group = index === undefined ? undefined : drawn[index];
   if (!group || index === undefined) return null;
@@ -198,7 +203,11 @@ function tooltipFor(
         {
           key: group.key,
           slot: slots[index] ?? 1,
-          value: <CardFigure value={group.count} floor={group.floor} />,
+          value: withUnit(
+            cardNumber(group.count, { floor: group.floor }).text,
+            group.count,
+            unit
+          ),
         },
       ]}
       className="static"

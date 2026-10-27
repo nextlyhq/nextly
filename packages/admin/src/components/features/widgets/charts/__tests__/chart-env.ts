@@ -49,7 +49,11 @@ export function sizeChartsInTests(): void {
         if (!this.classList.contains("recharts-responsive-container")) {
           return measure.call(this);
         }
-        const height = Number.parseFloat(this.style.height) || 0;
+        // A chart that fills its card is drawn at the least height it is given here, where no
+        // card around it has a height.
+        const height = this.style.height.endsWith("%")
+          ? Number.parseFloat(this.style.minHeight) || 0
+          : Number.parseFloat(this.style.height) || 0;
         return DOMRect.fromRect({ width: CHART_WIDTH, height });
       }
     );

@@ -7,20 +7,27 @@
  * assistive tech and the engine's own keyboard layer is off, since the chart's name, description,
  * table, keys and live region are `GroupsChart`'s, outside it.
  *
- * A name longer than its column ends in "…"; the tooltip and the table hold it whole. The names
- * and the counts are each a category axis over the same rows, so a row's name, bar and count
- * cannot drift apart.
+ * The rows share the card's body: each takes an equal part of its height, and its bar thickens
+ * with the row up to `MAX_BAR`, so a few groups fill a tall card without a block of bars at its
+ * top, and many keep their bars apart. A name longer than its column ends in "…"; the tooltip and
+ * the table hold it whole. The names and the counts are each a category axis over the same rows,
+ * so a row's name, bar and count cannot drift apart.
  *
  * @module components/features/widgets/charts/drawn/groups-drawing
  */
 
-import type { JSX, ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+} from "react";
 import {
   Bar,
   BarChart,
   Cell,
   ResponsiveContainer,
-  Text,
   XAxis,
   YAxis,
 } from "recharts";
@@ -33,6 +40,7 @@ import {
 } from "../chart-config";
 import { usePrefersReducedMotion } from "../reduced-motion";
 
+import { fitName } from "./fit-name";
 import {
   PointerIndex,
   TOOLTIP_MARK,
@@ -67,15 +75,18 @@ export interface GroupsDrawingProps {
 /** The name's column and the count's, in pixels: the approved layout's 80 and its counts. */
 const NAME_WIDTH = 80;
 const COUNT_WIDTH = 36;
-const BAR_HEIGHT = 8;
+/** The room between a name and its bar. */
+const NAME_GAP = 8;
+/** A bar is never thicker than this, however tall its row: past it, rows only move apart. */
+const MAX_BAR = 16;
+/** The share of a row the gap around its bar takes, so a bar is under half its row's height. */
+const ROW_GAP = "55%";
 /** How far the engine sets an axis's tick from the axis line. */
 const TICK_MARGIN = 8;
-/**
- * The name's size as the engine measures it to decide where "…" goes. It measures in a span of
- * its own, styled from this alone, so without it a name is measured at the page's default size
- * and cut although it fits.
- */
-const NAME_TEXT = { fontSize: 12 } as const;
+/** The tooltip's room from the bar's end. */
+const TOOLTIP_GAP = 8;
+/** The names' size, as drawn and as measured for "…". */
+const NAME_SIZE = 12;
 
 export default function GroupsDrawing({
   rows,
@@ -86,15 +97,17 @@ export default function GroupsDrawing({
 }: GroupsDrawingProps): JSX.Element {
   const animate = !usePrefersReducedMotion();
   const pointer = usePointerIndex(onHover);
+  const font = useDrawnFont();
   const byKey = new Map(rows.map(row => [row.key, row]));
-  const height = rows.length * CHART_ROW_HEIGHT;
+  const minHeight = rows.length * CHART_ROW_HEIGHT;
   const data = useStableValue(rows.map(row => ({ ...row })));
 
   return (
     <div
+      ref={font.ref}
       aria-hidden="true"
       data-testid="chart-drawing"
-      className="relative"
+      className="relative min-h-0 flex-1"
       data-motion={animate ? "animated" : "reduced"}
       onMouseMove={pointer.onMouseMove}
       // design-lint-ok: each group's colour, set once from its chart slot's token.
@@ -105,8 +118,9 @@ export default function GroupsDrawing({
           stays on its mark while a reader moves onto it (WCAG 2.2 1.4.13). */}
       <ResponsiveContainer
         width="100%"
-        height={height}
-        initialDimension={{ width: 320, height }}
+        height="100%"
+        minHeight={minHeight}
+        initialDimension={{ width: 320, height: minHeight }}
         className="pointer-events-none"
       >
         <BarChart
@@ -114,7 +128,7 @@ export default function GroupsDrawing({
           layout="vertical"
           accessibilityLayer={false}
           margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
-          barCategoryGap={CHART_ROW_HEIGHT - BAR_HEIGHT}
+          barCategoryGap={ROW_GAP}
         >
           <XAxis type="number" domain={[0, 1]} hide />
           <YAxis
@@ -125,30 +139,13 @@ export default function GroupsDrawing({
             tickLine={false}
             axisLine={false}
             interval={0}
-            tick={({ y, payload }) => {
-              const row = byKey.get(String(payload.value));
-              // From the drawing's left edge, where the name's column starts.
-              return (
-                <Text
-                  x={0}
-                  y={Number(y)}
-                  width={NAME_WIDTH - 8}
-                  maxLines={1}
-                  style={NAME_TEXT}
-                  textAnchor="start"
-                  verticalAnchor="middle"
-                  fontSize={12}
-                  fontStyle={row?.placeholder ? "italic" : "normal"}
-                  fill={
-                    row?.placeholder
-                      ? "var(--nx-muted-foreground)"
-                      : "var(--nx-foreground)"
-                  }
-                >
-                  {row?.label ?? ""}
-                </Text>
-              );
-            }}
+            tick={({ y, payload }) => (
+              <GroupName
+                row={byKey.get(String(payload.value))}
+                y={Number(y)}
+                font={font.value}
+              />
+            )}
           />
           <YAxis
             yAxisId="count"
@@ -162,7 +159,7 @@ export default function GroupsDrawing({
             // Ended at the drawing's right edge: the engine places a right axis's tick a margin
             // in from the axis, and the count's column is the axis's width.
             tick={{
-              fontSize: 12,
+              fontSize: NAME_SIZE,
               fill: "var(--nx-muted-foreground)",
               textAnchor: "end",
               dx: COUNT_WIDTH - TICK_MARGIN,
@@ -174,12 +171,14 @@ export default function GroupsDrawing({
             keys={rows.map(row => row.key)}
             into={pointer.into}
           />
+          {/* Rounded by half the bar's thickness, whatever the row makes it: the engine holds a
+              corner's radius to half the bar. */}
           <Bar
             yAxisId="name"
             dataKey="fraction"
-            barSize={BAR_HEIGHT}
-            radius={BAR_HEIGHT / 2}
-            background={{ fill: "var(--nx-muted)", radius: BAR_HEIGHT / 2 }}
+            maxBarSize={MAX_BAR}
+            radius={MAX_BAR / 2}
+            background={{ fill: "var(--nx-muted)", radius: MAX_BAR / 2 }}
             isAnimationActive={animate}
           >
             {rows.map(row => (
@@ -192,8 +191,9 @@ export default function GroupsDrawing({
         <div
           {...TOOLTIP_MARK}
           className="absolute z-10"
-          // design-lint-ok: placed against the row in view, on the side the chart has room.
-          style={tooltipPlace(shown, rows.length)}
+          // design-lint-ok: placed in the neighbouring row, from the bar's end, so it covers
+          // neither the bar it describes nor the names.
+          style={tooltipPlace(shown, rows)}
         >
           {tooltip}
         </div>
@@ -203,15 +203,78 @@ export default function GroupsDrawing({
 }
 
 /**
- * Where the tooltip of the row at `index` of `count` sits: from the bar's start, under the row in
- * the top half and over it in the bottom half, so it stays on the card.
+ * The font the drawing's text is set in, read from the page once the drawing is laid out, for
+ * measuring a name: the size the names are drawn at, in the drawing's own family.
+ */
+function useDrawnFont(): {
+  ref: (element: HTMLDivElement | null) => void;
+  value: string;
+} {
+  const element = useRef<HTMLDivElement | null>(null);
+  const [family, setFamily] = useState("sans-serif");
+  useLayoutEffect(() => {
+    const drawn = element.current;
+    if (drawn) setFamily(getComputedStyle(drawn).fontFamily || "sans-serif");
+  }, []);
+  return {
+    ref: drawn => {
+      element.current = drawn;
+    },
+    value: `${NAME_SIZE}px ${family}`,
+  };
+}
+
+/** A group's name from the drawing's left edge, cut to its column in the font it is drawn in. */
+function GroupName({
+  row,
+  y,
+  font,
+}: {
+  row: GroupsDrawnRow | undefined;
+  y: number;
+  font: string;
+}): JSX.Element {
+  return (
+    <text
+      x={0}
+      y={y}
+      dy="0.355em"
+      textAnchor="start"
+      fontSize={NAME_SIZE}
+      fontStyle={row?.placeholder ? "italic" : "normal"}
+      fill={
+        row?.placeholder ? "var(--nx-muted-foreground)" : "var(--nx-foreground)"
+      }
+    >
+      {row ? fitName(row.label, NAME_WIDTH - NAME_GAP, font) : ""}
+    </text>
+  );
+}
+
+/**
+ * Where the tooltip of the row at `index` sits: in the row under it in the top half of the chart
+ * and in the row over it in the bottom half, so it stays on the card and never covers its own bar;
+ * across, from that bar's end, so it points at it, or ending there when the bar is long, and never
+ * over the names. Rows share the height evenly, so a row's place is a share of it.
  */
 function tooltipPlace(
   index: number,
-  count: number
-): { left: string; top: string } | { left: string; bottom: string } {
-  const left = `${NAME_WIDTH}px`;
-  return index * 2 < count
-    ? { left, top: `${(index + 1) * CHART_ROW_HEIGHT}px` }
-    : { left, bottom: `${(count - index) * CHART_ROW_HEIGHT}px` };
+  rows: readonly GroupsDrawnRow[]
+): Record<string, string> {
+  const count = Math.max(1, rows.length);
+  const fraction = rows[index]?.fraction ?? 0;
+  const track = `(100% - ${NAME_WIDTH + COUNT_WIDTH}px)`;
+  const across =
+    fraction <= 0.5
+      ? {
+          left: `calc(${NAME_WIDTH + TOOLTIP_GAP}px + ${track} * ${fraction})`,
+        }
+      : {
+          right: `calc(${COUNT_WIDTH + TOOLTIP_GAP}px + ${track} * ${1 - fraction})`,
+        };
+  const down =
+    index * 2 < count
+      ? { top: `${((index + 1) / count) * 100}%` }
+      : { bottom: `${((count - index) / count) * 100}%` };
+  return { ...across, ...down };
 }

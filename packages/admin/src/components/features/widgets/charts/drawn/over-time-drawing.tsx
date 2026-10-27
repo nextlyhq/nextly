@@ -77,8 +77,11 @@ export interface OverTimeDrawingProps {
   onHover: (index: number) => void;
   /** What the tooltip says about the interval in view. */
   tooltip: ReactNode;
-  /** The drawing's height in pixels, the axes included. */
-  height: number;
+  /**
+   * The drawing's least height in pixels, the axes included. It fills the card's body above that,
+   * whose height the card's size fixes.
+   */
+  minHeight: number;
 }
 
 /** The line's weight, and the ring of a marked point, in pixels. */
@@ -107,7 +110,7 @@ export default function OverTimeDrawing({
   shown,
   onHover,
   tooltip,
-  height,
+  minHeight,
 }: OverTimeDrawingProps): JSX.Element {
   const animate = !usePrefersReducedMotion();
   const pointer = usePointerIndex(onHover);
@@ -126,7 +129,7 @@ export default function OverTimeDrawing({
     <div
       aria-hidden="true"
       data-testid="chart-drawing"
-      className="relative"
+      className="relative min-h-0 flex-1"
       data-motion={animate ? "animated" : "reduced"}
       onMouseMove={pointer.onMouseMove}
       // design-lint-ok: each series' colour, set once from its chart slot's token.
@@ -137,8 +140,9 @@ export default function OverTimeDrawing({
           stays on its mark while a reader moves onto it (WCAG 2.2 1.4.13). */}
       <ResponsiveContainer
         width="100%"
-        height={height}
-        initialDimension={{ width: 320, height }}
+        height="100%"
+        minHeight={minHeight}
+        initialDimension={{ width: 320, height: minHeight }}
         className="pointer-events-none"
       >
         <ComposedChart
@@ -209,6 +213,7 @@ export default function OverTimeDrawing({
         count={rows.length}
         banded={style === "bars"}
         axes={axes}
+        high={isHigh(rows, shown)}
       >
         {tooltip}
       </TooltipBox>
@@ -265,21 +270,30 @@ function TooltipBox({
   count,
   banded,
   axes,
+  high,
   children,
 }: {
   shown: number | undefined;
   count: number;
   banded: boolean;
   axes: boolean;
+  /** Whether the interval's highest point is in the plot's upper half. */
+  high: boolean;
   children: ReactNode;
 }): JSX.Element | null {
   if (shown === undefined || children === null) return null;
   return (
     <div
       {...TOOLTIP_MARK}
-      className="absolute top-0 z-10"
-      // design-lint-ok: placed beside the interval in view, on the side the chart has room.
-      style={tooltipPlace(shown, count, banded, axes)}
+      className="absolute z-10"
+      // design-lint-ok: placed beside the interval in view, on the side the chart has room, and
+      // away from its point: low in the plot for a high point, high for a low one.
+      style={{
+        ...tooltipPlace(shown, count, banded, axes),
+        ...(high
+          ? { bottom: `${(axes ? DATES_HEIGHT : 0) + EDGE}px` }
+          : { top: `${EDGE}px` }),
+      }}
     >
       {children}
     </div>
@@ -328,6 +342,28 @@ function InView({
       })}
     </>
   );
+}
+
+/**
+ * Whether the interval at `index` reaches the upper half of the plot: its highest value against
+ * the highest the chart draws, which the value axis starts at zero to reach.
+ */
+function isHigh(
+  rows: OverTimeDrawingProps["rows"],
+  index: number | undefined
+): boolean {
+  if (index === undefined) return false;
+  const values = rows.flatMap(row =>
+    row.values.filter((value): value is number => value !== null)
+  );
+  const highest = Math.max(0, ...values);
+  const here = Math.max(
+    0,
+    ...(rows[index]?.values.filter(
+      (value): value is number => value !== null
+    ) ?? [])
+  );
+  return highest > 0 && here * 2 > highest;
 }
 
 /** How far across the plot the interval at `index` of `count` is drawn, 0 to 1. */

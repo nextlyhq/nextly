@@ -16,7 +16,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
-import { timeseriesAccepts, timeseriesBody } from "../timeseries";
+import { pointLabel, timeseriesAccepts, timeseriesBody } from "../timeseries";
 import { CardEmpty } from "../../frame/states";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
@@ -154,5 +154,32 @@ describe("the timeseries archetype", () => {
     expect(screen.getByTestId("card-empty")).toHaveTextContent(
       /Nothing to plot yet/
     );
+  });
+});
+
+describe("an interval in words", () => {
+  afterEach(() =>
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" })
+  );
+
+  it("is a day as the chart writes it, with no year", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-27T00:00:00.000Z", "day")).toBe("Oct 27");
+  });
+
+  it("is a week by the day it starts", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-19T00:00:00.000Z", "week")).toBe(
+      "Week of Oct 19"
+    );
+  });
+
+  it("is a month with its year", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-01T00:00:00.000Z", "month")).toBe("Oct 2026");
+  });
+
+  it("is the instant as stored where it cannot be read as a date", () => {
+    expect(pointLabel("not a date", "day")).toBe("not a date");
   });
 });
