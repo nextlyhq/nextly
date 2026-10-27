@@ -935,6 +935,7 @@ export {
   registerVersionPinHolder,
   versionPins,
   type VersionPin,
+  type RegisteredVersionPinHolder,
   type VersionPinHolder,
   type VersionPinHolderDefinition,
   type VersionPinSlot,

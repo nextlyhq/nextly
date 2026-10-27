@@ -84,6 +84,14 @@ export interface VersionPinHolder {
   ): Promise<void>;
   /** Free every slot this holder has on the document. */
   releaseAll(tx: TransactionContext, ref: VersionRef): Promise<void>;
+}
+
+/**
+ * The holder registration hands back: everything a holder does, and a read of
+ * its own slots. Kept apart from {@link VersionPinHolder} so a type that
+ * implements or stands in for a holder keeps compiling without the read.
+ */
+export interface RegisteredVersionPinHolder extends VersionPinHolder {
   /**
    * This holder's slots on the document: a plain read, taking the caller's
    * transaction or the adapter. The holder is a predicate of the query, so
@@ -101,7 +109,7 @@ const MAX_SLOT_LENGTH = 191;
 
 const holders = new Map<
   string,
-  { definition: VersionPinHolderDefinition; handle: VersionPinHolder }
+  { definition: VersionPinHolderDefinition; handle: RegisteredVersionPinHolder }
 >();
 
 /**
@@ -118,7 +126,7 @@ const holders = new Map<
  */
 export function registerVersionPinHolder(
   definition: VersionPinHolderDefinition
-): VersionPinHolder {
+): RegisteredVersionPinHolder {
   const { name } = definition;
   if (!HOLDER_NAME.test(name) || name.length > MAX_HOLDER_LENGTH) {
     throw NextlyError.invalidInput({
@@ -140,7 +148,7 @@ export function registerVersionPinHolder(
 export function registerNamespacedVersionPinHolder(
   namespace: string,
   definition: VersionPinHolderDefinition
-): { handle: VersionPinHolder; recorded: string } {
+): { handle: RegisteredVersionPinHolder; recorded: string } {
   const { name } = definition;
   if (!HOLDER_NAME.test(name)) {
     throw NextlyError.invalidInput({
@@ -162,7 +170,7 @@ export function registerNamespacedVersionPinHolder(
  * Record a holder under `name`, or return the handle it already has: the same
  * name and label again is the same feature reloading.
  */
-function register(name: string, label: string): VersionPinHolder {
+function register(name: string, label: string): RegisteredVersionPinHolder {
   const existing = holders.get(name);
   if (existing?.definition.label === label) return existing.handle;
   if (existing) {
@@ -243,7 +251,7 @@ async function assertVersionExists(
   }
 }
 
-function holderHandle(name: string): VersionPinHolder {
+function holderHandle(name: string): RegisteredVersionPinHolder {
   return {
     async pin(tx, { ref, slot, versionNo }) {
       assertSlot(slot);

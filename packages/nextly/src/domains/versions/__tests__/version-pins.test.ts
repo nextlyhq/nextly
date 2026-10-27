@@ -17,12 +17,23 @@ import {
   versionPinHolderNames,
   versionPinKey,
   versionPins,
+  type VersionPinHolder,
 } from "../version-pins";
 
 beforeEach(() => {
   resetVersionPinHolders();
   registerVersionPinHolder({ name: "workflows", label: "Workflows" });
 });
+
+// Checked by the tests' type check, not at run time: a holder written to the
+// interface before registration's read of its own slots existed, such as a
+// stand-in a test hands to code that takes a holder, still compiles as one.
+// A required `list` on `VersionPinHolder` fails it.
+export const holderWithoutTheRead: VersionPinHolder = {
+  pin: () => Promise.resolve(),
+  release: () => Promise.resolve(),
+  releaseAll: () => Promise.resolve(),
+};
 
 const ref = {
   scopeKind: "collection" as const,
