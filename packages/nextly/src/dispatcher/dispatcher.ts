@@ -37,6 +37,7 @@ import { dispatchSingles } from "./handlers/single-dispatcher";
 import { dispatchUser } from "./handlers/user-dispatcher";
 import { dispatchUserFields } from "./handlers/user-field-dispatcher";
 import { getAdapterFromDI } from "./helpers/di";
+import { returnedServiceFailure } from "./helpers/service-envelope";
 import type {
   DispatchRequest,
   DispatchResult,
@@ -232,15 +233,10 @@ export class ServiceDispatcher {
         return {
           success: r.success ?? true,
           message: r.success ? r.message : undefined,
-          // Even for legacy ServiceResult errors, propagate as NextlyError
-          // so the route wrapper can build a canonical response. Wrap the
-          // legacy string message in INTERNAL_ERROR.
-          error:
-            !r.success && r.message
-              ? NextlyError.internal({
-                  logContext: { legacyServiceResultMessage: r.message },
-                })
-              : undefined,
+          // A failed envelope is rebuilt as the error it reports, by the one
+          // converter every boundary uses, so a returned 403 is answered 403
+          // rather than as a server fault. Its message goes to the log only.
+          error: r.success === false ? returnedServiceFailure(r) : undefined,
           status: r.statusCode ?? r.status ?? 200,
           data: r.data,
           meta: (r as Record<string, unknown>).meta,

@@ -149,7 +149,8 @@ export type Rule = (typeof RULES)[number];
 /**
  * What a caller asks to do. `list` and `count` read a collection's entries
  * through the list and count paths, which a door judges apart from the read
- * of one entry by its id.
+ * of one entry by its id. `new-pub` creates an entry already
+ * published, which needs the create and the publish permission together.
  */
 export const ACTIONS = [
   "read",
@@ -160,12 +161,17 @@ export const ACTIONS = [
   "unpublish",
   "list",
   "count",
+  "new-pub",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
-/** The actions that name one entry, which every collection door can ask. */
+/**
+ * The actions every collection door can ask: each names one permission. A
+ * list and a count read many entries, and a create sent as published is two
+ * permissions at once, so only the doors that send a write ask it.
+ */
 export const ENTRY_ACTIONS = ACTIONS.filter(
-  action => action !== "list" && action !== "count"
+  action => action !== "list" && action !== "count" && action !== "new-pub"
 );
 
 /**
@@ -692,8 +698,16 @@ function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
  *   unpublish is judged on top of update (`shared/types/access.ts`), so where
  *   the target declares an update rule, it must allow the change as well.
  *   A `list` and a `count` are reads, judged by the read permission and rule.
+ *   A create sent as published is a create and a publish, allowed only where
+ *   both are.
  */
 export function oneAnswer(row: Row): Verdict {
+  if (row.action === "new-pub") {
+    const both = (["create", "publish"] as const).every(
+      action => oneAnswer({ ...row, action }) === "allow"
+    );
+    return both ? "allow" : "refuse";
+  }
   const { caller, target, rule } = row;
   const action = judgedAs(row.action);
   if (PRINCIPALS.includes(caller) && target === "media") return "refuse";

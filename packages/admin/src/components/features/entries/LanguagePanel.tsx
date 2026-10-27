@@ -66,6 +66,12 @@ export interface LanguagePanelProps {
    * write the live document). States stay readable.
    */
   actionsDisabled?: boolean;
+  /**
+   * Withholds opening another language. The same as `actionsDisabled` unless
+   * given: a user who may only read the document is held from every mutation
+   * here and may still read its other languages.
+   */
+  navigationDisabled?: boolean;
   className?: string;
 }
 
@@ -276,6 +282,7 @@ function LanguageRows({
   canSeed,
   metaKnown,
   actionsDisabled,
+  navigationDisabled,
   onSelect,
 }: {
   shown: readonly { code: string; label: string; rtl: boolean }[];
@@ -295,6 +302,7 @@ function LanguageRows({
   /** Whether `translations` was supplied at all — see `seedVerb`. */
   metaKnown: boolean;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   onSelect:
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
@@ -337,6 +345,7 @@ function LanguageRows({
             onSelect?.(locale.code, { seedFrom: active });
           }}
           actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
         />
       ))}
     </ul>
@@ -528,6 +537,7 @@ function LanguageRow({
   onSelect,
   onSeed,
   actionsDisabled,
+  navigationDisabled,
 }: {
   code: string;
   label: string;
@@ -544,6 +554,7 @@ function LanguageRow({
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
 }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
@@ -625,11 +636,11 @@ function LanguageRow({
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs"
-              // Switching languages is withheld under the same gate that
-              // withholds the mutations: while a past version is on screen,
-              // changing the document underneath the history banner shows one
-              // language's history labelled as another's.
-              disabled={actionsDisabled}
+              // Switching languages is withheld while a past version is on
+              // screen: changing the document underneath the history banner
+              // shows one language's history labelled as another's. A reader
+              // is not held here, only from the mutations beside it.
+              disabled={navigationDisabled}
               aria-label={`Open ${label}`}
               onClick={() => onSelect(code)}
             >
@@ -642,12 +653,54 @@ function LanguageRow({
   );
 }
 
+/**
+ * Whether a document has languages to show. Two switches, and both have to be
+ * on. `enabled` is the APP's — several languages are configured — while
+ * `collectionLocalized` is this DOCUMENT's. Reading only the first puts a
+ * language panel on a document that has no language dimension, where every
+ * row after the default reads "not translated": a claim about content that
+ * cannot exist rather than work left to do.
+ */
+function hasLanguages(
+  enabled: boolean,
+  collectionLocalized: boolean,
+  languageCount: number
+): boolean {
+  return enabled && collectionLocalized && languageCount >= 2;
+}
+
+/**
+ * The panel as an editor mounts it, given the document's translations, the
+ * language on screen and the switch to another. The rail and the inline mount
+ * of the entry and Single editors share it, so each reads them the same way.
+ */
+export function DocumentLanguagePanel({
+  translations,
+  locale,
+  onLocaleChange,
+  ...panel
+}: Omit<LanguagePanelProps, "translations" | "activeLocale" | "onSelect"> & {
+  translations?: Record<string, LocaleTranslationMeta> | undefined;
+  locale?: string | undefined;
+  onLocaleChange?: LanguagePanelProps["onSelect"] | undefined;
+}): JSX.Element | null {
+  return (
+    <LanguagePanel
+      {...panel}
+      {...(translations === undefined ? {} : { translations })}
+      {...(locale === undefined ? {} : { activeLocale: locale })}
+      {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+    />
+  );
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
   onSelect,
   hasStatus,
   actionsDisabled = false,
+  navigationDisabled = actionsDisabled,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -661,13 +714,7 @@ export function LanguagePanel({
     hasStatus === undefined ? {} : { hasStatus }
   );
 
-  // Two switches, and both have to be on. `enabled` is the APP's — several
-  // languages are configured — while `collectionLocalized` is this DOCUMENT's.
-  // Reading only the first puts a language panel on a document that has no
-  // language dimension, where every row after the default reads "not
-  // translated": a claim about content that cannot exist rather than work left
-  // to do.
-  if (!enabled || !collectionLocalized || locales.length < 2) return null;
+  if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
   const active = activeLocale ?? defaultLocale;
   const pendingCount = pendingLanguageCount(locales, translations);
@@ -737,6 +784,7 @@ export function LanguagePanel({
         canSeed={copy?.available ?? false}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
         onSelect={onSelect}
       />
       <StateLegend />

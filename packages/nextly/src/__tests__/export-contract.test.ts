@@ -15,10 +15,10 @@ import { describe, expect, it } from "vitest";
 import { compile, listedFiles } from "../../../../scripts/tsc-cli.mjs";
 
 import type {
+  GridSize,
   WidgetArchetype,
-  WidgetHeight,
   WidgetOp,
-  WidgetSize,
+  WidgetSizeDeclaration,
   WidgetSourceField,
 } from "../index";
 
@@ -233,6 +233,7 @@ function exportedAmong(names: readonly string[]): Map<string, Set<string>> {
 const ASKED = [
   ...RETIRED_ACCOUNT_TYPES,
   ...RETIRED_ACCOUNT_NAMES,
+  "WidgetSizeDeclaration",
   "UserListResponse",
   "UserListResponseSchema",
   "defaultSkipAdminApi",
@@ -503,6 +504,23 @@ describe("published export surface", () => {
   );
 
   it(
+    "exports the grid size type a definition names from the root and the config entry",
+    () => {
+      // A type is erased at runtime, so only the compiler can say it is
+      // published. That no named size type is, anywhere, is the source scan's
+      // to hold (`domains/widgets/__tests__/one-size-vocabulary.test.ts`).
+      const compiled = exported();
+      for (const entry of ["nextly", "nextly/config"]) {
+        expect([
+          entry,
+          compiled.get(entry)?.has("WidgetSizeDeclaration"),
+        ]).toEqual([entry, true]);
+      }
+    },
+    COMPILE_TIMEOUT_MS
+  );
+
+  it(
     "keeps publishing defaultSkipAdminApi from the root, marked deprecated",
     () => {
       // No longer the REST limit's default, and kept for an app that passes it
@@ -610,16 +628,15 @@ describe("published export surface", () => {
   });
 
   it("publishes every contract a widget definition names", async () => {
-    // `WidgetDefinition` is exported from the root and its `defaultHeight` is
-    // typed `WidgetHeight`. There is no `nextly/widgets` subpath, so the root
+    // `WidgetDefinition` is exported from the root and its `size` is typed
+    // `WidgetSizeDeclaration`. There is no `nextly/widgets` subpath, so the root
     // entry point is the only place a plugin author can reach these -- and a
     // publicly visible property whose type has no public name cannot be
     // annotated, only inferred. Same argument for the source contract:
     // `registerSource` and `WidgetSource` are published, so the field and op
     // vocabularies they are built out of have to be nameable too.
     const root = (await import("../index")) as Record<string, unknown>;
-    expect(root.WIDGET_SIZES).toEqual(["sm", "md", "lg", "xl", "full"]);
-    expect(root.WIDGET_HEIGHTS).toEqual(["short", "tall"]);
+    expect(root.GRID_COLUMNS).toBe(12);
     expect(root.WIDGET_ARCHETYPES).toContain("metric");
     expect(root.WIDGET_SOURCE_KINDS).toContain("collection");
     expect(root.WIDGET_OPS).toContain("count");
@@ -628,12 +645,34 @@ describe("published export surface", () => {
     // an unexported name here is a `check-types` failure rather than a silent
     // pass. Each is annotated (never merely inferred), which is the property a
     // plugin author actually needs.
-    const height: WidgetHeight = "tall";
-    const size: WidgetSize = "lg";
+    const unit: GridSize = { w: 6, h: 4 };
+    const size: WidgetSizeDeclaration = { default: unit };
     const archetype: WidgetArchetype = "metric";
     const op: WidgetOp = "count";
     const field: WidgetSourceField = { name: "title", type: "string" };
-    expect([height, size, archetype, op, field.name]).toHaveLength(5);
+    expect([unit, size, archetype, op, field.name]).toHaveLength(5);
+  });
+
+  it("publishes the grid size functions from the config entry point", async () => {
+    // The admin sizes, clamps and offers a card's sizes through these, read
+    // from `nextly/config`, so each must be a value there and not a type only.
+    const cfg = (await import("../config")) as Record<string, unknown>;
+    expect(cfg.GRID_COLUMNS).toBe(12);
+    for (const name of [
+      "clampSize",
+      "isGridSize",
+      "narrowedSizeBounds",
+      "sizeBounds",
+      "sizeDeclarationProblems",
+      "sizeWithinBounds",
+    ]) {
+      expect([name, typeof cfg[name]]).toEqual([name, "function"]);
+    }
+    expect(cfg.UNSTATED_WIDGET_SIZE).toEqual({
+      default: { w: 12, h: 4 },
+      min: { w: 3, h: 2 },
+      max: { w: 12, h: 6 },
+    });
   });
 
   it("publishes the field-group type accessor", async () => {

@@ -13,6 +13,7 @@
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
 import type { TransportableValue } from "./declaration/transportable";
+import type { GridSize } from "./grid-size";
 import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
@@ -238,6 +239,55 @@ export type WidgetSlot =
 export interface WidgetQueryBatchResponse {
   results: WidgetSlot[];
 }
+
+/**
+ * A card's current size, which changes as the card is resized or the screen
+ * it is drawn on does.
+ *
+ * `w` and `h` are the card's size in grid units (`{ w, h }`, twelve columns
+ * wide), within its widget's declared bounds. `tier` is how much room the card
+ * has on this screen, read from the width it is drawn at: below 340 pixels
+ * `small`, from 700 `large`, `medium` between. On a narrow dashboard a card is
+ * drawn wider than its `w` says, so a component that lays itself out by the
+ * room it has reads `tier`, not `w`.
+ *
+ * Declared here, beside the props it travels in, so the admin that builds
+ * those props and the declaration that types them read one shape.
+ *
+ * @experimental
+ */
+export interface WidgetRenderSize extends GridSize {
+  tier: "small" | "medium" | "large";
+}
+
+/**
+ * What a widget declared with `defineWidget` and drawn by its own component is
+ * handed, as the admin builds it: the shape `WidgetProps<W>` types from the
+ * declaration, its settings and data left untyped here because only the
+ * declaration knows them.
+ *
+ * 🔴 A `type`, for the reason `WidgetComponentProps` below is one: the admin
+ * annotates the object it forwards through `PluginSlot` with it, so a renamed
+ * or dropped prop fails to compile there.
+ *
+ * @experimental
+ */
+export type DeclaredComponentProps = {
+  widgetId: string;
+  /** The card's id: one widget may sit on a dashboard more than once. */
+  placementId: string;
+  settings: Record<string, unknown>;
+  size: WidgetRenderSize;
+  /**
+   * The card's data, always present: the host draws loading, no permission
+   * and error itself, and calls the component only once there is data.
+   */
+  data: unknown;
+  /** True while a newer answer is on its way; `data` is the last one. */
+  refreshing: boolean;
+  /** Asks for the card's data again. */
+  retry: () => void;
+};
 
 /**
  * The props a widget component is handed, whatever it draws.

@@ -7,13 +7,8 @@ import { useMemo } from "react";
 import { Link } from "@admin/components/ui/link";
 
 import { CountValue, countLabel } from "../widgets/archetypes/count-value";
+import { FrameState } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
-} from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 import {
@@ -41,13 +36,26 @@ export const NeedsAttention: React.FC<WidgetComponentProps> = ({ slot }) => {
   // with rather than moving on every render.
   const view = useMemo(() => attentionView(slot, Date.now()), [slot]);
 
-  if (view.state === "loading") return <CardSkeleton shape="rows" />;
-  if (view.state === "unavailable") return <CardUnavailable />;
+  if (view.state === "loading") {
+    return (
+      <FrameState state={{ kind: "loading", skeleton: { shape: "rows" } }} />
+    );
+  }
+  if (view.state === "unavailable") {
+    return <FrameState state={{ kind: "no-access" }} />;
+  }
   if (view.state === "error") {
-    return <CardError title="Needs attention" message={view.message} />;
+    return <FrameState state={{ kind: "error", message: view.message }} />;
   }
   if (view.state === "clear") {
-    return <CardEmpty title="All clear" detail="Nothing is waiting for you." />;
+    return (
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: { title: "All clear", detail: "Nothing is waiting for you." },
+        }}
+      />
+    );
   }
   if (tier === "small") return <SmallAttention kinds={view.kinds} />;
   return (

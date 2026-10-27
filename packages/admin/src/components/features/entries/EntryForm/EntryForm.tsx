@@ -45,6 +45,7 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
@@ -53,7 +54,7 @@ import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
-import { LanguagePanel } from "../LanguagePanel";
+import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
@@ -591,11 +592,16 @@ export function EntryForm({
    * looked read-only. The autosave is still held off while a version is on
    * screen, which is a different question: what it would RECORD.
    */
+  // A user who may read this entry but not change it gets the same page,
+  // read-only, with no claim made on the document.
+  const readOnlyForReader =
+    useReadOnlyForReader(collectionSlug) && mode === "edit";
   const lock = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
     entryId: entry?.id,
     enabled: mode === "edit",
+    readOnlyForReader,
   });
   // One answer for every surface offering a write: the header reads the same
   // through the document-actions model, the rail, the language panel and the
@@ -603,6 +609,12 @@ export function EntryForm({
   // context — this body renders ABOVE the provider this component creates, so
   // a context read here would report no version on screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  // Changing the content is held for a reader as well. Deleting is not: it
+  // follows its own permission, and is offered only with it.
+  const editsHeld = writesHeld || readOnlyForReader;
+  // A colleague's claim or a reader's page, without the version on screen:
+  // what holds the actions a version's own surfaces offer, Restore among them.
+  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -636,14 +648,12 @@ export function EntryForm({
     // default lets the browser submit the form natively — reloading the page
     // and dropping the reader's history state.
     event?.preventDefault();
-    return writesHeld
-      ? Promise.resolve(submitHeld)
-      : submitEntry(event, intent);
+    return editsHeld ? Promise.resolve(submitHeld) : submitEntry(event, intent);
   };
   const handleDelete = () =>
     writesHeld ? Promise.resolve(deleteHeld) : deleteEntry();
   const handleDiscardWorkingDraft = () =>
-    writesHeld ? Promise.resolve() : discardWorkingDraft();
+    editsHeld ? Promise.resolve() : discardWorkingDraft();
 
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
@@ -652,7 +662,9 @@ export function EntryForm({
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
   const recovery = useAutosaveRecovery({
-    scope: autosaveScope,
+    // A reader is offered no recovery point: restoring one would make the
+    // read-only form dirty with work it cannot save.
+    scope: readOnlyForReader ? null : autosaveScope,
     form,
     savedCount,
   });
@@ -678,7 +690,9 @@ export function EntryForm({
      * the reading describes work against a document nobody is tending. The
      * shared predicate states the rule once for both editors.
      */
-    enabled: mayRecordRecovery(isSubmitting, viewingVersion),
+    // Nor is a reader's form recorded: it cannot change the document.
+    enabled:
+      !readOnlyForReader && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
   });
@@ -695,8 +709,10 @@ export function EntryForm({
   // the entry is saved, which is when it has an id to name, and while the
   // language is unknown: a link minted without a resolvable locale is either
   // refused or a grant over every translation.
+  // Withheld from a reader too, so the share popover cannot stay mounted
+  // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    savedEntryId === "" || linkLocale.kind === "unresolved"
+    readOnlyForReader || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -750,7 +766,10 @@ export function EntryForm({
    */
   const previewRevision = previewRevisionOf(entry, savedCount);
 
+  // Previewing, and sharing a preview, are offered only to a user who may
+  // change the entry: minting a link needs that on the server.
   const canPreview =
+    !readOnlyForReader &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -788,7 +807,10 @@ export function EntryForm({
     entry,
     collectionSlug: collection.name,
     locale,
-    documentLocked: lock.readOnly,
+    // A colleague's claim, which withholds every write: a reader's read-only
+    // page withholds only the edits, through `canEdit`.
+    documentLocked: lock.actionsDisabled,
+    canEdit: !readOnlyForReader,
     contributedActions: documentActions,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
@@ -905,10 +927,13 @@ export function EntryForm({
                */
               // Nor beside a document view, which takes the window alone; the
               // flag survives a move from the edit screen into the view.
+              // Nor for a reader, who is offered no preview: an open pane
+              // closes once the user may no longer change the entry.
               open={
                 previewOpen &&
                 translationMode.source === undefined &&
-                !documentView
+                !documentView &&
+                !readOnlyForReader
               }
               onClose={() => setPreviewOpen(false)}
               scope={{
@@ -1068,6 +1093,7 @@ export function EntryForm({
                                   // locale is either refused by the mint route or, if the claim
                                   // were dropped to avoid that, a grant over every translation.
                                   isLinkAvailable={
+                                    !readOnlyForReader &&
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }
@@ -1076,7 +1102,8 @@ export function EntryForm({
                                     : { shareDocument })}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
-                                    lock.actionsDisabled,
+                                    // A reader's page holds the slot's writes too.
+                                    versionWritesHeld,
                                     "collection",
                                     controllerNames[0]
                                   )}
@@ -1137,27 +1164,24 @@ export function EntryForm({
                                         "@4xl/content:hidden"
                                     )}
                                   >
-                                    <LanguagePanel
-                                      {...(entry?._translations === undefined
-                                        ? {}
-                                        : {
-                                            translations:
-                                              entry._translations as Record<
-                                                string,
-                                                {
-                                                  translated: boolean;
-                                                  status?: string;
-                                                }
-                                              >,
-                                          })}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { activeLocale: locale })}
-                                      {...(onLocaleChange === undefined
-                                        ? {}
-                                        : { onSelect: onLocaleChange })}
+                                    <DocumentLanguagePanel
+                                      translations={
+                                        entry?._translations as
+                                          | Record<
+                                              string,
+                                              {
+                                                translated: boolean;
+                                                status?: string;
+                                              }
+                                            >
+                                          | undefined
+                                      }
+                                      locale={locale}
+                                      onLocaleChange={onLocaleChange}
                                       hasStatus={hasStatus}
-                                      actionsDisabled={writesHeld}
+                                      actionsDisabled={editsHeld}
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={writesHeld}
                                     />
                                   </div>
                                 )}
@@ -1177,8 +1201,9 @@ export function EntryForm({
                                   // restore racing the ordinary save would let
                                   // completion order decide which contents
                                   // survive.
+                                  // A reader's page holds restoring as well.
                                   actionsDisabled={
-                                    lock.actionsDisabled || isSubmitting
+                                    versionWritesHeld || isSubmitting
                                   }
                                 >
                                   {mainFields.length > 0 && (
@@ -1221,7 +1246,9 @@ export function EntryForm({
                                       {...(onLocaleChange === undefined
                                         ? {}
                                         : { onLocaleChange })}
-                                      actionsDisabled={writesHeld}
+                                      actionsDisabled={editsHeld}
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={writesHeld}
                                       isDirty={isDirty}
                                     />
                                   </div>

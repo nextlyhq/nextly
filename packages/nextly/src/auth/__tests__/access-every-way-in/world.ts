@@ -295,6 +295,8 @@ const SERVICE_CALLS: Record<
 > = {
   read: (c, slug, id, opts) => c.findEntryById(slug, id, opts),
   create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
+  "new-pub": (c, slug, _id, opts) =>
+    c.createEntry(slug, { title: "made", status: "published" }, opts),
   update: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { title: "changed" }, opts),
   delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
@@ -865,7 +867,7 @@ function registerProbeWidgets(): void {
         id,
         title: id,
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         content: id,
         requiredPermission: `${action}-${slug}`,
       },

@@ -50,6 +50,7 @@ import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
+import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -393,7 +394,11 @@ export default function EditEntryPage({
    * resolves to nothing falls through to `EntryForm` and that branch has its
    * own claim.
    */
+  // A reader gets the custom view read-only too, through the same gates a
+  // colleague's claim hands it, with no claim made.
+  const customViewReader = useReadOnlyForReader(slug ?? "");
   const customViewLock = useDocumentLockSurface({
+    readOnlyForReader: customViewReader,
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
@@ -579,7 +584,10 @@ export default function EditEntryPage({
       // from is what keeps that sentence true.
       documentLock: {
         readOnly: customViewLock.readOnly,
-        actionsDisabled: customViewLock.actionsDisabled,
+        // A view knows only these two gates, and its own writes (a save
+        // among them) follow `actionsDisabled`, so a reader's view has them
+        // withheld too.
+        actionsDisabled: customViewLock.actionsDisabled || customViewReader,
       },
     };
 
@@ -641,6 +649,14 @@ export default function EditEntryPage({
     entryId: id,
     collection: collection,
     entry: apiEntryData,
+    // The gates a custom edit view receives, for a user who may only read
+    // the entry: the slots open on read as the editor does, so one written to
+    // change the entry is told to hold its writes. A colleague's claim is the
+    // form's, below, and not stated here.
+    documentLock: {
+      readOnly: customViewReader,
+      actionsDisabled: customViewReader,
+    },
   };
 
   return (

@@ -17,13 +17,14 @@ import type {
 import { tableAccepts, tableBody } from "../table";
 import { CardEmpty } from "../../frame/states";
 import { CardTierContext } from "../../frame/tier";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
     id: "acme/posts",
     title: "Recent posts",
     archetype: "table",
-    size: "lg",
+    size: gridBounds(6),
     query: {
       source: "collection:posts",
       op: "list",

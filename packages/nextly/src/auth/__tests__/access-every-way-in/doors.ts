@@ -138,6 +138,11 @@ const COLLECTION_REQUESTS: Record<
 > = {
   read: { method: "GET", byId: true },
   create: { method: "POST", byId: false, body: { title: "made" } },
+  "new-pub": {
+    method: "POST",
+    byId: false,
+    body: { title: "made", status: "published" },
+  },
   update: { method: "PATCH", byId: true, body: { title: "changed" } },
   delete: { method: "DELETE", byId: true },
   publish: { method: "PATCH", byId: true, body: { status: "published" } },
@@ -326,6 +331,12 @@ const DIRECT_CALLS: Record<
   read: (n, collection, id, as) => n.findByID({ collection, id, ...as }),
   create: (n, collection, _id, as) =>
     n.create({ collection, data: { title: "made" }, ...as }),
+  "new-pub": (n, collection, _id, as) =>
+    n.create({
+      collection,
+      data: { title: "made", status: "published" },
+      ...as,
+    }),
   update: (n, collection, id, as) =>
     n.update({ collection, id, data: { title: "changed" }, ...as }),
   delete: (n, collection, id, as) => n.delete({ collection, id, ...as }),
@@ -1060,6 +1071,17 @@ async function setPubStatus(world: World, row: Row): Promise<void> {
   }
 }
 
+/** Whether `after` holds a row `before` did not, stored as published. */
+function addedPublished(
+  before: readonly Record<string, unknown>[],
+  after: readonly Record<string, unknown>[]
+): boolean {
+  const existing = new Set(before.map(stored => String(stored.id)));
+  return after.some(
+    stored => !existing.has(String(stored.id)) && stored.status === "published"
+  );
+}
+
 /** The status a Single's publish or unpublish leaves it in. */
 const statusAfter = (row: Row) =>
   row.action === "publish" ? "published" : "draft";
@@ -1086,12 +1108,15 @@ export async function ask(
   const { answer: given, deviations, refusal } = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
-  // A Single's publish or unpublish is done only when its status moved: a
-  // save that bumps the row's timestamps but drops the status changes the
-  // table without doing what was asked.
+  // A Single's publish or unpublish is done only when its status moved, and
+  // a create sent as published only when the row it added is published: a
+  // write that drops the status changes the table without doing what was
+  // asked.
   const done =
     row.target === "single-pub"
       ? after[0]?.status === statusAfter(row)
-      : landed;
+      : row.action === "new-pub"
+        ? addedPublished(before, after)
+        : landed;
   return { answer: given, deviations, refusal, landed, done };
 }

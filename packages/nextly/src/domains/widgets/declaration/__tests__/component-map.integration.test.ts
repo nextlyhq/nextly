@@ -56,8 +56,7 @@ const revenue = defineWidget({
   title: "Revenue",
   description: "Takings per day",
   category: "Shop",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ total: 1 }),
   display: { component: "@acme/shop/admin#Revenue" },
 });
@@ -67,8 +66,7 @@ const visits = defineWidget({
   title: "Visits",
   description: "Visits per day",
   category: "Stats",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ total: 1 }),
   display: { component: "@acme/stats/admin#Visits" },
 });

@@ -80,7 +80,7 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:orders", op: "count" },
       },
       { source: "@acme/stripe" }
@@ -99,7 +99,7 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:orders", op: "count" },
       })
     );
