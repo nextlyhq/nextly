@@ -296,11 +296,13 @@ describe("DocumentBar — contributed actions while reading history", () => {
       returnToCurrent: vi.fn(),
     });
 
-    it("offers Back to current and Restore… where Save and Publish sat", async () => {
+    it("offers Back to current and Restore this version where Save and Publish sat", async () => {
       const affordance = restore();
       renderWithHistory(shown, { restore: affordance });
 
-      await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+      await userEvent.click(
+        screen.getByRole("button", { name: "Restore this version" })
+      );
       expect(affordance.request).toHaveBeenCalledTimes(1);
       await userEvent.click(
         screen.getByRole("button", { name: "Back to current" })
@@ -311,24 +313,26 @@ describe("DocumentBar — contributed actions while reading history", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("withholds Restore… while a colleague holds the document", () => {
+    it("withholds Restore this version while a colleague holds the document", () => {
       renderWithHistory(shown, { restore: restore(), documentLocked: true });
 
       expect(
-        screen.queryByRole("button", { name: "Restore…" })
+        screen.queryByRole("button", { name: "Restore this version" })
       ).not.toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Back to current" })
       ).toBeInTheDocument();
     });
 
-    it("holds Restore… until the version is on screen", () => {
+    it("holds Restore this version until the version is on screen", () => {
       renderWithHistory(
         { ...shown, snapshot: undefined },
         { restore: restore() }
       );
 
-      expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Restore this version" })
+      ).toBeDisabled();
     });
   });
 });

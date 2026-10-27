@@ -308,8 +308,9 @@ export function versionAwareToolbarSlots(
 
 /**
  * A past version's actions on a phone: the moves through its changes, Back to
- * current and Restore…, in a bar at the bottom, under the thumb. Wider
- * screens carry the same actions in the title bar and the comparison bar.
+ * current and Restore this version, in a bar at the bottom, under the thumb.
+ * Wider screens carry the same actions in the document bar and the
+ * comparison bar, under the same names.
  */
 /**
  * Where the reader is among the changes, in the phone bar's few words. Says
@@ -399,7 +400,9 @@ function VersionPhoneBar({
           disabled={actions.restoreDisabled}
           onClick={actions.restore}
         >
-          Restore…
+          {/* Says which document state it brings back; the confirmation
+              that follows says what happens to the live document. */}
+          Restore this version
         </Button>
       ) : null}
     </div>

@@ -476,7 +476,8 @@ type HostedActions = ReturnType<typeof useHostedDocumentActions>;
 
 /**
  * While a past version is on screen, its own actions take the document's
- * place: Back to current, and Restore… where the primary action sits. Save and
+ * place: Back to current, and Restore this version where the primary action
+ * sits. Save and
  * Publish act on the LIVE document, which is not what is being read, so they
  * are replaced rather than greyed. On a phone these two sit in the bar at the
  * bottom instead, under the thumb.
@@ -509,7 +510,9 @@ function VersionOnScreenActions({
           disabled={versionActions.restoreDisabled}
           onClick={versionActions.restore}
         >
-          Restore…
+          {/* Names what it restores, beside Back to current; the confirmation
+              that follows says what happens to the live document. */}
+          Restore this version
         </Button>
       ) : null}
       {/* The menu stays, with only its own rows: View API response reads what
