@@ -39,4 +39,6 @@ An app or plugin role declared with the slug `public` is refused at boot, as one
 
 At boot, the Public role is given `read-media` and the read of each collection and Single whose `read` rule answers `true` for a visitor. Each read is granted once, so one an owner removes stays removed. Access doesn't change yet.
 
+Plugins can declare permissions for the Public role on their own collections with `contributes.publicGrants` (experimental), for example `[{ collection: "tickets", action: "create" }]`. Only `read` and `create` can be granted. Each grant is made once at boot, so one an owner removes stays removed, and a grant on a collection the plugin doesn't contribute is refused and logged. The form builder uses it to let the Public role create form submissions.
+
 Each startup log names what the Public role does not hold yet that visitors may rely on: reads with no `read` rule, reads whose rule answers neither `true` nor `false`, writes whose rule answers `true` for anyone, and rules that failed or gave no answer when asked. Grant the Public role each one visitors should keep.
