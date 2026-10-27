@@ -48,7 +48,10 @@ function ownOrManage(action: string, resource: string): RouteGrant {
  * single-grant check, which reads an entity's own rule where an entity of
  * that name exists.
  */
-function only(action: string, resource: string): RouteGrant {
+function only(
+  action: string,
+  resource: string
+): { readonly anyOf: readonly SystemPermission[] } {
   return { anyOf: [{ action, resource }] };
 }
 
