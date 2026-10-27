@@ -12,6 +12,7 @@ import { resolveRoute } from "@admin/lib/routing";
 import { routeConfig } from "@admin/pages/registry";
 
 import {
+  addressableFieldsWithin,
   clearDocumentViews,
   documentViewApplies,
   documentViewMissing,
@@ -418,5 +419,32 @@ describe("resolveRoute for a document view", () => {
     );
     expect(single.Component).toBe(SingleEditPage);
     expect(single.params).toEqual({ slug: "homepage" });
+  });
+});
+
+describe("the fields a document addresses at its own level", () => {
+  it("stops at an unnamed group already open on its path, directly or through another", () => {
+    // Raw config can hold a cycle. Each group's fields are still found once,
+    // the group that reaches itself is not walked again, and named fields
+    // keep the unnamed groups they sit in.
+    const direct: Record<string, unknown> = { type: "group", fields: [] };
+    direct.fields = [{ name: "secret", type: "text" }, direct];
+    const outer: Record<string, unknown> = { type: "group", fields: [] };
+    const inner = {
+      type: "group",
+      fields: [outer, { name: "note", type: "text" }],
+    };
+    outer.fields = [{ name: "secret", type: "text" }, inner];
+
+    const names = (fields: object[]) =>
+      addressableFieldsWithin(fields).map(({ field, within }) => [
+        (field as { name?: string }).name,
+        within.length,
+      ]);
+    expect(names([direct])).toEqual([["secret", 1]]);
+    expect(names([outer])).toEqual([
+      ["secret", 1],
+      ["note", 2],
+    ]);
   });
 });
