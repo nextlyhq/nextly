@@ -32,17 +32,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import type { PrincipalRef } from "../../plugins/principals/types";
-import { emailQueueMysql } from "../../schemas/email-queue/mysql";
-import { emailQueuePg } from "../../schemas/email-queue/postgres";
-import { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
+import type { emailQueueMysql } from "../../schemas/email-queue/mysql";
+import type { emailQueuePg } from "../../schemas/email-queue/postgres";
+import type { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
 import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
-import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
-import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
-import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
+import type { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
+import type { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
+import type { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
 import type { RowLockServer } from "../../shared/lib/row-lock";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import {
@@ -130,11 +131,11 @@ export type EmailQueueTable =
 export function emailQueueTableFor(dialect: string): EmailQueueTable {
   switch (dialect) {
     case "postgresql":
-      return emailQueuePg;
     case "mysql":
-      return emailQueueMysql;
     case "sqlite":
-      return emailQueueSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.emailQueue;
     default:
       throw NextlyError.internal({
         logContext: {
@@ -152,10 +153,10 @@ function emailQueueRecipientsTableFor(
   | typeof emailQueueRecipientsPg
   | typeof emailQueueRecipientsMysql
   | typeof emailQueueRecipientsSqlite {
-  if (dialect === "postgresql") return emailQueueRecipientsPg;
-  if (dialect === "mysql") return emailQueueRecipientsMysql;
-  // `emailQueueTableFor` has refused any other dialect by now.
-  return emailQueueRecipientsSqlite;
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it, and `emailQueueTableFor` has refused any other
+  // dialect by now.
+  return loadedDialect(dialect).tables.emailQueueRecipients;
 }
 
 /** The Drizzle surface the queue needs. */

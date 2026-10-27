@@ -72,6 +72,45 @@ describe("card states from a widget's answer", () => {
     ).toBeInTheDocument();
   });
 
+  it("asks for a setting the widget needs as its empty state, not as an error", () => {
+    const needs: WidgetSlot = {
+      ok: false,
+      error: "Choose Collection in the card's settings",
+      code: "needs-setting",
+      setting: "Collection",
+    };
+    expect(resolveWidgetOutcome(list, needs)).toEqual({
+      state: "empty",
+      empty: { title: "Choose Collection in the card's settings" },
+    });
+    render(
+      <WidgetRenderer definition={list} slot={needs} onRetry={() => {}} />
+    );
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Choose Collection in the card's settings"
+    );
+    // Retrying would ask the same unanswerable question again.
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+
+  it("takes a card its widget does not show for this person off the dashboard", () => {
+    const notShown: WidgetSlot = {
+      ok: false,
+      error: "Not shown for you",
+      code: "not-shown",
+    };
+    expect(resolveWidgetOutcome(list, notShown)).toEqual({
+      state: "not-shown",
+    });
+    render(
+      <WidgetRenderer definition={list} slot={notShown} onRetry={() => {}} />
+    );
+    expect(
+      screen.getByRole("region", { name: "Recent posts" })
+    ).toHaveAttribute("data-hidden-empty");
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+
   it("draws a list with no rows as the frame's empty state", () => {
     const empty: WidgetSlot = { ok: true, result: { op: "list", items: [] } };
     expect(resolveWidgetOutcome(list, empty)).toMatchObject({ state: "empty" });

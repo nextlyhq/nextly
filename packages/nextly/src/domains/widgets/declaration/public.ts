@@ -11,7 +11,6 @@
 export {
   defineWidget,
   type AnyWidget,
-  type ContentQuery,
   type WidgetAccess,
   type WidgetComponentMap,
   type WidgetData,

@@ -230,6 +230,52 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("keeps a card's needs-setting code with the setting it names, and its not-shown code", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: false,
+          error: "Choose Collection in the card's settings",
+          code: "needs-setting",
+          setting: "Collection",
+        },
+        { ok: false, error: "Not shown for you", code: "not-shown" },
+        // Naming no setting, it could not ask for one: read as the failure it then is.
+        { ok: false, error: "Choose it", code: "needs-setting" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "c-needs", query: countQuery("collection:a") },
+          { placementId: "c-hidden", query: countQuery("collection:b") },
+          { placementId: "c-nameless", query: countQuery("collection:c") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["c-nameless"]).toBeDefined()
+    );
+    // Lost here, each would be drawn as a failure with Retry rather than as what it is.
+    expect(result.current.slots["c-needs"]).toEqual({
+      ok: false,
+      error: "Choose Collection in the card's settings",
+      code: "needs-setting",
+      setting: "Collection",
+    });
+    expect(result.current.slots["c-hidden"]).toEqual({
+      ok: false,
+      error: "Not shown for you",
+      code: "not-shown",
+    });
+    expect(result.current.slots["c-nameless"]).toEqual({
+      ok: false,
+      error: "Choose it",
+    });
+  });
+
   it("drops the unavailable code from a refusal with no usable message", async () => {
     // A slot missing its message is a broken answer that may recover; kept, the code would hide
     // that behind the unavailable state, which offers no Retry.

@@ -12,25 +12,33 @@
 import { z } from "zod";
 
 import type { AuthContext } from "../auth/middleware";
-import { answerAsAsked } from "../domains/widgets/answer-as-asked";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
-import { resolveCardSettings } from "../domains/widgets/declaration/card-query";
 import {
-  checkedCardQuery,
+  renamedCollection,
+  resolveCardSettings,
+  unsetSetting,
+} from "../domains/widgets/declaration/card-settings";
+import {
   declaredWidget,
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
 import { bindReadServices } from "../domains/widgets/declaration/read-services";
-import { executeWidgetQuery } from "../domains/widgets/execute";
 import { GRID_COLUMNS, MIN_GRID_ROWS } from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
-import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
+import type { WidgetSlot } from "../domains/widgets/result";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
+import { NextlyError } from "../errors/nextly-error";
+import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { askableCards } from "./widget-layout";
-import { failedSlot, type ReadyCardData } from "./widget-slots";
+import {
+  failedSlot,
+  unavailableSlot,
+  type CardAnswer,
+  type ReadyCardData,
+} from "./widget-slots";
 
 /**
  * A by-card entry: which card, of which widget, and nothing more.
@@ -177,58 +185,202 @@ function cardEntryFor(
   };
 }
 
+/** What a card's settings, person and budget hand its widget's own functions. */
+type CardInput = Parameters<ReadyCardData["answer"]>[0];
+
 /**
- * One card's answer, as the person asking: its data function run with its
- * settings and person-bound services, or the query its settings write, checked
- * and run as the batch's own. Then its empty test, in the same slot, when the
- * declaration states one; otherwise the display's own rule decides in the admin.
+ * Whether this person fails the widget's `access`, judged with them before
+ * `load` runs: a permission name was judged already, when the card was handed
+ * (`askableCards`); the collections it reads, through the batch's own check,
+ * the one gate every collection read passes; a predicate, with the person.
+ *
+ * 🔴 A predicate that throws refuses: it is the plugin's own code deciding who
+ * may see data, and a decision that could not be made is no. It runs within
+ * the card's budget, as `load` does, so one that never settles fails its card
+ * alone.
+ */
+async function refusedAccess(
+  declared: DeclaredWidget,
+  batch: CardBatch
+): Promise<boolean> {
+  const { access } = declared.declaration;
+  if (typeof access === "function") {
+    try {
+      return (await access({ user: batch.caller.user })) !== true;
+    } catch (error) {
+      logPluginFailure(declared, "widget-access-threw", error);
+      return true;
+    }
+  }
+  if (typeof access === "object" && access !== null) {
+    for (const collection of access.collections) {
+      try {
+        await batch.check({
+          source: `collection:${renamedCollection(collection, declared.collections)}`,
+          op: "count",
+        });
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The refusal a declared widget's own code failing becomes, naming the owner,
+ * the widget and the reason for the operator, and nothing the code said.
+ *
+ * 🔴 No cause in production: a plugin's error can carry the data it was
+ * reading, and the log is no place for it. In development the plugin's own
+ * message and stack are logged too, so an author can see why their widget
+ * failed.
+ */
+function pluginFailure(
+  declared: DeclaredWidget,
+  reason: string,
+  error: unknown
+): NextlyError {
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage: `Declared widget "${declared.declaration.id}" of ${declared.owner} failed: ${reason}`,
+    logContext: {
+      owner: declared.owner,
+      widget: declared.declaration.id,
+      reason,
+      ...authorsOwnError(error),
+    },
+  });
+}
+
+/** The plugin's own error, for the log in development only. */
+function authorsOwnError(error: unknown): { pluginError?: unknown } {
+  if (process.env.NODE_ENV === "production") return {};
+  return {
+    pluginError:
+      error instanceof Error
+        ? { message: error.message, stack: error.stack }
+        : String(error),
+  };
+}
+
+/** Logs a failure of a widget's own code that refuses rather than fails the card. */
+function logPluginFailure(
+  declared: DeclaredWidget,
+  reason: string,
+  error: unknown
+): void {
+  // Guarded as `failedSlot` guards its own: a log that throws must not fail the card.
+  try {
+    getNextlyLogger().warn({
+      kind: "declared-widget-refused",
+      ...pluginFailure(declared, reason, error).toLogJSON("declared-widget"),
+    });
+  } catch {
+    // Deliberately swallowed; see above.
+  }
+}
+
+/** Runs one of a widget's own functions, turning what it throws into `pluginFailure`. */
+async function ownCode<T>(
+  declared: DeclaredWidget,
+  reason: string,
+  run: () => T | Promise<T>
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    // 🔴 Whatever it throws is the plugin's, a NextlyError included: one imported from the SDK
+    // carries the plugin's own public message and log context, which can hold the data it was
+    // reading. Core's own errors never pass through here: the card's budget and a batch given up
+    // are decided around this call, and settle the card before anything thrown in here is read.
+    throw pluginFailure(declared, reason, error);
+  }
+}
+
+/** That a widget's access refused the person asking, for whoever is debugging it. */
+function logRefusedAccess(declared: DeclaredWidget): void {
+  // Guarded as `failedSlot` guards its own: a log that throws must not fail the card.
+  try {
+    getNextlyLogger().debug({
+      kind: "declared-widget-access-refused",
+      owner: declared.owner,
+      widget: declared.declaration.id,
+    });
+  } catch {
+    // Deliberately swallowed; see above.
+  }
+}
+
+/**
+ * One card's answer, as the person asking, decided in this order, each before
+ * the widget's own `load` runs:
+ *
+ * 1. Its `access`: a person it refuses gets the one "not available" answer.
+ * 2. Its settings: one with no value asks the reader for it (`needs-setting`).
+ * 3. Its `shows`: no leaves the card out for this person (`not-shown`).
+ * 4. Its `load`, with its settings, the person, read services bound to them,
+ *    the card's signal, the batch's instant and the owner's share scope. What
+ *    it throws, and an answer JSON cannot carry, fails this card alone.
+ *
+ * Then its `isEmpty`, in the same slot, when the declaration states one.
  */
 async function answerCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  asked: Parameters<ReadyCardData["answer"]>[0]
-): Promise<{ result: WidgetResult; empty: boolean }> {
-  const { signal, scope, now } = asked;
+  asked: CardInput
+): Promise<CardAnswer> {
+  if (await refusedAccess(declared, batch)) {
+    // Routine, not a failure: a person without access is answered "not available" on every load,
+    // so it is said at debug level, not as an error (a predicate that threw has warned already).
+    logRefusedAccess(declared);
+    return { settled: unavailableSlot() };
+  }
   const { declaration, collections } = declared;
-  const { isEmpty } = declaration;
-  if (typeof declaration.load === "function") {
-    const run = declaration.load as (input: unknown) => Promise<unknown>;
-    const value = await run({
-      settings: resolveCardSettings(declaration.settings, placement.config),
-      user: batch.caller.user,
+  const settings = resolveCardSettings(declaration.settings, placement.config);
+  const missing = unsetSetting(declaration.settings, settings);
+  if (missing !== undefined) {
+    return {
+      settled: {
+        ok: false,
+        error: `Choose ${missing.label} in the card's settings`,
+        code: "needs-setting",
+        setting: missing.label,
+      },
+    };
+  }
+  const { signal, scope, now } = asked;
+  const input = {
+    settings,
+    user: batch.caller.user,
+    signal,
+    scope,
+    now,
+    services: bindReadServices({
+      caller: batch.caller,
+      prepare: batch.check,
       signal,
-      scope,
       now,
-      services: bindReadServices({
-        caller: batch.caller,
-        prepare: batch.check,
-        signal,
-        now,
-        ...(collections === undefined ? {} : { collections }),
-      }),
-    });
-    const result = cardAnswerResult(declared.display, value, declaration.id);
-    return { result, empty: isEmpty?.(value) === true };
-  }
-  // Through the one checked builder: a query its display cannot draw fails
-  // this card alone, rather than reaching the admin as an answer it misreads.
-  const built = checkedCardQuery(declared, placement.config);
-  // A query that cannot be written (a setting it needs has no value) is a card
-  // with nothing it may be asked: the one unavailable answer, like any other.
-  if (built === undefined) {
-    failUnavailableSourceOrOp(
-      `card "${placement.id}" of widget "${declaration.id}" has no query to run`
+      ...(collections === undefined ? {} : { collections }),
+    }),
+  };
+  const { shows, load, isEmpty } = declaration;
+  if (shows !== undefined) {
+    const shown = await ownCode(declared, "widget-shows-threw", () =>
+      shows(input)
     );
+    if (shown !== true) {
+      return {
+        settled: { ok: false, error: "Not shown for you", code: "not-shown" },
+      };
+    }
   }
-  const query = await batch.check(built);
-  const result = answerAsAsked(
-    query,
-    await executeWidgetQuery(query, batch.caller, {
-      signal,
-      scope,
-      now: new Date(now),
-    })
-  );
-  return { result, empty: isEmpty?.(result) === true };
+  const value = await ownCode(declared, "widget-load-threw", () => load(input));
+  const result = cardAnswerResult(declared.display, value, {
+    widget: declaration.id,
+    owner: declared.owner,
+  });
+  return { result, empty: isEmpty?.(value) === true };
 }
