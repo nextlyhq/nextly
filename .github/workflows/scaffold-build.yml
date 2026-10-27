@@ -854,7 +854,9 @@ jobs:
           for archive in /categories/after-build /tags/after-build; do
             for page in "" "?page=2"; do
               fetch "$archive$page"
-              listed=$(grep -o 'href="/blog/after-build-[0-9]*"' /tmp/archive.html | sort -u | wc -l)
+              # `|| true`: a page listing none is a count of 0 for the check below, not
+              # a grep failure that ends the step without saying why.
+              listed=$({ grep -o 'href="/blog/after-build-[0-9]*"' /tmp/archive.html || true; } | sort -u | wc -l)
               expected=9
               [ -n "$page" ] && expected=1
               [ "$listed" -eq "$expected" ] || {
