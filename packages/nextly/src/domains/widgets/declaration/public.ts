@@ -19,7 +19,6 @@ export {
   type WidgetProps,
   type WidgetReadServices,
   type WidgetRenderSize,
-  type WidgetWidth,
 } from "./define-widget";
 export type {
   AdminDashboardConfig,

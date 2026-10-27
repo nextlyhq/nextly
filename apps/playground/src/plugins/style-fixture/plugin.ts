@@ -34,7 +34,7 @@ export const styleFixturePlugin = definePlugin({
           id: "style-fixture/notes",
           title: "Fixture notes",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 4 } },
           content: [
             "## Release checklist",
             "",
@@ -53,7 +53,7 @@ export const styleFixturePlugin = definePlugin({
           id: "style-fixture/recent",
           title: "Fixture recent posts",
           archetype: "list",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 4 } },
           query: {
             source: "collection:posts",
             op: "list",

@@ -54,7 +54,7 @@ function register(id: string, patch: Record<string, unknown> = {}): void {
     id,
     title: id,
     archetype: "text",
-    defaultSize: "md",
+    size: { default: { w: 4, h: 3 } },
     content: `notes for ${id}`,
     ...patch,
   };

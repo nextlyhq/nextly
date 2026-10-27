@@ -2,32 +2,38 @@
  * A reader's own arrangement of the dashboard: what it stores, and what it
  * refuses to store.
  *
- * ## One ordered list of cards, each at a width
+ * ## One ordered list of cards, each at a size
  *
  * A stored arrangement is a list of placements whose ARRAY ORDER is the order
- * the cards are drawn in, each at one of five widths (`widths.ts`). There is no
- * column and no page-wide column count: cards fill rows left to right and wrap.
+ * the cards are drawn in, each sized `{ w, h }` in grid units (`grid-size.ts`):
+ * `w` columns of twelve and `h` rows. Cards fill the grid left to right and
+ * wrap, and nothing about a card's size is stored but those two numbers.
  *
- * Arrangements saved in the two earlier formats are CONVERTED when read and
- * never written back by the read: the flat first format, and the columns
- * format after it. A converted row is stored in the current format at its
- * owner's next save, and until then the row stays exactly as it was. A read
- * that wrote would race the version guard and a second tab, turning reads into
- * conflicts.
+ * ## A row of an earlier format is no saved arrangement
+ *
+ * 🔴 Nothing is converted. A row this core wrote in an earlier format is read
+ * as though its reader had no row at all: they are handed the current default
+ * and follow it, and nothing of the row is carried over -- no card, size,
+ * setting, removal or skipped Get started step. Only the row's version number
+ * is read. The read never writes, so the row stays exactly as it was until its
+ * owner's next write of any kind replaces it with a row of the current format,
+ * holding only what that write says, as it would create a row for someone who
+ * had none. A read that wrote would race the version guard and a second tab,
+ * turning reads into conflicts.
  *
  * ## The stored layout is a THIRD reader of the widget contract
  *
  * The registry and the plugin channel are the other two. This one holds data
  * THIS core wrote, about widgets it did not, which is why its validation is
- * SHAPE ONLY. Whether a `widgetId` names a widget that exists, or a width is
- * one the widget allows, are questions about the live registry, asked on every
- * read rather than frozen here. The width itself is core's own vocabulary, so
- * it is the one field checked against a closed list.
+ * SHAPE ONLY. Whether a `widgetId` names a widget that exists, or a size lies
+ * within the widget's current bounds, are questions about the live registry,
+ * asked on every read rather than frozen here. Whether a size is one the grid
+ * can draw at all is the grid's own rule, so it is the one field judged here.
  *
  * ## What a placement deliberately does NOT hold
  *
  * 🔴 No `requiredPermission`, and no other copy of anything the definition
- * owns. A placement stores an identity, a width and its settings. Every
+ * owns. A placement stores an identity, a size and its settings. Every
  * question about whether this reader may SEE the widget is asked of the live
  * registry on every read, so a permission tightened after a layout was saved
  * takes effect at once.
@@ -47,15 +53,15 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { CONTENT_WIDTHS, NEEDS_ATTENTION_WIDTHS } from "./core-widget-widths";
+import {
+  GRID_COLUMNS,
+  isGridSize,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
+  type GridSize,
+} from "./grid-size";
 import { MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
-import {
-  WIDGET_WIDTHS as WIDGET_WIDTH_ORDER,
-  isWidgetWidth,
-  widthFromSize,
-  type WidgetWidth,
-} from "./widths";
 
 // The payload's version, writer and size check live in the import-free
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
@@ -69,11 +75,16 @@ export {
 } from "./layout-payload";
 
 /**
- * How many columns the flat first format was dealt across when it was read as
- * columns. A fact of that conversion, kept as its own constant so it cannot
- * move with anything the dashboard does today.
+ * The versions this core wrote before the current one: the flat first format,
+ * the columns format after it, and the list of named widths.
+ *
+ * 🔴 Named, rather than "anything below the current version". A row with no
+ * version, or one naming a version this core never wrote, is not an earlier
+ * format to reset: it is a row nothing here understands, and it stays on the
+ * unreadable path, with its operator record and the reader's confirmation
+ * before a save replaces it.
  */
-const FIRST_FORMAT_COLUMNS = 3;
+const EARLIER_LAYOUT_VERSIONS: ReadonlySet<unknown> = new Set([1, 2, 3]);
 
 /** One card, at one position in the list, for one reader. */
 export interface WidgetPlacement {
@@ -82,13 +93,15 @@ export interface WidgetPlacement {
   /** Which registry entry this draws. Resolved live on every read. */
   widgetId: string;
   /**
-   * How wide the card is. KEPT as stored even when the widget no longer
-   * allows it: the admin draws the nearest width it does allow, and the stored
-   * choice comes back if the widget allows it again.
+   * How many grid columns the card spans, 1 to 12. KEPT as stored even when it
+   * lies outside the widget's current bounds: the admin draws the nearest size
+   * inside them, and the stored size stays until its owner saves.
    */
-  width: WidgetWidth;
+  w: number;
+  /** How many grid rows the card spans, kept as stored as `w` is. */
+  h: number;
   /**
-   * Removed cards are RETURNED and kept, settings and width included, so a
+   * Removed cards are RETURNED and kept, settings and size included, so a
    * reader can put one back where it was.
    */
   removed: boolean;
@@ -134,161 +147,9 @@ export interface StoredLayout {
 export interface PlaceableWidget {
   id: string;
   defaultOrder?: number;
-  /** The width a new card starts at. A widget that says nothing is full. */
-  defaultWidth?: WidgetWidth;
+  /** The size a new card starts at: the default of the widget's bounds. */
+  size: GridSize;
 }
-
-/**
- * What a retired widget's cards become.
- *
- * 🔴 ONE map of these, applied on EVERY read whatever the row's format, the
- * current one included. So a widget can be retired after rows were already
- * saved in the current format and still reach them, and a row with nothing to
- * map comes back unchanged.
- */
-export interface WidgetRetirement {
-  /** The widget a retired card becomes. */
-  successor: string;
-  /**
-   * WHICH card of the successor a card becomes, read off the card in its
-   * successor form: for a successor that shows one collection, that
-   * collection. Two cards merge only when they become the same successor with
-   * the same identity, so Posts count and Products health stay two cards.
-   * Absent, a successor has one identity, and its cards all merge.
-   */
-  identity?: (placement: WidgetPlacement) => string | undefined;
-  /**
-   * The successor's settings, from the retired card's. Absent, the retired
-   * card's settings are carried as they are.
-   */
-  settings?: (
-    placement: WidgetPlacement
-  ) => Record<string, unknown> | undefined;
-  /**
-   * The widths the successor allows, used to pick a merged card's width: the
-   * largest of the merged cards' widths that the successor allows. Declared
-   * here rather than read from the live registry, so the conversion stays a
-   * function of the stored text and this map. Absent, every width.
-   */
-  allowedWidths?: readonly WidgetWidth[];
-  /**
-   * When a merged card starts removed: `"all"` (the default) only if every card
-   * merged into it was removed; `"any"` if any one was. `"any"` is for cards
-   * whose removal was a reader's explicit dismissal of what the successor now
-   * does, so merging must not undo it; the card stays recoverable from Removed.
-   */
-  removed?: "all" | "any";
-}
-
-/**
- * Retired widgets, each with what its cards become. A `ReadonlyMap` of exact
- * ids is one; {@link widgetRetirements} adds the families of ids minted per
- * collection or Single, which no list of exact ids can name.
- */
-export interface WidgetRetirements {
-  /** What a card of this widget becomes, or `undefined` when it is not retired. */
-  get(widgetId: string): WidgetRetirement | undefined;
-  /** Every retirement, for the successors they name. */
-  values(): Iterable<WidgetRetirement>;
-}
-
-/** A family of retired ids, matched by their shape rather than spelled out. */
-export interface WidgetRetirementPattern {
-  matches: (widgetId: string) => boolean;
-  retirement: WidgetRetirement;
-}
-
-/**
- * The retirements over exact ids, then over the families `patterns` match.
- * An exact id wins over a pattern, so one id is never answered two ways.
- */
-export function widgetRetirements(
-  exact: ReadonlyMap<string, WidgetRetirement>,
-  patterns: readonly WidgetRetirementPattern[] = []
-): WidgetRetirements {
-  return {
-    get: widgetId =>
-      exact.get(widgetId) ??
-      patterns.find(pattern => pattern.matches(widgetId))?.retirement,
-    values: () => [
-      ...exact.values(),
-      ...patterns.map(pattern => pattern.retirement),
-    ],
-  };
-}
-
-/** What a Collections, Singles or per-Single card becomes: the one Content card. */
-const INTO_CONTENT: WidgetRetirement = {
-  successor: "core/content",
-  allowedWidths: CONTENT_WIDTHS.allowedWidths,
-};
-
-/**
- * A per-Single card's id: `single/<slug>-status`, as the generated set mints
- * it. Matched by shape, since there is one per Single the install ever had.
- */
-const PER_SINGLE_CARD = /^single\/[a-z0-9-]+-status$/;
-
-/**
- * The widgets this release has retired.
- *
- * - "Unpublished changes" became one kind of Needs attention. It had no
- *   settings and one card per dashboard, so its card becomes the Needs
- *   attention card, merging into one the layout already holds. Needs attention
- *   draws from a third to the full width, so a quarter-width card is drawn at a
- *   third.
- * - Collections, Singles and the per-Single cards became Content, and the
- *   setup checklist and the sample-content offer became Get started (below).
- */
-export const RETIRED_WIDGETS: WidgetRetirements = widgetRetirements(
-  new Map<string, WidgetRetirement>([
-    [
-      "core/pending-edits",
-      {
-        successor: "core/needs-attention",
-        allowedWidths: NEEDS_ATTENTION_WIDTHS.allowedWidths,
-      },
-    ],
-    // - Collections and Singles became one Content card, which lists both.
-    //   Every saved layout holds the two (a save carries the cards a condition
-    //   hid), so they merge: the first one's id and position, the larger width
-    //   Content allows, removed only if both were.
-    ["core/collections", INTO_CONTENT],
-    ["core/singles", INTO_CONTENT],
-    // - The setup checklist and the sample-content offer became the one Get
-    //   started card, at full width only. A layout holding both (every saved
-    //   row does, since a save carries the cards a condition hid) gets one
-    //   card, with the first one's id and position. Removed if EITHER was:
-    //   removing either one was a reader turning that help away, and Get
-    //   started is both, so merging must not bring it back. It stays
-    //   recoverable from Removed.
-    [
-      "core/onboarding-checklist",
-      {
-        successor: "core/get-started",
-        allowedWidths: ["full"],
-        removed: "any",
-      },
-    ],
-    [
-      "core/seed-demo-content",
-      {
-        successor: "core/get-started",
-        allowedWidths: ["full"],
-        removed: "any",
-      },
-    ],
-  ]),
-  [
-    // - A per-Single card became Content, merging into the Content card a
-    //   layout already holds. Its settings were about one Single, which
-    //   Content does not take, so they are not carried.
-    {
-      matches: widgetId => PER_SINGLE_CARD.test(widgetId),
-      retirement: { ...INTO_CONTENT, settings: () => undefined },
-    },
-  ]
-);
 
 function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -298,26 +159,31 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** `undefined`, or a string with real text in it. */
-function optionalTextProblem(
-  value: unknown,
-  field: string
-): string | undefined {
-  if (value === undefined) return undefined;
-  return typeof value === "string"
-    ? undefined
-    : `"${field}", when given, must be a string`;
-}
-
 type PlacementRule = (placement: Record<string, unknown>) => string | undefined;
 
-/** The rules every placement's identity and settings satisfy, in any format. */
-const COMMON_RULES: readonly PlacementRule[] = [
+/**
+ * The rules a placement satisfies, as a LIST rather than a ladder (one
+ * function per field, so no single function trips the complexity gate, and
+ * each answers in words the sender of a refused PUT can act on).
+ *
+ * A body in an earlier format fails here: it has no `w` and no `h`. That is
+ * the refusal of an earlier format the endpoint promises, reached by the same
+ * rules a stored row is read with, so the two cannot disagree.
+ */
+const PLACEMENT_RULES: readonly PlacementRule[] = [
   p => (isUsableText(p.id) ? undefined : 'a placement needs a non-empty "id"'),
   p =>
     isUsableText(p.widgetId)
       ? undefined
       : 'a placement needs a non-empty "widgetId"',
+  // The grid's own rule, asked through the one function that states it. Only
+  // whether the grid can draw the size: the widget's bounds are the registry's.
+  p =>
+    isGridSize({ w: p.w, h: p.h })
+      ? undefined
+      : `"w" and "h" must be whole numbers the grid can draw, "w" from 1 to ${GRID_COLUMNS} and "h" from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}`,
+  p =>
+    typeof p.removed === "boolean" ? undefined : '"removed" must be a boolean',
   p =>
     p.config === undefined || isPlainObject(p.config)
       ? undefined
@@ -326,52 +192,6 @@ const COMMON_RULES: readonly PlacementRule[] = [
     p.config !== undefined && exceedsDepth(p.config, MAX_CONFIG_DEPTH)
       ? `"config" may nest at most ${MAX_CONFIG_DEPTH} levels`
       : undefined,
-];
-
-/**
- * The rules a placement of the CURRENT format satisfies, as a LIST rather than
- * a ladder (one function per field, so no single function trips the
- * complexity gate, and each answers in words the sender of a refused PUT can
- * act on).
- *
- * A body in an earlier format fails here: it has no `width` and no `removed`.
- * That is the refusal of an earlier format the endpoint promises, reached by
- * the same rules a stored row is read with, so the two cannot disagree.
- */
-const PLACEMENT_RULES: readonly PlacementRule[] = [
-  ...COMMON_RULES,
-  p =>
-    isWidgetWidth(p.width)
-      ? undefined
-      : '"width" must be one of quarter, third, half, twoThirds or full',
-  p =>
-    typeof p.removed === "boolean" ? undefined : '"removed" must be a boolean',
-];
-
-/**
- * The rules a placement of the COLUMNS format satisfied (and the flat format
- * before it, which had the same fields less `column`). Kept only to read those
- * rows: nothing writes them any more.
- *
- * `size` and `height` are checked as STRINGS, never against a vocabulary: a
- * size was seeded from a widget's declaration, which may have come from a
- * plugin built against a newer core, and a closed check would have taken the
- * reader's whole saved dashboard down over one card.
- */
-const COLUMNS_FORMAT_RULES: readonly PlacementRule[] = [
-  ...COMMON_RULES,
-  // `Number.isFinite`, not `typeof === "number"`: NaN and both infinities are
-  // numbers JSON cannot carry.
-  p =>
-    Number.isFinite(p.order) ? undefined : '"order" must be a finite number',
-  p =>
-    typeof p.hidden === "boolean" ? undefined : '"hidden" must be a boolean',
-  p =>
-    p.column === undefined || Number.isFinite(p.column)
-      ? undefined
-      : '"column", when given, must be a finite number',
-  p => optionalTextProblem(p.size, "size"),
-  p => optionalTextProblem(p.height, "height"),
 ];
 
 /**
@@ -498,7 +318,8 @@ function toPlacement(value: Record<string, unknown>): WidgetPlacement {
   return {
     id: value.id as string,
     widgetId: value.widgetId as string,
-    width: value.width as WidgetWidth,
+    w: value.w as number,
+    h: value.h as number,
     removed: value.removed as boolean,
     ...(value.config === undefined
       ? {}
@@ -513,329 +334,37 @@ function toPlacement(value: Record<string, unknown>): WidgetPlacement {
  * the decoded object through, so nothing a client chose to add is stored.
  */
 export function readPlacements(value: unknown): WidgetPlacement[] {
-  return readWith(value, PLACEMENT_RULES).map(toPlacement);
-}
-
-function readWith(
-  value: unknown,
-  rules: readonly PlacementRule[]
-): Record<string, unknown>[] {
   if (!Array.isArray(value)) {
     throw NextlyError.invalidInput({
       message: 'Invalid dashboard layout: "placements" must be an array.',
     });
   }
   return value.map((entry, index) => {
-    const problem = firstProblem(entry, rules);
+    const problem = placementProblem(entry);
     if (problem !== undefined) {
       throw NextlyError.invalidInput({
         message: `Invalid dashboard layout: placements[${index}] ${problem}.`,
       });
     }
-    return entry as Record<string, unknown>;
-  });
-}
-
-/** A placement of the columns format, as that format stored it. */
-interface ColumnsFormatPlacement {
-  id: string;
-  widgetId: string;
-  column: number;
-  order: number;
-  hidden: boolean;
-  size?: string;
-  config?: Record<string, unknown>;
-}
-
-function toColumnsFormatPlacement(
-  value: Record<string, unknown>
-): ColumnsFormatPlacement {
-  return {
-    id: value.id as string,
-    widgetId: value.widgetId as string,
-    // Absent was read as the first column by the format itself.
-    column:
-      typeof value.column === "number"
-        ? Math.max(0, Math.trunc(value.column))
-        : 0,
-    order: value.order as number,
-    hidden: value.hidden as boolean,
-    ...(value.size === undefined ? {} : { size: value.size as string }),
-    ...(value.config === undefined
-      ? {}
-      : { config: value.config as Record<string, unknown> }),
-  };
-}
-
-/**
- * A flat first-format row, read as the columns format read it.
- *
- * Kept step for step, so the conversion that follows sees exactly what every
- * earlier release saw: sorted by `order`, dealt round-robin across three
- * columns, each placement's own `order` kept.
- */
-function firstFormatAsColumns(value: unknown): ColumnsFormatPlacement[] {
-  return readWith(value, COLUMNS_FORMAT_RULES)
-    .map(toColumnsFormatPlacement)
-    .sort((a, b) => a.order - b.order)
-    .map((placement, index) => ({
-      ...placement,
-      column: index % FIRST_FORMAT_COLUMNS,
-    }));
-}
-
-/**
- * A columns-format arrangement, as one ordered list.
- *
- * 🔴 ROW-MAJOR: by `order`, then by `column` -- across the tops of the
- * columns, then the next row down. That is the order positions were announced
- * in, and it keeps the top card of every column near the top. Stable, so equal
- * positions keep their stored order.
- *
- * Each card keeps its id, its settings and its removed state (`hidden`), and
- * its stored size becomes its width. A missing or unknown size becomes full,
- * which is how the admin drew it; the widget's CURRENT default is never
- * consulted, so the same row converts the same way in every release. `column`,
- * `order` and `height` go: the array order replaces the first two, and height
- * follows content.
- */
-function columnsToList(
-  placements: readonly ColumnsFormatPlacement[]
-): WidgetPlacement[] {
-  return [...placements]
-    .sort((a, b) => a.order - b.order || a.column - b.column)
-    .map(placement => ({
-      id: placement.id,
-      widgetId: placement.widgetId,
-      width: widthFromSize(placement.size),
-      removed: placement.hidden,
-      ...(placement.config === undefined ? {} : { config: placement.config }),
-    }));
-}
-
-/** One card on its way through the retirement map. */
-interface RetiringCard {
-  placement: WidgetPlacement;
-  /** The merge group it belongs to, when it is or becomes a successor card. */
-  key?: string;
-  /** Whether it was retired, rather than already a successor card. */
-  retired: boolean;
-  /** The successor's allowed widths, for a retired card. */
-  allowedWidths?: readonly WidgetWidth[];
-  /** Its retirement's removed rule, for a retired card. */
-  removedRule?: "all" | "any";
-}
-
-/** A card's merge key: its successor and which card of it. */
-function mergeKey(
-  successor: string,
-  identity: WidgetRetirement["identity"],
-  placement: WidgetPlacement
-): string {
-  return `${successor}\u0000${identity?.(placement) ?? ""}`;
-}
-
-/** A card in the form one retirement turns it into. */
-function retired(
-  placement: WidgetPlacement,
-  retirement: WidgetRetirement
-): WidgetPlacement {
-  const config = retirement.settings
-    ? retirement.settings(placement)
-    : placement.config;
-  const { config: _replaced, ...rest } = placement;
-  return {
-    ...rest,
-    widgetId: retirement.successor,
-    ...(config === undefined ? {} : { config }),
-  };
-}
-
-/**
- * The retirements a widget goes through, in order, to reach one that is not
- * retired: more than one when its successor was itself retired later. Stops at
- * a widget it has already passed, so a map that loops cannot loop the read.
- */
-function retirementChain(
-  widgetId: string,
-  retirements: WidgetRetirements
-): WidgetRetirement[] {
-  const chain: WidgetRetirement[] = [];
-  const passed = new Set<string>([widgetId]);
-  let next = retirements.get(widgetId);
-  while (next !== undefined) {
-    chain.push(next);
-    if (passed.has(next.successor)) break;
-    passed.add(next.successor);
-    next = retirements.get(next.successor);
-  }
-  return chain;
-}
-
-/** Each card, retired cards in their successor form, with its merge group. */
-function retiringCards(
-  placements: readonly WidgetPlacement[],
-  retirements: WidgetRetirements
-): RetiringCard[] {
-  // How each successor tells its cards apart, so a card ALREADY of that
-  // widget joins the same groups as the cards retired into it.
-  const identityOf = new Map<string, WidgetRetirement["identity"]>();
-  for (const retirement of retirements.values()) {
-    identityOf.set(retirement.successor, retirement.identity);
-  }
-  return placements.map(placement => {
-    const chain = retirementChain(placement.widgetId, retirements);
-    if (chain.length > 0) {
-      // Each step in turn, so a widget retired again since reaches the widget
-      // that exists now, with every step's settings mapping applied.
-      const converted = chain.reduce(retired, placement);
-      const last = chain[chain.length - 1];
-      return {
-        placement: converted,
-        key: mergeKey(last.successor, last.identity, converted),
-        retired: true,
-        ...(last.allowedWidths ? { allowedWidths: last.allowedWidths } : {}),
-        ...(last.removed ? { removedRule: last.removed } : {}),
-      };
-    }
-    if (identityOf.has(placement.widgetId)) {
-      return {
-        placement,
-        key: mergeKey(
-          placement.widgetId,
-          identityOf.get(placement.widgetId),
-          placement
-        ),
-        retired: false,
-      };
-    }
-    return { placement, retired: false };
+    return toPlacement(entry as Record<string, unknown>);
   });
 }
 
 /**
- * The widest of `widths` that `allowed` holds, or the widest of all.
+ * Decodes one stored `layout` column: the arrangement it holds, or `undefined`
+ * for a row of an earlier format, which is no saved arrangement (the module
+ * note). Only an earlier row's version number is read, never its content.
  *
- * Choosing only among the CARRIED widths, never inventing one: when the
- * successor allows none of them, the merged card keeps the reader's widest
- * choice, the way {@link WidgetPlacement.width} keeps any width its widget
- * stops allowing. The admin draws it at the nearest allowed width, and the
- * choice returns if the successor allows it again.
- */
-function widestAllowed(
-  widths: readonly WidgetWidth[],
-  allowed: readonly WidgetWidth[] | undefined
-): WidgetWidth {
-  const rank = (width: WidgetWidth) => WIDGET_WIDTH_ORDER.indexOf(width);
-  const candidates = allowed
-    ? widths.filter(width => allowed.includes(width))
-    : widths;
-  const pool = candidates.length > 0 ? candidates : widths;
-  return pool.reduce((best, width) =>
-    rank(width) > rank(best) ? width : best
-  );
-}
-
-/**
- * The one card a merge group leaves, or `undefined` for a group of one.
- *
- * A successor card the layout already held keeps its id, position, width and
- * settings, and the retired cards merge into it. Otherwise the first card in
- * the order keeps its id, position and settings, and takes the largest of the
- * group's widths that the successor allows. Either way the card is removed only
- * if every card in the group was, unless a retired card's retirement says any
- * one removal carries over (`removed: "any"`).
- */
-function mergedCard(group: readonly RetiringCard[]): RetiringCard {
-  const kept = group.find(card => !card.retired) ?? group[0];
-  // Over the cards IN the merge: the kept one and the retired ones. Another
-  // successor card the layout already held stays as it was, so its state is
-  // no part of this card's.
-  const merged = group.filter(card => card === kept || card.retired);
-  const wasRemoved = (card: RetiringCard) => card.placement.removed === true;
-  const removed = merged.some(card => card.removedRule === "any")
-    ? merged.some(wasRemoved)
-    : merged.every(wasRemoved);
-  if (!kept.retired) {
-    return { ...kept, placement: { ...kept.placement, removed } };
-  }
-  const width = widestAllowed(
-    group.map(card => card.placement.width),
-    kept.allowedWidths
-  );
-  return { ...kept, placement: { ...kept.placement, width, removed } };
-}
-
-/**
- * Replaces every retired widget with its successor, merging the cards that
- * become the same card.
- *
- * Each retired card keeps its id, position, width, removed state and
- * settings, under its successor (settings through the retirement's own
- * mapping, where it has one). Cards merge only when they become the same
- * successor with the same identity -- for a successor showing one collection,
- * the same collection -- and a successor card the layout already held takes
- * part in that merge as the card that is kept. That is the one way a
- * conversion makes fewer cards than it read; every field has one winner, so
- * any two implementations agree. Every other card is left where it is.
- *
- * Returns the same array when nothing is retired, so a row in the current
- * format with nothing to map comes back exactly as it was.
- */
-export function applyRetirements(
-  placements: WidgetPlacement[],
-  retirements: WidgetRetirements
-): WidgetPlacement[] {
-  if (
-    !placements.some(
-      placement => retirements.get(placement.widgetId) !== undefined
-    )
-  ) {
-    return placements;
-  }
-  const cards = retiringCards(placements, retirements);
-  const groups = new Map<string, RetiringCard[]>();
-  for (const card of cards) {
-    if (card.key === undefined) continue;
-    const group = groups.get(card.key) ?? [];
-    group.push(card);
-    groups.set(card.key, group);
-  }
-  // A group's kept card stands in its own place; the rest of the group goes.
-  const keptBy = new Map<RetiringCard, RetiringCard>();
-  for (const group of groups.values()) {
-    if (!group.some(card => card.retired)) continue;
-    const kept = group.find(card => !card.retired) ?? group[0];
-    keptBy.set(kept, mergedCard(group));
-  }
-  return cards.flatMap(card => {
-    if (card.key === undefined) return [card.placement];
-    const group = groups.get(card.key) ?? [];
-    if (!group.some(member => member.retired)) return [card.placement];
-    const merged = keptBy.get(card);
-    if (merged) return [merged.placement];
-    // Only RETIRED cards go into a merge. A successor card the layout already
-    // held, other than the one that takes the merge, stays as it was.
-    return card.retired ? [] : [card.placement];
-  });
-}
-
-/**
- * Decodes one stored `layout` column, converting an earlier format.
- *
- * THROWS on anything it cannot read, rather than quietly resetting to the
+ * THROWS on anything else it cannot read, rather than quietly resetting to the
  * default. A saved arrangement vanishing with no signal is the worse failure:
  * the caller decides what to do with the throw. The service logs it, the
  * dashboard draws the default, the person is told, and the row is left
  * untouched until they choose to replace it.
  *
- * The conversion is a pure function of the stored text and the retirement
- * map, so reading one row twice gives identical cards and ids.
+ * A pure function of the stored text, so reading one row twice gives
+ * identical cards and ids.
  */
-export function readStoredLayout(
-  raw: string,
-  retirements: WidgetRetirements = RETIRED_WIDGETS
-): StoredLayout {
+export function readStoredLayout(raw: string): StoredLayout | undefined {
   let decoded: unknown;
   try {
     decoded = JSON.parse(raw);
@@ -852,54 +381,36 @@ export function readStoredLayout(
     });
   }
 
-  // The ONE version check, legitimate because this core wrote the value. A
-  // version above ours came from a NEWER core and holds fields we would drop
+  // The ONE version check, legitimate because this core wrote the value. An
+  // earlier version is answered before anything else in the row is looked at,
+  // so nothing of its content can reach a reader.
+  if (EARLIER_LAYOUT_VERSIONS.has(decoded.schemaVersion)) return undefined;
+  // A version above ours came from a NEWER core and holds fields we would drop
   // on the next write; one we never had is not a shape to guess at.
-  const placements = placementsOfVersion(decoded);
-  const converted = applyRetirements(placements, retirements);
+  if (decoded.schemaVersion !== LAYOUT_SCHEMA_VERSION) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "stored dashboard layout names an unknown schema version",
+        found: String(decoded.schemaVersion),
+        expected: LAYOUT_SCHEMA_VERSION,
+      },
+    });
+  }
 
+  const placements = readPlacements(decoded.placements);
   // 🔴 REPORTS a repeat rather than resolving one. Resolving across the whole
   // row would let a card this caller may not know exists claim an id and push a
   // card they CAN see onto a different one, so the id they are handed would
   // depend on a card that was filtered so they could not learn of it.
-  const { rekeyed } = resolvePlacementIds(converted);
+  const { rekeyed } = resolvePlacementIds(placements);
   return {
     schemaVersion: LAYOUT_SCHEMA_VERSION,
-    placements: converted,
+    placements,
     // `=== true` rather than truthiness: anything else this core did not
-    // write is the ordinary, arranged row. The flat first format predates the
-    // field, and every row of it was arranged.
-    ...(decoded.unarranged === true && decoded.schemaVersion !== 1
-      ? { unarranged: true as const }
-      : {}),
+    // write is the ordinary, arranged row.
+    ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
     ...(rekeyed.length === 0 ? {} : { duplicatePlacementIds: rekeyed }),
   };
-}
-
-/** The placements of a decoded row, in the current format, by its version. */
-function placementsOfVersion(
-  decoded: Record<string, unknown>
-): WidgetPlacement[] {
-  switch (decoded.schemaVersion) {
-    case 1:
-      return columnsToList(firstFormatAsColumns(decoded.placements));
-    case 2:
-      return columnsToList(
-        readWith(decoded.placements, COLUMNS_FORMAT_RULES).map(
-          toColumnsFormatPlacement
-        )
-      );
-    case LAYOUT_SCHEMA_VERSION:
-      return readPlacements(decoded.placements);
-    default:
-      throw NextlyError.internal({
-        logContext: {
-          reason: "stored dashboard layout names an unknown schema version",
-          found: String(decoded.schemaVersion),
-          expected: LAYOUT_SCHEMA_VERSION,
-        },
-      });
-  }
 }
 
 /**
@@ -923,7 +434,7 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
 /**
  * The default arrangement with a reader's choices about its cards applied.
  *
- * For a row that still follows the default: positions, widths and the set of
+ * For a row that still follows the default: positions, sizes and the set of
  * cards all come from `defaults`, and the stored row contributes only what its
  * reader chose about each card -- that they removed it, and the settings they
  * gave it. A setting changed outside customise mode is written to such a row,
@@ -994,9 +505,10 @@ export function defaultPlacements(
   return [...widgets].sort(byDeclaredOrder).map(widget => ({
     id: widget.id,
     widgetId: widget.id,
-    // The width travels WITH the placement: the first save stores it, so a
+    // The size travels WITH the placement: the first save stores it, so a
     // later change to the widget's default does not resize a saved card.
-    width: widget.defaultWidth ?? "full",
+    w: widget.size.w,
+    h: widget.size.h,
     removed: false,
   }));
 }
@@ -1172,11 +684,7 @@ export function visibilityToken(
   readableCollections: Iterable<string> = [],
   // Each Collection setting, as `id=declaration`: a plugin changing one, its
   // name or its default, moves a stored card between withheld and shown.
-  collectionSettings: Iterable<string> = [],
-  // The facts a saved generated card's conversion is exact on, as
-  // `id=query`: a timeline's date field changing turns a converted card back
-  // into a stored one with no widget id changing.
-  conversionFacts: Iterable<string> = []
+  collectionSettings: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -1188,7 +696,6 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
-          ...[...conversionFacts].sort().map(entry => `converts:${entry}`),
         ].join("\n")
       )
       .digest("base64url")
