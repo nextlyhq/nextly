@@ -6,6 +6,7 @@
 // why instead, and the dialog does not offer Apply.
 
 import { Badge, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { AlertTriangle, Check, Copy } from "@admin/components/icons";
 import { useCopyToClipboard } from "@admin/hooks/useCopyToClipboard";
@@ -115,7 +116,7 @@ export function LeavingTranslationNotice({
   fields,
 }: {
   fields: readonly SchemaPreviewLeavingTranslation[];
-}) {
+}): JSX.Element | null {
   if (fields.length === 0) return null;
   return (
     <div className="space-y-3 rounded-md border border-border bg-primary/5 p-3">

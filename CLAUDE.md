@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (6c9a8e7eb27eeae9). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (1366e26d8f191147). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -76,7 +76,7 @@ Claude Code loads by path, `.claude/rules/integration-tests.md` for
   `/templates` (`base`, `blank`, `blog`, `plugin`).
 - `packages/ui` - shared React components and the design-token theme.
 - `packages/admin-css`, `packages/eslint-plugin`, `packages/module-specifiers`,
-  `packages/eslint-config`, `packages/prettier-config`, `packages/tsconfig`,
+  `packages/eslint-config` (empty), `packages/prettier-config`, `packages/tsconfig`,
   `packages/telemetry` - shared tooling and support packages.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
@@ -143,7 +143,8 @@ slot left RESERVED: the `working-in-worktrees` skill.
   self-skip when the dialect's URL is unset. Their databases are the
   containers in `docker-compose.test.yml`, which neither `pnpm docker:test`
   nor `pnpm docker:up` starts. NEVER point a TEST\_\* URL at a database you did
-  not create for the run, and never re-enable integration parallelism.
+  not create for the run; parallel integration files need a database per
+  worker.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
@@ -390,9 +391,8 @@ already in hand may move; preconditions may not.
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
 instead of `readAccessCaller`, or a rule handed permissions not spelled as
-stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
-one release. Two doors that answer one key differently is a defect this
-repository has already had.
+stored (`read-posts`), such as the earlier `posts:read`. Two doors that answer
+one key differently is a defect this repository has already had.
 
 ### One question has one implementation
 

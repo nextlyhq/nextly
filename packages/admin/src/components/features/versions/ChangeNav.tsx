@@ -8,6 +8,7 @@
  */
 
 import { ArrowDown, ArrowUp } from "lucide-react";
+import type { JSX } from "react";
 
 import { Button } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
@@ -28,7 +29,7 @@ export function ChangeNav({
   onMove: (delta: -1 | 1) => void;
   /** Where it shows: the editor's bar hides it on a phone, for instance. */
   className?: string;
-}) {
+}): JSX.Element {
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
       <span className="text-muted-foreground" aria-hidden="true">

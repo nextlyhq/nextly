@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
+  DASHBOARD_FULL_MESSAGE,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
   RETIRED_WIDGETS,
@@ -717,10 +718,36 @@ describe("partitioning by what a reader may see", () => {
         .visible
     ).toHaveLength(1);
   });
+
+  it("puts a withheld card of a visible widget in the invisible half", () => {
+    const set = (to: string) =>
+      card(to, "core/a", { config: { collection: to } });
+    const { visible: shown, invisible } = partitionPlacements(
+      [set("posts"), set("secret")],
+      visible,
+      placement => placement.config?.collection === "secret"
+    );
+    expect(shown.map(p => p.id)).toEqual(["posts"]);
+    expect(invisible.map(p => p.id)).toEqual(["secret"]);
+  });
 });
 
 describe("merging a write with the cards the writer could not see", () => {
   const visible = new Set(["core/a", "core/b", "core/c"]);
+
+  it("carries a withheld card of a visible widget back in place", () => {
+    // A Count card set to a collection the writer may not read is not in what
+    // they were handed, so their save cannot hold it: dropping it would
+    // delete it.
+    const secret = card("S", "core/a", { config: { collection: "secret" } });
+    const merged = mergePreservingHidden(
+      [card("b"), card("a")],
+      [card("a"), secret, card("b")],
+      visible,
+      placement => placement.config?.collection === "secret"
+    );
+    expect(merged.map(p => p.id)).toEqual(["b", "a", "S"]);
+  });
 
   it("puts each carried card back after the card it followed", () => {
     // Stored: a, H1, b, H2, c. The writer moves c to the front. H1 still
@@ -782,6 +809,24 @@ describe("merging a write with the cards the writer could not see", () => {
     ]);
   });
 
+  it("keeps a withheld card of a one-card widget beside the one the caller adds", () => {
+    // 🔴 Neither refused nor replaced. Refusing the add would tell the caller
+    // a card they may not see exists; dropping the hidden card would lose it.
+    // Both are kept, and the read allows a row that already holds more than
+    // one, so the arrangement still saves when both are shown.
+    const hidden = card("old", "acme/pinned", {
+      config: { source: "secret" },
+    });
+    const added = card("new", "acme/pinned", { config: { source: "posts" } });
+    const merged = mergePreservingHidden(
+      [added],
+      [hidden],
+      new Set(["acme/pinned"]),
+      placement => placement.config?.source === "secret"
+    );
+    expect(merged).toEqual([hidden, added]);
+  });
+
   it("drops the latest carried cards past the stored ceiling, never the caller's", () => {
     const submitted = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
       card(`v${i}`, "core/a")
@@ -813,12 +858,18 @@ describe("the size ceiling", () => {
     expect(layoutSizeProblem(many)).toMatch(/at most/);
   });
 
-  it("measures BYTES, not characters", () => {
+  it("measures BYTES, not characters, and says the dashboard is full", () => {
     // A multi-byte payload under the character count but over the byte limit.
     const wide = "\u{1F600}".repeat(9000);
+    expect(layoutSizeProblem([card("a", "core/a", { config: { wide } })])).toBe(
+      DASHBOARD_FULL_MESSAGE
+    );
+    // The must-differ half: as many characters, one byte each, fit.
     expect(
-      layoutSizeProblem([card("a", "core/a", { config: { wide } })])
-    ).toMatch(/bytes/);
+      layoutSizeProblem([
+        card("a", "core/a", { config: { wide: "x".repeat(9000) } }),
+      ])
+    ).toBeUndefined();
   });
 });
 
@@ -837,6 +888,31 @@ describe("the visibility token", () => {
 
   it("moves when a shortcut's gate is gained or lost, with the widgets unchanged", () => {
     expect(visibilityToken(["a"], [])).not.toBe(visibilityToken(["a"], ["g"]));
+  });
+
+  it("moves when the collections a reader may read change by name alone", () => {
+    // Renaming `a_b` to `a-b` keeps every widget id and changes this.
+    expect(visibilityToken(["a"], [], ["a_b"])).not.toBe(
+      visibilityToken(["a"], [], ["a-b"])
+    );
+    expect(visibilityToken(["a"], [])).toBe(visibilityToken(["a"], [], []));
+  });
+
+  it("moves when a Collection setting changes, with nothing else changing", () => {
+    // A stored card is judged by the setting -- its default when it stores no
+    // value -- so a plugin changing it moves that card between withheld and
+    // shown.
+    expect(visibilityToken(["a"], [], [], ['a="posts"'])).not.toBe(
+      visibilityToken(["a"], [], [], ['a="secret"'])
+    );
+  });
+
+  it("moves when a fact a conversion is exact on changes, with nothing else changing", () => {
+    expect(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=createdAt"])
+    ).not.toBe(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=eventOn"])
+    );
   });
 
   it("cannot mistake a held gate for a widget id", () => {
@@ -1090,5 +1166,231 @@ describe("Unpublished changes retires into Needs attention", () => {
       "core/needs-attention",
     ]);
     expect(read(once)).toEqual(once);
+  });
+});
+
+describe("Collections, Singles and the per-Single cards retire into Content", () => {
+  // The production map, so these hold for the rows this release converts.
+  const read = (placements: WidgetPlacement[]) =>
+    readStoredLayout(serializeLayout(placements), RETIRED_WIDGETS).placements;
+  const CONTENT = "core/content";
+
+  it("makes one Content card at the first one's position, whichever came first", () => {
+    expect(
+      read([
+        card("a"),
+        card("cols", "core/collections"),
+        card("b"),
+        card("sing", "core/singles"),
+      ])
+    ).toEqual([card("a"), card("cols", CONTENT), card("b")]);
+    // 🔴 Singles first: kept as an existing successor, Content would have
+    // stood at Collections' place instead.
+    expect(
+      read([
+        card("sing", "core/singles"),
+        card("a"),
+        card("cols", "core/collections"),
+      ])
+    ).toEqual([card("sing", CONTENT), card("a")]);
+  });
+
+  it("takes the larger width Content allows, and keeps the widest when it allows none", () => {
+    expect(
+      read([
+        card("cols", "core/collections", { width: "half" }),
+        card("sing", "core/singles", { width: "twoThirds" }),
+      ])[0]?.width
+    ).toBe("twoThirds");
+    expect(
+      read([
+        card("cols", "core/collections", { width: "quarter" }),
+        card("sing", "core/singles", { width: "third" }),
+      ])[0]?.width
+    ).toBe("third");
+  });
+
+  for (const [cols, sing] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
+    it(`is removed only if both were (Collections removed: ${cols}, Singles removed: ${sing})`, () => {
+      for (const order of [
+        [
+          card("cols", "core/collections", { removed: cols }),
+          card("sing", "core/singles", { removed: sing }),
+        ],
+        [
+          card("sing", "core/singles", { removed: sing }),
+          card("cols", "core/collections", { removed: cols }),
+        ],
+      ]) {
+        const merged = read(order);
+        expect(merged).toHaveLength(1);
+        expect(merged[0]?.removed).toBe(cols && sing);
+      }
+    });
+  }
+
+  it("merges into a Content card the layout already holds, which keeps its id, position, width and settings", () => {
+    expect(
+      read([
+        card("cols", "core/collections", { width: "full" }),
+        card("content", CONTENT, { width: "half", config: { note: "kept" } }),
+        card("sing", "core/singles", { removed: true }),
+      ])
+    ).toEqual([
+      card("content", CONTENT, { width: "half", config: { note: "kept" } }),
+    ]);
+  });
+
+  it("turns a per-Single card into Content, merging it, without its settings", () => {
+    expect(
+      read([
+        card("home", "single/home-status", { config: { limit: 3 } }),
+        card("about", "single/about-status", { width: "half" }),
+        card("a"),
+      ])
+    ).toEqual([card("home", CONTENT), card("a")]);
+    expect(
+      read([card("content", CONTENT), card("home", "single/home-status")])
+    ).toEqual([card("content", CONTENT)]);
+  });
+
+  it("leaves a card that only looks like a per-Single one, and the generated collection cards, as they are", () => {
+    const kept = [
+      card("near", "single/home-statuses"),
+      card("posts", "collection/posts-count"),
+    ];
+    expect(read(kept)).toEqual(kept);
+  });
+
+  it("changes nothing on a second read of a converted layout", () => {
+    const once = read([
+      card("sing", "core/singles"),
+      card("home", "single/home-status"),
+      card("cols", "core/collections"),
+    ]);
+    expect(once.map(placement => placement.widgetId)).toEqual([CONTENT]);
+    expect(read(once)).toEqual(once);
+  });
+});
+
+describe("the checklist and the sample-content offer retire into Get started", () => {
+  const SEED = "core/seed-demo-content";
+  const CHECKLIST = "core/onboarding-checklist";
+  const STARTED = "core/get-started";
+
+  /** One stored row holding both old cards, in each format a release wrote. */
+  function rowsHolding(
+    first: { id: string; widgetId: string; removed: boolean },
+    second: { id: string; widgetId: string; removed: boolean }
+  ): Record<string, string> {
+    const old = [first, second];
+    return {
+      v1: JSON.stringify({
+        schemaVersion: 1,
+        placements: [
+          ...old.map((c, order) => ({
+            id: c.id,
+            widgetId: c.widgetId,
+            order,
+            hidden: c.removed,
+          })),
+          { id: "team", widgetId: "core/team", order: 2, hidden: false },
+        ],
+      }),
+      v2: columnsRow([
+        ...old.map((c, order) => ({
+          id: c.id,
+          widgetId: c.widgetId,
+          column: 0,
+          order,
+          hidden: c.removed,
+        })),
+        {
+          id: "team",
+          widgetId: "core/team",
+          column: 0,
+          order: 2,
+          hidden: false,
+        },
+      ]),
+      v3: serializeLayout([
+        ...old.map(c => card(c.id, c.widgetId, { removed: c.removed })),
+        card("team", "core/team"),
+      ]),
+    };
+  }
+
+  const read = (raw: string) =>
+    readStoredLayout(raw, RETIRED_WIDGETS).placements;
+
+  for (const [firstWidget, secondWidget] of [
+    [SEED, CHECKLIST],
+    [CHECKLIST, SEED],
+  ] as const) {
+    it(`becomes one full-width card with the first card's id and place (${firstWidget} first)`, () => {
+      const rows = rowsHolding(
+        { id: "first", widgetId: firstWidget, removed: false },
+        { id: "second", widgetId: secondWidget, removed: false }
+      );
+      for (const [format, raw] of Object.entries(rows)) {
+        const placements = read(raw);
+        expect(
+          placements.map(p => [p.id, p.widgetId]),
+          format
+        ).toEqual([
+          ["first", STARTED],
+          ["team", "core/team"],
+        ]);
+        expect(placements[0]?.width, format).toBe("full");
+      }
+    });
+  }
+
+  for (const [seedRemoved, checklistRemoved] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ]) {
+    it(`starts removed when either card was (sample content removed: ${seedRemoved}, checklist removed: ${checklistRemoved})`, () => {
+      // 🔴 Removed only if BOTH were, the default rule, brought back a card a
+      // reader had dismissed: every saved row holds both old cards, and the
+      // sample-content offer could not be removed at all.
+      const expected = seedRemoved || checklistRemoved;
+      for (const order of [
+        [
+          { id: "s", widgetId: SEED, removed: seedRemoved },
+          { id: "c", widgetId: CHECKLIST, removed: checklistRemoved },
+        ],
+        [
+          { id: "c", widgetId: CHECKLIST, removed: checklistRemoved },
+          { id: "s", widgetId: SEED, removed: seedRemoved },
+        ],
+      ] as const) {
+        for (const [format, raw] of Object.entries(
+          rowsHolding(order[0], order[1])
+        )) {
+          const started = read(raw).filter(p => p.widgetId === STARTED);
+          expect(started, format).toHaveLength(1);
+          expect(started[0]?.removed, format).toBe(expected);
+        }
+      }
+    });
+  }
+
+  it("leaves the default rule, removed only if every card was, to every other retirement", () => {
+    const merged = readStoredLayout(
+      serializeLayout([
+        card("pending", "core/pending-edits", { removed: true }),
+        card("attention", "core/needs-attention", { removed: false }),
+      ]),
+      RETIRED_WIDGETS
+    ).placements;
+    expect(merged.map(p => p.removed)).toEqual([false]);
   });
 });

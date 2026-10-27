@@ -23,6 +23,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import { FieldRow } from "@admin/components/features/entries/EntryForm/FieldRow";
@@ -318,7 +319,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   initCollapsed = false,
   isSortable = true,
-}: ComponentRowProps<TFieldValues>) {
+}: ComponentRowProps<TFieldValues>): JSX.Element {
   // Note: _control is reserved for future use - FieldRenderer gets control from FormContext
   void _control;
   const {

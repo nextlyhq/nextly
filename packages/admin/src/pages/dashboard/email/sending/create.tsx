@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
 import {
@@ -24,7 +24,7 @@ import {
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 
-export default function CreateEmailProviderPage() {
+export default function CreateEmailProviderPage(): JSX.Element {
   const { mutate: createProvider, isPending } = useCreateEmailProvider();
   // The catalog of provider types this server registered. The form renders
   // from it, so a provider contributed by a plugin appears here without the

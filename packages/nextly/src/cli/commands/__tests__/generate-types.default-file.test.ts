@@ -16,8 +16,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Command } from "commander";
-import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { compile } from "../../../../../../scripts/tsc-cli.mjs";
 
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
@@ -140,6 +141,10 @@ describe("generate:types with no types path set", () => {
  * reaches first decides the type, here the old one, imported first. So the
  * file reads, through each name and through GeneratedTypes, a part only the
  * newly generated types have: `singles`, and `collections` with none in it.
+ *
+ * Checked by the compiler's command line, which answers the same on every
+ * TypeScript version, through a config written beside the file: `paths` can
+ * only be set there, and resolve from it without a `baseUrl`.
  */
 async function typeErrorsImportingBothNames(
   cwd: string,
@@ -161,19 +166,23 @@ async function typeErrorsImportingBothNames(
       "",
     ].join("\n")
   );
-  const program = ts.createProgram([join(cwd, "src/uses-both.ts")], {
-    strict: true,
-    noEmit: true,
-    skipLibCheck,
-    types: [],
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    baseUrl: cwd,
-    paths: { nextly: ["./nextly-stub.d.ts"] },
-  });
-  return ts
-    .getPreEmitDiagnostics(program)
-    .map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+  await writeFile(
+    join(cwd, "tsconfig.uses-both.json"),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        skipLibCheck,
+        types: [],
+        module: "esnext",
+        moduleResolution: "bundler",
+        paths: { nextly: ["./nextly-stub.d.ts"] },
+      },
+      files: ["src/uses-both.ts"],
+    })
+  );
+  return compile(["-p", "tsconfig.uses-both.json"], cwd).map(
+    d => `${d.code}: ${d.message}`
+  );
 }
 
 describe("a project that kept the re-export, importing both names after generation", () => {

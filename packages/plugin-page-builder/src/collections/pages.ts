@@ -1,5 +1,10 @@
-import type { PreviewViewportsDeclaration } from "nextly/config";
-import { defineCollection, previewUrlFromTemplate, text } from "nextly/config";
+import {
+  defineCollection,
+  previewUrlFromTemplate,
+  text,
+  type CollectionConfig,
+  type PreviewViewportsDeclaration,
+} from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 /**
@@ -98,7 +103,9 @@ export interface PagesCollectionOptions {
  * So this collection stores no derived usage, and takes no document bounds:
  * bounds exist to cap a derivation, and the derivation lives with the index.
  */
-export function pagesCollection(options: PagesCollectionOptions = {}) {
+export function pagesCollection(
+  options: PagesCollectionOptions = {}
+): CollectionConfig {
   const { previewPath, breakpoints } = options;
 
   return defineCollection({

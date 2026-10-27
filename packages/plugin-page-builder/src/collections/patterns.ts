@@ -25,7 +25,13 @@
  *
  * @module collections/patterns
  */
-import { defineCollection, select, text, textarea } from "nextly/config";
+import {
+  defineCollection,
+  select,
+  text,
+  textarea,
+  type CollectionConfig,
+} from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 import { PATTERN_GRANULARITIES } from "../library-contract";
@@ -50,7 +56,7 @@ export { PATTERN_GRANULARITIES };
  * only inserted — so there is no preview path to declare and nothing for a host
  * to configure.
  */
-export function patternsCollection() {
+export function patternsCollection(): CollectionConfig {
   return defineCollection({
     slug: PATTERNS_SLUG,
     labels: { singular: "Pattern", plural: "Patterns" },

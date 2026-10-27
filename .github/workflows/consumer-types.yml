@@ -1,0 +1,84 @@
+name: Consumer types
+
+# Whether a user's project type-checks against the packages as they will be
+# published: every publishable package is packed as package-smoke packs it, the
+# packed manifests are checked for the declarations their `exports` name, and
+# projects scaffolded by the packed `create-nextly-app` are type-checked by each
+# supported TypeScript major against those tarballs (scripts/consumer-types.mjs).
+#
+# attw reads one tarball at a time and asks how each declared subpath resolves.
+# It cannot see a subpath that has gone from the map, since it has nothing to
+# ask about; a scaffolded project that imports it fails to compile. This job
+# runs beside attw, which stays until this check has replaced it.
+#
+# Per pull request, path-filtered to what can change the packed declarations:
+# the packages' sources and templates, the lockfile, the root manifest, and the
+# check itself.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/**"
+      - "templates/**"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "scripts/consumer-types.mjs"
+      - "scripts/jsonc.mjs"
+      - ".github/workflows/consumer-types.yml"
+
+# A pull request run is the event a fork can trigger, so the token reads only.
+permissions:
+  contents: read
+
+# Keyed by ref for pull requests, so a new push supersedes the run under review;
+# keyed by run otherwise, so one dispatch never cancels another.
+concurrency:
+  group: consumer-types-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  consumer-types:
+    name: Scaffolded projects type-check against the packed packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      # The same loop as package-smoke: `pnpm pack` resolves workspace ranges
+      # to concrete versions, and private workspaces are skipped by their
+      # manifest's `private` flag, so the set checked is the set released.
+      - name: Pack all publishable packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/tarballs"
+          for dir in packages/*/; do
+            if node -e "process.exit(require('./${dir}package.json').private ? 0 : 1)"; then
+              continue
+            fi
+            (cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP/tarballs")
+          done
+          ls -l "$RUNNER_TEMP/tarballs"
+
+      # The verdict is the first line of the output, and each problem below it
+      # names the TypeScript version, the project and the leg it came from.
+      - name: Type-check the scaffolded projects
+        run: node scripts/consumer-types.mjs --tarballs "$RUNNER_TEMP/tarballs" --work "$RUNNER_TEMP/consumer-types"

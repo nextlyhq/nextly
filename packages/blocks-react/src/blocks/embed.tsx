@@ -23,7 +23,7 @@
  *
  * @module blocks/embed
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -121,7 +121,7 @@ const EMBED_BASE_STYLES = {
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const embed = defineBlock<EmbedProps, PageContext>({
+export const embed: BlockDefinition<EmbedProps, PageContext> = defineBlock({
   name: "core/embed",
   version: 1,
   description:

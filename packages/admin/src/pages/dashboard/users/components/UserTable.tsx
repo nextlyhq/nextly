@@ -9,7 +9,7 @@ import {
   Skeleton,
 } from "@nextlyhq/ui";
 import { Edit, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
@@ -121,7 +121,7 @@ const ALWAYS_VISIBLE = new Set(["name"]);
  * sync after edits and deletes; the toolbar, selection bar and table come from
  * the shared ListView.
  */
-export default function UserTable() {
+export default function UserTable(): JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const [roleFilter] = useState<string>("all");

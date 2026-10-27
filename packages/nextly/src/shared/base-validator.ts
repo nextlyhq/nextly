@@ -26,6 +26,7 @@ import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 import { MAX_DECIMAL_PRECISION, MAX_DECIMAL_SCALE } from "./decimal-bounds";
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
+import { SLUG_PATTERN } from "./slug-pattern";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 import type {
   CollectionAccessControl,
@@ -84,12 +85,9 @@ export interface SlugValidationContext {
 // Shared Constants
 // ============================================================
 
-/**
- * Regex pattern for valid slugs.
- * Must start with a lowercase letter, contain only lowercase letters,
- * numbers, hyphens, and underscores. Length: 1-50 chars.
- */
-export const SLUG_PATTERN = /^[a-z][a-z0-9_-]*$/;
+// The slug rule, kept in a module that imports nothing so browser code can
+// read the same one; re-exported here for this module's existing importers.
+export { SLUG_PATTERN };
 
 /**
  * Regex pattern for valid field names.

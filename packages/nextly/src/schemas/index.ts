@@ -53,6 +53,14 @@ import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailQueueMysql } from "./email-queue/mysql";
+import { emailQueuePg } from "./email-queue/postgres";
+import { emailQueueSqlite } from "./email-queue/sqlite";
+import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
+import { emailQueueRecipientsMysql } from "./email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "./email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "./email-queue-recipients/sqlite";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { emailSendClaimsMysql } from "./email-send-claims/mysql";
 import { emailSendClaimsPg } from "./email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
@@ -309,7 +317,9 @@ export function getCoreSchema(
         emailProvidersPg,
         emailTemplatesPg,
         emailDeliveriesPg,
-        emailSendClaimsPg
+        emailSendClaimsPg,
+        emailQueuePg,
+        emailQueueRecipientsPg
       );
       break;
     case "mysql":
@@ -322,7 +332,9 @@ export function getCoreSchema(
         emailProvidersMysql,
         emailTemplatesMysql,
         emailDeliveriesMysql,
-        emailSendClaimsMysql
+        emailSendClaimsMysql,
+        emailQueueMysql,
+        emailQueueRecipientsMysql
       );
       break;
     case "sqlite":
@@ -335,7 +347,9 @@ export function getCoreSchema(
         emailProvidersSqlite,
         emailTemplatesSqlite,
         emailDeliveriesSqlite,
-        emailSendClaimsSqlite
+        emailSendClaimsSqlite,
+        emailQueueSqlite,
+        emailQueueRecipientsSqlite
       );
       break;
     default: {
@@ -370,7 +384,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
   "audit_log",
   "activity_log",
@@ -400,6 +413,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_deliveries",
   "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
+  EMAIL_QUEUE_TABLE,
+  EMAIL_QUEUE_RECIPIENTS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
@@ -456,7 +471,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "./rbac/postgres";
 
 // Plan A Task 8 — media tables. PG re-exports for direct-query callers.

@@ -159,25 +159,37 @@ export const entryKeys = {
   all: ["entries"] as const,
 
   /** Key for all list queries */
-  lists: () => [...entryKeys.all, "list"] as const,
+  lists: (): readonly ["entries", "list"] =>
+    [...entryKeys.all, "list"] as const,
 
   /** Key for lists of a specific collection */
-  listsByCollection: (collectionSlug: string) =>
+  listsByCollection: (
+    collectionSlug: string
+  ): readonly ["entries", "list", string] =>
     [...entryKeys.lists(), collectionSlug] as const,
 
   /** Key for a specific list query with filters */
-  list: (collectionSlug: string, filters?: EntryFilters) =>
+  list: (
+    collectionSlug: string,
+    filters?: EntryFilters
+  ): readonly ["entries", "list", string, EntryFilters] =>
     [...entryKeys.listsByCollection(collectionSlug), filters ?? {}] as const,
 
   /** Key for all detail queries */
-  details: () => [...entryKeys.all, "detail"] as const,
+  details: (): readonly ["entries", "detail"] =>
+    [...entryKeys.all, "detail"] as const,
 
   /** Key for details of a specific collection */
-  detailsByCollection: (collectionSlug: string) =>
+  detailsByCollection: (
+    collectionSlug: string
+  ): readonly ["entries", "detail", string] =>
     [...entryKeys.details(), collectionSlug] as const,
 
   /** Key for a specific entry detail */
-  detail: (collectionSlug: string, id: string) =>
+  detail: (
+    collectionSlug: string,
+    id: string
+  ): readonly ["entries", "detail", string, string] =>
     [...entryKeys.detailsByCollection(collectionSlug), id] as const,
 
   /**
@@ -199,7 +211,18 @@ export const entryKeys = {
       translationStatus?: boolean;
       draft?: boolean;
     }
-  ) =>
+  ): readonly [
+    "entries",
+    "detail",
+    string,
+    string,
+    {
+      readonly locale: string | null;
+      readonly fallbackLocale: string | null;
+      readonly translationStatus: boolean;
+      readonly draft: boolean;
+    },
+  ] =>
     [
       ...entryKeys.detail(collectionSlug, id),
       {
@@ -211,10 +234,14 @@ export const entryKeys = {
     ] as const,
 
   /** Key for count queries */
-  counts: () => [...entryKeys.all, "count"] as const,
+  counts: (): readonly ["entries", "count"] =>
+    [...entryKeys.all, "count"] as const,
 
   /** Key for count of a specific collection */
-  count: (collectionSlug: string, where?: Record<string, unknown>) =>
+  count: (
+    collectionSlug: string,
+    where?: Record<string, unknown>
+  ): readonly ["entries", "count", string, Record<string, unknown>] =>
     [...entryKeys.counts(), collectionSlug, where ?? {}] as const,
 } as const;
 

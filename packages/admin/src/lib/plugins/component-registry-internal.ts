@@ -36,7 +36,10 @@ export type ComponentPath = string;
 export const CORE_COMPONENT_PREFIX = "core#";
 
 /** Maps component path strings to actual React components. */
-export const componentRegistry = new Map<ComponentPath, ComponentType>();
+export const componentRegistry: Map<string, ComponentType> = new Map<
+  ComponentPath,
+  ComponentType
+>();
 
 /**
  * The single write into the registry map.

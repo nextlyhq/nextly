@@ -17,7 +17,7 @@
 
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
 
-import { changedFieldsOf, changesStatus } from "./activity-changes";
+import { changedFieldsOf, changesStatus, publishes } from "./activity-changes";
 
 /** The longest gap between two saves of one run: ten minutes. */
 export const RUN_GAP_MS = 10 * 60 * 1000;
@@ -70,13 +70,14 @@ function instantOf(value: unknown): number | undefined {
  * event in its own right; an install-level settings change names no entry or
  * Single, and each stays its own row even when it carries an id. An update
  * that changed the status is a publish or an unpublish, which stays visible as
- * its own row even when it also carried edits. So does an entry's update that
- * records no changed fields, written before they were recorded or by a save
- * that changed nothing: it cannot show it was not a publish, and a run would
- * hide one if it was. A Single's save records none yet, so a Single's saves
- * still join, a publish of one among them. The actor is the kind and the
- * reference together, as a row written before the kind was recorded is a
- * person's.
+ * its own row even when it also carried edits, and so does one marked as a
+ * publish, which promoted pending edits or put a Single live and so need not
+ * have changed the status at all. So does an entry's update that records no
+ * changed fields, written before they were recorded or by a save that changed
+ * nothing: it cannot show it was not a publish, and a run would hide one if it
+ * was. A Single's rows written before they recorded either still join, as they
+ * always have. The actor is the kind and the reference together, as a row
+ * written before the kind was recorded is a person's.
  */
 export function runKeyOf(row: Record<string, unknown>): string | undefined {
   if (row.action !== "update") return undefined;
@@ -84,7 +85,7 @@ export function runKeyOf(row: Record<string, unknown>): string | undefined {
     return undefined;
   }
   if (isSettingsChange(row)) return undefined;
-  if (changesStatus(row.metadata)) return undefined;
+  if (changesStatus(row.metadata) || publishes(row.metadata)) return undefined;
   if (
     row.subjectKind !== "single" &&
     changedFieldsOf(row.metadata) === undefined

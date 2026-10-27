@@ -49,7 +49,7 @@
  *
  * @module blocks/library/columns
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -112,53 +112,54 @@ export const COLUMNS_BASE_STYLES = {
   },
 } as const;
 
-export const columns = defineBlock<ContainerProps, PageContext>({
-  name: COLUMNS_BLOCK,
-  version: 1,
-  description:
-    "A row of columns. Restricts its slot to core/column so each column keeps an identity that can be selected and styled.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Columns",
-    icon: "columns",
-    category: LAYOUT,
-    keywords: ["row", "grid", "split", "side by side"],
-  },
-  props: {
-    as: { type: "select", options: ["div", "section", "article"] },
-    contained: { type: "checkbox" },
-  },
-  defaultProps: { as: "div", contained: false },
-  example: { props: { as: "div" } },
-  // The parent half of the nesting rule. `block.ts` is explicit that this does
-  // NOT imply the child half: a slot naming a type must not confine that type
-  // to it. `core/column` states its own side in `column.tsx`.
-  slots: {
-    children: {
-      allow: [COLUMN_BLOCK],
-      /**
-       * The two columns a freshly placed row starts with.
-       *
-       * A row must start with children at all, because this slot admits only
-       * `core/column` and that block names this one as its only parent — so an
-       * empty row is a container whose single legal child can be placed nowhere
-       * else on the page, and the author has to build both halves by hand.
-       *
-       * Two rather than one, because a row of one is a box and an author who
-       * wanted a box would have reached for one; and rather than three, because
-       * removing a column is a click and adding one is a decision.
-       *
-       * The entries are written out rather than repeated from a count. Each
-       * declares one child, so an unequal split — a different width per column —
-       * is a change to an entry rather than a change of shape, and this list is
-       * the only place the number lives.
-       */
-      defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
+export const columns: BlockDefinition<ContainerProps, PageContext> =
+  defineBlock({
+    name: COLUMNS_BLOCK,
+    version: 1,
+    description:
+      "A row of columns. Restricts its slot to core/column so each column keeps an identity that can be selected and styled.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Columns",
+      icon: "columns",
+      category: LAYOUT,
+      keywords: ["row", "grid", "split", "side by side"],
     },
-  },
-  baseStyles: COLUMNS_BASE_STYLES,
-  supports: CONTAINER_SUPPORTS,
-  render: renderContainer,
-});
+    props: {
+      as: { type: "select", options: ["div", "section", "article"] },
+      contained: { type: "checkbox" },
+    },
+    defaultProps: { as: "div", contained: false },
+    example: { props: { as: "div" } },
+    // The parent half of the nesting rule. `block.ts` is explicit that this does
+    // NOT imply the child half: a slot naming a type must not confine that type
+    // to it. `core/column` states its own side in `column.tsx`.
+    slots: {
+      children: {
+        allow: [COLUMN_BLOCK],
+        /**
+         * The two columns a freshly placed row starts with.
+         *
+         * A row must start with children at all, because this slot admits only
+         * `core/column` and that block names this one as its only parent — so an
+         * empty row is a container whose single legal child can be placed nowhere
+         * else on the page, and the author has to build both halves by hand.
+         *
+         * Two rather than one, because a row of one is a box and an author who
+         * wanted a box would have reached for one; and rather than three, because
+         * removing a column is a click and adding one is a decision.
+         *
+         * The entries are written out rather than repeated from a count. Each
+         * declares one child, so an unequal split — a different width per column —
+         * is a change to an entry rather than a change of shape, and this list is
+         * the only place the number lives.
+         */
+        defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
+      },
+    },
+    baseStyles: COLUMNS_BASE_STYLES,
+    supports: CONTAINER_SUPPORTS,
+    render: renderContainer,
+  });

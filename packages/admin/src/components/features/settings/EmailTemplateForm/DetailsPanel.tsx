@@ -10,6 +10,7 @@
  * are the site's settings on any email.
  */
 import { Input, Textarea } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import type { useForm } from "react-hook-form";
 
@@ -122,7 +123,7 @@ export function DetailsPanel({
   ownsContent: boolean;
   /** A template carrying a secret takes no copies. */
   carriesSecret: boolean;
-}) {
+}): JSX.Element {
   return (
     <div className="flex flex-col gap-6" data-testid="details-panel">
       <FormField

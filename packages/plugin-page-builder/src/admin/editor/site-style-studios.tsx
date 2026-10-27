@@ -353,13 +353,28 @@ function readableClassLibrary(
   return siteStyle?.classes ?? NO_CLASSES;
 }
 
+/** What {@link useClassSurface} returns, and what the editor hands on as its `classes`. */
+export type ClassSurface = {
+  library: readonly NamedClass[] | undefined;
+
+  absence: "pending" | "failed";
+
+  create: (slug: string) => Promise<ClassCreation>;
+  /** Which classes are mid-rename, for the manager's no-op check. */
+  pendingSlugs: Record<string, string>;
+
+  currentRenameAttempt: (classId: string) => number;
+
+  rename: (classId: string, slug: string) => Promise<ClassRenameOutcome>;
+};
+
 export function useClassSurface(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
   pending: boolean,
   error: unknown,
   /** The site's own config, whose classes storage layers over. */
   config: { classes?: readonly NamedClass[] } | undefined
-) {
+): ClassSurface {
   // Derived outside the hook, so this decides nothing and only distributes what
   // was decided — which is what keeps the component rendering the inspector
   // free of the branch.
@@ -491,7 +506,7 @@ function useCreateClass(
   // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (slug: string) =>
+    async (slug: string): Promise<ClassCreation> =>
       // Composed INSIDE the queue, so a creation following a rename builds on
       // that rename rather than on the list they both started from.
       //

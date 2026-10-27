@@ -23,6 +23,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
   checkbox,
   date,
   defineCollection,
@@ -53,6 +57,17 @@ const CLERK = { id: "clerk", email: "clerk@x.test", roles: [] };
 
 function handlerOf(t: TestNextly): CollectionsHandler {
   return t.getService("collectionsHandler") as CollectionsHandler;
+}
+
+/**
+ * Stores BOSS and CLERK as users. A code rule only narrows the permission, so
+ * each holds publish and update on `slug`, which a publish needs.
+ */
+async function seatPublishers(t: TestNextly, slug: string): Promise<void> {
+  for (const who of [BOSS, CLERK]) {
+    await userWhoMay(t, who.id, "publish", [slug]);
+    await grantTo(t, who.id, "update", [slug]);
+  }
 }
 
 /** Published, with drafts on, and two fields only BOSS may write. */
@@ -92,6 +107,50 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
   });
+  await seatPublishers(current, SLUG);
+  return current;
+}
+
+/**
+ * Published, with drafts on, and a group holding a field anyone may write
+ * beside one only BOSS may: what a publisher sends when they edit the group.
+ */
+async function bootGroupWithProtectedChild(
+  dialect: TestDialect,
+  slug: string
+): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "body" }),
+          group({
+            name: "ops",
+            fields: [
+              text({ name: "note" }),
+              text({
+                name: "runbook",
+                access: {
+                  update: ({ req }) => req.user?.email === BOSS.email,
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+  await seatPublishers(current, slug);
   return current;
 }
 
@@ -166,10 +225,11 @@ async function heldStill(
 
 async function liveDoc(
   t: TestNextly,
-  id: string
+  id: string,
+  slug: string = SLUG
 ): Promise<Record<string, unknown>> {
   const doc = (await t.nextly.findByID({
-    collection: SLUG as never,
+    collection: slug as never,
     id,
     overrideAccess: true,
     status: "all",
@@ -369,6 +429,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(
@@ -556,6 +617,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(
@@ -630,6 +692,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(
@@ -669,48 +732,17 @@ describe.each(getConfiguredTestDialects())(
       expect(doc?.ops).toEqual({ note: "published-note" });
     });
 
-    it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
-      // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
-      // caller sends replaces the pending change's group whole, and the field gate
-      // has already stripped the protected child the caller included, so the
-      // promoted group lacks it and it reads as a deletion. Crediting the caller
-      // from their raw request would allow it, and would also credit a caller who
-      // echoes a protected path with the pending change's edit, so this refuses.
-      // It fails closed: the publish is refused and the pending change is kept.
-      // Judging each leaf by the source that won the merge is what would allow it.
+    it("publishes a group the caller sends with a protected child at its live value, when the pending change left that child alone", async () => {
+      // A group the caller sends replaces the pending change's group whole, and
+      // the field gate keeps the protected child the caller included at its
+      // stored value. The pending change never touched that child, so the
+      // publish changes nothing the publisher is denied, and it goes through
+      // with the child as live holds it: a protected top-level field echoed back
+      // unchanged is published the same way. Where the pending change DID edit
+      // the child, the publish is refused instead (the cases below).
       const slug = "provenance";
-      current = await createTestNextly({
-        dialect,
-        collections: [
-          defineCollection({
-            slug,
-            status: true,
-            versions: { drafts: true },
-            access: {
-              read: () => true,
-              update: () => true,
-              publish: () => true,
-              unpublish: () => true,
-            },
-            fields: [
-              text({ name: "body" }),
-              group({
-                name: "ops",
-                fields: [
-                  text({ name: "note" }),
-                  text({
-                    name: "runbook",
-                    access: {
-                      update: ({ req }) => req.user?.email === BOSS.email,
-                    },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        ],
-      });
-      const h = handlerOf(current);
+      const t = await bootGroupWithProtectedChild(dialect, slug);
+      const h = handlerOf(t);
 
       const created = await h.createEntry(
         { collectionName: slug, overrideAccess: true },
@@ -732,10 +764,9 @@ describe.each(getConfiguredTestDialects())(
         },
         { body: "edited" }
       );
-      const unchanged = await heldStill(current, slug, id);
 
       // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
-      // the value it already holds, which the gate will strip from their payload.
+      // the value it already holds, which they may not write.
       const published = await h.updateEntry(
         {
           collectionName: slug,
@@ -749,26 +780,89 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-      expect(published.success).toBe(false);
-      const issues = (
-        published as {
-          publicData?: { errors?: Array<{ path: string; code: string }> };
-        }
-      ).publicData?.errors;
-      expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
-      expect(issues?.[0]?.code).toBe("FORBIDDEN");
-      // Nothing published, and the pending change is still there.
-      const doc = (await current.nextly.findByID({
-        collection: slug as never,
-        id,
-        overrideAccess: true,
-        status: "all",
-      } as never)) as Record<string, unknown> | null;
-      expect(doc?.body).toBe("live");
-      expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
-      expect(await pendingDrafts(current, id)).toHaveLength(1);
-      await unchanged();
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      // The pending change and the caller's own edit are live, and the
+      // protected child is as it was.
+      const doc = await liveDoc(t, id, slug);
+      expect(doc.body).toBe("edited");
+      expect(doc.ops).toEqual({ note: "clerk-note", runbook: "live-runbook" });
+      expect(await pendingDrafts(t, id)).toHaveLength(0);
     });
+
+    // The pending change edits a protected child of a group, and the publisher
+    // sends that group with an edit of their own. Their group replaces the
+    // pending change's whole, and the field gate puts the protected child back
+    // at the value the LIVE row holds, so the promoted document no longer
+    // differs from live there: judged on that alone, the publish succeeds,
+    // consumes the draft, and the pending change's edit is gone. The child is
+    // not the publisher's to send, so the pending change's value is what the
+    // publish would make of it, and that is a change the publisher may not make.
+    it.each([
+      {
+        how: "echoes the protected child at its live value",
+        live: { note: "live-note", runbook: "live-runbook" },
+        sent: { note: "clerk-note", runbook: "live-runbook" },
+      },
+      {
+        how: "leaves the protected child out",
+        live: { note: "live-note", runbook: "live-runbook" },
+        sent: { note: "clerk-note" },
+      },
+      {
+        how: "leaves out a protected child live does not hold yet",
+        live: { note: "live-note" },
+        sent: { note: "clerk-note" },
+      },
+    ])(
+      "refuses, and keeps the draft, when the publisher's group $how and the pending change edited it",
+      async ({ live, sent }) => {
+        const slug = "provenance";
+        const t = await bootGroupWithProtectedChild(dialect, slug);
+        const h = handlerOf(t);
+
+        const created = await h.createEntry(
+          { collectionName: slug, overrideAccess: true },
+          { body: "live", ops: live, status: "published" }
+        );
+        const id = (created.data as { id?: string }).id as string;
+
+        await h.updateEntry(
+          {
+            collectionName: slug,
+            entryId: id,
+            routeAuthorized: true,
+            user: BOSS,
+          },
+          { ops: { ...live, runbook: "boss-runbook" } }
+        );
+        const unchanged = await heldStill(t, slug, id);
+
+        const published = await h.updateEntry(
+          {
+            collectionName: slug,
+            entryId: id,
+            routeAuthorized: true,
+            user: CLERK,
+          },
+          { status: "published", ops: sent }
+        );
+
+        expect(published.success, JSON.stringify(published)).toBe(false);
+        const issues = (
+          published as {
+            publicData?: { errors?: Array<{ path: string; code: string }> };
+          }
+        ).publicData?.errors;
+        expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+        expect(issues?.[0]?.code).toBe("FORBIDDEN");
+        // Live is as it was, and the pending change still holds BOSS's edit.
+        expect((await liveDoc(t, id, slug)).ops).toEqual(live);
+        expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
+          "boss-runbook"
+        );
+        await unchanged();
+      }
+    );
 
     it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
       // A full form resubmits every field, so a publisher routinely sends a

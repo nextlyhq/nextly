@@ -14,6 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -201,6 +202,22 @@ async function singleVisible(t: TestNextly): Promise<boolean> {
   return result.success === true;
 }
 
+/**
+ * Gives a plain author what a release's run meets on the documents here. A
+ * code rule only narrows the permission, so the author holds read, update and
+ * publish on each, and unpublish on each but memos, whose takedown has no rule
+ * and is decided by grants alone. Notes are left out: who publishes one is a
+ * role's business.
+ */
+async function mayRelease(t: TestNextly, author: string): Promise<string> {
+  const ruled = ["pages", "articles", "posts", "dossiers", "letters", "notice"];
+  for (const action of ["read", "update", "publish"]) {
+    await grantTo(t, author, action, [...ruled, "memos"]);
+  }
+  await grantTo(t, author, "unpublish", ruled);
+  return author;
+}
+
 interface Arranged {
   releaseId: string;
   owner: string;
@@ -223,7 +240,8 @@ async function dueRelease(
   people?: { owner: string; author: string }
 ): Promise<Arranged> {
   const owner = people?.owner ?? (await seedLiveAuthor(t));
-  const author = people?.author ?? (await seedPlainAuthor(t));
+  const author =
+    people?.author ?? (await mayRelease(t, await seedPlainAuthor(t)));
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({
     title: "Launch",
@@ -264,7 +282,7 @@ async function futureRelease(
       entryId,
       locale: null,
       action: "publish",
-      createdBy: await seedPlainAuthor(t),
+      createdBy: await mayRelease(t, await seedPlainAuthor(t)),
     },
     ANY_EDITABLE_STATE
   );
@@ -526,7 +544,7 @@ describe.each(getConfiguredTestDialects())(
       // decides. Stopping only the one with a problem would hand the other
       // both documents, and with them an effect the pair never had.
       const t = await boot(dialect);
-      const going = await seedPlainAuthor(t);
+      const going = await mayRelease(t, await seedPlainAuthor(t));
       const coming = await seedPlainAuthor(t);
       const roleId = await grantRole(t, coming, [
         "update-memos",
@@ -641,7 +659,12 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const owner = await seedLiveAuthor(t);
       const author = await seedPlainAuthor(t);
-      const roleId = await grantRole(t, author, ["update-notes"]);
+      // A code rule only narrows the permission, so the role also grants
+      // publish on notes, and the rule naming it still decides.
+      const roleId = await grantRole(t, author, [
+        "update-notes",
+        "publish-notes",
+      ]);
       // The slug `grantRole` gives the role it makes.
       publisherSlug = `role-${author.slice(0, 8)}`;
       const note = await entry(t, "notes", "draft");

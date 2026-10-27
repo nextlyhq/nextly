@@ -21,7 +21,7 @@ import {
   usePluginRouteMutation,
   type PluginRouteRead,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useState } from "react";
+import { useState, type JSX } from "react";
 
 import {
   adminPageHref,
@@ -114,7 +114,7 @@ function firstOf(value: string | string[] | undefined): string {
  * and states, and, for staff who also hold manage-accounts, what may be done
  * to it. Staff never see or set a password here.
  */
-export function AccountPage({ searchParams }: AccountPageProps) {
+export function AccountPage({ searchParams }: AccountPageProps): JSX.Element {
   const accountId = firstOf(searchParams?.id);
   const [deleted, setDeleted] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);

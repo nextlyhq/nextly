@@ -71,9 +71,8 @@ admin's permission matrix, `requiredPermission` on a route,
 `ctx.authenticatedScope.permissions` and every code-defined `access` rule all
 use it.
 
-Rules were once handed `posts:read` instead. For one release a rule's list
-still carries that spelling too, after the other, and Nextly warns once per
-rule that checks it; it stops being accepted in a later release.
+Rules were once handed `posts:read` instead. That spelling is no longer in a
+rule's list, so a rule checking it does not allow; check `read-posts`.
 
 `ctx.authenticatedScope.permissions` is derived from
 `ctx.authenticatedScope.grants`, the permission rows the key resolved to, so

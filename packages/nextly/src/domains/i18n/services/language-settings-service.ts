@@ -13,6 +13,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   buildCollectionRevalidationIntent,
@@ -178,7 +179,8 @@ export class LanguageSettingsService {
       await this.refusePendingDefaultChanges();
     }
     // With nothing stored the locked read locks no row, so a change made at the same moment also
-    // planned from the implicit English list, and its insert of English met this one's. Run
+    // planned from the implicit English list, and its insert of English met this one's: a
+    // duplicate on PostgreSQL and SQLite, a deadlock on MySQL (`lostToFirstChange`). Run
     // again, in a transaction of its own now the failed one has rolled back, it plans from what
     // the other stored and is locked behind it as every later change is.
     const written =
@@ -297,7 +299,7 @@ export class LanguageSettingsService {
         return planned;
       });
     } catch (error) {
-      if (wasEmpty && isUniqueViolation(error)) return null;
+      if (wasEmpty && lostToFirstChange(this.adapter, error)) return null;
       throw error;
     }
   }
@@ -343,6 +345,19 @@ function refuseWhenPending(current: string, pending: number): void {
     ],
     logContext: { reason: "default-language-has-pending-changes", pending },
   });
+}
+
+/**
+ * Whether, with nothing stored, a change lost to another that stored the list first. PostgreSQL
+ * and SQLite refuse the second insert of English as a duplicate. MySQL's locked read of an empty
+ * table takes a gap lock in each transaction, so each insert waits on the other's, and MySQL
+ * rolls one back as a deadlock instead.
+ */
+function lostToFirstChange(adapter: DrizzleAdapter, error: unknown): boolean {
+  if (isUniqueViolation(error)) return true;
+  return (
+    toDbError(adapter.getCapabilities().dialect, error).kind === "deadlock"
+  );
 }
 
 /** The default language's code, English while nothing is stored. */

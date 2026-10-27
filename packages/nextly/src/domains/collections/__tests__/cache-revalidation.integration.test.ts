@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import { createAdapter } from "../../../database/factory";
@@ -234,6 +235,9 @@ describe("cache revalidation — write path (sqlite)", () => {
         ],
       }),
     ]);
+    // A code rule only narrows the permission, so the writer holds create on
+    // redact.
+    await userWhoMay(handle!, "u", "create", ["redact"]);
     await entries.createEntries(
       { collectionName: "redact", user: { id: "u" } },
       [{ title: "T", slug: "hidden-slug" }]

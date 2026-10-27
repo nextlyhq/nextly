@@ -39,9 +39,11 @@ import { createDynamicHandlers } from "../../routeHandler";
 import { ServiceContainer } from "../../services/index";
 import type { AuthUserId } from "../../types/auth";
 import {
+  hasAnyPermission,
   hasPermission,
   invalidateAllPermissionCaches,
   isSuperAdmin,
+  listEffectiveGrants,
   listEffectivePermissions,
   listRoleSlugsForUser,
   resolveUserRoles,
@@ -67,12 +69,11 @@ const ACCESS_TABLES = new Set([
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
 ]);
 
 const holdsRead = ({ permissions }: { permissions: string[] }) =>
-  permissions.includes("notes:read");
+  permissions.includes("read-notes");
 
 /** A collection whose read rule and field rule both read the permissions. */
 const notes = defineCollection({
@@ -325,6 +326,72 @@ describe.each(getConfiguredTestDialects())(
       expect(fifty.access.length).toBe(one.access.length);
     });
 
+    /**
+     * The access tables read by `ask`, run in one request, with every cache
+     * emptied first so the count is what the request itself asked.
+     */
+    async function inOneRequest<T>(ask: () => Promise<T>) {
+      await invalidateAllPermissionCaches();
+      const { result, tables } = await tablesRead(t, () =>
+        runWithAccessMemo(ask)
+      );
+      return {
+        result,
+        access: tables.filter(table => ACCESS_TABLES.has(table)),
+      };
+    }
+
+    /** Permissions the reader does not hold, beside the one it does. */
+    const NOT_HELD: Array<[string, string]> = [
+      ["update", "notes"],
+      ["delete", "notes"],
+      ["create", "notes"],
+      ["read", "users"],
+    ];
+
+    it("reads the same access rows for several permission questions as for one", async () => {
+      const one = await inOneRequest(() =>
+        hasPermission(userId, "read", "notes")
+      );
+      const several = await inOneRequest(async () => {
+        const answers: boolean[] = [];
+        for (const [action, resource] of [["read", "notes"], ...NOT_HELD]) {
+          answers.push(await hasPermission(userId, action, resource));
+        }
+        return answers;
+      });
+      // POPULATION CONTROL: the held permission allows, the others refuse,
+      // and the caller's access was read for both.
+      expect(one.result).toBe(true);
+      expect(several.result).toEqual([true, false, false, false, false]);
+      expect(one.access.length).toBeGreaterThan(0);
+      expect(several.access).toEqual(one.access);
+    });
+
+    it("reads the same access rows for any of several permissions as for one", async () => {
+      const one = await inOneRequest(() =>
+        hasPermission(userId, "read", "notes")
+      );
+      // The held permission last, so every other one is asked first.
+      const any = await inOneRequest(() =>
+        hasAnyPermission(userId, [
+          ...NOT_HELD.map(([action, resource]) => ({ action, resource })),
+          { action: "read", resource: "notes" },
+        ])
+      );
+      const none = await inOneRequest(() =>
+        hasAnyPermission(
+          userId,
+          NOT_HELD.map(([action, resource]) => ({ action, resource }))
+        )
+      );
+      expect(any.result).toBe(true);
+      expect(none.result).toBe(false);
+      expect(one.access.length).toBeGreaterThan(0);
+      expect(any.access).toEqual(one.access);
+      expect(none.access).toEqual(one.access);
+    });
+
     it("sees a role the same request assigns", async () => {
       // A request that changes someone's roles and then asks about them must
       // see the change, so a role write forgets what the request had kept.
@@ -385,7 +452,7 @@ describe.each(getConfiguredTestDialects())(
         (id: string) => isSuperAdmin(id),
       ],
     ] as const)(
-      "drops %s it took from the process cache when the role behind it expires",
+      "drops %s it took from the access kept between requests when the role behind it expires",
       async (_answer, role, asks) => {
         const holder = await newHolder(
           `cached-${role}`,
@@ -394,17 +461,107 @@ describe.each(getConfiguredTestDialects())(
         );
         const ask = () => asks(holder);
         await invalidateAllPermissionCaches();
-        // Asked outside the request, so the process cache holds the answer.
+        // Asked outside the request, so the user's access is kept between
+        // requests.
         expect(await ask()).toBe(true);
         await runWithAccessMemo(async () => {
           const cached = await tablesRead(t, ask);
-          // POPULATION CONTROL: served from the cache, not by a role walk.
+          // POPULATION CONTROL: served from what was kept, not by a role walk.
           expect(cached.result).toBe(true);
           expect(cached.tables).not.toContain("user_roles");
           expect(await pastTheLapse(ask)).toBe(false);
         });
       }
     );
+
+    it("keeps the roles it read when reading the grants fails", async () => {
+      // A reader that takes whichever half of a caller it could read relies
+      // on a failed grants read leaving the roles it read standing.
+      const holder = await newHolder("partial-read", readerId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () =>
+          runWithAccessMemo(() =>
+            Promise.allSettled([
+              listRoleSlugsForUser(holder),
+              listEffectiveGrants(holder),
+            ])
+          )
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect(result[0]).toEqual({ status: "fulfilled", value: ["reader"] });
+    });
+
+    it("resolves a caller's roles when reading the grants fails", async () => {
+      // A reader that needs only the roles, such as a key deciding whether
+      // its owner is a super-admin, must not fail on a grants read it never
+      // needed.
+      const holder = await newHolder("roles-only", readerId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () => runWithAccessMemo(() => resolveUserRoles(holder))
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect([...result.roleIds]).toEqual([readerId]);
+    });
+
+    it("keeps a super-admin's authority when reading the grants fails", async () => {
+      // Super-admin authority rests on the roles alone, and is decided before
+      // any grant is consulted, so a failed grants read must not refuse it.
+      const holder = await newHolder("partial-admin", superAdminId);
+      await invalidateAllPermissionCaches();
+      const { result, failed } = await failingFirstRead(
+        t,
+        "role_permissions",
+        () =>
+          runWithAccessMemo(() =>
+            Promise.all([
+              isSuperAdmin(holder),
+              hasPermission(holder, "read", "notes"),
+            ])
+          )
+      );
+      // POPULATION CONTROL: the grants read failed.
+      expect(failed).toBe(true);
+      expect(result).toEqual([true, true]);
+    });
+
+    it("reads a caller's access again in a request that outlives what it kept", async () => {
+      // No role the caller holds expires, so only the kept access's own life,
+      // one minute, bounds how long one request may go on answering from it.
+      const holder = await newHolder("long-request", readerId);
+      await invalidateAllPermissionCaches();
+      await runWithAccessMemo(async () => {
+        const start = Date.now();
+        expect(await hasPermission(holder, "read", "notes")).toBe(true);
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          // The control: inside the minute, the request answers from what it
+          // kept, so the re-read below is the minute ending and nothing else.
+          vi.setSystemTime(start + 55_000);
+          const within = await tablesRead(t, () =>
+            hasPermission(holder, "read", "notes")
+          );
+          expect(within.result).toBe(true);
+          expect(within.tables).not.toContain("user_roles");
+
+          vi.setSystemTime(start + 65_000);
+          const later = await tablesRead(t, () =>
+            hasPermission(holder, "read", "notes")
+          );
+          expect(later.result).toBe(true);
+          expect(later.tables).toContain("user_roles");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
 
     it("drops what it kept when another request takes the role away", async () => {
       const holder = await newHolder("revoked", readerId);

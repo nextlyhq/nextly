@@ -24,7 +24,14 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
+import type { PublishedContentSource } from "nextly/config";
+import {
+  useMemo,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -35,7 +42,9 @@ import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 import { registerCoreWidgetComponents } from "./core-components";
+import { DrawFailureContext, useDrawFailures } from "./draw-failures";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
+import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
@@ -53,7 +62,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { bandForWidth, drawnWidth } from "./sizes";
+import { bandForWidth, drawnWidth, GRID_GAP_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -108,8 +117,8 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The gaps a card's predicted width counts (`GRID_GAP_CLASS`).
+        className={`grid grid-cols-12 ${GRID_GAP_CLASS}`}
       >
         {[0, 1, 2].map(row => (
           <div
@@ -142,9 +151,17 @@ function NothingToDraw({
  */
 function askedWith(
   rows: ArrangedWidget[],
-  dashboardWidth: number | undefined
-): Array<ArrangedWidget & { tier?: SizeTier }> {
+  dashboardWidth: number | undefined,
+  editing: boolean,
+  sources: readonly PublishedContentSource[] | undefined
+): Array<ArrangedWidget & { tier?: SizeTier; editing?: true }> {
   return rows.map(row => {
+    // A card core answers on the server is asked by its id at rest, and with
+    // the settings it is drawn with while customising, when they may not be
+    // saved yet (see `questionsFor`).
+    if (row.widget.serverData === true) {
+      return editing ? { ...row, editing: true as const } : row;
+    }
     // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
     // the query is asked before the card can measure itself, and sized for that tier.
     const tier = predictedTier(
@@ -152,12 +169,17 @@ function askedWith(
       dashboardWidth
     );
     const sized = tier ? { ...row, tier } : row;
-    const widget = widgetAsAsked(row.widget, row.config);
-    // The declared query travels with the asked one, so the batch keys the card by what it
-    // declares and a change of its settings asks this card again alone.
+    const widget = widgetAsAsked(row.widget, row.config, sources);
+    // The declared query, or cells, travel with the asked ones, so the batch keys the card by
+    // what it declares and a change of its settings asks this card again alone.
     return widget === row.widget
       ? sized
-      : { ...sized, widget, declaredQuery: row.widget.query };
+      : {
+          ...sized,
+          widget,
+          declaredQuery: row.widget.query,
+          declaredCells: row.widget.cells,
+        };
   });
 }
 
@@ -175,6 +197,7 @@ const NO_CARDS: [] = [];
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
+  editing: boolean,
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
@@ -182,19 +205,25 @@ function useCardsAtDashboardWidth(
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
+  // The collections the reader may read, with their fields: what a card's content settings are
+  // asked against.
+  const sources = useBranding().widgetSources;
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth),
-    [visible, dashboardWidth]
+        : askedWith(visible, dashboardWidth, editing, sources),
+    [visible, dashboardWidth, editing, sources]
   );
   const band =
     dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
+  // Cards whose own component threw drawing a fine answer, counted as failed.
+  const draws = useDrawFailures();
   return {
     dashboardRef,
     drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
-    ...useWidgetBatch(cards),
+    ...useWidgetBatch(cards, draws.failed),
+    reportDraw: draws.report,
   };
 }
 
@@ -332,7 +361,7 @@ function holdingBody({
   return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
-export function WidgetGrid() {
+export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
@@ -400,7 +429,8 @@ export function WidgetGrid() {
     failed,
     settling,
     retry,
-  } = useCardsAtDashboardWidth(visible, {
+    reportDraw,
+  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
     gridRef: focus.gridRef,
     say: announce.drag,
     drop: arrangement.dropCard,
@@ -491,32 +521,36 @@ export function WidgetGrid() {
           />
 
           <CardDragContext drag={drag}>
-            <ArrangedGrid
-              rows={visible}
-              placements={editor.placements}
-              isDrawn={arrangement.isDrawn}
-              isEditing={editor.isEditing}
-              writes={{
-                isWriting: editor.isWriting,
-                singleCardWriteBlocked: singleCardWriteBlocked(
-                  layout.isUnreadable
-                ),
-                settings: settingsWrite,
-              }}
-              slots={slots}
-              cellSlots={cellSlots}
-              requested={requested}
-              updatedAtFor={updatedAtFor}
-              fetchedTierFor={fetchedTierFor}
-              fetchingPlacementIds={fetchingPlacementIds}
-              retry={retry}
-              announcement={announcement}
-              focus={focus}
-              gridRef={focus.gridRef}
-              highlightedId={ring.highlightedId}
-              drag={drag}
-              on={cardActions(arrangement, removal, editor)}
-            />
+            <AtRestSettingsWriteProvider value={settingsWrite}>
+              <DrawFailureContext.Provider value={reportDraw}>
+                <ArrangedGrid
+                  rows={visible}
+                  placements={editor.placements}
+                  isDrawn={arrangement.isDrawn}
+                  isEditing={editor.isEditing}
+                  writes={{
+                    isWriting: editor.isWriting,
+                    singleCardWriteBlocked: singleCardWriteBlocked(
+                      layout.isUnreadable
+                    ),
+                    settings: settingsWrite,
+                  }}
+                  slots={slots}
+                  cellSlots={cellSlots}
+                  requested={requested}
+                  updatedAtFor={updatedAtFor}
+                  fetchedTierFor={fetchedTierFor}
+                  fetchingPlacementIds={fetchingPlacementIds}
+                  retry={retry}
+                  announcement={announcement}
+                  focus={focus}
+                  gridRef={focus.gridRef}
+                  highlightedId={ring.highlightedId}
+                  drag={drag}
+                  on={cardActions(arrangement, removal, editor)}
+                />
+              </DrawFailureContext.Provider>
+            </AtRestSettingsWriteProvider>
           </CardDragContext>
 
           <DashboardAddPanel

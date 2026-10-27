@@ -31,6 +31,13 @@ export const ATTENTION_KINDS = ["unpublished", "scheduled", "overdue"] as const;
 /** @experimental */
 export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 
+/**
+ * How far ahead "due soon" looks: a week, what someone can act on this week.
+ * One number for the source that counts the scheduled entries and the card
+ * that links to them, measured from the answer's own `asOf`.
+ */
+export const ATTENTION_DUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Where one part of a kind lives: a collection's list, or a Single. @experimental */
 export type AttentionContentKind = "collection" | "single";
 
@@ -39,7 +46,12 @@ export type AttentionKey =
   | { kind: AttentionKind }
   | {
       kind: AttentionKind;
-      part: { contentKind: AttentionContentKind; slug: string };
+      part: {
+        contentKind: AttentionContentKind;
+        slug: string;
+        /** For a Single, the language its pending change was counted in. */
+        locale?: string;
+      };
     };
 
 /** Whether `value` is one of the kinds. @experimental */
@@ -55,9 +67,13 @@ export function isAttentionKind(value: string): value is AttentionKind {
 export function attentionPartKey(
   kind: AttentionKind,
   contentKind: AttentionContentKind,
-  slug: string
+  slug: string,
+  locale?: string
 ): string {
-  return `${kind}:${contentKind}:${slug}`;
+  // A Single's language follows its slug, so its link opens the language that
+  // was counted; a collection's part needs none.
+  const base = `${kind}:${contentKind}:${slug}`;
+  return contentKind === "single" && locale ? `${base}:${locale}` : base;
 }
 
 /**
@@ -67,16 +83,21 @@ export function attentionPartKey(
  * @experimental
  */
 export function parseAttentionKey(value: string): AttentionKey | null {
-  const [kind, contentKind, slug, ...rest] = value.split(":");
+  const [kind, contentKind, slug, locale, ...rest] = value.split(":");
   if (kind === undefined || !isAttentionKind(kind)) return null;
   if (contentKind === undefined) return { kind };
   if (
     (contentKind !== "collection" && contentKind !== "single") ||
     slug === undefined ||
     slug === "" ||
-    rest.length > 0
+    rest.length > 0 ||
+    // A language belongs to a Single's part alone, and is never empty.
+    (locale !== undefined && (contentKind !== "single" || locale === ""))
   ) {
     return null;
   }
-  return { kind, part: { contentKind, slug } };
+  return {
+    kind,
+    part: { contentKind, slug, ...(locale !== undefined ? { locale } : {}) },
+  };
 }

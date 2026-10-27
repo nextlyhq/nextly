@@ -9,6 +9,7 @@
  */
 
 import type { RepeaterFieldConfig, RepeaterRowLabelProps } from "nextly/config";
+import type { JSX } from "react";
 
 // ============================================================
 // Types
@@ -93,7 +94,7 @@ export function RepeaterRowLabel({
   index,
   field,
   data,
-}: RepeaterRowLabelComponentProps) {
+}: RepeaterRowLabelComponentProps): JSX.Element {
   // 1. Custom RowLabel component overrides everything else.
   const CustomRowLabel = field.admin?.components?.RowLabel;
   if (CustomRowLabel) {

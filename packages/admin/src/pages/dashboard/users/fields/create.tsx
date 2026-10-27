@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import {
   UserFieldForm,
@@ -17,7 +17,7 @@ import { useCreateUserField } from "@admin/hooks/queries/useUserFields";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 
-export default function CreateUserFieldPage() {
+export default function CreateUserFieldPage(): JSX.Element {
   const { mutate: createField, isPending } = useCreateUserField();
 
   const handleSubmit = useCallback(

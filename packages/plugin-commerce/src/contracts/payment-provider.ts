@@ -456,9 +456,25 @@ export async function startProviderPayment(
   return started;
 }
 
+/** The fields of {@link paymentProviderCapabilitiesSchema}. */
+type PaymentProviderCapabilitiesShape = {
+  captureLater: z.ZodBoolean;
+  cancel: z.ZodBoolean;
+  refund: z.ZodBoolean;
+  partialRefund: z.ZodBoolean;
+  operationKeyLifetimeMs: z.ZodNumber;
+  currencies: z.ZodOptional<z.ZodArray<typeof currencyCodeSchema>>;
+  maxAmounts: z.ZodOptional<
+    z.ZodRecord<typeof currencyCodeSchema, z.ZodNumber>
+  >;
+};
+
 /** @experimental */
-export const paymentProviderCapabilitiesSchema = z
-  .strictObject({
+export const paymentProviderCapabilitiesSchema: z.ZodObject<
+  PaymentProviderCapabilitiesShape,
+  z.core.$strict
+> = z
+  .strictObject<PaymentProviderCapabilitiesShape>({
     captureLater: z.boolean(),
     cancel: z.boolean(),
     refund: z.boolean(),
@@ -535,7 +551,8 @@ export function assertPaymentProvider(
   }
 }
 
-const statusSchema = z.enum([
+/** The states a provider reports a payment in. */
+type PaymentStatuses = readonly [
   "pending",
   "requires_action",
   "processing",
@@ -543,14 +560,37 @@ const statusSchema = z.enum([
   "paid",
   "failed",
   "cancelled",
-]);
+];
+
+const statusSchema: z.ZodEnum<{ [K in PaymentStatuses[number]]: K }> =
+  z.enum<PaymentStatuses>([
+    "pending",
+    "requires_action",
+    "processing",
+    "authorised",
+    "paid",
+    "failed",
+    "cancelled",
+  ]);
 
 /**
  * A provider's own identifier or code, as commerce stores it: at most 255
  * characters, the most its columns hold on every dialect. Longer is refused
  * here, as a broken answer, rather than by one database alone.
  */
-const providerStringSchema = z.string().min(1).max(255);
+const providerStringSchema: z.ZodString = z.string().min(1).max(255);
+
+/** The fields of {@link providerPaymentSchema}. */
+type ProviderPaymentShape = {
+  providerReference: typeof providerStringSchema;
+  reference: z.ZodString;
+  status: typeof statusSchema;
+  amount: typeof moneySchema;
+  amountCaptured: typeof moneySchema;
+  amountRefunded: typeof moneySchema;
+  clientData: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+  failureCode: z.ZodOptional<z.ZodString>;
+};
 
 /**
  * A provider's payment as commerce accepts it: every amount valid and in one
@@ -559,8 +599,11 @@ const providerStringSchema = z.string().min(1).max(255);
  *
  * @experimental
  */
-export const providerPaymentSchema = z
-  .strictObject({
+export const providerPaymentSchema: z.ZodObject<
+  ProviderPaymentShape,
+  z.core.$strict
+> = z
+  .strictObject<ProviderPaymentShape>({
     providerReference: providerStringSchema,
     reference: z.string().min(1),
     status: statusSchema,
@@ -591,21 +634,53 @@ export const providerPaymentSchema = z
     message: "a paid payment has money captured, and no other has any",
   });
 
+/** The states a provider reports a refund in. */
+type RefundStatuses = readonly ["pending", "succeeded", "failed"];
+/** The fields of {@link providerRefundSchema}. */
+type ProviderRefundShape = {
+  providerRefundReference: typeof providerStringSchema;
+  providerReference: typeof providerStringSchema;
+  reference: z.ZodString;
+  amount: typeof moneySchema;
+  status: z.ZodEnum<{ [K in RefundStatuses[number]]: K }>;
+};
+
 /** @experimental */
-export const providerRefundSchema = z.strictObject({
+export const providerRefundSchema: z.ZodObject<
+  ProviderRefundShape,
+  z.core.$strict
+> = z.strictObject<ProviderRefundShape>({
   providerRefundReference: providerStringSchema,
   providerReference: providerStringSchema,
   reference: z.string().min(1),
   amount: moneySchema.refine(m => m.amount > 0, {
     message: "a refund is a positive amount",
   }),
-  status: z.enum(["pending", "succeeded", "failed"]),
+  status: z.enum<RefundStatuses>(["pending", "succeeded", "failed"]),
 });
 
+/** The kinds of event a provider's webhook carries. */
+type WebhookEventTypes = readonly [
+  "payment.updated",
+  "refund.updated",
+  "dispute.updated",
+  "other",
+];
+/** The fields of {@link providerWebhookEventSchema}. */
+type ProviderWebhookEventShape = {
+  eventId: z.ZodString;
+  type: z.ZodEnum<{ [K in WebhookEventTypes[number]]: K }>;
+  providerReference: z.ZodNullable<typeof providerStringSchema>;
+  occurredAt: z.ZodISODateTime;
+};
+
 /** @experimental */
-export const providerWebhookEventSchema = z.strictObject({
+export const providerWebhookEventSchema: z.ZodObject<
+  ProviderWebhookEventShape,
+  z.core.$strict
+> = z.strictObject<ProviderWebhookEventShape>({
   eventId: z.string().min(1),
-  type: z.enum([
+  type: z.enum<WebhookEventTypes>([
     "payment.updated",
     "refund.updated",
     "dispute.updated",
@@ -637,19 +712,34 @@ export function parseProviderAnswer<S extends z.ZodType>(
   return parsed.data;
 }
 
+/** When a payment is captured. */
+type CaptureTimes = readonly ["now", "later"];
+/** The fields of {@link startPaymentInputSchema}. */
+type StartPaymentInputShape = {
+  operationId: typeof operationIdSchema;
+  reference: z.ZodString;
+  amount: typeof moneySchema;
+  capture: z.ZodEnum<{ [K in CaptureTimes[number]]: K }>;
+  email: z.ZodOptional<z.ZodEmail>;
+  description: z.ZodOptional<z.ZodString>;
+};
+
 /**
  * The start request as commerce sends it, so a provider can parse its input
  * at its own boundary.
  *
  * @experimental
  */
-export const startPaymentInputSchema = z.strictObject({
+export const startPaymentInputSchema: z.ZodObject<
+  StartPaymentInputShape,
+  z.core.$strict
+> = z.strictObject<StartPaymentInputShape>({
   operationId: operationIdSchema,
   reference: z.string().min(1).max(255),
   amount: moneySchema.refine(isPayableAmount, {
     message: "a payment is a positive amount",
   }),
-  capture: z.enum(["now", "later"]),
+  capture: z.enum<CaptureTimes>(["now", "later"]),
   email: z.email().optional(),
   description: z.string().max(1000).optional(),
 });

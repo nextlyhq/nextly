@@ -115,6 +115,58 @@ describe("getSchemaJournal", () => {
     expect(res.headers.get("Vary")).toBe("Cookie");
   });
 
+  describe("a super-admin's session and their API key", () => {
+    // The same maker, a super-admin by lookup, through both ways in: only
+    // how they authenticated differs, so it alone decides the answer.
+    const session = {
+      userId: "admin-1",
+      authMethod: "session",
+      roles: ["super-admin"],
+      permissions: [],
+    };
+    const key = {
+      ...session,
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+      grants: [],
+    };
+
+    beforeEach(() => {
+      (isErrorResponse as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      (readJournal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        rows: [{ id: "id-1", source: "ui", status: "success" }],
+        hasMore: false,
+      });
+    });
+
+    it("reads the journal through the session, as the admin's notification bell does", async () => {
+      (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue(
+        session
+      );
+
+      const res = await getSchemaJournal(
+        makeReq("http://x/api/schema/journal")
+      );
+
+      expect(res.status).toBe(200);
+      expect(readJournal).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses the key, whatever role its maker holds", async () => {
+      (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue(
+        key
+      );
+
+      const res = await getSchemaJournal(
+        makeReq("http://x/api/schema/journal")
+      );
+
+      expect(res.status).toBe(403);
+      expect(readJournal).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses default limit of 20 when not provided", async () => {
     (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       userId: "user-1",

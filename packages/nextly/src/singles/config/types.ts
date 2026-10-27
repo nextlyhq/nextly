@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
+import type { Workflow } from "../../domains/workflows/types";
 import type { HookHandler } from "../../hooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 // Builder-facing content-versioning options surfaced on the Single config.
@@ -458,6 +459,18 @@ export interface SingleConfig {
    * @default undefined (unversioned)
    */
   versions?: boolean | VersionsConfig;
+
+  /**
+   * The editorial workflow this Single's documents move through on their way
+   * to publishing, from `defineWorkflow` or `reviewWorkflow`. One workflow may
+   * serve any number of collections and Singles; each has at most one. It
+   * needs drafts kept beside the live version: `status` on and drafts enabled
+   * in `versions`, or the configuration is refused, saying which is missing.
+   * Declaring it changes nothing at runtime yet.
+   *
+   * @experimental
+   */
+  workflow?: Workflow;
 
   /**
    * Enable multilingual content for this Single. When `true`, translatable

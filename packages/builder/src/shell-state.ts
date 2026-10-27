@@ -109,7 +109,8 @@ export const CANVAS_GUTTER = 16;
  * the page has 448px, so the drag stops only once the canvas is already
  * narrower than the floor that exists to stop it.
  */
-export const MIN_CANVAS_PANEL_WIDTH = MIN_CANVAS_WIDTH + CANVAS_GUTTER * 2;
+export const MIN_CANVAS_PANEL_WIDTH: number =
+  MIN_CANVAS_WIDTH + CANVAS_GUTTER * 2;
 
 /**
  * The narrowest viewport the full shell is supported at (PB-D17 D10-5).

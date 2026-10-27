@@ -33,6 +33,7 @@ import {
   type TextNode,
   type LexicalEditor,
 } from "lexical";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -352,7 +353,7 @@ function SlashCommandMenuItem({
 
 export function SlashCommandPlugin({
   disabled = false,
-}: SlashCommandPluginProps) {
+}: SlashCommandPluginProps): JSX.Element | null {
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
   // The typeahead anchor is appended to whatever `parent` is given, defaulting

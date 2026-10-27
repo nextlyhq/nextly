@@ -116,6 +116,14 @@ export interface ResolverOptions {
    * @experimental
    */
   scope?: WidgetScope;
+  /**
+   * The batch's one instant: what every read in it measures `since` and
+   * `until` from, so two cards, or two cells of one card, cannot straddle
+   * different moments. Absent, a read takes its own.
+   *
+   * @experimental
+   */
+  now?: Date;
 }
 
 /**

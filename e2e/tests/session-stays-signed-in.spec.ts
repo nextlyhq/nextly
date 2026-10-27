@@ -1,7 +1,9 @@
 /**
- * The stored session every test opens with stays signed in however long the
- * suite runs: once it is older than `SESSION_MAX_AGE_MS`, the next test is
- * handed a new one (see `support/session` and `support/test`).
+ * The dev user's stored session, which makes each spec file's account and
+ * serves whatever a spec opens from `STORAGE_STATE`, stays signed in however
+ * long the suite runs: once it is older than `SESSION_MAX_AGE_MS`, it is
+ * renewed before the next test (see `support/session` and `support/test`). And
+ * each spec file runs as an account of its own, not as the dev user.
  *
  * The server's token lives 15 minutes, and a test cannot wait that long, so a
  * session the server refuses stands in for one that has expired: the stored
@@ -25,7 +27,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, request } from "@playwright/test";
+import { expect, request, type Page } from "@playwright/test";
 
 import {
   keepSessionFresh,
@@ -108,7 +110,7 @@ test.describe("a stored session", () => {
 });
 
 // In order: the first ages the suite's own session past its limit, and the
-// second is handed what the suite's `test` made of it before its context opened.
+// second reads what the suite's `test` made of it before that test began.
 test.describe.serial("the suite's session, past its limit", () => {
   let aged: string | undefined;
 
@@ -118,17 +120,32 @@ test.describe.serial("the suite's session, past its limit", () => {
     ageBy(STORAGE_STATE, SESSION_MAX_AGE_MS + 60_000);
   });
 
-  test("is renewed before the next test's context opens", async ({
-    context,
-    page,
-  }) => {
-    const cookies = await context.cookies();
-    const token = cookies.find(cookie => cookie.name === "nextly_session");
-    expect(token?.value).toBeDefined();
-    expect(token?.value).not.toBe(aged);
-    expect((await page.request.get("/admin/api/dashboard/layout")).ok()).toBe(
-      true
-    );
+  test("is renewed before the next test", async ({ baseURL }) => {
+    const renewed = tokenIn(STORAGE_STATE);
+    expect(renewed).toBeDefined();
+    expect(renewed).not.toBe(aged);
+    expect(await signedIn(baseURL!, STORAGE_STATE)).toBe(true);
+  });
+});
+
+/** The address of the user a page's session belongs to. */
+async function sessionEmail(page: Page): Promise<string | undefined> {
+  const answer = await page.request.get("/admin/api/auth/session");
+  expect(answer.ok(), await answer.text()).toBe(true);
+  return ((await answer.json()) as { user?: { email?: string } }).user?.email;
+}
+
+// In order, so both tests are the same attempt of this file.
+test.describe.serial("a spec file's own account", () => {
+  let first: string | undefined;
+
+  test("is not the dev user", async ({ page }) => {
+    first = await sessionEmail(page);
+    expect(first).toMatch(/^spec-.+@nextly\.local$/);
+  });
+
+  test("is the same for every test in the file", async ({ page }) => {
+    expect(await sessionEmail(page)).toBe(first);
   });
 });
 

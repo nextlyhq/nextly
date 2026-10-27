@@ -32,6 +32,8 @@
  * @module components/features/releases/ScheduledReleaseBanner
  */
 
+import type { JSX } from "react";
+
 import { CalendarClock } from "@admin/components/icons";
 import { Badge } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -164,7 +166,7 @@ export interface ScheduledReleaseBannerProps {
 export function ScheduledReleaseBanner({
   document,
   onDefaultLocale,
-}: ScheduledReleaseBannerProps) {
+}: ScheduledReleaseBannerProps): JSX.Element | null {
   // The list endpoint is gated, so a reader without the grant must not issue a
   // request whose only outcome is a 403 under every document they open.
   const canRead = useCan("read-content-releases");

@@ -27,6 +27,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useRef } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -59,7 +60,7 @@ export function ComponentFieldEditor({
   onInitCollapsedChange,
   isSortable,
   onIsSortableChange,
-}: ComponentFieldEditorProps) {
+}: ComponentFieldEditorProps): JSX.Element {
   const multiSelectionCacheRef = useRef<string[] | undefined>(undefined);
 
   // Fetch available components

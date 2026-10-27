@@ -17,6 +17,7 @@ import {
   PopoverTrigger,
   Spinner,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { CheckIcon, ChevronDownIcon, X, Shield } from "@admin/components/icons";
@@ -84,7 +85,7 @@ export function UserRoleSelector({
   onRetry,
   disabled = false,
   errorMessage,
-}: UserRoleSelectorProps) {
+}: UserRoleSelectorProps): JSX.Element {
   const [open, setOpen] = useState(false);
 
   const isSystemRole = (role: Role) => role.type === "System";

@@ -12,7 +12,8 @@ const NOW = Date.parse("2026-10-22T12:00:00Z");
 
 function grouped(
   buckets: { value: string; count: number; atLeast?: boolean }[],
-  choices: { value: string; label: string }[] = []
+  choices: { value: string; label: string }[] = [],
+  asOf?: string
 ): WidgetSlot {
   return {
     ok: true,
@@ -20,6 +21,7 @@ function grouped(
       op: "groupBy",
       buckets,
       field: { name: "item", label: "Item", type: "string", choices },
+      ...(asOf === undefined ? {} : { asOf }),
     },
   };
 }
@@ -101,6 +103,64 @@ describe("the Needs attention card's view of its slot", () => {
       _inRelease: { scheduledBefore: "2026-10-29T12:00:00.000Z" },
     });
     expect(overdue.href).toBe("/admin/releases?tab=attention&reason=overdue");
+  });
+
+  it("measures this week from the answer's own instant, not the page's clock", () => {
+    const view = attentionView(
+      grouped(
+        [
+          { value: "scheduled", count: 1 },
+          { value: "scheduled:collection:posts", count: 1 },
+        ],
+        [],
+        "2026-10-01T08:30:00.000Z"
+      ),
+      NOW
+    );
+    if (view.state !== "ready") throw new Error(view.state);
+    expect(whereOf(view.kinds[0].parts[0].href)).toEqual({
+      _inRelease: { scheduledBefore: "2026-10-08T08:30:00.000Z" },
+    });
+  });
+
+  it("opens a Single in the language its change was counted in", () => {
+    const view = attentionView(
+      grouped([
+        { value: "unpublished", count: 2 },
+        { value: "unpublished:single:home:fr", count: 1 },
+        { value: "unpublished:single:about", count: 1 },
+      ]),
+      NOW
+    );
+    if (view.state !== "ready") throw new Error(view.state);
+    expect(view.kinds[0].parts.map(p => p.href)).toEqual([
+      "/admin/singles/home?locale=fr",
+      "/admin/singles/about",
+    ]);
+  });
+
+  it("says a kind was not all checked, rather than clear, when nothing was found in the lists it read", () => {
+    const view = attentionView(
+      grouped([{ value: "unpublished", count: 0, atLeast: true }]),
+      NOW
+    );
+    expect(view).toEqual({
+      state: "ready",
+      kinds: [
+        {
+          kind: "unpublished",
+          label: "Unpublished changes",
+          count: 0,
+          atLeast: true,
+          unchecked: true,
+          parts: [],
+        },
+      ],
+    });
+    // A zero that is not a floor is still nothing waiting.
+    expect(
+      attentionView(grouped([{ value: "unpublished", count: 0 }]), NOW)
+    ).toEqual({ state: "clear" });
   });
 
   it("keeps each floor where the source put it", () => {

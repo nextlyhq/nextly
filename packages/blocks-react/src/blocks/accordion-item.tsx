@@ -49,7 +49,7 @@
  *
  * @module blocks/library/accordion-item
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 // This package's own render args, not the engine's. The engine leaves
@@ -125,36 +125,37 @@ function renderAccordionItem({
   );
 }
 
-export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
-  name: ACCORDION_ITEM_BLOCK,
-  version: 1,
-  description:
-    "One section of an accordion: a title that is always visible and children the browser reveals when it is open.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Accordion item",
-    icon: "panel",
-    category: INTERACTIVE,
-    keywords: ["disclosure", "panel", "faq"],
-  },
-  props: {
-    title: { role: "content", type: "text" },
-    open: { type: "checkbox" },
-  },
-  defaultProps: { title: "Section", open: false },
-  example: { props: { title: "What is included?", open: false } },
-  // The child half of the nesting rule. The parent states the other half in
-  // `accordion.tsx`; `block.ts` is explicit that neither implies the other.
-  parent: [ACCORDION_BLOCK],
-  slots: {
-    // No declared starting children. Unlike the accordion that holds it, this
-    // slot carries no allow-list: a section holds whatever a section holds, so
-    // there is no child type it exists to hold and no starting block righter
-    // than none.
-    children: {},
-  },
-  supports: ACCORDION_ITEM_SUPPORTS,
-  render: renderAccordionItem,
-});
+export const accordionItem: BlockDefinition<AccordionItemProps, PageContext> =
+  defineBlock({
+    name: ACCORDION_ITEM_BLOCK,
+    version: 1,
+    description:
+      "One section of an accordion: a title that is always visible and children the browser reveals when it is open.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Accordion item",
+      icon: "panel",
+      category: INTERACTIVE,
+      keywords: ["disclosure", "panel", "faq"],
+    },
+    props: {
+      title: { role: "content", type: "text" },
+      open: { type: "checkbox" },
+    },
+    defaultProps: { title: "Section", open: false },
+    example: { props: { title: "What is included?", open: false } },
+    // The child half of the nesting rule. The parent states the other half in
+    // `accordion.tsx`; `block.ts` is explicit that neither implies the other.
+    parent: [ACCORDION_BLOCK],
+    slots: {
+      // No declared starting children. Unlike the accordion that holds it, this
+      // slot carries no allow-list: a section holds whatever a section holds, so
+      // there is no child type it exists to hold and no starting block righter
+      // than none.
+      children: {},
+    },
+    supports: ACCORDION_ITEM_SUPPORTS,
+    render: renderAccordionItem,
+  });

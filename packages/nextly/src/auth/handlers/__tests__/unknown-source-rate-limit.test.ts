@@ -141,6 +141,25 @@ const login = (h: Harness, email: string) =>
 /** Whether the limiter admitted the request. */
 const admitted = async (res: Promise<Response>) => (await res).status !== 429;
 
+/**
+ * A response's body and headers as compared between two callers: everything
+ * but the request id, which every response carries a fresh one of.
+ */
+async function answerOf(response: Response): Promise<unknown> {
+  const body = (await response.json()) as {
+    error?: { requestId?: unknown } & Record<string, unknown>;
+  };
+  if (!body.error) return body;
+  const { requestId: _requestId, ...rest } = body.error;
+  return { ...body, error: rest };
+}
+
+function headersOf(response: Response): [string, string][] {
+  return [...response.headers.entries()].filter(
+    ([name]) => name !== "x-request-id"
+  );
+}
+
 describe("identifier keying", () => {
   it("one source spending one address's budget leaves another address signing in", async () => {
     const h = harness({ budget: 3 });
@@ -180,8 +199,8 @@ describe("identifier keying", () => {
 
     expect(real.status).toBe(429);
     expect(ghost.status).toBe(real.status);
-    expect(await ghost.text()).toBe(await real.text());
-    expect([...ghost.headers.entries()]).toEqual([...real.headers.entries()]);
+    expect(await answerOf(ghost)).toEqual(await answerOf(real));
+    expect(headersOf(ghost)).toEqual(headersOf(real));
     // The limiter keys on the address as given and never asks whether it
     // exists, so nothing it does can depend on the answer.
     expect(h.accountLookups).toEqual([]);
@@ -884,8 +903,8 @@ describe("strategies that name the account a sign-in targets", () => {
 
     expect(real.status).toBe(429);
     expect(ghost.status).toBe(real.status);
-    expect(await ghost.text()).toBe(await real.text());
-    expect([...ghost.headers.entries()]).toEqual([...real.headers.entries()]);
+    expect(await answerOf(ghost)).toEqual(await answerOf(real));
+    expect(headersOf(ghost)).toEqual(headersOf(real));
     expect(h.accountLookups).toEqual([]);
   });
 

@@ -89,7 +89,7 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
    * can be highlighted and focused, or `null` when nothing was added: not customising, or the
    * dashboard already holds as many cards as it can.
    */
-  add: (widgetId: string) => string | null;
+  add: (widgetId: string, settings?: Record<string, unknown>) => string | null;
 }
 
 /**
@@ -170,7 +170,7 @@ export function useLayoutEditor(
   }, [layout]);
 
   const add = useCallback(
-    (widgetId: string): string | null => {
+    (widgetId: string, settings?: Record<string, unknown>): string | null => {
       // Answered from the draft as drawn, so the caller learns the id before the list moves
       // on; `addPlacement` refuses the same cases again inside the update.
       if (draft === null || draft.placements.length >= MAX_PLACEMENTS) {
@@ -184,7 +184,13 @@ export function useLayoutEditor(
         current
           ? {
               ...current,
-              placements: addPlacement(current.placements, widgetId, width, id),
+              placements: addPlacement(
+                current.placements,
+                widgetId,
+                width,
+                id,
+                settings
+              ),
             }
           : current
       );

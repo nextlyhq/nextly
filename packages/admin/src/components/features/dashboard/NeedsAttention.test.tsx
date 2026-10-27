@@ -7,6 +7,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -37,13 +38,15 @@ const WAITING: WidgetSlot = {
 function drawAt(tier: SizeTier, slot: WidgetSlot | undefined) {
   render(
     <CardTierContext.Provider value={tier}>
-      <NeedsAttention
-        widgetId="core/needs-attention"
-        placementId="core/needs-attention"
-        settings={{}}
-        slot={slot}
-        isFetching={false}
-      />
+      {inFrame(
+        <NeedsAttention
+          widgetId="core/needs-attention"
+          placementId="core/needs-attention"
+          settings={{}}
+          slot={slot}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }
@@ -85,6 +88,53 @@ describe("the Needs attention card", () => {
     drawAt("large", WAITING);
     expect(screen.getByRole("link", { name: "Posts: 2" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Pages: 1" })).toBeInTheDocument();
+  });
+
+  it("links a spread kind's two largest lists when small, then says how many more", () => {
+    drawAt("small", {
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [
+          { value: "unpublished", count: 6 },
+          { value: "unpublished:collection:posts", count: 3 },
+          { value: "unpublished:collection:pages", count: 2 },
+          { value: "unpublished:collection:events", count: 1 },
+        ],
+        field: {
+          name: "item",
+          type: "string",
+          choices: [
+            { value: "unpublished:collection:posts", label: "Posts" },
+            { value: "unpublished:collection:pages", label: "Pages" },
+            { value: "unpublished:collection:events", label: "Events" },
+          ],
+        },
+      },
+    });
+    const parts = screen.getByTestId("needs-attention-unpublished-parts");
+    expect(parts).toHaveTextContent("+1 more");
+    expect(screen.getByRole("link", { name: "Posts: 3" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Pages: 2" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Events: 1" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("says a kind was not all checked, never all clear, when its lists went partly unread", () => {
+    drawAt("medium", {
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [{ value: "unpublished", count: 0, atLeast: true }],
+      },
+    });
+    const row = screen.getByTestId("needs-attention-unpublished-unchecked");
+    expect(row).toHaveTextContent("Not all checked");
+    expect(row).toHaveTextContent("Not all lists were checked");
+    expect(screen.queryByText("All clear")).not.toBeInTheDocument();
+    // No number is drawn, and no link leads to lists that were not read.
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("says a floor aloud as a floor", () => {

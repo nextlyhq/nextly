@@ -5,31 +5,20 @@ import {
   type BrowserContext,
 } from "@playwright/test";
 
-/**
- * A browser signed in as someone other than the dev super-admin.
- *
- * The suite's own session is `dev@nextly.local`, who holds every permission,
- * so nothing it opens can ever be refused. This makes a role holding exactly
- * the permissions a test names, a user holding that role, and a fresh browser
- * context signed in as that user, all over HTTP: the playground renders no
- * sign-in page.
- *
- * Two server rules shape it:
- *
- * - A password an admin types for someone else must be changed at first
- *   sign-in, so login answers with a pending token rather than a session, and
- *   the second call sets the user's own password and issues the session.
- * - The auth endpoints check a double-submit CSRF token AND the request's
- *   origin. Playwright's request client sends no `Origin`, so it is set here.
- *
- * Login shares a per-address budget of attempts with the other auth POSTs, and
- * this spends two, so call it once per spec file, not once per test.
- */
+import { createSignedInUser, uniqueTag } from "./accounts";
 
-/** Typed by the admin for the new user; replaced at first sign-in. */
-const TEMPORARY_PASSWORD = "Temporary-Pass-1";
-/** Must differ from the temporary one, or the change is refused as a reuse. */
-const OWN_PASSWORD = "Own-Password-2";
+/**
+ * A browser signed in as someone other than a super-admin.
+ *
+ * Each spec file's own session is a super-admin (see `./test`), who holds
+ * every permission, so nothing it opens can ever be refused. This makes a role
+ * holding exactly the permissions a test names, a user holding that role, and
+ * a fresh browser context signed in as that user, all over HTTP (see
+ * `./accounts`): the playground renders no sign-in page.
+ *
+ * Signing in spends two of the account's auth attempts, so call it once per
+ * spec file, not once per test.
+ */
 
 export interface LimitedUser {
   context: BrowserContext;
@@ -45,7 +34,24 @@ export async function signInAsLimitedUser(
   baseURL: string,
   permissions: readonly string[]
 ): Promise<LimitedUser> {
-  const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { roleIds, ...user } = await signInWithRoles(browser, admin, baseURL, [
+    permissions,
+  ]);
+  return { ...user, roleId: roleIds[0] };
+}
+
+/**
+ * {@link signInAsLimitedUser} for a user holding several roles, one for each
+ * list of permissions, so a test can show what holding them together gives.
+ */
+export async function signInWithRoles(
+  browser: Browser,
+  /** A request context signed in as the super-admin, to create the roles and user. */
+  admin: APIRequestContext,
+  baseURL: string,
+  roles: readonly (readonly string[])[]
+): Promise<Omit<LimitedUser, "roleId"> & { roleIds: string[] }> {
+  const tag = uniqueTag();
 
   // Roles take permission ids, not slugs. The list pages at ten by default,
   // which would silently miss most of them.
@@ -54,79 +60,44 @@ export async function signInAsLimitedUser(
   const { items } = (await list.json()) as {
     items: Array<{ id: string; slug: string }>;
   };
-  const permissionIds = permissions.map(slug => {
-    const found = items.find(item => item.slug === slug);
-    if (!found) throw new Error(`[e2e] No permission "${slug}" to grant.`);
-    return found.id;
-  });
+  const idsOf = (permissions: readonly string[]) =>
+    permissions.map(slug => {
+      const found = items.find(item => item.slug === slug);
+      if (!found) throw new Error(`[e2e] No permission "${slug}" to grant.`);
+      return found.id;
+    });
 
-  const role = await admin.post("/admin/api/roles", {
-    data: {
-      name: `E2E limited ${tag}`,
-      slug: `e2e-limited-${tag}`,
-      permissionIds,
-    },
-  });
-  expect(role.status(), await role.text()).toBe(201);
-  const roleId = ((await role.json()) as { item: { id: string } }).item.id;
+  const roleIds: string[] = [];
+  for (const [index, permissions] of roles.entries()) {
+    const role = await admin.post("/admin/api/roles", {
+      data: {
+        name: `E2E limited ${tag} ${index + 1}`,
+        slug: `e2e-limited-${tag}-${index + 1}`,
+        permissionIds: idsOf(permissions),
+      },
+    });
+    expect(role.status(), await role.text()).toBe(201);
+    roleIds.push(((await role.json()) as { item: { id: string } }).item.id);
+  }
 
-  const email = `limited-${tag}@nextly.local`;
-  const user = await admin.post("/admin/api/users", {
-    data: {
-      email,
-      name: "Limited User",
-      password: TEMPORARY_PASSWORD,
-      roles: [roleId],
-      isActive: true,
-    },
-  });
-  expect(user.status(), await user.text()).toBe(201);
-  const userId = ((await user.json()) as { item: { id: string } }).item.id;
-
-  // An empty jar, so nothing of the super-admin's session comes along.
-  const context = await browser.newContext({
+  const { storageState, email, userId } = await createSignedInUser(
+    admin,
     baseURL,
-    storageState: { cookies: [], origins: [] },
-  });
-  const api = context.request;
-  const headers = { Origin: baseURL };
-  const csrfToken = async () =>
-    (
-      (await (await api.get("/admin/api/auth/csrf")).json()) as {
-        token: string;
-      }
-    ).token;
+    {
+      email: `limited-${tag}@nextly.local`,
+      name: "Limited User",
+      roleIds,
+    }
+  );
+  const context = await browser.newContext({ baseURL, storageState });
 
-  const login = await api.post("/admin/api/auth/login", {
-    headers,
-    data: { email, password: TEMPORARY_PASSWORD, csrfToken: await csrfToken() },
-  });
-  expect(login.status(), await login.text()).toBe(200);
-  const pending = (await login.json()) as {
-    status?: string;
-    pendingToken?: string;
-  };
-  expect(pending.status).toBe("password_change_required");
-
-  const changed = await api.post("/admin/api/auth/set-initial-password", {
-    headers,
-    data: {
-      pendingToken: pending.pendingToken,
-      newPassword: OWN_PASSWORD,
-      csrfToken: await csrfToken(),
-    },
-  });
-  expect(changed.status(), await changed.text()).toBe(200);
-
-  // Dev auto-login issues a super-admin session to any visit WITHOUT a valid
-  // one, so a sign-in that quietly failed would leave a context that can open
-  // everything, and every refusal a test expects would simply not happen.
-  // Asking who this is turns that into a failure here instead.
-  const me = await api.get("/admin/api/me/permissions");
+  // The session is this user's (checked by `createSignedInUser`); this checks
+  // it is also not a super-admin's, so every refusal a test expects can happen.
+  const me = await context.request.get("/admin/api/me/permissions");
   expect(me.ok(), await me.text()).toBe(true);
   expect(((await me.json()) as { isSuperAdmin: boolean }).isSuperAdmin).toBe(
     false
   );
 
-  return { context, email, userId, roleId };
+  return { context, email, userId, roleIds };
 }

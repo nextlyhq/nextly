@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * A card's menu at rest, outside customise mode: its quick setting, which a small card's header
- * has no room for, and Settings. The customise-mode menu (`CardActionsMenu`) stays as it is.
+ * A card's menu at rest, outside customise mode, in the same place on every card: its quick
+ * setting, which a small card's header has no room for, Settings, and Refresh, which asks again
+ * for this card alone. The customise-mode menu (`CardActionsMenu`) stays as it is.
  *
  * @module components/features/widgets/edit/CardMenu
  */
@@ -19,7 +20,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { Settings } from "lucide-react";
+import { RefreshCw, Settings } from "lucide-react";
+import type { JSX } from "react";
 import { useRef } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -29,19 +31,22 @@ import type { CardQuickSettingState } from "./useCardQuickSetting";
 export interface CardMenuProps {
   title: string;
   /** The card's quick setting, when its widget marks one. */
-  quick?: CardQuickSettingState["menu"];
+  quick?: CardQuickSettingState["menu"] | undefined;
   /** Open the card's settings sheet, when its widget offers settings. */
-  onOpenSettings?: () => void;
+  onOpenSettings?: (() => void) | undefined;
+  /** Ask again for this card's data alone, when it asks for any. */
+  onRefresh?: (() => void) | undefined;
   /** A layout write is in flight, or the card's settings cannot be saved now. */
-  disabled: boolean;
+  settingsDisabled: boolean;
 }
 
 export function CardMenu({
   title,
   quick,
   onOpenSettings,
-  disabled,
-}: CardMenuProps) {
+  onRefresh,
+  settingsDisabled,
+}: CardMenuProps): JSX.Element {
   // Set by Settings, which sends focus into its sheet: the menu's own close would otherwise
   // return focus to its trigger a tick later and take it back out.
   const focusIsHandled = useRef(false);
@@ -58,7 +63,6 @@ export function CardMenu({
           size="icon"
           // 28px, past the 24px minimum target WCAG 2.5.8 asks of a control this small.
           className="size-7 text-muted-foreground hover:text-foreground"
-          disabled={disabled}
           aria-label={`Card menu for ${title}`}
           data-testid="card-menu"
         >
@@ -97,9 +101,12 @@ export function CardMenu({
             {label}
           </DropdownMenuCheckboxItem>
         ) : null}
-        {quick && onOpenSettings ? <DropdownMenuSeparator /> : null}
+        {quick && (onOpenSettings || onRefresh) ? (
+          <DropdownMenuSeparator />
+        ) : null}
         {onOpenSettings ? (
           <DropdownMenuItem
+            disabled={settingsDisabled}
             onSelect={() => {
               focusIsHandled.current = true;
               onOpenSettings();
@@ -108,6 +115,15 @@ export function CardMenu({
           >
             <Settings aria-hidden className="size-4" />
             Settings…
+          </DropdownMenuItem>
+        ) : null}
+        {onRefresh ? (
+          <DropdownMenuItem
+            onSelect={() => onRefresh()}
+            data-testid="card-menu-refresh"
+          >
+            <RefreshCw aria-hidden className="size-4" />
+            Refresh
           </DropdownMenuItem>
         ) : null}
       </DropdownMenuContent>

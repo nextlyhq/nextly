@@ -317,7 +317,78 @@ export function $importTextWidgetMarkdown(content: string): void {
  * heading scale differs, because a widget is a panel among panels rather than
  * a page, and a page-scale `h1` inside one reads as a mistake.
  */
-export const TEXT_WIDGET_THEME = {
+export const TEXT_WIDGET_THEME: {
+  readonly heading: {
+    readonly h1: "text-lg font-semibold mt-4 mb-2 first:mt-0";
+    readonly h2: "text-base font-semibold mt-3 mb-1.5 first:mt-0";
+    readonly h3: "text-sm font-semibold mt-3 mb-1 first:mt-0";
+    readonly h4: "text-sm font-medium mt-2 mb-1 first:mt-0";
+    readonly h5: "text-sm font-medium mt-2 mb-1 first:mt-0";
+    readonly h6: "text-sm font-medium mt-2 mb-1 first:mt-0";
+  };
+  readonly root: string;
+  readonly text: {
+    bold: string;
+    italic: string;
+    underline: string;
+    strikethrough: string;
+    code: string;
+    highlight: string;
+    subscript: string;
+    superscript: string;
+  };
+  readonly paragraph: string;
+  readonly list: {
+    ul: string;
+    ol: string;
+    listitem: string;
+    listitemChecked: string;
+    listitemUnchecked: string;
+    nested: {
+      listitem: string;
+    };
+  };
+  readonly quote: string;
+  readonly link: string;
+  readonly code: string;
+  readonly codeHighlight: {
+    atrule: string;
+    attr: string;
+    boolean: string;
+    builtin: string;
+    cdata: string;
+    char: string;
+    class: string;
+    "class-name": string;
+    comment: string;
+    constant: string;
+    deleted: string;
+    doctype: string;
+    entity: string;
+    function: string;
+    important: string;
+    inserted: string;
+    keyword: string;
+    namespace: string;
+    number: string;
+    operator: string;
+    prolog: string;
+    property: string;
+    punctuation: string;
+    regex: string;
+    selector: string;
+    string: string;
+    symbol: string;
+    tag: string;
+    url: string;
+    variable: string;
+  };
+  readonly table: string;
+  readonly tableCell: string;
+  readonly tableCellHeader: string;
+  readonly tableRow: string;
+  readonly tableRowStriping: string;
+} = {
   ...RICH_TEXT_THEME,
   heading: {
     h1: "text-lg font-semibold mt-4 mb-2 first:mt-0",

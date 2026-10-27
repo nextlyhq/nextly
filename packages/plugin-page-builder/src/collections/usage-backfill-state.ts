@@ -21,7 +21,7 @@
  *
  * @module collections/usage-backfill-state
  */
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 /** The slug the backfill's progress is stored under. */
 export const USAGE_BACKFILL_STATE_SLUG = "nx_pb_usage_backfill";
@@ -54,7 +54,7 @@ export interface UsageBackfillStateRow {
  * these are identifiers this plugin composes, not numbers, dates or
  * relationships it may assume exist.
  */
-export function usageBackfillStateCollection() {
+export function usageBackfillStateCollection(): CollectionConfig {
   return defineCollection({
     slug: USAGE_BACKFILL_STATE_SLUG,
     labels: { singular: "Usage backfill", plural: "Usage backfill" },
@@ -80,8 +80,9 @@ export function usageBackfillStateCollection() {
       // the whole mechanism, which is why nothing outside may make it.
       //
       // These do NOT stop a session super-admin. The RBAC gate is ordered
-      // "super-admin bypass -> code-defined access -> DB permissions", so for
-      // such a caller these callbacks are never evaluated. Closing that needs a
+      // "super-admin bypass -> DB permissions -> code-defined access, which
+      // only narrows them", so for such a caller these callbacks are never
+      // evaluated. Closing that needs a
       // write boundary external collection operations cannot cross, which is a
       // core capability rather than an access rule a plugin can declare.
       //

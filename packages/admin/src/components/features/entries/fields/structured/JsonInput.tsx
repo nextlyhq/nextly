@@ -13,6 +13,7 @@
 import { Button, Textarea } from "@nextlyhq/ui";
 import type { JSONFieldConfig } from "nextly/config";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -155,7 +156,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: JsonInputProps<TFieldValues>) {
+}: JsonInputProps<TFieldValues>): JSX.Element {
   // Get editor options from field config
   const editorOptions = field.admin?.editorOptions ?? {};
   const tabSize = editorOptions.tabSize ?? 2;

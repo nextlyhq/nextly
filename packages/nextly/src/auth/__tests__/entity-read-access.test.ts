@@ -49,6 +49,7 @@ import { userActor } from "../access/actor";
 import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
 import { apiKeyScope } from "../authenticated-scope";
 import {
+  authorizationScheduler,
   canReadEntity,
   readAccessCaller,
   readableEntities,
@@ -186,10 +187,10 @@ describe("canReadEntity — API key callers", () => {
       true
     );
     // The role screen's spelling, the same slug the coarse check compared,
-    // with the earlier `posts:read` after it for its deprecation release.
+    // and no other.
     expect(read).toHaveBeenCalledWith(
       expect.objectContaining({
-        permissions: ["read-posts", "posts:read"],
+        permissions: ["read-posts"],
         roles: ["editor"],
         operation: "read",
         collection: "posts",
@@ -383,5 +384,63 @@ describe("readableEntities", () => {
     // that returns the empty set.
     const allowed = await readableEntities(["posts", "pages"], session);
     expect([...allowed].sort()).toEqual(["pages", "posts"]);
+  });
+});
+
+describe("authorizationScheduler", () => {
+  /** A decision held open until the test answers it, counting how many are in flight. */
+  function harness() {
+    let inFlight = 0;
+    let most = 0;
+    const answers: Array<() => void> = [];
+    const decide =
+      (fail = false) =>
+      () =>
+        new Promise<boolean>((resolve, reject) => {
+          inFlight += 1;
+          most = Math.max(most, inFlight);
+          answers.push(() => {
+            inFlight -= 1;
+            if (fail) reject(new Error("refused"));
+            else resolve(true);
+          });
+        });
+    const answerAll = () => {
+      for (const answer of answers.splice(0, answers.length)) answer();
+    };
+    return { decide, answerAll, inFlight: () => inFlight, most: () => most };
+  }
+
+  it("runs the first decision alone, then at most the bound at once", async () => {
+    const h = harness();
+    const scheduled = authorizationScheduler(3);
+    const decisions = Array.from({ length: 8 }, () => scheduled(h.decide()));
+    // The warm-up: one decision before anything fans out.
+    expect(h.inFlight()).toBe(1);
+    h.answerAll();
+    await vi.waitFor(() => expect(h.inFlight()).toBe(3));
+    while (h.inFlight() > 0) {
+      h.answerAll();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    await expect(Promise.all(decisions)).resolves.toHaveLength(8);
+    // 🔴 Never more than the bound, though all eight were asked at once.
+    expect(h.most()).toBe(3);
+  });
+
+  it("hands each caller its own decision, a refusal reaching only the one that asked", async () => {
+    const h = harness();
+    const scheduled = authorizationScheduler(2);
+    const refused = scheduled(h.decide(true));
+    const allowed = scheduled(h.decide());
+    h.answerAll();
+    await expect(refused).rejects.toThrow("refused");
+    await vi.waitFor(() => expect(h.inFlight()).toBe(1));
+    h.answerAll();
+    await expect(allowed).resolves.toBe(true);
+  });
+
+  it("refuses a bound that would never let a decision start", () => {
+    expect(() => authorizationScheduler(0)).toThrow();
   });
 });

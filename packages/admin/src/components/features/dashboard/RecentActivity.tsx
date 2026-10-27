@@ -1,10 +1,9 @@
 /**
  * Who changed what, most recent first.
  *
- * Drawn as the dashboard card `core/recent-activity`, which declares
- * `chrome: "none"` -- so this component owns its own heading and its own
- * loading, error and empty states, and draws the `<section>` shell its
- * neighbours draw rather than a `Card` the grid would frame a second time.
+ * Drawn as the dashboard card `core/recent-activity`, inside the dashboard's
+ * frame, which draws its heading and every state; this component draws the
+ * rows, and reports an empty feed or an unreadable answer for the frame to say.
  *
  * ## It shows a fixed page and offers no way past it
  *
@@ -27,46 +26,18 @@
  * @module components/features/dashboard/RecentActivity
  */
 
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-  Badge,
-  Spinner,
-} from "@nextlyhq/ui";
+import { Avatar, AvatarFallback, AvatarImage, Badge } from "@nextlyhq/ui";
 import { Clock } from "lucide-react";
-import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
+import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
-} from "@admin/components/features/widgets/frame/states";
-import {
-  rowsDrawn,
-  useCardTier,
-  useRowsTier,
-} from "@admin/components/features/widgets/frame/tier";
-import { AlertCircle } from "@admin/components/icons";
-import {
-  activityFromRow,
-  useRecentActivity,
-} from "@admin/hooks/queries/useRecentActivity";
-import { useNowTick } from "@admin/hooks/useNowTick";
+import { FrameState } from "@admin/components/features/widgets/frame/card-state";
+import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import { activityFromRow } from "@admin/hooks/queries/useRecentActivity";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 import { cn } from "@admin/lib/utils";
 import type { Activity } from "@admin/types/dashboard/activity";
-
-/**
- * Props for RecentActivity component
- */
-export interface RecentActivityProps {
-  /** Maximum number of activities to display (default: 5) */
-  limit?: number;
-}
 
 /**
  * How many saves one row stands for: "· 12 times", or "· 1000+ times" when the
@@ -189,13 +160,18 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
 };
 
 /**
- * Nothing to show: the dashboard's one empty state, in this card's words, as
- * every other card says it.
+ * Nothing to show: reported to the frame, which draws the dashboard's one empty
+ * state in this card's words, as every other card says it.
  */
 const EmptyState: React.FC = () => (
-  <CardEmpty
-    title="No activity yet"
-    detail="Changes people make to your content show here."
+  <FrameState
+    state={{
+      kind: "empty",
+      empty: {
+        title: "No activity yet",
+        detail: "Changes people make to your content show here.",
+      },
+    }}
   />
 );
 
@@ -212,24 +188,6 @@ const ActivityRows: React.FC<{
 );
 
 /**
- * A refused answer in the frame's own words: "not available" when the source is
- * not this reader's, and otherwise the error with the Retry a framed card offers.
- */
-const ActivityFailure: React.FC<{
-  slot: Extract<WidgetSlot, { ok: false }>;
-  onRetry: (() => void) | undefined;
-}> = ({ slot, onRetry }) =>
-  slot.code === "unavailable" ? (
-    <CardUnavailable />
-  ) : (
-    <CardError
-      message={slot.error}
-      title="Recent activity"
-      {...(onRetry ? { onRetry } : {})}
-    />
-  );
-
-/**
  * The dashboard's Recent activity card, answered by `system:activity` in the
  * dashboard's batch: framed, so the heading and the size are the card's.
  *
@@ -238,37 +196,16 @@ const ActivityFailure: React.FC<{
  * the one row more the batch asked for: the rule core's own lists follow. A
  * run of one person's saves is one row.
  *
- * A custom card owns its states, so each is drawn here with the frame's own:
- * the loading rows, "not available", an error, and the empty state.
+ * The frame draws every state; what this card's own answer says beyond its
+ * rows (still loading, an unreadable answer, or an empty feed) it reports.
  */
-export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
-  slot,
-  isFetching,
-  query,
-  onRetry,
-}) => {
-  // Medium until the card has measured itself, which it does before its first paint.
-  const tier = useCardTier() ?? "medium";
-  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
+export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
   // See `RecentActivity` below: a relative time is read again as time passes.
-  const now = useNowTick();
-
-  if (!slot) {
-    return isFetching ? (
-      <CardSkeleton shape="rows" rows={drawn} layout={{ kind: "list" }} />
-    ) : null;
-  }
-  if (!slot.ok) return <ActivityFailure slot={slot} onRetry={onRetry} />;
-  if (slot.result.op !== "list") {
-    return (
-      <CardError
-        message="This card was answered with something other than a list."
-        title="Recent activity"
-      />
-    );
-  }
+  const { drawn, now, read } = useListCard(props);
+  const { query } = props;
+  if ("node" in read) return read.node;
   // A row this build cannot read is left out rather than drawn from guesses.
-  const activities = slot.result.items.flatMap(row => {
+  const activities = read.list.items.flatMap(row => {
     const activity = activityFromRow(row);
     return activity ? [activity] : [];
   });
@@ -276,77 +213,9 @@ export const RecentActivityCard: React.FC<WidgetComponentProps> = ({
   return (
     <div className="space-y-2">
       <ActivityRows activities={activities.slice(0, drawn)} now={now} />
-      {slot.result.items.length > drawn && <MoreExist query={query} />}
+      {read.list.items.length > drawn && <MoreExist query={query} />}
     </div>
   );
 };
 
 RecentActivityCard.displayName = "RecentActivityCard";
-
-/**
- * Recent activity as a section of its own, reading `GET /api/dashboard/activity`.
- *
- * @deprecated The dashboard draws {@link RecentActivityCard}, answered by the
- * `system:activity` widget source. This stays for code that renders the section
- * itself, and draws the same rows and the same empty state.
- */
-export const RecentActivity: React.FC<RecentActivityProps> = ({
-  limit = 5,
-}) => {
-  const { data, isLoading, error } = useRecentActivity(limit);
-  /*
-   * 🔴 Deriving the label at render is only half the repair. A render has to
-   * HAPPEN, and a dashboard card nobody touches gets none -- so an entry
-   * fetched as "just now" would keep that wording for as long as the page is
-   * open, which is the same wrong label reached by a different route. This is
-   * what makes the derivation run again.
-   *
-   * The value is passed to the formatter rather than discarded, so the label a
-   * reader sees and the instant this hook re-rendered for are the same one.
-   */
-  const now = useNowTick();
-
-  return (
-    <section aria-labelledby="dashboard-activity-heading" className="space-y-6">
-      <div className="flex items-center gap-4">
-        <h4
-          id="dashboard-activity-heading"
-          className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap"
-        >
-          Recent activity
-        </h4>
-        <div className="h-px flex-1 bg-border" />
-      </div>
-
-      {isLoading && (
-        <div className="flex flex-col items-center justify-center py-16 gap-4">
-          <Spinner size="md" className="text-primary/40" />
-          <span className="text-sm text-muted-foreground">
-            Loading activity…
-          </span>
-        </div>
-      )}
-
-      {error && (
-        // Full-strength destructive border so the boundary is perceivable at
-        // the 3:1 UI minimum, matching the other cards' error state.
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
-          <AlertCircle className="h-4 w-4" />
-          <span>Couldn&apos;t load recent activity.</span>
-        </div>
-      )}
-
-      {data && !isLoading && !error && (
-        <div className="space-y-1">
-          {data.activities.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <ActivityRows activities={data.activities} now={now} />
-          )}
-        </div>
-      )}
-    </section>
-  );
-};
-
-RecentActivity.displayName = "RecentActivity";

@@ -22,10 +22,12 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 const registerServices = vi.fn();
 const isServicesRegistered = vi.fn(() => false);
 
-vi.mock("../../di", () => ({
+vi.mock("../../di/register", () => ({
   registerServices: (config: unknown) => registerServices(config),
-  isServicesRegistered: () => isServicesRegistered(),
   shutdownServices: vi.fn(),
+}));
+vi.mock("../../di", () => ({
+  isServicesRegistered: () => isServicesRegistered(),
   // A permissive stub, deliberately. The assertion below is about the argument
   // `registerServices` receives, which is decided BEFORE any of these post-
   // registration steps run — so what they resolve to cannot affect it, and a

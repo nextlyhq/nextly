@@ -1,8 +1,10 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { StatusPage } from "@admin/components/shared/status-page";
 
-export function NotFoundPage() {
+export function NotFoundPage(): JSX.Element {
   return (
     <StatusPage
       visual={

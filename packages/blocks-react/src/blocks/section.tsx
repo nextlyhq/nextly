@@ -6,7 +6,7 @@
  *
  * @module blocks/library/section
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -18,34 +18,35 @@ import type { ContainerProps } from "./container";
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const section = defineBlock<ContainerProps, PageContext>({
-  name: "core/section",
-  version: 1,
-  description:
-    "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Section",
-    icon: "section",
-    category: LAYOUT,
-    keywords: ["container", "wrapper", "band", "region"],
-  },
-  props: {
-    as: { type: "select", options: ["section", "header", "footer", "main"] },
-    contained: { type: "checkbox" },
-  },
-  defaultProps: { as: "section", contained: true },
-  example: { props: { as: "section", contained: true } },
-  slots: {
-    // Named children with no allow-list: a page region holds whatever a page
-    // holds, so no starting block is more correct than none. A section that
-    // arrives empty is not therefore an invisible one — the editor draws a box
-    // for any container whose slot is empty, which covers every unrestricted
-    // container rather than only the ones that thought to declare a default.
-    children: {},
-  },
-  supports: CONTAINER_SUPPORTS,
-  render: renderContainer,
-});
+export const section: BlockDefinition<ContainerProps, PageContext> =
+  defineBlock({
+    name: "core/section",
+    version: 1,
+    description:
+      "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Section",
+      icon: "section",
+      category: LAYOUT,
+      keywords: ["container", "wrapper", "band", "region"],
+    },
+    props: {
+      as: { type: "select", options: ["section", "header", "footer", "main"] },
+      contained: { type: "checkbox" },
+    },
+    defaultProps: { as: "section", contained: true },
+    example: { props: { as: "section", contained: true } },
+    slots: {
+      // Named children with no allow-list: a page region holds whatever a page
+      // holds, so no starting block is more correct than none. A section that
+      // arrives empty is not therefore an invisible one — the editor draws a box
+      // for any container whose slot is empty, which covers every unrestricted
+      // container rather than only the ones that thought to declare a default.
+      children: {},
+    },
+    supports: CONTAINER_SUPPORTS,
+    render: renderContainer,
+  });

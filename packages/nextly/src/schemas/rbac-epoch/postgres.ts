@@ -26,12 +26,12 @@
  * read-modify-write from the application would lose one of two simultaneous
  * invalidations.
  *
- * ## Why a table rather than a column on the cache rows
+ * ## Why a table rather than a column on an existing one
  *
  * `ensureCoreTables` reconciles an existing database by re-running idempotent
  * `CREATE TABLE IF NOT EXISTS` statements, so a NEW TABLE reaches installs that
  * already exist. It explicitly does not repair a table whose columns drifted,
- * which a new column on `user_permission_cache` would have needed. A separate
+ * which a new column on an existing table would have needed. A separate
  * table is therefore the shape that can actually be delivered to the databases
  * this is meant to protect.
  *
