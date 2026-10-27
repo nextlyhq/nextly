@@ -498,21 +498,67 @@ describe("deciding whether this is CI", () => {
 });
 
 /*
+ * A group kill that fails with EPERM is macOS's answer for a group of zombies
+ * only, and also the answer for a live member that cannot be signalled. Only
+ * the first is nothing left to signal. The system's answers are given here, so
+ * every platform runs the macOS case.
+ */
+describe("signalling a run's group", () => {
+  const failing = code => () => {
+    throw Object.assign(new Error(`kill ${code}`), { code });
+  };
+  const member = (pgid, state) => ({ ppid: 1, pgid, state, start: "Tue Sep 24 10:00:00 2026" });
+
+  it("signals the group, as a negative pid", () => {
+    const sent = [];
+    signalGroup(200, "SIGTERM", { kill: (...args) => sent.push(args), table: () => new Map() });
+    expect(sent).toEqual([[-200, "SIGTERM"]]);
+  });
+
+  it("ignores a group that is already gone", () => {
+    expect(() => signalGroup(200, "SIGKILL", { kill: failing("ESRCH"), table: () => undefined })).not.toThrow();
+  });
+
+  it("treats EPERM from a group of zombies only as nothing left to signal", () => {
+    const table = () => new Map([[200, member(200, "Z")], [201, member(200, "Z")], [300, member(300, "S")]]);
+    expect(() => signalGroup(200, "SIGKILL", { kill: failing("EPERM"), table })).not.toThrow();
+  });
+
+  it("treats EPERM from a group with no member left as nothing left to signal", () => {
+    const table = () => new Map([[300, member(300, "S")]]);
+    expect(() => signalGroup(200, "SIGKILL", { kill: failing("EPERM"), table })).not.toThrow();
+  });
+
+  it("passes EPERM on when a member of the group is alive", () => {
+    const table = () => new Map([[200, member(200, "Z")], [201, member(200, "S")]]);
+    expect(() => signalGroup(200, "SIGKILL", { kill: failing("EPERM"), table })).toThrow(/EPERM/);
+  });
+
+  it("passes EPERM on when the group's members cannot be read", () => {
+    expect(() => signalGroup(200, "SIGKILL", { kill: failing("EPERM"), table: () => undefined })).toThrow(/EPERM/);
+  });
+});
+
+/*
  * Where there is no /proc — macOS — processes are read from one `ps` table.
  * Linux's `ps` prints the same columns, so the path runs here too.
  */
 describe.runIf(POSIX)("reading processes from ps", () => {
-  it("reads each row's pid, parent, state and start time", () => {
+  it("reads each row's pid, parent, group, state and start time", () => {
     const table = parseProcessTable(
-      "  123     1 Ss   Tue Sep 24 10:00:00 2026\n  456   123 Z    Tue Sep 24 10:01:00 2026\nnot a row\n"
+      "  123     1   123 Ss   Tue Sep 24 10:00:00 2026\n  456   123   123 Z    Tue Sep 24 10:01:00 2026\nnot a row\n"
     );
-    expect(table.get(123)).toEqual({ ppid: 1, state: "S", start: "Tue Sep 24 10:00:00 2026" });
-    expect(table.get(456).state).toBe("Z");
+    expect(table.get(123)).toEqual({ ppid: 1, pgid: 123, state: "S", start: "Tue Sep 24 10:00:00 2026" });
+    expect(table.get(456)).toMatchObject({ pgid: 123, state: "Z" });
     expect(table.size).toBe(2);
   });
 
   it("reads this machine's own ps output", () => {
-    expect(processTable().get(process.pid)?.ppid).toBe(process.ppid);
+    const self = processTable().get(process.pid);
+    expect(self?.ppid).toBe(process.ppid);
+    // A group id of its own column, not the parent's read twice.
+    expect(Number.isInteger(self?.pgid) && self.pgid > 0).toBe(true);
+    expect(self?.start).toMatch(/\d{4}$/);
   });
 
   /*
@@ -1001,9 +1047,10 @@ describe.runIf(POSIX)("running a command bounded", () => {
    * leader exits can meet exactly that group, and the error ended the runner
    * with status 1 in place of the run's own (the case above, 1 run in 12 under
    * load). perl keeps the zombie: it never reaps the child it put in a group of
-   * its own.
+   * its own. Only macOS answers EPERM here, so only there does this case tell
+   * the fix apart; the injected cases below hold it on every platform.
    */
-  it.runIf(HAS_PERL)("treats a group left with only zombies as one with nothing to signal", async () => {
+  it.runIf(HAS_PERL && process.platform === "darwin")("treats a group left with only zombies as one with nothing to signal", async () => {
     const keeper = spawn(
       "perl",
       ["-e", '$| = 1; my $pid = fork(); if ($pid == 0) { setpgrp(0, 0); exit 0 } print "$pid\\n"; sleep 30'],
