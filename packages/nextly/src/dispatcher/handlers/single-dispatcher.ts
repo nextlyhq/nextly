@@ -85,7 +85,8 @@ import {
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
-  leavingSettingsNotApplied,
+  leavingSettingsStep,
+  namedLeavingSettings,
   pushAndReconcileCompanion,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
@@ -1044,25 +1045,41 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const { record: updated, migrationStatus } =
-        await svc.metadata.updateSingleSchema({
-          slug,
-          existing,
-          updateData,
-          fields: schemaFields,
-          isLocalized,
-          wasLocalized,
-          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-          // the record inside its exclusion and needs to tell an explicit `localized: false` from
-          // this handler having filled in the value it read.
-          localizedRequested: b.localized !== undefined,
-          hasStatus,
-          wasStatus,
-          // Whether the request SET the toggle, which is not the same as changing it: saving it at
-          // its current value still reaches the companion, and that is what repairs a localized
-          // single whose companion `_status` was never provisioned.
-          statusRequested: b.status !== undefined,
+      const {
+        record: updated,
+        migrationStatus,
+        refusedSettings,
+      } = await svc.metadata.updateSingleSchema({
+        slug,
+        existing,
+        updateData,
+        fields: schemaFields,
+        isLocalized,
+        wasLocalized,
+        // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+        // the record inside its exclusion and needs to tell an explicit `localized: false` from
+        // this handler having filled in the value it read.
+        localizedRequested: b.localized !== undefined,
+        hasStatus,
+        wasStatus,
+        // Whether the request SET the toggle, which is not the same as changing it: saving it at
+        // its current value still reaches the companion, and that is what repairs a localized
+        // single whose companion `_status` was never provisioned.
+        statusRequested: b.status !== undefined,
+      });
+
+      // Leaving settings the database refused: the record already holds the fields without them,
+      // as the table does, and the admin is told which setting on which field was not applied.
+      if (refusedSettings.length > 0) {
+        const named = namedLeavingSettings(refusedSettings);
+        throw new NextlyError({
+          code: "NEXTLY_MIGRATION_APPLY_FAILED",
+          publicMessage:
+            `The fields were saved as shared, but the database refused ${named} once the values ` +
+            "were shared, so the fields were saved without them. Save again to apply them.",
+          logContext: { op: "leavingFieldSettings", entity: slug },
         });
+      }
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
@@ -1239,7 +1256,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           : undefined;
 
       // A Required or Unique field leaving translation is pushed without its setting first, and
-      // the setting is pushed once the companion reconcile has copied its values in.
+      // the setting is pushed once the companion reconcile has copied its values in, before its
+      // companion column is dropped.
       const settingsDeferred = fieldsWithLeavingSettingsDeferred({
         oldFields: single.fields as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
@@ -1292,27 +1310,32 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         wasStatus: single.status === true,
         adapter,
         renamed: companionRename ?? undefined,
+        // The settings the first push left off, once the shared columns hold the default
+        // language's values. A new desired schema rather than an edit of the first: the pipeline
+        // keeps the last one it applied, by reference, to skip a push that changes nothing.
+        settleLeaving: settingsDeferred
+          ? leavingSettingsStep({
+              adapter,
+              entity: slug,
+              tableName,
+              builtBy: "collection",
+              oldFields: single.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              renamed: companionRename,
+              push: () =>
+                push({
+                  ...desired,
+                  singles: {
+                    ...desired.singles,
+                    [slug]: {
+                      ...desired.singles[slug],
+                      fields: fields as DesiredSingle["fields"],
+                    },
+                  },
+                }),
+            })
+          : undefined,
       });
-
-      // The settings the first push left off, now that the shared columns hold the default
-      // language's values. Whether those values can take them was asked before anything ran.
-      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
-      // applied, by reference, to skip a push that changes nothing.
-      if (settingsDeferred) {
-        const settled = await push({
-          ...desired,
-          singles: {
-            ...desired.singles,
-            [slug]: {
-              ...desired.singles[slug],
-              fields: fields as DesiredSingle["fields"],
-            },
-          },
-        });
-        if (!settled.success) {
-          throw leavingSettingsNotApplied(slug, settled);
-        }
-      }
 
       const newSchemaVersion = currentVersion + 1;
 

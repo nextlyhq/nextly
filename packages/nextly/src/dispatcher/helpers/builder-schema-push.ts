@@ -10,12 +10,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { fieldsLeavingTranslationUnder } from "../../domains/i18n/migration/archive-preflight";
 import {
-  companionUniqueIndexChanges,
-  companionUniqueIndexName,
-  uniqueTranslatedColumns,
-} from "../../domains/i18n/migration/companion-unique-indexes";
+  fieldsLeavingTranslationUnder,
+  refuseLeavingSettingsTheValuesCannotTake,
+} from "../../domains/i18n/migration/archive-preflight";
+import {
+  type LeavingFieldLike,
+  leavingFieldConstraints,
+} from "../../domains/i18n/migration/field-leaves-translation-rules";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -31,8 +33,8 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
-import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -99,6 +101,11 @@ export interface BuilderCompanionReconcile {
   /** Draft/Published after and before this save. A field group has neither. */
   status?: boolean;
   wasStatus?: boolean;
+  /**
+   * The settings step of Required or Unique fields leaving translation (`leavingSettingsStep`),
+   * run once their values are copied onto main and before their companion columns are dropped.
+   */
+  settleLeaving?: () => Promise<void>;
 }
 
 /**
@@ -109,8 +116,9 @@ export interface BuilderCompanionReconcile {
  * the companion too, and a dialog that paired them differently would leave an entity's
  * translations behind its main table.
  *
- * @throws Error when the push is refused, and `NEXTLY_INTERNAL_ERROR` naming the entity when the
- *   push landed but its companion could not be brought in step.
+ * @throws Error when the push is refused; the settings step's own refusal as it is, the fields
+ *   still translated; and `NEXTLY_INTERNAL_ERROR` naming the entity when the push landed but its
+ *   companion could not be brought in step.
  */
 export async function pushAndReconcileCompanion(
   push: (desired: DesiredSchema) => Promise<PipelineResult>,
@@ -118,7 +126,6 @@ export async function pushAndReconcileCompanion(
   kind: "single" | "component",
   companion: BuilderCompanionReconcile
 ): Promise<PipelineResult> {
-  await dropLeavingFieldUniqueIndexes(kind, companion);
   const result = await push(desired);
   if (!result.success) {
     // The push's own words, under the code its status already was: what the dialog tells the
@@ -149,6 +156,9 @@ export async function pushAndReconcileCompanion(
       await reconcileComponentCompanion({ ...companion, joinedBefore });
     }
   } catch (error) {
+    // A refused setting is the dialog's answer to the admin, naming the field, and nothing has
+    // been dropped by then, so it is passed on as it is rather than as a companion out of step.
+    if (isLeavingSettingsRefusal(error)) throw error;
     throw NextlyError.internal({
       cause: error instanceof Error ? error : undefined,
       logContext: {
@@ -165,71 +175,97 @@ export async function pushAndReconcileCompanion(
 }
 
 /**
- * Drops the per-language unique index of each field leaving translation, before the push.
- *
- * The companion reconcile drops it too, but only after the push, and on SQLite the push may read
- * every table in the database, where an expression index on the companion cannot be read. The
- * index goes with the field's translation in any case; the reconcile reads the live indexes, so it
- * finds it gone rather than dropping it a second time.
+ * The settings step a schema dialog runs between copying the values of Required or Unique fields
+ * leaving translation onto main and dropping their companion columns: whether those values can
+ * take the settings, asked again right before they are applied, then the push of the real fields.
+ * Either refusal leaves the fields translated, every language in place, so the dialog can be saved
+ * again as it was.
  */
-async function dropLeavingFieldUniqueIndexes(
-  kind: "single" | "component",
-  companion: BuilderCompanionReconcile
-): Promise<void> {
-  if (!companion.wasLocalized || !companion.localized) return;
-  const leaving = new Set(
-    fieldsLeavingTranslationUnder(
-      companion.oldFields,
-      companion.newFields,
-      companion.renamed
+export function leavingSettingsStep(args: {
+  adapter: DrizzleAdapter;
+  entity: string;
+  tableName: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  renamed?: FieldRename | null;
+  /** The push of the fields with their settings. */
+  push: () => Promise<Pick<PipelineResult, "success" | "error">>;
+}): () => Promise<void> {
+  return async () => {
+    try {
+      await refuseLeavingSettingsTheValuesCannotTake({
+        ...args,
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      });
+      const settled = await args.push();
+      if (!settled.success) throw leavingSettingsNotApplied(args, settled);
+    } catch (error) {
+      if (error instanceof Error) leavingSettingsRefusals.add(error);
+      throw error;
+    }
+  };
+}
+
+/** The errors a settings step (`leavingSettingsStep`) refused with. */
+const leavingSettingsRefusals = new WeakSet<Error>();
+
+/**
+ * Whether `error` is a settings step's refusal, which a caller passes on as it is: nothing has
+ * been dropped by then, and it names the fields.
+ */
+export function isLeavingSettingsRefusal(error: unknown): boolean {
+  return error instanceof Error && leavingSettingsRefusals.has(error);
+}
+
+/** Each setting by name and field, as "Required on code and Unique on code". */
+export function namedLeavingSettings(
+  settings: readonly { field: string; setting: "required" | "unique" }[]
+): string {
+  return settings
+    .map(
+      s => `${s.setting === "required" ? "Required" : "Unique"} on ${s.field}`
     )
-  );
-  if (leaving.size === 0) return;
-  const dialect = companion.adapter.getCapabilities().dialect;
-  const companionTable = `${companion.tableName}_locales`;
-  // Each leaving field's index as it is now: keyed on the column the field had before the change,
-  // which for a field this change renames is still its old one.
-  const renamed = companion.renamed;
-  const indexed = uniqueTranslatedColumns({
-    fields: companion.oldFields,
-    entityLocalized: true,
-    dialect,
-    builtBy: kind === "component" ? "fieldGroup" : "collection",
-  }).filter(c =>
-    leaving.has(renamed && c.field === renamed.from ? renamed.to : c.field)
-  );
-  if (indexed.length === 0) return;
-  const { drops } = companionUniqueIndexChanges({
-    dialect,
-    companionTable,
-    wanted: [],
-    translatedColumns: indexed.map(c => c.column),
-    liveIndexNames: new Set(
-      indexed.map(c => companionUniqueIndexName(companionTable, c.column))
-    ),
-  });
-  await applyMigrationStatements(
-    companion.adapter,
-    drops.join("\n--> statement-breakpoint\n")
-  );
+    .join(" and ");
 }
 
 /**
- * The error for a schema dialog's second push refused: the one that applies the Required and
- * Unique settings of fields leaving translation after their values were shared. By then the first
- * push and the companion transition have run, so the fields are shared without their settings; the
- * log says so, and the public message stays generic.
+ * The error for a schema dialog's settings step refused by the database, after its values were
+ * judged able to take them: an entry written in between, or a refusal of the database's own. It
+ * names each setting and field, which are the admin's own schema, and says the fields are still
+ * translated; the database's reason goes to the log.
  */
-export function leavingSettingsNotApplied(
-  entity: string,
+function leavingSettingsNotApplied(
+  args: {
+    entity: string;
+    oldFields: readonly LeavingFieldLike[];
+    newFields: readonly LeavingFieldLike[];
+    renamed?: FieldRename | null;
+  },
   result: Pick<PipelineResult, "error">
 ): NextlyError {
-  return NextlyError.internal({
+  const leaving = new Set(
+    fieldsLeavingTranslationUnder(args.oldFields, args.newFields, args.renamed)
+  );
+  const constrained = args.newFields.filter(
+    f => leaving.has(f.name) && leavingFieldConstraints(f, undefined).length > 0
+  );
+  const settings = constrained.flatMap(f =>
+    leavingFieldConstraints(f, undefined).map(setting => ({
+      field: f.name,
+      setting,
+    }))
+  );
+  const still = constrained.length === 1 ? "The field is" : "The fields are";
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage:
+      `The database refused ${namedLeavingSettings(settings)} once the values were shared. ` +
+      `${still} still translated, with every language kept; save again to apply the change.`,
     logContext: {
       op: "leavingFieldSettings",
-      entity,
+      entity: args.entity,
       detail: result.error?.message,
-      note: "fields leaving translation are shared without their Required or Unique settings",
     },
   });
 }

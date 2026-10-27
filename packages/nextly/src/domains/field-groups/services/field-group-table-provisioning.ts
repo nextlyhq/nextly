@@ -15,6 +15,7 @@ import { consoleLogger } from "../../../shared/types";
 import { appLocalization } from "../../i18n/configured-locales";
 import { refuseTranslatedUniqueThatCannotHold } from "../../i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { settleThenDropLeavingFields } from "../../i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
   type FieldRename,
@@ -157,6 +158,12 @@ export async function reconcileComponentCompanion(args: {
   joinedBefore?: readonly string[];
   /** A translated field this change renames, by field name; its companion column is renamed. */
   renamed?: FieldRename;
+  /**
+   * Applies the Required and Unique settings of fields leaving translation, once their values are
+   * copied onto main and before their companion columns are dropped (`settleThenDropLeavingFields`),
+   * throwing when they are refused. Left out, each column is dropped right after its copy.
+   */
+  settleLeaving?: () => Promise<void>;
   // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
   // change on a group that was and remains non-localized reaches here and moves nothing, and a
   // caller that inferred "the tables changed" from the request shape would report a physical
@@ -205,6 +212,7 @@ export async function reconcileComponentCompanion(args: {
     companionExists,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
+    holdLeavingDrops: args.settleLeaving !== undefined,
     // What this database holds now, so a re-save after a part-applied one finishes it.
     ...(await liveCompanionShape(adapter, {
       tableName,
@@ -234,6 +242,14 @@ export async function reconcileComponentCompanion(args: {
   // not happen.
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+  if (args.settleLeaving) {
+    await settleThenDropLeavingFields({
+      adapter,
+      plan,
+      settleLeaving: args.settleLeaving,
+      entity: "fieldGroup",
+    });
   }
 
   // The transition record describes a companion that no longer exists, so it stops being true

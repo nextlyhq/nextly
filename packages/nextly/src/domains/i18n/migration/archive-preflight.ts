@@ -596,14 +596,75 @@ export function fieldsLeavingTranslationUnder(
   newFields: readonly LeavingFieldLike[],
   renamed?: FieldRename | null
 ): string[] {
-  return fieldsLeavingTranslation(
-    renamed
-      ? oldFields.map(f =>
-          f.name === renamed.from ? { ...f, name: renamed.to } : f
-        )
-      : oldFields,
-    newFields
+  return fieldsLeavingTranslation(underRename(oldFields, renamed), newFields);
+}
+
+/** `oldFields` with the field `renamed` names under its new name. */
+function underRename<F extends LeavingFieldLike>(
+  oldFields: readonly F[],
+  renamed: FieldRename | null | undefined
+): readonly F[] {
+  return renamed
+    ? oldFields.map(f =>
+        f.name === renamed.from ? { ...f, name: renamed.to } : f
+      )
+    : oldFields;
+}
+
+/**
+ * Refuses the Required and Unique settings of fields leaving translation that their default
+ * language's values cannot take, asked again right before a schema dialog applies them: the save
+ * asked before anything ran, and an entry written since reaches the companion until the column is
+ * dropped. Asked once the change's companion RENAME has run, so a renamed field's values are read
+ * from the column under its new name. A field whose column an earlier apply already dropped has
+ * nothing left to ask.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each field, the setting its values cannot take,
+ *   and how many entries are in the way
+ */
+export async function refuseLeavingSettingsTheValuesCannotTake(args: {
+  adapter: DrizzleAdapter;
+  entity: string;
+  tableName: string;
+  builtBy: ColumnOrigin;
+  defaultLocale: string;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  renamed?: FieldRename | null;
+}): Promise<void> {
+  const dialect = args.adapter.getCapabilities().dialect;
+  const oldFields = underRename(args.oldFields, args.renamed);
+  const before = new Map(oldFields.map(f => [f.name, f]));
+  const live = new Set(
+    await companionColumnNames(args.adapter, args.tableName)
   );
+  const leaving = new Set(
+    fieldsLeavingTranslation(oldFields, args.newFields).filter(name => {
+      const previous = before.get(name);
+      const column =
+        previous &&
+        fieldToLocalizedColumnSpec(previous, dialect, args.builtBy)?.name;
+      return column !== undefined && live.has(column);
+    })
+  );
+  if (leaving.size === 0) return;
+  const refusals = await refusalsForConstrainedFieldsLeaving({
+    adapter: args.adapter,
+    dialect,
+    tableName: args.tableName,
+    builtBy: args.builtBy,
+    defaultLocale: args.defaultLocale,
+    leaving,
+    oldFields,
+    newFields: args.newFields,
+    surface: "builder",
+  });
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals,
+      logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+    });
+  }
 }
 
 export function fieldsWithLeavingSettingsDeferred<

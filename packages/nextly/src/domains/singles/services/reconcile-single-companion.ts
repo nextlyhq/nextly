@@ -24,6 +24,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
 import { appLocalization } from "../../i18n/configured-locales";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { settleThenDropLeavingFields } from "../../i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
   type FieldRename,
@@ -62,6 +63,12 @@ export interface ReconcileSingleCompanionArgs {
   joinedBefore?: readonly string[];
   /** A translated field this change renames, by field name; its companion column is renamed. */
   renamed?: FieldRename;
+  /**
+   * Applies the Required and Unique settings of fields leaving translation, once their values are
+   * copied onto main and before their companion columns are dropped (`settleThenDropLeavingFields`),
+   * throwing when they are refused. Left out, each column is dropped right after its copy.
+   */
+  settleLeaving?: () => Promise<void>;
 }
 
 export async function reconcileSingleCompanion(
@@ -123,6 +130,7 @@ export async function reconcileSingleCompanion(
     wasStatus,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
+    holdLeavingDrops: args.settleLeaving !== undefined,
     // What this database holds now, so a re-save after a part-applied one finishes it.
     ...(await liveCompanionShape(adapter, {
       tableName,
@@ -152,6 +160,14 @@ export async function reconcileSingleCompanion(
   // not happen.
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+  if (args.settleLeaving) {
+    await settleThenDropLeavingFields({
+      adapter,
+      plan,
+      settleLeaving: args.settleLeaving,
+      entity: "single",
+    });
   }
 
   // The transition record describes a companion that no longer exists, so it stops being true the

@@ -13,6 +13,33 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+// What runs before a schema change applied whole: nothing unless a test arms it, to model a write
+// landing right before a Single's save applies a leaving field's settings.
+const { beforeWhole } = vi.hoisted(() => ({
+  beforeWhole: {
+    run: undefined as ((sql: string) => Promise<void>) | undefined,
+  },
+}));
+
+vi.mock(
+  "../../schema/services/apply-migration-statements",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../schema/services/apply-migration-statements")
+      >();
+    return {
+      ...actual,
+      applyMigrationWhole: async (
+        ...args: Parameters<typeof actual.applyMigrationWhole>
+      ) => {
+        await beforeWhole.run?.(args[0].migrationSQL);
+        return actual.applyMigrationWhole(...args);
+      },
+    };
+  }
+);
+
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -78,6 +105,10 @@ describeEachDialect(
     });
 
     afterEach(async () => {
+      // A test that fails before restoring its push spy or hook would otherwise wrap every later
+      // test's pushes.
+      vi.restoreAllMocks();
+      beforeWhole.run = undefined;
       await current.destroy();
       vi.unstubAllEnvs();
     });
@@ -577,68 +608,327 @@ describeEachDialect(
       return fields.find(f => f.name === "code")?.localized;
     }
 
-    // A dialog's apply shares the values, drops the companion column and only then pushes the
-    // Unique setting. When that last push fails (here a write landing in between gives a second
-    // entry an existing value), the values already sit on the main table while the registry still
-    // names the field translated, so the same save, retried, has to finish from that state.
-    it.each(
-      PATHS.filter(
-        p => p.path.includes("schema dialog") && p.entity !== "single"
-      )
-    )(
-      "finishes on a retry after the push applying Unique fails once the values are shared, when $path",
+    const DIALOGS = PATHS.filter(p => p.path.includes("schema dialog"));
+
+    /**
+     * The real pushes, run as they are, with `around` called before and after each by its number
+     * in the save (1, then 2 for the settings).
+     */
+    function aroundPushes(
+      around: (push: number, when: "before" | "after") => Promise<void>
+    ): { pushes: () => number; restore: () => void } {
+      const realApply = PushSchemaPipeline.prototype.apply;
+      let pushes = 0;
+      const spy = vi
+        .spyOn(PushSchemaPipeline.prototype, "apply")
+        .mockImplementation(async function (
+          this: PushSchemaPipeline,
+          ...args: Parameters<PushSchemaPipeline["apply"]>
+        ) {
+          pushes += 1;
+          const push = pushes;
+          await around(push, "before");
+          const result = await realApply.apply(this, args);
+          await around(push, "after");
+          return result;
+        });
+      return { pushes: () => pushes, restore: () => spy.mockRestore() };
+    }
+
+    /**
+     * Writes `code` in English as the entity's own write path does while the field is still
+     * translated: a collection's new entry, a Single's update, a field group row an embedding
+     * entry writes. Returns the value read back where the runtime reads it.
+     */
+    async function writeTranslatedCode(
+      path: Path,
+      value: string
+    ): Promise<unknown> {
+      if (path.entity === "collection") {
+        const entry = await handler()
+          .getEntryService()
+          .createEntry(
+            { collectionName: "posts", overrideAccess: true, locale: "en" },
+            { code: value, views: 2 }
+          );
+        expect(entry.success, JSON.stringify(entry)).toBe(true);
+        return (entry.data as { code?: unknown }).code;
+      }
+      if (path.entity === "single") {
+        const singles: SingleEntryService =
+          current.getService("singleEntryService");
+        const written = await singles.update(
+          "hero",
+          { code: value },
+          { locale: "en", overrideAccess: true }
+        );
+        expect(written.success, JSON.stringify(written)).toBe(true);
+        const read = await singles.get("hero", {
+          locale: "en",
+          overrideAccess: true,
+        });
+        return (read.data as { code?: unknown } | undefined)?.code;
+      }
+      const system = SYSTEM_COLUMNS.comp_promo;
+      await query(
+        `INSERT INTO ${q("comp_promo")} (${["id", ...Object.keys(system), "views"].map(q).join(", ")}) ` +
+          `VALUES ('promo-late', ${Object.values(system).join(", ")}, 1)`
+      );
+      await query(
+        `INSERT INTO ${q("comp_promo_locales")} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
+          `VALUES ('promo-late', 'en', '${value}')`
+      );
+      const [row] = await query<{ code: unknown }>(
+        `SELECT ${q("code")} AS code FROM ${q("comp_promo_locales")} WHERE ${q("_parent")} = 'promo-late'`
+      );
+      return row?.code;
+    }
+
+    // A dialog's apply copies the values onto the shared column, pushes the Unique setting, and
+    // only then drops the companion column. When that push is refused (here a write landing in
+    // between gives a second row an existing value), nothing has been dropped: the field is still
+    // translated, its entries still write it, and the same save, made again, finishes the change.
+    it.each(DIALOGS)(
+      "keeps the field translated when the push applying Unique is refused, and finishes when saved again, when $path",
       async path => {
-        const english = ["a1@example.com", "b2@example.com"];
+        const english =
+          path.entity === "single"
+            ? ["a1@example.com"]
+            : ["a1@example.com", "b2@example.com"];
         await seedConstrained(path, { unique: true }, english);
         const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
 
-        // The real push, run as it is; before the second one in the save, a row sharing an
-        // entry's value is written to the main table, so that push is refused by the database.
-        const realApply = PushSchemaPipeline.prototype.apply;
-        let pushes = 0;
-        const spy = vi
-          .spyOn(PushSchemaPipeline.prototype, "apply")
-          .mockImplementation(async function (
-            this: PushSchemaPipeline,
-            ...args: Parameters<PushSchemaPipeline["apply"]>
-          ) {
-            pushes += 1;
-            if (pushes === 2) {
-              await query(
-                rowFor(path.table, "concurrent-1", "'a1@example.com'")
-              );
-            }
-            return realApply.apply(this, args);
-          });
+        const spy = aroundPushes(async (push, when) => {
+          if (push === 2 && when === "before") {
+            await query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
+          }
+        });
         const failure = await attempt(path.change(change));
-        spy.mockRestore();
+        spy.restore();
 
-        expect(pushes).toBe(2);
+        expect(spy.pushes()).toBe(2);
         expect(failure).toBeInstanceOf(NextlyError);
         expect((failure as NextlyError).logContext?.op).toBe(
           "leavingFieldSettings"
         );
-        // The state the retry starts from: values shared, companion column gone, registry behind.
-        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
+        expect(reported(failure)).toMatch(/refused Unique on code/);
+        // Nothing dropped: still translated, every value and the companion column in place.
+        expect(await columnsOf(`${path.table}_locales`)).toContain("code");
+        expect(await englishCodes(path.table)).toEqual(english);
         expect(await registryTranslatesCode(path.entity)).not.toBe(false);
 
         await query(
           `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
         );
+        // Still written as a translated field is.
+        expect(await writeTranslatedCode(path, "c3@example.com")).toBe(
+          "c3@example.com"
+        );
         await path.change(change);
 
         expect(await registryTranslatesCode(path.entity)).toBe(false);
-        expect(await sharedCodes(path.table)).toEqual(english);
+        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
+        const shared = await sharedCodes(path.table);
+        expect(shared).toEqual(
+          expect.arrayContaining(
+            path.entity === "single"
+              ? ["c3@example.com"]
+              : [...english, "c3@example.com"]
+          )
+        );
         // The row sharing an entry's value first, then one of the same shape that does not: the
         // second is taken, so the first was refused for its value, not for its shape.
         expect(
-          await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
+          await inserts(rowFor(path.table, "broken-1", "'c3@example.com'"))
         ).not.toBe(true);
         expect(
           await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
         ).toBe(true);
       }
     );
+
+    // The value the drop relies on is copied again right before it: an English value written
+    // after the settings push, while the field is still translated, is the one the field keeps,
+    // and a Spanish one written then is archived with the rest.
+    it.each(DIALOGS)(
+      "keeps a value written between the settings push and the drop, when $path",
+      async path => {
+        await seedConstrained(path, { unique: true }, ["a1@example.com"]);
+        const companion = q(`${path.table}_locales`);
+        const spy = aroundPushes(async (push, when) => {
+          if (push !== 2 || when !== "after") return;
+          await query(
+            `UPDATE ${companion} SET ${q("code")} = 'late@example.com' WHERE ${q("_locale")} = 'en'`
+          );
+          const [row] = await query<{ parent: string }>(
+            `SELECT ${q("_parent")} AS parent FROM ${companion} WHERE ${q("_locale")} = 'en'`
+          );
+          await query(
+            `INSERT INTO ${companion} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
+              `VALUES ('${row?.parent}', 'es', 'tarde@example.com')`
+          );
+        });
+        await path.change([{ ...CODE, localized: false, unique: true }, VIEWS]);
+        spy.restore();
+
+        expect(spy.pushes()).toBe(2);
+        expect(await sharedCodes(path.table)).toEqual(["late@example.com"]);
+        const archived = await query<{ n: number | string }>(
+          `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} ` +
+            `WHERE ${q("locale")} = 'es' AND ${q("field")} = 'code' AND ${q("value")} = 'tarde@example.com'`
+        );
+        expect(Number(archived[0]?.n)).toBeGreaterThan(0);
+      }
+    );
+
+    // A push refused part-way commits what it ran on SQLite and MySQL: here the shared column
+    // already holds the values and carries Unique, the companion column is still there, and the
+    // registry still names the field translated. Saving again finishes the change.
+    it.each(DIALOGS)(
+      "finishes a change whose settings push landed part-way, when saved again, when $path",
+      async path => {
+        const english =
+          path.entity === "single"
+            ? ["a1@example.com"]
+            : ["a1@example.com", "b2@example.com"];
+        const flags = { required: true, unique: true };
+        await seedConstrained(path, flags, english);
+        const companion = q(`${path.table}_locales`);
+        const main = q(path.table);
+        await query(`ALTER TABLE ${main} ADD COLUMN ${q("code")} varchar(255)`);
+        await query(
+          `UPDATE ${main} SET ${q("code")} = (SELECT c.${q("code")} FROM ${companion} c ` +
+            `WHERE c.${q("_parent")} = ${main}.${q("id")} AND c.${q("_locale")} = 'en')`
+        );
+        await query(
+          `CREATE UNIQUE INDEX ${q(`${path.table}_code_unique`)} ON ${main} (${q("code")})`
+        );
+
+        await path.change([{ ...CODE, localized: false, ...flags }, VIEWS]);
+
+        expect(await registryTranslatesCode(path.entity)).toBe(false);
+        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
+        expect(await sharedCodes(path.table)).toEqual(english);
+        expect(
+          await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
+        ).toBe(true);
+        expect(
+          await inserts(rowFor(path.table, "duplicate-1", "'kept@example.com'"))
+        ).not.toBe(true);
+        expect(await inserts(rowFor(path.table, "missing-1", "NULL"))).not.toBe(
+          true
+        );
+      }
+    );
+
+    /** The registry's record of `code` for `entity`. */
+    async function registryCode(
+      entity: string
+    ): Promise<
+      { localized?: boolean; required?: boolean; unique?: boolean } | undefined
+    > {
+      const { table, slug } = REGISTRY[entity];
+      const [row] = await query<{ fields: unknown }>(
+        `SELECT ${q("fields")} AS fields FROM ${q(table)} WHERE ${q("slug")} = '${slug}'`
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as {
+        name: string;
+        localized?: boolean;
+        required?: boolean;
+        unique?: boolean;
+      }[];
+      return fields.find(f => f.name === "code");
+    }
+
+    // A Single's save records its field list whatever happens past its main migration, so a
+    // refused settings step is recorded as the table then is: the field shared, holding neither
+    // setting, since the step is all or nothing. The next save sees both settings as a change and
+    // applies them.
+    it("records neither setting when a Single's save has its second refused, and applies both on the next save", async () => {
+      const path = PATHS.find(p => p.path === "a Single's schema is saved")!;
+      const flags = { required: true, unique: true };
+      await seedConstrained(path, flags, ["a1@example.com"]);
+      const change = [{ ...CODE, localized: false, ...flags }, VIEWS];
+
+      // Before the statements applying the settings, a row holding the entry's value is written,
+      // so the second of them, Unique, is refused by the database.
+      let injected = false;
+      beforeWhole.run = async (sql: string) => {
+        if (injected || !/unique/i.test(sql) || !/code/.test(sql)) return;
+        injected = true;
+        await query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
+      };
+      const failure = await attempt(path.change(change));
+      beforeWhole.run = undefined;
+
+      expect(injected).toBe(true);
+      expect(reported(failure)).toMatch(/Required on code and Unique on code/);
+      // The record holds neither setting, as the table does.
+      const recorded = await registryCode("single");
+      expect(recorded?.localized).toBe(false);
+      expect(recorded?.required).not.toBe(true);
+      expect(recorded?.unique).not.toBe(true);
+      expect(await inserts(rowFor(path.table, "blank-1", "NULL"))).toBe(true);
+      expect(
+        await inserts(rowFor(path.table, "again-1", "'a1@example.com'"))
+      ).toBe(true);
+      await query(
+        `DELETE FROM ${q(path.table)} WHERE ${q("id")} IN ('concurrent-1', 'blank-1', 'again-1')`
+      );
+      // The field reads and writes as a shared one at once.
+      const singles: SingleEntryService =
+        current.getService("singleEntryService");
+      const written = await singles.update(
+        "hero",
+        { code: "b2@example.com" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(written.success, JSON.stringify(written)).toBe(true);
+      const read = await singles.get("hero", {
+        locale: "es",
+        overrideAccess: true,
+      });
+      expect((read.data as { code?: unknown } | undefined)?.code).toBe(
+        "b2@example.com"
+      );
+
+      // The editor's next save: previewed, then applied under the version the preview gave.
+      const preview = (await (
+        (await dispatchSingles(
+          "previewSingleSchemaChanges",
+          { slug: "hero" },
+          { fields: change, localized: true }
+        )) as Response
+      ).json()) as { hasChanges?: boolean; schemaVersion: number };
+      expect(preview.hasChanges).toBe(true);
+      await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields: change,
+          confirmed: true,
+          localized: true,
+          schemaVersion: preview.schemaVersion,
+        }
+      );
+
+      expect(await registryCode("single")).toMatchObject({
+        localized: false,
+        required: true,
+        unique: true,
+      });
+      expect(
+        await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
+      ).toBe(true);
+      expect(
+        await inserts(rowFor(path.table, "duplicate-1", "'kept@example.com'"))
+      ).not.toBe(true);
+      expect(await inserts(rowFor(path.table, "missing-1", "NULL"))).not.toBe(
+        true
+      );
+    });
 
     // Both settings at once: the shared column is added holding neither and takes both after the
     // copy, so what the entries must satisfy is asked of the values that copy writes, not of the

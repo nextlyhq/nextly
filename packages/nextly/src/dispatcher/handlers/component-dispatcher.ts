@@ -55,7 +55,7 @@ import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
-  leavingSettingsNotApplied,
+  leavingSettingsStep,
   pushAndReconcileCompanion,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
@@ -556,7 +556,8 @@ export const COMPONENTS_METHODS: Record<
               : undefined;
 
           // A Required or Unique field leaving translation is pushed without its setting first,
-          // and the setting is pushed once the companion reconcile has copied its values in.
+          // and the setting is pushed once the companion reconcile has copied its values in,
+          // before its companion column is dropped.
           const settingsDeferred = fieldsWithLeavingSettingsDeferred({
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
@@ -603,27 +604,34 @@ export const COMPONENTS_METHODS: Record<
               (component as { localized?: boolean }).localized === true,
             adapter,
             renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the
+            // pipeline keeps the last one it applied, by reference, to skip a push that changes
+            // nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      components: {
+                        ...desired.components,
+                        [slug]: {
+                          ...desired.components[slug],
+                          fields: fields as DesiredFieldGroup["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
           });
-
-          // The settings the first push left off, now that the shared columns hold the default
-          // language's values. Whether those values can take them was asked before anything ran.
-          // A new desired schema rather than an edit of the first: the pipeline keeps the last one
-          // it applied, by reference, to skip a push that changes nothing.
-          if (settingsDeferred) {
-            const settled = await push({
-              ...desired,
-              components: {
-                ...desired.components,
-                [slug]: {
-                  ...desired.components[slug],
-                  fields: fields as DesiredFieldGroup["fields"],
-                },
-              },
-            });
-            if (!settled.success) {
-              throw leavingSettingsNotApplied(slug, settled);
-            }
-          }
 
           const newSchemaVersion = currentVersion + 1;
 

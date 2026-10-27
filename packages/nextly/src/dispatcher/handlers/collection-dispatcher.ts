@@ -41,6 +41,7 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
+import { settleThenDropLeavingFields } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -92,7 +93,10 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
-import { leavingSettingsNotApplied } from "../helpers/builder-schema-push";
+import {
+  isLeavingSettingsRefusal,
+  leavingSettingsStep,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -882,7 +886,8 @@ const COLLECTIONS_METHODS: Record<
       });
 
       // A Required or Unique field leaving translation is pushed without its setting first, and
-      // the setting is pushed once the companion transition has copied its values in.
+      // the setting is pushed once the companion transition has copied its values in, before its
+      // companion column is dropped.
       const settingsDeferred = fieldsWithLeavingSettingsDeferred({
         oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
@@ -988,6 +993,7 @@ const COLLECTIONS_METHODS: Record<
             joinedBefore: movedOnto(result, tableName),
             // A translated field the admin renamed: the dialog's answer naming the companion.
             renamed,
+            holdLeavingDrops: settingsDeferred !== undefined,
             // What this database holds now, so a re-apply after a part-applied one finishes it.
             ...(await liveCompanionShape(adapter, {
               tableName,
@@ -1008,6 +1014,42 @@ const COLLECTIONS_METHODS: Record<
           // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
+          }
+          // The settings the first push left off, once the shared columns hold the default
+          // language's values, and only then the leaving fields' companion columns dropped. A new
+          // desired schema rather than an edit of the first: the pipeline keeps the last one it
+          // applied, by reference, to skip a push that changes nothing.
+          if (settingsDeferred) {
+            const settleLeaving = leavingSettingsStep({
+              adapter,
+              entity: String(p.collectionName),
+              tableName,
+              builtBy: "collection",
+              oldFields,
+              newFields,
+              renamed: companionRename,
+              push: () =>
+                apply(
+                  {
+                    ...desired,
+                    collections: {
+                      ...desired.collections,
+                      [p.collectionName]: {
+                        ...desired.collections[p.collectionName],
+                        fields: fields as DesiredCollection["fields"],
+                      },
+                    },
+                  },
+                  "ui",
+                  { promptChannel: "auto" }
+                ),
+            });
+            await settleThenDropLeavingFields({
+              adapter,
+              plan,
+              settleLeaving,
+              entity: "collection",
+            });
           }
 
           // The transition record describes a companion that no longer exists, so it stops being true
@@ -1033,6 +1075,10 @@ const COLLECTIONS_METHODS: Record<
             );
           }
         } catch (err) {
+          // A refused setting is the dialog's answer to the admin, naming the field, and nothing
+          // has been dropped by then, so it is passed on as it is rather than as a companion out
+          // of step.
+          if (isLeavingSettingsRefusal(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           // Fatal to correctness (translatable values have nowhere to live), but
           // the main-table apply already committed — surface loudly rather than
@@ -1046,30 +1092,6 @@ const COLLECTIONS_METHODS: Record<
               note: "main table updated but localized companion out of sync; re-apply to retry",
             },
           });
-        }
-      }
-
-      // The settings the first push left off, now that the shared columns hold the default
-      // language's values. Whether those values can take them was asked before anything ran.
-      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
-      // applied, by reference, to skip a push that changes nothing.
-      if (settingsDeferred) {
-        const settled = await apply(
-          {
-            ...desired,
-            collections: {
-              ...desired.collections,
-              [p.collectionName]: {
-                ...desired.collections[p.collectionName],
-                fields: fields as DesiredCollection["fields"],
-              },
-            },
-          },
-          "ui",
-          { promptChannel: "auto" }
-        );
-        if (!settled.success) {
-          throw leavingSettingsNotApplied(String(p.collectionName), settled);
         }
       }
 
