@@ -397,8 +397,11 @@ function activeLanguageView(
 function pendingLanguageCount(
   locales: readonly { code: string }[],
   translations: Record<string, LocaleTranslationMeta> | undefined
-): number {
-  return locales.filter(l => translations?.[l.code]?.pendingChange).length;
+): number | null {
+  // Unknown, not none, where the states were not read: the confirmation then
+  // warns that any held change goes live rather than claim there is none.
+  if (translations === undefined) return null;
+  return locales.filter(l => translations[l.code]?.pendingChange).length;
 }
 
 /**
