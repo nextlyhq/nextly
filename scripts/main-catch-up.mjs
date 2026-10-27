@@ -88,21 +88,27 @@ const VERDICTS = new Set(["success", "failure"]);
 export async function decision(workflow, sha, { repository, context, now = Date.now() }) {
   const { workflow_runs: listed } = await githubJson(`repos/${repository}/actions/workflows/${workflow}/runs?branch=main&head_sha=${sha}&per_page=20`, context);
   const runs = listed.filter(run => MAIN_EVENTS.has(run.event));
-  const unfinished = runs.find(run => run.status !== "completed");
-  if (unfinished) {
-    const recent = await recentRuns(workflow, { repository, context });
-    const pending = recent.find(run => run.event === "workflow_dispatch" && run.status !== "completed");
-    if (pending) return { action: "none", reason: `catch-up run ${pending.id} is ${pending.status}; one at a time` };
+  // A commit gets one catch-up: one dispatched for it, finished or not, stands.
+  const caughtUp = runs.find(run => run.event === "workflow_dispatch");
+  if (caughtUp) return { action: "none", reason: `catch-up run ${caughtUp.id} of ${sha.slice(0, 9)} is ${caughtUp.status}; its result stands` };
+  // One catch-up at a time across main, whatever this commit's own runs did.
+  const recent = await recentRuns(workflow, { repository, context });
+  const pending = recent.find(run => run.event === "workflow_dispatch" && run.status !== "completed");
+  if (pending) return { action: "none", reason: `catch-up run ${pending.id} is ${pending.status}; one at a time` };
+  // A run that has started is testing the commit, or will finish superseded
+  // within seconds; only one still waiting for a runner may wait for ever.
+  const started = runs.find(run => run.status === "in_progress");
+  if (started) return { action: "none", reason: `run ${started.id} of ${sha.slice(0, 9)} is in progress and may still test it` };
+  const waiting = runs.find(run => run.status !== "completed");
+  if (waiting) {
     const verdict = await lastVerdict(workflow, recent, { repository, context });
     const age = verdict ? now - Date.parse(verdict.updated_at) : Infinity;
     if (age <= MAX_VERDICT_AGE_MS) {
-      return { action: "none", reason: `run ${unfinished.id} of ${sha.slice(0, 9)} is ${unfinished.status} and may still test it` };
+      return { action: "none", reason: `run ${waiting.id} of ${sha.slice(0, 9)} is ${waiting.status} and may still test it` };
     }
     const since = verdict ? `${(age / 3_600_000).toFixed(1)} h ago (run ${verdict.id})` : "not in main's recent runs";
-    return { action: "dispatch", reason: `run ${unfinished.id} of ${sha.slice(0, 9)} is ${unfinished.status}, but main's last verdict was ${since}` };
+    return { action: "dispatch", reason: `run ${waiting.id} of ${sha.slice(0, 9)} is ${waiting.status}, but main's last verdict was ${since}` };
   }
-  const caughtUp = runs.find(run => run.event === "workflow_dispatch");
-  if (caughtUp) return { action: "none", reason: `catch-up run ${caughtUp.id} already ran on ${sha.slice(0, 9)}; its result stands` };
   for (const run of runs) {
     const { jobs } = await githubJson(`repos/${repository}/actions/runs/${run.id}/jobs?per_page=100`, context);
     if (tested(jobs, WORKFLOWS[workflow])) return { action: "none", reason: `run ${run.id} tested ${sha.slice(0, 9)}` };

@@ -49,12 +49,13 @@ const skippedJobs = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(nam
 function routesWith(runFor, jobsFor, { lastVerdict = 1, extra = () => [] } = {}) {
   const routes = { ...head };
   for (const [at, workflow] of Object.keys(WORKFLOWS).entries()) {
-    const run = runFor(workflow, at + 1);
-    routes[runsOf(workflow)] = { workflow_runs: run ? [run] : [] };
-    if (run) routes[jobsOf(run.id)] = jobsFor(workflow);
+    // A case may give the newest commit one run or several.
+    const onHead = [].concat(runFor(workflow, at + 1) ?? []);
+    routes[runsOf(workflow)] = { workflow_runs: onHead };
+    for (const run of onHead) routes[jobsOf(run.id)] = jobsFor(workflow);
     const earlier = { id: 100 + at, event: "push", status: "completed", updated_at: hoursAgo(lastVerdict) };
     routes[jobsOf(earlier.id)] = testedJobs(workflow);
-    routes[recentOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...(run ? [run] : []), earlier] };
+    routes[recentOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...onHead, earlier] };
   }
   return routes;
 }
@@ -99,6 +100,37 @@ describe("the catch-up on main's newest commit", () => {
     const pending = (_, at) => [{ id: 200 + at, event: "workflow_dispatch", status: "queued" }];
     const { fetchImpl, dispatched } = api(
       routesWith((_, id) => ({ id, event: "push", status: "queued" }), skippedJobs, { lastVerdict: 10, extra: pending })
+    );
+    expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it("starts nothing for a commit whose catch-up already ran, though its push run is still queued and the verdict old", async () => {
+    const both = (_, id) => [
+      { id, event: "push", status: "queued" },
+      { id: 300 + id, event: "workflow_dispatch", status: "completed" },
+    ];
+    const { fetchImpl, dispatched } = api(routesWith(both, skippedJobs, { lastVerdict: 10 }));
+    expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it("starts nothing while a catch-up on an older commit is on its way, whatever the newest commit's runs did", async () => {
+    // The newest commit's push run finished superseded, so it tested nothing;
+    // one catch-up at a time still holds.
+    const pending = (_, at) => [{ id: 200 + at, event: "workflow_dispatch", status: "in_progress" }];
+    const { fetchImpl, dispatched } = api(
+      routesWith((_, id) => ({ id, event: "push", status: "completed" }), skippedJobs, { extra: pending })
+    );
+    expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it("leaves a push run that has started to finish, however old the last verdict", async () => {
+    // Only a run still waiting for a runner can be superseded before it
+    // starts; one in progress is already testing the commit.
+    const { fetchImpl, dispatched } = api(
+      routesWith((_, id) => ({ id, event: "push", status: "in_progress" }), skippedJobs, { lastVerdict: 10 })
     );
     expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
     expect(dispatched()).toEqual([]);
