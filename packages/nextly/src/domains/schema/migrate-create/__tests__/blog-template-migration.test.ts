@@ -198,6 +198,25 @@ describe("the blog template's code, as this test loads it", () => {
 });
 
 describe("the blog template's migration", () => {
+  // The check below counts what a visual blog registers only if the snapshot
+  // was read: the reader answers an empty list for a missing or unreadable
+  // `meta` folder, which would leave only the code-first config to check.
+  it("reads what a visual blog registers from the template's snapshot", async () => {
+    const visual = await visualStatus();
+    const { collections, singles } = await blogEntities();
+    const codeFirst = [...collections, ...singles];
+    expect([...visual.keys()].sort()).toEqual(
+      codeFirst.map(e => e.tableName).sort()
+    );
+    // At least one table is Draft/Published only through registration's
+    // default, or the snapshot adds nothing the code-first config does not.
+    expect(
+      codeFirst
+        .filter(e => e.status !== true && visual.get(e.tableName) === true)
+        .map(e => e.tableName)
+    ).not.toEqual([]);
+  });
+
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
     it(`creates every table and column nextly expects (${dialect})`, async () => {
       const sql = readFileSync(
@@ -345,7 +364,20 @@ describe("the blog template's MySQL migration", () => {
       )
     ))
       keys.push([table, column, target, targetColumn]);
-    expect(keys.length).toBeGreaterThan(0);
+    // Every foreign key the file declares, so one dropped by an edit fails here
+    // rather than leaving its column unchecked.
+    expect(
+      keys.map(([t, c, target, tc]) => `${t}.${c} -> ${target}.${tc}`).sort()
+    ).toEqual([
+      "dc_posts.author -> users.id",
+      "dc_posts.featured_image -> media.id",
+      "dc_posts_categories.category_id -> dc_categories.id",
+      "dc_posts_categories.post_id -> dc_posts.id",
+      "dc_posts_tags.post_id -> dc_posts.id",
+      "dc_posts_tags.tag_id -> dc_tags.id",
+      "single_site_settings.logo -> media.id",
+      "user_ext.user_id -> users.id",
+    ]);
     const expected = (target: string, targetColumn: string) =>
       targetColumn === "id" && target in nextlyIds
         ? nextlyIds[target]
