@@ -29,12 +29,23 @@ import {
 } from "../generate";
 
 // The template imports nextly by its published names, which vitest.config.ts
-// points at this package's source, so its collections are built by the real
-// field helpers. The package root is replaced here by the one name the
-// template reads from it, rather than loading every service.
-vi.mock("nextly", async () => ({
-  NextlyError: (await import("../../../../errors/nextly-error")).NextlyError,
-}));
+// resolves to this package's source for template files: `nextly/config` to the
+// real config surface, so the template's collections are built by the real
+// field helpers, and `nextly` to the package root, replaced here by the one
+// name the template reads from it rather than every service. Each records that
+// a template import reached it, so a template that stopped resolving to this
+// source fails the check below by name.
+const reached = vi.hoisted(() => new Set<string>());
+vi.mock("../../../../config", async importOriginal => {
+  reached.add("nextly/config");
+  return importOriginal();
+});
+vi.mock("../../../../index", async () => {
+  reached.add("nextly");
+  return {
+    NextlyError: (await import("../../../../errors/nextly-error")).NextlyError,
+  };
+});
 
 const TEMPLATE = new URL(
   "../../../../../../../templates/blog/",
@@ -155,6 +166,13 @@ async function blogEntities() {
     ),
   };
 }
+
+describe("the blog template's code, as this test loads it", () => {
+  it("imports nextly from this package's source", async () => {
+    await blogEntities();
+    expect([...reached].sort()).toEqual(["nextly", "nextly/config"]);
+  });
+});
 
 describe("the blog template's migration", () => {
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
