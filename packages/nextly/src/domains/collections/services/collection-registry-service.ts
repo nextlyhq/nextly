@@ -179,6 +179,19 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
+   * Every collection's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every collection's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
+  /**
    * The slugs of every collection with a Draft/Published lifecycle, read
    * without the rest of their records: what a decision about publishing
    * across collections needs.

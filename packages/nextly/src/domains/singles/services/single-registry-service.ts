@@ -319,6 +319,19 @@ export class SingleRegistryService extends BaseRegistryService<
     return records.map(({ slug, label }) => ({ slug, label }));
   }
 
+  /**
+   * Every Single's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every Single's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
   async getAllSingles(
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {

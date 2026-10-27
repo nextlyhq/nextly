@@ -12,6 +12,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -38,7 +39,7 @@ function metric(placementId: string, source: string): BatchCard {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "metric",
-    size: "sm",
+    size: gridBounds(3),
     query,
   };
   return { placementId, widget };
@@ -229,7 +230,7 @@ describe("the announcement's count", () => {
           id: "acme/revenue",
           title: "Revenue",
           archetype: "custom",
-          size: "md",
+          size: gridBounds(4),
           component: "@acme/admin#Revenue",
           serverData: true,
         },

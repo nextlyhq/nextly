@@ -1,13 +1,13 @@
 "use client";
 
 import type React from "react";
-import { useState } from "react";
 
-import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
+import { Circle, Clock, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
 import { DocumentLanguagePanel } from "../../LanguagePanel";
+import { DocumentIdCopy } from "../DocumentIdCopy";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -78,24 +78,6 @@ export function pillStateFromForm(
   if (status === "published" && hasWorkingDraft) return "changed";
   if (status === "published" && isDirty) return "modified";
   return status === "published" ? "published" : "draft";
-}
-
-/**
- * Format an entry ID as `first5…last3` so the rail row stays a single line
- * even for long UUIDs. Returns the original string when it is short enough
- * that truncating would hide more than it reveals.
- *
- * @example
- * formatId("548e813c-8266-40c3-bd9c-ca1816f8")  // "548e8…6f8"
- * formatId("abc12345")                          // "abc12345"
- * formatId(undefined)                           // "—"
- */
-export function formatId(id: string | null | undefined): string {
-  if (!id) return "—";
-  // Why: 9 chars or fewer fits in a single line at the rail width without
-  // ellipsis, and `first5…last3` would be longer than the original at 8.
-  if (id.length <= 9) return id;
-  return `${id.slice(0, 5)}…${id.slice(-3)}`;
 }
 
 export function DocumentPanel({
@@ -247,16 +229,6 @@ function StatusRow({ state }: { state: PillState }) {
 }
 
 function IdRow({ id }: { id?: string | null }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    if (!id) return;
-    void navigator.clipboard.writeText(id).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
@@ -264,28 +236,7 @@ function IdRow({ id }: { id?: string | null }) {
         <span>ID</span>
       </dt>
       <dd className="flex items-center gap-1 min-w-0">
-        <span className="text-xs font-mono text-foreground" title={id ?? ""}>
-          {formatId(id)}
-        </span>
-        {id && (
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="hover:bg-primary/5 rounded p-0.5 transition-colors"
-            aria-label={copied ? "ID copied" : "Copy ID to clipboard"}
-          >
-            {copied ? (
-              // The copied tick uses the per-mode success ink. A fixed ramp
-              // step (`success-600`) is a constant darkening of the brand
-              // green and lands at 4.38:1 on the dark surface, under the 4.5:1
-              // text minimum; `--color-success` is defined for each mode and
-              // measures 5.30:1 light, 5.29:1 dark.
-              <Check className="h-3 w-3 text-success" />
-            ) : (
-              <Copy className="h-3 w-3 text-muted-foreground" />
-            )}
-          </button>
-        )}
+        <DocumentIdCopy id={id} />
       </dd>
     </div>
   );

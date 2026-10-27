@@ -7,11 +7,21 @@
  * @module schemas/email-brand/__tests__/parity.test
  */
 import { Column, getTableName, is, isTable, type Table } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { getDialectTables } from "../../../database";
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
-import { EMAIL_BRAND_TABLE, my, pg, sl } from "../index";
+import { EMAIL_BRAND_TABLE } from "../index";
+import * as my from "../mysql";
+import * as pg from "../postgres";
+import * as sl from "../sqlite";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Property and column name of every column, as the notices parity test reads them. */
 const columnNames = (table: Table): string[] =>

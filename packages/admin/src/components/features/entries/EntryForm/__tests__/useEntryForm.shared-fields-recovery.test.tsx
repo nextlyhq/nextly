@@ -34,6 +34,11 @@ vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
     return { mutateAsync: update, isPending: false };
   },
 }));
+// Whether reads ask for translation status, as the other useEntryForm tests
+// answer it: these entries aren't localized.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useAsksTranslationStatus: () => false,
+}));
 vi.mock("@admin/hooks/queries/useDeleteEntry", () => ({
   useDeleteEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));

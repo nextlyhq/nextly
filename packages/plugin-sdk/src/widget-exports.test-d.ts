@@ -13,12 +13,12 @@
  */
 import { WIDGET_CONDITIONS, WIDGET_LIFECYCLES } from "@nextlyhq/plugin-sdk";
 import type {
+  GridSize,
   WidgetLifecycle,
   WidgetCondition,
   WidgetDefinition,
   WidgetQuery,
-  WidgetSize,
-  WidgetHeight,
+  WidgetSizeDeclaration,
   WidgetArchetype,
   WidgetSource,
   WidgetSourceField,
@@ -31,8 +31,8 @@ import type {
 type _WidgetSurface = [
   WidgetDefinition,
   WidgetQuery,
-  WidgetSize,
-  WidgetHeight,
+  GridSize,
+  WidgetSizeDeclaration,
   WidgetArchetype,
   WidgetSource,
   WidgetSourceField,
@@ -43,13 +43,16 @@ type _WidgetSurface = [
 ];
 
 // Every contract the published shapes NAME must be nameable too, which is the
-// property a bare `WidgetDefinition` export would not have: `defaultHeight` is
-// a `WidgetHeight`, and a `WidgetSource`'s `fields` are `WidgetSourceField`s.
-// Annotating -- not inferring -- is what proves the names are reachable.
-const _height: WidgetHeight = "tall";
+// property a bare `WidgetDefinition` export would not have: `size` is a
+// `WidgetSizeDeclaration` of `GridSize`s, and a `WidgetSource`'s `fields` are
+// `WidgetSourceField`s. Annotating -- not inferring -- is what proves the names
+// are reachable.
+const _unit: GridSize = { w: 6, h: 4 };
+const _size: WidgetSizeDeclaration = { default: _unit, max: { w: 12, h: 6 } };
+const _declared: WidgetDefinition["size"] = _size;
 const _field: WidgetSourceField = { name: "title", type: "string" };
 const _op: WidgetOp = "count";
-void _height;
+void _declared;
 void _field;
 void _op;
 

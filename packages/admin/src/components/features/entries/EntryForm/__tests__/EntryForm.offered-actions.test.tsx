@@ -64,6 +64,14 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
+// A request judged in other languages, held as `<request>:<slug>`. The
+// module's other hooks stay real: the history panel they serve is not what
+// these cases are about.
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: (slug: string, request: string) =>
+    canFor(`${request}:${slug}`),
+}));
 
 import { EntryForm } from "../EntryForm";
 
@@ -157,8 +165,25 @@ describe("a quick-edit modal's Save", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("is offered with the update permission", () => {
+  it("is not offered to a role that may update only in another language than the default", () => {
+    // The modal sends no language, so the server writes the default one.
     holding("read-categories", "update-categories");
+    render(
+      <EntryForm collection={categories} entry={entry} mode="edit" embedded />,
+      { wrapper: Providers }
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /save changes/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("is offered with the update permission in the default language", () => {
+    holding(
+      "read-categories",
+      "update-categories",
+      "updateInDefaultLanguage:categories"
+    );
     render(
       <EntryForm collection={categories} entry={entry} mode="edit" embedded />,
       { wrapper: Providers }

@@ -22,6 +22,7 @@ import {
 } from "../domains/widgets/declaration/declared-widgets";
 import { bindReadServices } from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
+import { GRID_COLUMNS, MIN_GRID_ROWS } from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
 import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
@@ -136,12 +137,15 @@ function askedPlacement(
   if (preview.success) {
     const { widget, settings } = preview.data;
     // Not a stored card, so it has no id of its own; its config is the
-    // settings asked with, read exactly as a stored card's is.
+    // settings asked with, read exactly as a stored card's is. Its size
+    // answers nothing about its data, so it is the full width at the fewest
+    // rows a card may span.
     return cards.placeable.has(widget)
       ? {
           id: "preview",
           widgetId: widget,
-          width: "full",
+          w: GRID_COLUMNS,
+          h: MIN_GRID_ROWS,
           removed: false,
           config: settings,
         }

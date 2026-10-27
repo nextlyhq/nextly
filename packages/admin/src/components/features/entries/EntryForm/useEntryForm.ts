@@ -21,6 +21,7 @@ import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -611,6 +612,9 @@ export function useEntryForm({
     setError: form.setError,
   });
 
+  // The read asks every language's translation state only of a user who may
+  // read it, and the save keys its cache on the same choice.
+  const asksTranslationStatus = useAsksTranslationStatus(collection.name);
   const updateMutation = useUpdateEntry({
     collectionSlug: collection.name,
     entryId: entry?.id ?? "",
@@ -625,6 +629,7 @@ export function useEntryForm({
     // caller passes how it read the entry; absent that, assume the full-page
     // editor's mode (the working-draft overlay for a drafts collection).
     draft: readDraft ?? collection.draftsEnabled === true,
+    translationStatus: asksTranslationStatus,
     refusedForm,
   });
 

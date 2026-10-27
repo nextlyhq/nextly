@@ -32,7 +32,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { PluginDefinition } from "../../../plugins/plugin-context";
-import { getCoreSchema } from "../../../schemas";
+import { getCoreSchema } from "../../../schemas/core-schema";
 import type { ExtensionSchema } from "../extension/build-extension-schema";
 import {
   coreContributions,

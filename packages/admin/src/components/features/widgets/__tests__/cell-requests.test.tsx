@@ -13,6 +13,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -66,7 +67,7 @@ function countCard(
       id: "core/count",
       title: "Count",
       archetype: "custom",
-      size: "sm",
+      size: gridBounds(3),
       cells,
     },
     declaredCells: DECLARED_CELLS,

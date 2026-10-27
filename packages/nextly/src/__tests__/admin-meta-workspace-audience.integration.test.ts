@@ -74,7 +74,7 @@ const contributor = definePlugin({
           id: "notes/welcome",
           title: "Welcome",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           content: "Welcome to the notes desk.",
         },
         // Gated on a grant the read-only key HOLDS.
@@ -82,7 +82,7 @@ const contributor = definePlugin({
           id: "notes/runbook",
           title: "Runbook",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `read-${NOTES}`,
           content: RUNBOOK,
         },
@@ -91,7 +91,7 @@ const contributor = definePlugin({
           id: "notes/editors",
           title: "For editors",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: EDITORS_ONLY,
         },
@@ -100,7 +100,7 @@ const contributor = definePlugin({
           id: "notes/shortcuts",
           title: "Shortcuts",
           archetype: "actions",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           actions: [
             { label: "All notes", href: "/admin/collections/notes" },
             {
@@ -116,7 +116,7 @@ const contributor = definePlugin({
           id: "notes/pinned",
           title: "Pinned",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           query: { source: `collection:${NOTES}`, op: "count" },
           settings: [PINNED_TO_EVENTS],
         },
@@ -142,7 +142,7 @@ const impostor = definePlugin({
           id: "notes/welcome",
           title: "Welcome (again)",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: IMPOSTOR,
         },
@@ -227,7 +227,7 @@ beforeEach(async () => {
       id: "app/ops-notes",
       title: "Ops notes",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       requiredPermission: `create-${NOTES}`,
       content: EDITORS_ONLY,
     },
@@ -238,7 +238,7 @@ beforeEach(async () => {
       id: "app/board",
       title: "Board",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       content: "The board meets on Mondays.",
     },
     { source: "@test/app" }
@@ -248,7 +248,7 @@ beforeEach(async () => {
       id: "app/tools",
       title: "Tools",
       archetype: "actions",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [
         { label: "Search", href: "/admin/search" },
         {
@@ -431,7 +431,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         id: "notes/editors",
         title: "Editors (registered)",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: {
           source: `collection:${NOTES}`,
           op: "count",
@@ -466,7 +466,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         id: "app/pinned",
         title: "Pinned",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: `collection:${NOTES}`, op: "count" },
         settings: [
           {
