@@ -47,6 +47,7 @@ import {
   useWithStoredReferences,
 } from "@admin/hooks/queries/useStoredReferences";
 import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -368,6 +369,14 @@ export default function EditEntryPage({
 
   const isLoading = isLoadingCollection || isLoadingEntry;
   const error = collectionError || entryError;
+  // The tab names the entry as the page heading does, once both the entry and
+  // the collection that says which field titles it have arrived. Above the
+  // loading and error returns below, because it is a hook.
+  useDocumentTitle(
+    entry && collection && id
+      ? getEntryTitle(entry, id, collection.admin?.useAsTitle)
+      : undefined
+  );
 
   // Resolved here, above this component's loading and error returns, for the
   // reason the hooks above give: whether a custom view renders decides whether

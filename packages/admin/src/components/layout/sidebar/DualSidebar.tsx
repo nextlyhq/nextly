@@ -12,7 +12,12 @@ import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
-import { useCollections, useSingles } from "@admin/hooks/queries";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  NAV_SINGLES_PARAMS,
+  useCollections,
+  useSingles,
+} from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
@@ -119,25 +124,20 @@ export function DualSidebar({
     });
   }, [baseMenuItems, visibleStandalonePlugins]);
 
-  // Fetch data for automatic navigation
+  // Fetch data for automatic navigation. The shared params keep these on the
+  // cache entries the browser tab's title reads its labels from, so naming a
+  // collection or Single in the tab costs no request of its own.
   const {
     data: collectionsData,
     isLoading: isCollectionsLoading,
     isError: isCollectionsError,
-  } = useCollections({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [{ field: "name", direction: "asc" }],
-  });
+  } = useCollections(NAV_COLLECTIONS_PARAMS);
 
   const {
     data: singlesData,
     isLoading: isSinglesLoading,
     isError: isSinglesError,
-  } = useSingles({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [],
-    filters: {},
-  });
+  } = useSingles(NAV_SINGLES_PARAMS);
 
   const pluginMetadata = branding?.plugins;
 

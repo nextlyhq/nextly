@@ -9,6 +9,7 @@ import registry, { routeConfig } from "../pages/registry";
 import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
+import { pluginPageScreen, type ScreenName } from "./navigation/screen-names";
 import { routedDocumentView } from "./plugins/document-view-registry";
 import {
   arePluginPagesKnown,
@@ -69,6 +70,12 @@ export interface RouteResult {
    * matched, which is a genuine 404 rather than a route without a section.
    */
   section?: CarriedRouteSection;
+  /**
+   * What the browser tab calls this screen, as the route declared it. Carried
+   * like `section`, so the title reads the route table's answer rather than
+   * matching the pathname a second time.
+   */
+  screenName?: ScreenName;
 }
 
 type Params = Record<string, string | string[]>;
@@ -122,6 +129,7 @@ function matchDynamicRoute(pathname: string): {
   requiredPermission?: string | string[];
   requiresBuilder?: boolean;
   section?: CarriedRouteSection;
+  screenName?: ScreenName;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
@@ -149,6 +157,7 @@ function matchDynamicRoute(pathname: string): {
         requiredPermission: config?.requiredPermission,
         requiresBuilder: config?.requiresBuilder,
         section: config?.type === "private" ? config.section : undefined,
+        screenName: config?.screenName,
         pattern,
       };
     }
@@ -264,6 +273,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: config?.requiredPermission,
       requiresBuilder: config?.requiresBuilder,
       section: config?.type === "private" ? config.section : undefined,
+      screenName: config?.screenName,
     };
   }
 
@@ -284,6 +294,9 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: pluginPage.requiredPermission,
       pluginComponentPath: pluginPage.component,
       section: pluginPage.section ?? "plugins",
+      // A plugin declares no name for its page; the host names it from what
+      // it already holds, the plugin's menu label for it or its address.
+      screenName: pluginPageScreen,
     };
   }
 
@@ -317,6 +330,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
+      screenName: dynamic.screenName,
     };
   }
 
@@ -326,5 +340,8 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
     params: {},
     searchParams: {},
     routeType: "private",
+    // No table entry answers this address, so the tab says what the screen
+    // shows instead.
+    screenName: "Page Not Found",
   };
 }
