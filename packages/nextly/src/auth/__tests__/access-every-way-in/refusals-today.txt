@@ -22,20 +22,20 @@ no-service user-without read single returns-false at rest  404 NOT_FOUND error  
 no-service user-without read single returns-filter at rest  404 NOT_FOUND error  | Not found.
 no-service user-without read single returns-null at rest  404 NOT_FOUND error  | Not found.
 no-service user-without read single returns-true at rest  404 NOT_FOUND error  | Not found.
-no-service visitor read collection async-filter at direct  403 - other  | 
-no-service visitor read collection malformed-filter at direct  403 - other  | 
-no-service visitor read collection none at direct  403 - other  | 
-no-service visitor read collection returns-empty-in at direct  403 - other  | 
-no-service visitor read collection returns-false at direct  403 - other  | 
-no-service visitor read collection returns-filter at direct  403 - other  | 
-no-service visitor read collection returns-null at direct  403 - other  | 
-no-service visitor read single async-filter at direct  403 - other  | 
-no-service visitor read single malformed-filter at direct  403 - other  | 
-no-service visitor read single none at direct  403 - other  | 
-no-service visitor read single returns-empty-in at direct  403 - other  | 
-no-service visitor read single returns-false at direct  403 - other  | 
-no-service visitor read single returns-filter at direct  403 - other  | 
-no-service visitor read single returns-null at direct  403 - other  | 
+no-service visitor read collection async-filter at direct  401 - other  | 
+no-service visitor read collection malformed-filter at direct  401 - other  | 
+no-service visitor read collection none at direct  401 - other  | 
+no-service visitor read collection returns-empty-in at direct  401 - other  | 
+no-service visitor read collection returns-false at direct  401 - other  | 
+no-service visitor read collection returns-filter at direct  401 - other  | 
+no-service visitor read collection returns-null at direct  401 - other  | 
+no-service visitor read single async-filter at direct  401 - other  | 
+no-service visitor read single malformed-filter at direct  401 - other  | 
+no-service visitor read single none at direct  401 - other  | 
+no-service visitor read single returns-empty-in at direct  401 - other  | 
+no-service visitor read single returns-false at direct  401 - other  | 
+no-service visitor read single returns-filter at direct  401 - other  | 
+no-service visitor read single returns-null at direct  401 - other  | 
 public visitor count collection async-false at direct  403 FORBIDDEN thrown  | You can't see pc async falses.
 public visitor count collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection async-false at service  403 FORBIDDEN thrown  | You can't see pc async falses.
@@ -271,21 +271,21 @@ public visitor new-pub collection async-filter at service  403 FORBIDDEN thrown 
 public visitor new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create pc async throws.
 public visitor new-pub collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create pc async throws.
-public visitor new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't publish pc async trues.
+public visitor new-pub collection async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't publish pc async trues.
+public visitor new-pub collection async-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create pc falses.
 public visitor new-pub collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection false at service  403 FORBIDDEN thrown  | You can't create pc falses.
 public visitor new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create pc malformed filters.
 public visitor new-pub collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create pc malformed filters.
-public visitor new-pub collection none at direct  403 FORBIDDEN thrown  | You can't publish pc nones.
+public visitor new-pub collection none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection none at service  403 FORBIDDEN thrown  | You can't publish pc nones.
-public visitor new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't publish pc other operations.
+public visitor new-pub collection none at service  401 AUTH_REQUIRED thrown  | Authentication required.
+public visitor new-pub collection other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't publish pc other operations.
+public visitor new-pub collection other-operation at service  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create pc permission spellings.
 public visitor new-pub collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create pc permission spellings.
@@ -310,51 +310,51 @@ public visitor new-pub collection returns-null at service  403 FORBIDDEN thrown 
 public visitor new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create pc returns strings.
 public visitor new-pub collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create pc returns strings.
-public visitor new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't publish pc returns trues.
+public visitor new-pub collection returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't publish pc returns trues.
+public visitor new-pub collection returns-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
 public visitor new-pub collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
 public visitor new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create pc role names.
 public visitor new-pub collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create pc role names.
-public visitor new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish pc role screen spellings.
+public visitor new-pub collection role-screen-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't publish pc role screen spellings.
+public visitor new-pub collection role-screen-spelling at service  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create pc throws.
 public visitor new-pub collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create pc throws.
-public visitor new-pub collection true at direct  403 FORBIDDEN thrown  | You can't publish pc trues.
+public visitor new-pub collection true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor new-pub collection true at service  403 FORBIDDEN thrown  | You can't publish pc trues.
+public visitor new-pub collection true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create pc user is key makers.
 public visitor new-pub collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create pc user is key makers.
 public visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async false.
 public visitor publish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async false.
-public visitor publish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
+public visitor publish collection async-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
+public visitor publish collection async-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async throws.
 public visitor publish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async throws.
-public visitor publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async true.
+public visitor publish collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async true.
+public visitor publish collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc false.
 public visitor publish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc false.
-public visitor publish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc malformed filter.
+public visitor publish collection malformed-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc malformed filter.
-public visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc none.
+public visitor publish collection malformed-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc none.
-public visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc other operation.
+public visitor publish collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc other operation.
+public visitor publish collection other-operation at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc permission spelling.
 public visitor publish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc permission spelling.
@@ -364,87 +364,87 @@ public visitor publish collection principal-kind at service  403 FORBIDDEN throw
 public visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc publish false.
 public visitor publish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc publish false.
-public visitor publish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns empty in.
+public visitor publish collection returns-empty-in at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns empty in.
+public visitor publish collection returns-empty-in at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns false.
 public visitor publish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns false.
-public visitor publish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
+public visitor publish collection returns-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
-public visitor publish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns null.
+public visitor publish collection returns-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection returns-null at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns null.
-public visitor publish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns string.
+public visitor publish collection returns-null at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection returns-string at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns string.
-public visitor publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns true.
+public visitor publish collection returns-string at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns true.
-public visitor publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns undefined.
+public visitor publish collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor publish collection returns-undefined at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns undefined.
+public visitor publish collection returns-undefined at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role name.
 public visitor publish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role name.
-public visitor publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role screen spelling.
+public visitor publish collection role-screen-spelling at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role screen spelling.
+public visitor publish collection role-screen-spelling at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc throws.
 public visitor publish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc throws.
-public visitor publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc true.
+public visitor publish collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc true.
+public visitor publish collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc user is key maker.
 public visitor publish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc user is key maker.
-public visitor publish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Async False.
+public visitor publish single-pub async-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Async Filter.
+public visitor publish single-pub async-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Async Throws.
+public visitor publish single-pub async-throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Async True.
+public visitor publish single-pub async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub false at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub False.
+public visitor publish single-pub false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Malformed Filter.
+public visitor publish single-pub malformed-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub None.
+public visitor publish single-pub none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Other Operation.
+public visitor publish single-pub other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Permission Spelling.
+public visitor publish single-pub permission-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Principal Kind.
+public visitor publish single-pub principal-kind at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Publish False.
+public visitor publish single-pub publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns Empty In.
+public visitor publish single-pub returns-empty-in at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns False.
+public visitor publish single-pub returns-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns Filter.
+public visitor publish single-pub returns-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns Null.
+public visitor publish single-pub returns-null at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns String.
+public visitor publish single-pub returns-string at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns True.
+public visitor publish single-pub returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Returns Undefined.
+public visitor publish single-pub returns-undefined at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Role Name.
+public visitor publish single-pub role-name at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Role Screen Spelling.
+public visitor publish single-pub role-screen-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub throws at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Throws.
+public visitor publish single-pub throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub true at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub True.
+public visitor publish single-pub true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub User Is Key Maker.
+public visitor publish single-pub user-is-key-maker at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor publish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async false.
 public visitor read collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
@@ -549,27 +549,27 @@ public visitor read users none at rest  401 AUTH_REQUIRED error  | Authenticatio
 public visitor unpublish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async false.
 public visitor unpublish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async false.
-public visitor unpublish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
+public visitor unpublish collection async-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
+public visitor unpublish collection async-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async throws.
 public visitor unpublish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async throws.
-public visitor unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async true.
+public visitor unpublish collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async true.
+public visitor unpublish collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc false.
 public visitor unpublish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc false.
-public visitor unpublish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc malformed filter.
+public visitor unpublish collection malformed-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc malformed filter.
-public visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc none.
+public visitor unpublish collection malformed-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc none.
-public visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc other operation.
+public visitor unpublish collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc other operation.
+public visitor unpublish collection other-operation at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc permission spelling.
 public visitor unpublish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc permission spelling.
@@ -579,87 +579,87 @@ public visitor unpublish collection principal-kind at service  403 FORBIDDEN thr
 public visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc publish false.
 public visitor unpublish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc publish false.
-public visitor unpublish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns empty in.
+public visitor unpublish collection returns-empty-in at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns empty in.
+public visitor unpublish collection returns-empty-in at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns false.
 public visitor unpublish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns false.
-public visitor unpublish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
+public visitor unpublish collection returns-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
-public visitor unpublish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns null.
+public visitor unpublish collection returns-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection returns-null at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns null.
-public visitor unpublish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns string.
+public visitor unpublish collection returns-null at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection returns-string at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns string.
-public visitor unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns true.
+public visitor unpublish collection returns-string at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns true.
-public visitor unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns undefined.
+public visitor unpublish collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+public visitor unpublish collection returns-undefined at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns undefined.
+public visitor unpublish collection returns-undefined at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role name.
 public visitor unpublish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role name.
-public visitor unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role screen spelling.
+public visitor unpublish collection role-screen-spelling at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role screen spelling.
+public visitor unpublish collection role-screen-spelling at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc throws.
 public visitor unpublish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc throws.
-public visitor unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc true.
+public visitor unpublish collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc true.
+public visitor unpublish collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 public visitor unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc user is key maker.
 public visitor unpublish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc user is key maker.
-public visitor unpublish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Async False.
+public visitor unpublish single-pub async-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Async Filter.
+public visitor unpublish single-pub async-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Async Throws.
+public visitor unpublish single-pub async-throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Async True.
+public visitor unpublish single-pub async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub False.
+public visitor unpublish single-pub false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Malformed Filter.
+public visitor unpublish single-pub malformed-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub None.
+public visitor unpublish single-pub none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Other Operation.
+public visitor unpublish single-pub other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Permission Spelling.
+public visitor unpublish single-pub permission-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Principal Kind.
+public visitor unpublish single-pub principal-kind at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Publish False.
+public visitor unpublish single-pub publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns Empty In.
+public visitor unpublish single-pub returns-empty-in at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns False.
+public visitor unpublish single-pub returns-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns Filter.
+public visitor unpublish single-pub returns-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns Null.
+public visitor unpublish single-pub returns-null at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns String.
+public visitor unpublish single-pub returns-string at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns True.
+public visitor unpublish single-pub returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Returns Undefined.
+public visitor unpublish single-pub returns-undefined at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Role Name.
+public visitor unpublish single-pub role-name at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Role Screen Spelling.
+public visitor unpublish single-pub role-screen-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Throws.
+public visitor unpublish single-pub throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub True.
+public visitor unpublish single-pub true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub User Is Key Maker.
+public visitor unpublish single-pub user-is-key-maker at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor unpublish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async false.
 public visitor update collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
@@ -9274,21 +9274,21 @@ service visitor count collection false at service  403 FORBIDDEN thrown  | You c
 service visitor count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service visitor count collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
-service visitor count collection none at direct  403 FORBIDDEN thrown  | You can't see c nones.
+service visitor count collection none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor count collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor count collection none at service  403 FORBIDDEN thrown  | You can't see c nones.
-service visitor count collection other-operation at direct  403 FORBIDDEN thrown  | You can't see c other operations.
+service visitor count collection none at service  401 AUTH_REQUIRED thrown  | Authentication required.
+service visitor count collection other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor count collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor count collection other-operation at service  403 FORBIDDEN thrown  | You can't see c other operations.
+service visitor count collection other-operation at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service visitor count collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service visitor count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service visitor count collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
-service visitor count collection publish-false at direct  403 FORBIDDEN thrown  | You can't see c publish falses.
+service visitor count collection publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor count collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor count collection publish-false at service  403 FORBIDDEN thrown  | You can't see c publish falses.
+service visitor count collection publish-false at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor count collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see c returns empty ins.
 service visitor count collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't see c returns empty ins.
@@ -9330,30 +9330,30 @@ service visitor create collection async-filter at service  403 FORBIDDEN thrown 
 service visitor create collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
 service visitor create collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
-service visitor create collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service visitor create collection async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service visitor create collection async-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
 service visitor create collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
 service visitor create collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
 service visitor create collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
-service visitor create collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor create collection none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
-service visitor create collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor create collection none at service  401 AUTH_REQUIRED thrown  | Authentication required.
+service visitor create collection other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor create collection other-operation at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service visitor create collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service visitor create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service visitor create collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
-service visitor create collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor create collection publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor create collection publish-false at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
 service visitor create collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
@@ -9369,9 +9369,9 @@ service visitor create collection returns-null at service  403 FORBIDDEN thrown 
 service visitor create collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
 service visitor create collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
-service visitor create collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service visitor create collection returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service visitor create collection returns-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
 service visitor create collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
@@ -9384,9 +9384,9 @@ service visitor create collection role-screen-spelling at service  403 FORBIDDEN
 service visitor create collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
 service visitor create collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
-service visitor create collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service visitor create collection true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor create collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service visitor create collection true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service visitor create collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
@@ -9402,30 +9402,30 @@ service visitor delete collection async-filter at service  403 FORBIDDEN thrown 
 service visitor delete collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
 service visitor delete collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async throws.
-service visitor delete collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
+service visitor delete collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c async true.
+service visitor delete collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
 service visitor delete collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c false.
 service visitor delete collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
 service visitor delete collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c malformed filter.
-service visitor delete collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c none.
+service visitor delete collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c none.
-service visitor delete collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c other operation.
+service visitor delete collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor delete collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c other operation.
+service visitor delete collection other-operation at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service visitor delete collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c permission spelling.
 service visitor delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
 service visitor delete collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c principal kind.
-service visitor delete collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c publish false.
+service visitor delete collection publish-false at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c publish false.
+service visitor delete collection publish-false at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns empty in.
 service visitor delete collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns empty in.
@@ -9441,9 +9441,9 @@ service visitor delete collection returns-null at service  403 FORBIDDEN thrown 
 service visitor delete collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
 service visitor delete collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns string.
-service visitor delete collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
+service visitor delete collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns true.
+service visitor delete collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
 service visitor delete collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c returns undefined.
@@ -9456,9 +9456,9 @@ service visitor delete collection role-screen-spelling at service  403 FORBIDDEN
 service visitor delete collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
 service visitor delete collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c throws.
-service visitor delete collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
+service visitor delete collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor delete collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c true.
+service visitor delete collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
 service visitor delete collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor delete collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this c user is key maker.
@@ -9481,21 +9481,21 @@ service visitor list collection false at service  403 FORBIDDEN thrown  | You ca
 service visitor list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see c malformed filters.
 service visitor list collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see c malformed filters.
-service visitor list collection none at direct  403 FORBIDDEN thrown  | You can't see c nones.
+service visitor list collection none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor list collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor list collection none at service  403 FORBIDDEN thrown  | You can't see c nones.
-service visitor list collection other-operation at direct  403 FORBIDDEN thrown  | You can't see c other operations.
+service visitor list collection none at service  401 AUTH_REQUIRED thrown  | Authentication required.
+service visitor list collection other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor list collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor list collection other-operation at service  403 FORBIDDEN thrown  | You can't see c other operations.
+service visitor list collection other-operation at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service visitor list collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see c permission spellings.
 service visitor list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see c principal kinds.
 service visitor list collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see c principal kinds.
-service visitor list collection publish-false at direct  403 FORBIDDEN thrown  | You can't see c publish falses.
+service visitor list collection publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor list collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor list collection publish-false at service  403 FORBIDDEN thrown  | You can't see c publish falses.
+service visitor list collection publish-false at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor list collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see c returns empty ins.
 service visitor list collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't see c returns empty ins.
@@ -9537,30 +9537,30 @@ service visitor new-pub collection async-filter at service  403 FORBIDDEN thrown
 service visitor new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
 service visitor new-pub collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
-service visitor new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service visitor new-pub collection async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service visitor new-pub collection async-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
 service visitor new-pub collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
 service visitor new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
 service visitor new-pub collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
-service visitor new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor new-pub collection none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
-service visitor new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor new-pub collection none at service  401 AUTH_REQUIRED thrown  | Authentication required.
+service visitor new-pub collection other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor new-pub collection other-operation at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service visitor new-pub collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
 service visitor new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
 service visitor new-pub collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
-service visitor new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor new-pub collection publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor new-pub collection publish-false at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
 service visitor new-pub collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
@@ -9576,9 +9576,9 @@ service visitor new-pub collection returns-null at service  403 FORBIDDEN thrown
 service visitor new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
 service visitor new-pub collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
-service visitor new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service visitor new-pub collection returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service visitor new-pub collection returns-true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
 service visitor new-pub collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
@@ -9591,36 +9591,36 @@ service visitor new-pub collection role-screen-spelling at service  403 FORBIDDE
 service visitor new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
 service visitor new-pub collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
-service visitor new-pub collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service visitor new-pub collection true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor new-pub collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service visitor new-pub collection true at service  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service visitor new-pub collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async false.
 service visitor publish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async false.
-service visitor publish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async filter.
+service visitor publish collection async-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async filter.
+service visitor publish collection async-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async throws.
 service visitor publish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async throws.
-service visitor publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
+service visitor publish collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c async true.
+service visitor publish collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c false.
 service visitor publish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c false.
-service visitor publish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c malformed filter.
+service visitor publish collection malformed-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c malformed filter.
-service visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
+service visitor publish collection malformed-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c none.
-service visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
+service visitor publish collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c other operation.
+service visitor publish collection other-operation at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c permission spelling.
 service visitor publish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c permission spelling.
@@ -9630,27 +9630,27 @@ service visitor publish collection principal-kind at service  403 FORBIDDEN thro
 service visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
 service visitor publish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c publish false.
-service visitor publish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns empty in.
+service visitor publish collection returns-empty-in at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns empty in.
+service visitor publish collection returns-empty-in at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns false.
 service visitor publish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns false.
-service visitor publish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns filter.
+service visitor publish collection returns-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns filter.
-service visitor publish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns null.
+service visitor publish collection returns-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection returns-null at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns null.
-service visitor publish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns string.
+service visitor publish collection returns-null at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection returns-string at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns string.
-service visitor publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
+service visitor publish collection returns-string at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns true.
-service visitor publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns undefined.
+service visitor publish collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor publish collection returns-undefined at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c returns undefined.
+service visitor publish collection returns-undefined at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
 service visitor publish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c role name.
@@ -9660,57 +9660,57 @@ service visitor publish collection role-screen-spelling at service  403 FORBIDDE
 service visitor publish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c throws.
 service visitor publish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c throws.
-service visitor publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
+service visitor publish collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c true.
+service visitor publish collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
 service visitor publish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this c user is key maker.
-service visitor publish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async False.
+service visitor publish single-pub async-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async Filter.
+service visitor publish single-pub async-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async Throws.
+service visitor publish single-pub async-throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Async True.
+service visitor publish single-pub async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub false at direct  403 FORBIDDEN thrown  | You can't publish S Pub False.
+service visitor publish single-pub false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Malformed Filter.
+service visitor publish single-pub malformed-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub none at direct  403 FORBIDDEN thrown  | You can't publish S Pub None.
+service visitor publish single-pub none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't publish S Pub Other Operation.
+service visitor publish single-pub other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't publish S Pub Permission Spelling.
+service visitor publish single-pub permission-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't publish S Pub Principal Kind.
+service visitor publish single-pub principal-kind at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Publish False.
+service visitor publish single-pub publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Empty In.
+service visitor publish single-pub returns-empty-in at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns False.
+service visitor publish single-pub returns-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Filter.
+service visitor publish single-pub returns-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Null.
+service visitor publish single-pub returns-null at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns String.
+service visitor publish single-pub returns-string at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns True.
+service visitor publish single-pub returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't publish S Pub Returns Undefined.
+service visitor publish single-pub returns-undefined at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Name.
+service visitor publish single-pub role-name at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish S Pub Role Screen Spelling.
+service visitor publish single-pub role-screen-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub throws at direct  403 FORBIDDEN thrown  | You can't publish S Pub Throws.
+service visitor publish single-pub throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub true at direct  403 FORBIDDEN thrown  | You can't publish S Pub True.
+service visitor publish single-pub true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't publish S Pub User Is Key Maker.
+service visitor publish single-pub user-is-key-maker at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor publish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c async false.
 service visitor read collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
@@ -9728,21 +9728,21 @@ service visitor read collection false at service  403 FORBIDDEN thrown  missing=
 service visitor read collection malformed-filter at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
 service visitor read collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this c malformed filter.
-service visitor read collection none at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c none.
+service visitor read collection none at direct  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
 service visitor read collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor read collection none at service  403 FORBIDDEN thrown  missing=same  | You can't see this c none.
-service visitor read collection other-operation at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c other operation.
+service visitor read collection none at service  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
+service visitor read collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
 service visitor read collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor read collection other-operation at service  403 FORBIDDEN thrown  missing=same  | You can't see this c other operation.
+service visitor read collection other-operation at service  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
 service visitor read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service visitor read collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this c permission spelling.
 service visitor read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
 service visitor read collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection principal-kind at service  403 FORBIDDEN thrown  missing=same  | You can't see this c principal kind.
-service visitor read collection publish-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c publish false.
+service visitor read collection publish-false at direct  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
 service visitor read collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor read collection publish-false at service  403 FORBIDDEN thrown  missing=same  | You can't see this c publish false.
+service visitor read collection publish-false at service  401 AUTH_REQUIRED thrown  missing=same  | Authentication required.
 service visitor read collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c returns empty in.
 service visitor read collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection returns-empty-in at service  403 FORBIDDEN thrown  missing=same  | You can't see this c returns empty in.
@@ -9790,15 +9790,15 @@ service visitor read single false at direct  403 FORBIDDEN thrown  | You can't s
 service visitor read single false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
 service visitor read single malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single none at direct  403 FORBIDDEN thrown  | You can't see S None.
+service visitor read single none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read single none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single other-operation at direct  403 FORBIDDEN thrown  | You can't see S Other Operation.
+service visitor read single other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read single other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see S Permission Spelling.
 service visitor read single permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see S Principal Kind.
 service visitor read single principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single publish-false at direct  403 FORBIDDEN thrown  | You can't see S Publish False.
+service visitor read single publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read single publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see S Returns Empty In.
 service visitor read single returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -9827,27 +9827,27 @@ service visitor read users none at rest  401 AUTH_REQUIRED error  | Authenticati
 service visitor unpublish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async false.
 service visitor unpublish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async false.
-service visitor unpublish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async filter.
+service visitor unpublish collection async-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async filter.
+service visitor unpublish collection async-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async throws.
 service visitor unpublish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async throws.
-service visitor unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
+service visitor unpublish collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c async true.
+service visitor unpublish collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c false.
 service visitor unpublish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c false.
-service visitor unpublish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c malformed filter.
+service visitor unpublish collection malformed-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c malformed filter.
-service visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
+service visitor unpublish collection malformed-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c none.
-service visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
+service visitor unpublish collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection other-operation at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c other operation.
+service visitor unpublish collection other-operation at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
 service visitor unpublish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c permission spelling.
@@ -9857,27 +9857,27 @@ service visitor unpublish collection principal-kind at service  403 FORBIDDEN th
 service visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
 service visitor unpublish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c publish false.
-service visitor unpublish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns empty in.
+service visitor unpublish collection returns-empty-in at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns empty in.
+service visitor unpublish collection returns-empty-in at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns false.
 service visitor unpublish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns false.
-service visitor unpublish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns filter.
+service visitor unpublish collection returns-filter at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns filter.
-service visitor unpublish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns null.
+service visitor unpublish collection returns-filter at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection returns-null at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns null.
-service visitor unpublish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns string.
+service visitor unpublish collection returns-null at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection returns-string at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns string.
-service visitor unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
+service visitor unpublish collection returns-string at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns true.
-service visitor unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns undefined.
+service visitor unpublish collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
+service visitor unpublish collection returns-undefined at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c returns undefined.
+service visitor unpublish collection returns-undefined at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
 service visitor unpublish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c role name.
@@ -9887,57 +9887,57 @@ service visitor unpublish collection role-screen-spelling at service  403 FORBID
 service visitor unpublish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c throws.
 service visitor unpublish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c throws.
-service visitor unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
+service visitor unpublish collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c true.
+service visitor unpublish collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
 service visitor unpublish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this c user is key maker.
-service visitor unpublish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async False.
+service visitor unpublish single-pub async-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub async-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async Filter.
+service visitor unpublish single-pub async-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub async-throws at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async Throws.
+service visitor unpublish single-pub async-throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub async-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Async True.
+service visitor unpublish single-pub async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub False.
+service visitor unpublish single-pub false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub malformed-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Malformed Filter.
+service visitor unpublish single-pub malformed-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub none at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub None.
+service visitor unpublish single-pub none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub none at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub other-operation at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Other Operation.
+service visitor unpublish single-pub other-operation at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub permission-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Permission Spelling.
+service visitor unpublish single-pub permission-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub principal-kind at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Principal Kind.
+service visitor unpublish single-pub principal-kind at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub publish-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Publish False.
+service visitor unpublish single-pub publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-empty-in at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Empty In.
+service visitor unpublish single-pub returns-empty-in at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-false at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns False.
+service visitor unpublish single-pub returns-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-filter at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Filter.
+service visitor unpublish single-pub returns-filter at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-null at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Null.
+service visitor unpublish single-pub returns-null at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-string at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns String.
+service visitor unpublish single-pub returns-string at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns True.
+service visitor unpublish single-pub returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub returns-undefined at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Returns Undefined.
+service visitor unpublish single-pub returns-undefined at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub role-name at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Name.
+service visitor unpublish single-pub role-name at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Role Screen Spelling.
+service visitor unpublish single-pub role-screen-spelling at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub throws at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub Throws.
+service visitor unpublish single-pub throws at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub true at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub True.
+service visitor unpublish single-pub true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub true at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't unpublish S Pub User Is Key Maker.
+service visitor unpublish single-pub user-is-key-maker at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor unpublish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
 service visitor update collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
@@ -9948,18 +9948,18 @@ service visitor update collection async-filter at service  403 FORBIDDEN thrown 
 service visitor update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
 service visitor update collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async throws.
-service visitor update collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service visitor update collection async-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor update collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async true.
+service visitor update collection async-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service visitor update collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c false.
 service visitor update collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
 service visitor update collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c malformed filter.
-service visitor update collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor update collection none at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor update collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c none.
+service visitor update collection none at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
 service visitor update collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c other operation.
@@ -9969,9 +9969,9 @@ service visitor update collection permission-spelling at service  403 FORBIDDEN 
 service visitor update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
 service visitor update collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c principal kind.
-service visitor update collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor update collection publish-false at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor update collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c publish false.
+service visitor update collection publish-false at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
 service visitor update collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns empty in.
@@ -9987,9 +9987,9 @@ service visitor update collection returns-null at service  403 FORBIDDEN thrown 
 service visitor update collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
 service visitor update collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns string.
-service visitor update collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service visitor update collection returns-true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor update collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns true.
+service visitor update collection returns-true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
 service visitor update collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c returns undefined.
@@ -10002,9 +10002,9 @@ service visitor update collection role-screen-spelling at service  403 FORBIDDEN
 service visitor update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
 service visitor update collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c throws.
-service visitor update collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service visitor update collection true at direct  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-service visitor update collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c true.
+service visitor update collection true at service  401 AUTH_REQUIRED thrown  missing=404 NOT_FOUND  | Authentication required.
 service visitor update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
 service visitor update collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c user is key maker.
@@ -10016,13 +10016,13 @@ service visitor update single async-filter at direct  403 FORBIDDEN thrown  | Yo
 service visitor update single async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single async-throws at direct  403 FORBIDDEN thrown  | You can't edit S Async Throws.
 service visitor update single async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor update single async-true at direct  403 FORBIDDEN thrown  | You can't edit S Async True.
+service visitor update single async-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor update single async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single false at direct  403 FORBIDDEN thrown  | You can't edit S False.
 service visitor update single false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single malformed-filter at direct  403 FORBIDDEN thrown  | You can't edit S Malformed Filter.
 service visitor update single malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor update single none at direct  403 FORBIDDEN thrown  | You can't edit S None.
+service visitor update single none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor update single none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single other-operation at direct  403 FORBIDDEN thrown  | You can't edit S Other Operation.
 service visitor update single other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -10030,7 +10030,7 @@ service visitor update single permission-spelling at direct  403 FORBIDDEN throw
 service visitor update single permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit S Principal Kind.
 service visitor update single principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor update single publish-false at direct  403 FORBIDDEN thrown  | You can't edit S Publish False.
+service visitor update single publish-false at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor update single publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single returns-empty-in at direct  403 FORBIDDEN thrown  | You can't edit S Returns Empty In.
 service visitor update single returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -10042,7 +10042,7 @@ service visitor update single returns-null at direct  403 FORBIDDEN thrown  | Yo
 service visitor update single returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single returns-string at direct  403 FORBIDDEN thrown  | You can't edit S Returns String.
 service visitor update single returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor update single returns-true at direct  403 FORBIDDEN thrown  | You can't edit S Returns True.
+service visitor update single returns-true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor update single returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit S Returns Undefined.
 service visitor update single returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -10052,7 +10052,7 @@ service visitor update single role-screen-spelling at direct  403 FORBIDDEN thro
 service visitor update single role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single throws at direct  403 FORBIDDEN thrown  | You can't edit S Throws.
 service visitor update single throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor update single true at direct  403 FORBIDDEN thrown  | You can't edit S True.
+service visitor update single true at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor update single true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit S User Is Key Maker.
 service visitor update single user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.

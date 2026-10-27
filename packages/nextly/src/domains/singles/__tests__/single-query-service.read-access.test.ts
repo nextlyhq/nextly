@@ -188,7 +188,8 @@ describe("SingleQueryService.get — the read gate", () => {
       logger: createSilentLogger() as never,
     });
 
-    expect(denied?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(denied?.statusCode).toBe(401);
     // Refused before the rule is asked.
     expect(publishRule).not.toHaveBeenCalled();
   });

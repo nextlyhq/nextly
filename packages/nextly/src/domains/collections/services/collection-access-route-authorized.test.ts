@@ -184,7 +184,8 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
     // not skip the RBAC gate and fall through to the permission-less default.
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
     expect(fakeActorForUser).not.toHaveBeenCalled();
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });

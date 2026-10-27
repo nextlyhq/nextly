@@ -1,10 +1,10 @@
 service none visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:A
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service none user-with
   create:A
   read:A
@@ -111,12 +111,12 @@ service none key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service true visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:A
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service true user-with
   create:A
   read:A
@@ -335,12 +335,12 @@ service false key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-true visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:A
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-true user-with
   create:A
   read:A
@@ -563,8 +563,8 @@ service returns-null visitor
   read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-null user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -675,8 +675,8 @@ service returns-undefined visitor
   read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-undefined user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -787,8 +787,8 @@ service returns-truthy visitor
   read:403 You can't see posts.
   update:403 You can't edit posts.
   delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-truthy user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1007,12 +1007,12 @@ service throws key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service async-true visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:A
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service async-true user-with
   create:A
   read:A
@@ -1455,12 +1455,12 @@ service signed-in key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 no-service none visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:A
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 no-service none user-with
   create:A
   read:A
@@ -1567,12 +1567,12 @@ no-service none key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 route-authorized none visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized none user-with
   create:A
   read:A
@@ -1679,12 +1679,12 @@ route-authorized none key-in-the-request
   publish:A
   unpublish:A
 route-authorized true visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized true user-with
   create:A
   read:A
@@ -1791,12 +1791,12 @@ route-authorized true key-in-the-request
   publish:A
   unpublish:A
 route-authorized false visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized false user-with
   create:A
   read:A
@@ -1903,12 +1903,12 @@ route-authorized false key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-true visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-true user-with
   create:A
   read:A
@@ -2015,12 +2015,12 @@ route-authorized returns-true key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-false visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-false user-with
   create:A
   read:A
@@ -2127,12 +2127,12 @@ route-authorized returns-false key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-null visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-null user-with
   create:A
   read:A
@@ -2239,12 +2239,12 @@ route-authorized returns-null key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-undefined visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-undefined user-with
   create:A
   read:A
@@ -2351,12 +2351,12 @@ route-authorized returns-undefined key-in-the-request
   publish:A
   unpublish:A
 route-authorized returns-truthy visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized returns-truthy user-with
   create:A
   read:A
@@ -2463,12 +2463,12 @@ route-authorized returns-truthy key-in-the-request
   publish:A
   unpublish:A
 route-authorized throws visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized throws user-with
   create:A
   read:A
@@ -2575,12 +2575,12 @@ route-authorized throws key-in-the-request
   publish:A
   unpublish:A
 route-authorized async-true visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized async-true user-with
   create:A
   read:A
@@ -2687,12 +2687,12 @@ route-authorized async-true key-in-the-request
   publish:A
   unpublish:A
 route-authorized role-name visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized role-name user-with
   create:A
   read:A
@@ -2799,12 +2799,12 @@ route-authorized role-name key-in-the-request
   publish:A
   unpublish:A
 route-authorized permission-spelling visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized permission-spelling user-with
   create:A
   read:A
@@ -2911,12 +2911,12 @@ route-authorized permission-spelling key-in-the-request
   publish:A
   unpublish:A
 route-authorized signed-in visitor
-  create:403 You can't create posts.
-  read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  create:401 Authentication required.
+  read:401 Authentication required.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 route-authorized signed-in user-with
   create:A
   read:A
