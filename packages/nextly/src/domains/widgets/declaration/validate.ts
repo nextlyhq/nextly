@@ -174,11 +174,9 @@ const CHECKS: readonly ((
   d => sizeProblems(d.size),
   d => accessProblem(d.access),
   d =>
-    d.shows === undefined
+    d.shows === undefined || isFunction(d.shows)
       ? undefined
-      : isFunction(d.shows)
-        ? `shows is ${LATER_RELEASE}: until then a widget that declares it is not started, so it is never shown to someone it should not be`
-        : "shows must be a function of the person asking",
+      : "shows must be a function of the person asking",
   d =>
     d.several === undefined || typeof d.several === "boolean"
       ? undefined
@@ -235,12 +233,24 @@ function optionalTextProblem(
  * they are applied, so a declared rule is never silently ignored and the card
  * shown to everyone.
  */
+/**
+ * Why `access` is none of its three forms, or `undefined`: a permission name,
+ * the collections the widget reads (each judged with the person through the
+ * batch's own check), or a predicate of the person.
+ */
 function accessProblem(access: unknown): string | undefined {
-  if (access === undefined || isPermissionName(access)) return undefined;
-  if (isFunction(access) || (isRecord(access) && "collections" in access)) {
-    return `access as ${isFunction(access) ? "a predicate of the person" : "the collections it reads"} is ${LATER_RELEASE}; until then name a permission such as "read-orders"`;
+  if (access === undefined || isPermissionName(access) || isFunction(access)) {
+    return undefined;
   }
-  return `access must be a permission name such as "read-orders", got ${quote(access)}`;
+  if (isRecord(access) && "collections" in access) {
+    const { collections } = access;
+    return Array.isArray(collections) &&
+      collections.length > 0 &&
+      collections.every(slug => nonBlank.safeParse(slug).success)
+      ? undefined
+      : "access.collections must be a list of the collections the widget reads, each named by its slug";
+  }
+  return `access must be a permission name such as "read-orders", { collections }, or a function of the person, got ${quote(access)}`;
 }
 
 /**
@@ -395,15 +405,18 @@ function settingsProblems(settings: unknown): string[] {
   return [...malformed, ...shared];
 }
 
+/**
+ * Why `load` is not a function of the card's settings and the person asking,
+ * or `undefined`. The `{ query }` form a declaration once had is named, with
+ * what to write instead, rather than refused as any other value.
+ */
 function loadProblem(load: unknown): string | undefined {
   if (load === undefined) return "load is required";
   if (isFunction(load)) return undefined;
   if (isRecord(load) && "query" in load) {
-    return isFunction(load.query)
-      ? undefined
-      : "load.query must be a function that writes the query from the settings";
+    return "load must be a function: the { query } form is removed. Read with the services a load function is handed (count, find), which read as the person asking";
   }
-  return "load must be a load function, or { query } with a function that writes the query from the settings";
+  return "load must be a function of the card's settings and the person asking";
 }
 
 function viewProblem(view: unknown): string | undefined {

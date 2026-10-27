@@ -57,7 +57,8 @@ export interface NextlyVersionConflict {
   declared?: string;
 }
 
-const DEPENDENCY_FIELDS = [
+/** The package.json fields that declare a dependency, in the order read. */
+export const DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
@@ -160,7 +161,11 @@ export const EXACT_FLAG: Record<PackageManager, string> = {
   bun: "--exact",
 };
 
-const ADD_COMMAND: Record<PackageManager, string> = {
+/**
+ * How each package manager adds a dependency. Exported so every message that
+ * tells the person what to install spells the command the same way.
+ */
+export const ADD_COMMAND: Record<PackageManager, string> = {
   npm: "npm install",
   pnpm: "pnpm add",
   yarn: "yarn add",

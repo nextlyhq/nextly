@@ -22,7 +22,7 @@ import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
 import type { WidgetQuery } from "../query";
 
-import { renamedCollection } from "./card-query";
+import { renamedCollection } from "./card-settings";
 import type { WidgetReadServices } from "./define-widget";
 import { sentAsJson, type TransportableValue } from "./transportable";
 

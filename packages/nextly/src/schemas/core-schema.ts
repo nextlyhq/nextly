@@ -33,7 +33,7 @@ import { emailBrandTables } from "./email-brand";
 import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
-import { fieldGroupLockTables } from "./field-group-lock";
+import { fieldGroupLockTables, schemaLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
 import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
@@ -162,6 +162,10 @@ export function getCoreSchema(
     // without this a column could never be added to an existing installation's copy. Same reasoning
     // as `nextly_schema_events` and `nextly_i18n_archive` below.
     ...Object.values(fieldGroupLockTables(dialect)),
+    // `nextly_schema_lock` — the one schema lock every schema change holds. Bootstrapped by the
+    // first run that contends for it, from the same declaration, and declared here for the reason
+    // the field-group lock above is: so a reconcile can carry a later change onto it.
+    ...Object.values(schemaLockTables(dialect)),
     // `nextly_document_lock` — one row per document being edited right now.
     // Declared here because it is the set `nextly migrate` pushes: a table
     // outside it is never created on a real installation, however completely
@@ -311,6 +315,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // Read by live introspection. Absent here, the table is created and then invisible to every
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
+  "nextly_schema_lock",
   "nextly_document_lock",
   RBAC_EPOCH_TABLE,
   DELETED_PRINCIPALS_TABLE,

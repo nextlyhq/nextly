@@ -649,7 +649,6 @@ export {
   settings as widgetSettings,
   type AnyWidget,
   type ComponentDisplay,
-  type ContentQuery,
   type CoreDisplay,
   type CoreView,
   type AdminDashboardConfig,

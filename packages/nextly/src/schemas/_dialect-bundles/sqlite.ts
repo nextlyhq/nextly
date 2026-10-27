@@ -19,6 +19,9 @@ export { users } from "../users/sqlite";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/sqlite";
 export { nextlyDocumentLock } from "../document-lock/sqlite";
 export { nextlyRbacEpoch } from "../rbac-epoch/sqlite";
 export { nextlyDeletedPrincipals } from "../deleted-principals/sqlite";

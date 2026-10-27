@@ -1,5 +1,7 @@
 /**
- * MySQL's migrate lock is a named lock held by a connection. The lock and its
+ * The schema lock on MySQL holds the earlier version's migrate lock beside its
+ * own row, so a process of an earlier version still finds it held. That lock is
+ * a named lock held by a connection. The lock and its
  * release must run on that one connection: a release that lands on another
  * pooled connection leaves the lock held by the first, idle connection. And a
  * named lock belongs to the whole server, so its name carries the database.
@@ -51,31 +53,41 @@ async function holderOfLock(): Promise<number | null> {
   return rows[0]?.holder ?? null;
 }
 
+/** Every call here is a command-line run that stops at once on a held lock. */
+const FAIL_FAST = { command: "test run", mode: "fail-fast" } as const;
+
 describeMysql("withMigrateLock on MySQL", () => {
   it("releases the lock when the work runs queries on more than one pooled connection", async () => {
-    const db = handle.adapter.getDrizzle();
-
     for (let i = 0; i < 5; i++) {
-      await withMigrateLock(db, "mysql", async () => {
-        // Two queries at once make the pool use a second connection, so the
-        // release is not guaranteed to run on the one that took the lock.
-        await Promise.all([
-          handle.adapter.executeQuery("SELECT SLEEP(0.05)"),
-          handle.adapter.executeQuery("SELECT SLEEP(0.05)"),
-        ]);
-      });
+      await withMigrateLock(
+        handle.adapter,
+        "mysql",
+        async () => {
+          // Two queries at once make the pool use a second connection, so the
+          // release is not guaranteed to run on the one that took the lock.
+          await Promise.all([
+            handle.adapter.executeQuery("SELECT SLEEP(0.05)"),
+            handle.adapter.executeQuery("SELECT SLEEP(0.05)"),
+          ]);
+        },
+        FAIL_FAST
+      );
 
       expect(await holderOfLock()).toBeNull();
     }
   });
 
   it("holds the lock while the work runs", async () => {
-    const db = handle.adapter.getDrizzle();
     let heldInside: number | null = null;
 
-    await withMigrateLock(db, "mysql", async () => {
-      heldInside = await holderOfLock();
-    });
+    await withMigrateLock(
+      handle.adapter,
+      "mysql",
+      async () => {
+        heldInside = await holderOfLock();
+      },
+      FAIL_FAST
+    );
 
     expect(heldInside).not.toBeNull();
   });
@@ -88,9 +100,16 @@ describeMysql("withMigrateLock on MySQL", () => {
     try {
       await other.connect();
       const outcome = await withMigrateLock(
-        handle.adapter.getDrizzle(),
+        handle.adapter,
         "mysql",
-        () => withMigrateLock(other.getDrizzle(), "mysql", async () => "ran")
+        () =>
+          withMigrateLock(
+            other as never,
+            "mysql",
+            async () => "ran",
+            FAIL_FAST
+          ),
+        FAIL_FAST
       );
       expect(outcome).toEqual({
         ran: true,
@@ -107,23 +126,54 @@ describeMysql("withMigrateLock on MySQL", () => {
   });
 
   it("still refuses a second taker on the same database", async () => {
-    const db = handle.adapter.getDrizzle();
-    await expect(
-      withMigrateLock(db, "mysql", () =>
-        withMigrateLock(db, "mysql", async () => "ran")
-      )
-    ).rejects.toThrow("holds the migrate lock");
+    // The second taker starts outside the first one's work, as another run would: work INSIDE a
+    // holder runs in its claim, so only a separate run is a contender.
+    let finish: () => void = () => {};
+    const holding = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    let entered: () => void = () => {};
+    const inside = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const first = withMigrateLock(
+      handle.adapter,
+      "mysql",
+      async () => {
+        entered();
+        await holding;
+      },
+      FAIL_FAST
+    );
+    await inside;
+    try {
+      await expect(
+        withMigrateLock(handle.adapter, "mysql", async () => "ran", FAIL_FAST)
+      ).rejects.toThrow("holds it");
+    } finally {
+      finish();
+      await first;
+    }
   });
 
-  it("leaves a held lock alone on --force-unlock, which clears nothing on MySQL", async () => {
-    // A named lock goes with the connection holding it, so there is never a
-    // stale one for --force-unlock to clear; it must not release a live one.
+  it("leaves the named lock alone on --force-unlock, which clears only the lock rows on MySQL", async () => {
+    // A named lock goes with the connection holding it, so there is never a stale one for
+    // --force-unlock to clear, and it must not release a live one. The rows it clears are the
+    // schema lock's own, so the run it cleared them under is told it did not hold its lock to the
+    // end — which is what forcing a live holder's lock means.
     const db = handle.adapter.getDrizzle();
     let heldAfter: number | null = null;
-    await withMigrateLock(db, "mysql", async () => {
-      await forceUnlock(db, "mysql");
-      heldAfter = await holderOfLock();
-    });
+    await expect(
+      withMigrateLock(
+        handle.adapter,
+        "mysql",
+        async () => {
+          await forceUnlock(db, "mysql");
+          heldAfter = await holderOfLock();
+        },
+        FAIL_FAST
+      )
+    ).rejects.toThrow();
     expect(heldAfter).not.toBeNull();
     expect(await holderOfLock()).toBeNull();
   });
@@ -148,15 +198,19 @@ describeMysql("withMigrateLock on MySQL", () => {
     }
 
     it("refuses at once in fail-fast mode, and gives its own lock back", async () => {
-      const db = handle.adapter.getDrizzle();
       const legacy = await holdLegacyLock();
       try {
         let ran = false;
         await expect(
-          withMigrateLock(db, "mysql", async () => {
-            ran = true;
-          })
-        ).rejects.toThrow("server-wide migrate lock");
+          withMigrateLock(
+            handle.adapter,
+            "mysql",
+            async () => {
+              ran = true;
+            },
+            FAIL_FAST
+          )
+        ).rejects.toThrow("MySQL lock `nextly:migrate`");
         expect(ran).toBe(false);
         expect(await holderOfLock()).toBeNull();
       } finally {
@@ -165,15 +219,16 @@ describeMysql("withMigrateLock on MySQL", () => {
     });
 
     it("waits in wait mode until the old name is free, then runs", async () => {
-      const db = handle.adapter.getDrizzle();
       const legacy = await holdLegacyLock();
       try {
         const started = Date.now();
         setTimeout(() => void legacy.release(), 1500);
-        const outcome = await withMigrateLock(db, "mysql", async () => "ran", {
-          mode: "wait",
-          maxWaitMs: 10_000,
-        });
+        const outcome = await withMigrateLock(
+          handle.adapter,
+          "mysql",
+          async () => "ran",
+          { command: "test run", mode: "wait", waitMs: 10_000, pollMs: 200 }
+        );
         expect(outcome).toEqual({ ran: true, value: "ran" });
         expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
       } finally {
@@ -183,12 +238,15 @@ describeMysql("withMigrateLock on MySQL", () => {
   });
 
   it("releases the lock when the work throws", async () => {
-    const db = handle.adapter.getDrizzle();
-
     await expect(
-      withMigrateLock(db, "mysql", async () => {
-        throw new Error("migration failed");
-      })
+      withMigrateLock(
+        handle.adapter,
+        "mysql",
+        async () => {
+          throw new Error("migration failed");
+        },
+        FAIL_FAST
+      )
     ).rejects.toThrow("migration failed");
 
     expect(await holderOfLock()).toBeNull();

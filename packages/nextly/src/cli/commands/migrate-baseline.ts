@@ -365,6 +365,8 @@ export interface BaselineCoreDeps {
    * project that configured a shorter takeover for far longer than it asked.
    */
   ttlSeconds?: number;
+  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
+  lockWaitMs?: number;
   /**
    * Adopt a companion holding translated columns the config does not describe.
    *
@@ -414,7 +416,7 @@ export async function baselineCore(
   // AND a journal row, and a concurrent `migrate` deciding what to apply must
   // not see one without the other.
   const result = await withMigrateLock<BaselineCoreResult>(
-    db,
+    adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
       const latest = await loadLatestSnapshot(metaDir);
@@ -617,10 +619,16 @@ export async function baselineCore(
         tableCount: plan.snapshot.tables.length,
       };
     },
-    { ttlSeconds: deps.ttlSeconds }
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    {
+      command: "nextly migrate:baseline",
+      mode: "wait",
+      waitMs: deps.lockWaitMs,
+      ttlSeconds: deps.ttlSeconds,
+    }
   );
 
-  // `withMigrateLock` reports `ran: false` only in "wait" mode. Adoption is
+  // `withMigrateLock` reports `ran: false` only for an `isSettled` wait, which this does not pass. Adoption is
   // never a case where someone else did the work: nobody else is going to
   // baseline this database, so returning here would mean reporting success for
   // a history that was never started.
