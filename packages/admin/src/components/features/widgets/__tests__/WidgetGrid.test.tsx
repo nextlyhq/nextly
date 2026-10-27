@@ -4,7 +4,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
@@ -284,6 +284,66 @@ describe("WidgetGrid — collection and gating", () => {
     expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
     expect(screen.getByText("first body")).toBeInTheDocument();
     expect(screen.queryByText("second body")).not.toBeInTheDocument();
+  });
+
+  it("draws a throwing component's error once, and never remounts the component card beside it", async () => {
+    // 🔴 The grid hands each card its answer afresh on every render. Keyed on a
+    // new object each time, a component that threw was caught, re-rendered the
+    // grid by reporting the failure, met a "new" answer, drew and threw again
+    // until React stopped it ("Maximum update depth exceeded"), and every
+    // component card remounted whenever the grid re-rendered.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let draws = 0;
+    let mounts = 0;
+    const Throws = (): JSX.Element => {
+      draws += 1;
+      throw new Error("boom");
+    };
+    const Counts = (): JSX.Element => {
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <p>counted body</p>;
+    };
+    registerComponents({
+      "@acme/admin#Throws": Throws,
+      "@acme/admin#Counts": Counts,
+    });
+    mockBranding = brandingWithRegistered(
+      ["throws", "counts"].map(name => ({
+        id: `acme/${name}`,
+        title: name,
+        archetype: "custom",
+        size: { default: { w: 6, h: 3 } },
+        component: `@acme/admin#${name[0].toUpperCase()}${name.slice(1)}`,
+        serverData: true,
+      }))
+    );
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "data", data: 1 } },
+        { ok: true, result: { op: "data", data: 2 } },
+      ],
+    });
+
+    renderGrid();
+
+    const failed = await screen.findByRole("region", { name: "throws" });
+    await waitFor(() => expect(failed).toHaveAttribute("data-state", "error"));
+    expect(screen.getByText("counted body")).toBeInTheDocument();
+    // Settled, and stays settled: no further draws once the error is shown.
+    const drawn = draws;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(draws).toBe(drawn);
+    // React draws a throwing component again once before giving up on it; a
+    // loop draws it until the update limit.
+    expect(draws).toBeLessThanOrEqual(4);
+    expect(mounts).toBe(1);
+    expect(
+      errors.mock.calls.some(call =>
+        String(call[0]).includes("Maximum update depth")
+      )
+    ).toBe(false);
   });
 
   it("renders a widget the app only REGISTERED, with no contribution beside it", () => {
