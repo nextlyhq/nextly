@@ -169,3 +169,62 @@ describe("a list", () => {
     expect(pathsAsked()).toEqual(["/collections/site-settings/entries"]);
   });
 });
+
+describe("a capabilities answer that arrives after the read", () => {
+  // A cold load can ask for the entry before the capabilities answer is in.
+  // The collection read's 404 then stands, and once the answer arrives and
+  // names the slug a Single, the read is asked again and falls back.
+  function emptyClient() {
+    return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  }
+
+  it("reads a Single's document once the answer names it, for one entry", async () => {
+    fetcherSpy
+      .mockRejectedValueOnce(notFound())
+      .mockRejectedValueOnce(notFound())
+      .mockResolvedValueOnce({ id: "s1", siteName: "Nextly" });
+    const client = emptyClient();
+
+    const { result } = renderHook(
+      () => useEntry({ collectionSlug: "site-settings", entryId: "s1" }),
+      { wrapper: makeWrapper(client) }
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    client.setQueryData(currentUserCapabilitiesKey(undefined), ANSWER);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ id: "s1", siteName: "Nextly" });
+    expect(pathsAsked()).toEqual([
+      "/collections/site-settings/entries/s1",
+      "/collections/site-settings/entries/s1",
+      "/singles/site-settings",
+    ]);
+  });
+
+  it("lists a Single's document once the answer names it", async () => {
+    fetcherSpy
+      .mockRejectedValueOnce(notFound())
+      .mockRejectedValueOnce(notFound())
+      .mockResolvedValueOnce({ id: "s1", siteName: "Nextly" });
+    const client = emptyClient();
+
+    const { result } = renderHook(
+      () => useEntries({ collectionSlug: "site-settings" }),
+      { wrapper: makeWrapper(client) }
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    client.setQueryData(currentUserCapabilitiesKey(undefined), ANSWER);
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.items).toEqual([
+      { id: "s1", siteName: "Nextly" },
+    ]);
+    expect(pathsAsked()).toEqual([
+      "/collections/site-settings/entries",
+      "/collections/site-settings/entries",
+      "/singles/site-settings",
+    ]);
+  });
+});
