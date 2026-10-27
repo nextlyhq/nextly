@@ -9,8 +9,10 @@
  * without a Postgres URL):
  *
  *   1. The Single row is `draft`.
- *   2. Writer A (an editor who may update but NOT unpublish) starts an update
+ *   2. Writer A (an editor who may update but NOT unpublish) starts an edit
  *      that keeps the row `draft`, reading `draft` before it takes its lock.
+ *      It names a field: a write naming the status alone is an unpublish,
+ *      judged by that gate before any lock, so it would never reach the race.
  *   3. Writer B publishes the row and commits.
  *   4. Writer A finally takes its lock. Classified against the PRE-lock read
  *      (`draft` → `draft`) the write is no transition and would be allowed —
@@ -164,12 +166,12 @@ describeLeg("single publish transition TOCTOU (postgres dialect gate)", () => {
 
       await bLocked.promise;
 
-      // Writer A: an editor (route-attested `update`, no `unpublish`) writes the
-      // row `draft`. Its pre-lock read sees the committed `draft` (B is
-      // uncommitted), then it blocks taking the row lock behind B.
+      // Writer A: an editor (route-attested `update`, no `unpublish`) edits the
+      // row and keeps it `draft`. Its pre-lock read sees the committed `draft`
+      // (B is uncommitted), then it blocks taking the row lock behind B.
       const aResultP = service.update(
         SLUG,
-        { status: "draft" },
+        { siteName: "S2", status: "draft" },
         { user: { id: "editor" }, routeAuthorized: true }
       );
 

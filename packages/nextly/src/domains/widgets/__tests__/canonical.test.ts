@@ -226,6 +226,40 @@ describe("the canonical widget set", () => {
     );
   });
 
+  it("takes the registration's queries on a collision, as the admin draws its query", () => {
+    registerWidget(
+      registered({
+        id: "dup/one",
+        archetype: "metric",
+        component: undefined,
+        query: { source: "single:homepage", op: "count" },
+      })
+    );
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([
+      { source: "single:homepage", op: "count" },
+    ]);
+  });
+
+  it("asks nothing on a collision whose registration declares no query, as the admin draws it", () => {
+    // 🔴 The admin's merge takes the registration's query, here none: the
+    // contribution's query is not asked, so its Collection setting names no
+    // collection the card reads.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([]);
+  });
+
   it("does NOT inherit a contributed permission, matching the admin", () => {
     // The asymmetry is deliberate. The registry is the override channel, so a
     // registration that states no permission has stated that, and

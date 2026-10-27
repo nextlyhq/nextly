@@ -12,7 +12,12 @@
  * - everyone else needs the permission for the action, AND, where the target
  *   declares a rule for the action, a rule that answers exactly `true`. A
  *   publish or an unpublish is judged by its own permission and its own rule,
- *   as any other action is.
+ *   as any other action is;
+ * - a collection's read, update, delete, publish or unpublish rule may answer
+ *   a filter instead of `true`, which allows only the entries the filter
+ *   matches. The decision then refuses the action for every entry and names
+ *   the filter, so a way in that cannot apply it refuses by reading `allowed`
+ *   alone.
  *
  * The decision makes no queries: the actor already carries everything it
  * reads. It never knows which way in asked, and each way in presents the
@@ -36,6 +41,13 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
+import {
+  mayAnswerFilter,
+  reportRuleFilterMisuse,
+  ruleAnswer,
+  type RuleAnswer,
+  type RuleFilter,
+} from "./rule-answer";
 
 /** A collection or a Single, with the code rules it declares. */
 export interface AccessTarget {
@@ -45,16 +57,29 @@ export interface AccessTarget {
 }
 
 /**
- * What a target's rule answered, as it answered it.
+ * What a target's rule answered, as it answered it, and what that means.
  *
- * Kept raw, so a caller that must reproduce how a door judges the answer
- * today (truthy, `=== true`, `=== false` or `!== false`) can do so from one
- * call of the rule, and the decision below judges it one way only.
+ * The raw value is kept for a way in that words a notice about it. Its
+ * meaning, read once when the rule was asked, is what every judgement reads
+ * ({@link outcomeAnswer}), so a getter or a proxy in the answer cannot tell
+ * one judgement something different from the next.
  */
 export type RuleOutcome =
   | { readonly declared: false }
-  | { readonly declared: true; readonly value: unknown }
+  | {
+      readonly declared: true;
+      readonly value: unknown;
+      /** The value's meaning, read when the rule was asked. */
+      readonly answer?: RuleAnswer;
+    }
   | { readonly declared: true; readonly threw: true };
+
+/** What a rule's outcome means: the meaning read when it was asked. */
+export function outcomeAnswer(
+  outcome: Extract<RuleOutcome, { readonly value: unknown }>
+): RuleAnswer {
+  return outcome.answer ?? ruleAnswer(outcome.value);
+}
 
 export type RefusalReason =
   | "visitor-cannot-publish"
@@ -62,15 +87,29 @@ export type RefusalReason =
   | "principal-without-rule"
   | "no-permission"
   | "rule-refused"
-  | "rule-threw";
+  | "rule-threw"
+  // A rule answered a filter that is not well formed.
+  | "rule-filter-malformed"
+  // A create rule or a Single's rule answered a filter, which only a
+  // collection's read, update, delete, publish and unpublish rules may.
+  | "rule-filter-misplaced";
 
 /**
- * Allowed, or refused with the reason. `filter` is where a rule's row filter
- * will go once rules may answer with one; no rule answers with one yet.
+ * Allowed for every entry, refused with the reason, or allowed only for the
+ * entries `filter` matches.
+ *
+ * The last is not `allowed`: `allowed` means every entry, and a way in that
+ * does not apply the filter must refuse, which it does by reading `allowed`
+ * alone. Only a way in that applies filters reads `filter`.
  */
 export type Decision =
-  | { readonly allowed: true; readonly filter?: undefined }
-  | { readonly allowed: false; readonly reason: RefusalReason };
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly reason: RefusalReason }
+  | {
+      readonly allowed: false;
+      readonly reason: "only-matching-entries";
+      readonly filter: RuleFilter;
+    };
 
 const ALLOW: Decision = Object.freeze({ allowed: true });
 
@@ -112,7 +151,8 @@ export function plainRule(
 /**
  * Asks the target's rule for `action` about this actor, once, and returns
  * what it said. A rule that throws, or whose promise rejects, is reported as
- * having thrown.
+ * having thrown, and a filter it may not answer, or one that is not well
+ * formed, is reported as misused.
  */
 export async function askRule(
   actor: Exclude<Actor, SystemActor>,
@@ -122,9 +162,9 @@ export async function askRule(
   const rule = ruleFor(target, action);
   if (rule === undefined) return { declared: false };
   if (typeof rule === "boolean") return { declared: true, value: rule };
+  let value: unknown;
   try {
-    const value: unknown = await rule(ruleContext(actor, action, target));
-    return { declared: true, value };
+    value = await rule(ruleContext(actor, action, target));
   } catch (error) {
     // A broken rule refuses, and is logged so it can be found and fixed.
     consoleLogger.error(
@@ -133,17 +173,61 @@ export async function askRule(
     );
     return { declared: true, threw: true };
   }
+  // Read once, here, and kept with the outcome for every judgement of it.
+  const answer = ruleAnswer(value);
+  reportRuleFilterMisuse(target.slug, action, target.kind, answer);
+  return { declared: true, value, answer };
 }
 
 /**
- * Whether a rule's outcome lets the action through: no rule adds no limit,
- * and a declared rule must answer exactly `true`. Anything else refuses,
- * `null`, `undefined` and a truthy non-boolean included.
+ * Whether the rule `target` declares for `action` refuses, from its outcome:
+ * no rule adds no limit, and a declared rule must answer exactly `true` or a
+ * well-formed filter it may answer. Anything else refuses, `null`,
+ * `undefined` and a truthy non-boolean included, and so does a filter from a
+ * rule that may not answer one (a create rule, a Single's). A filter it may
+ * answer is not a refusal here; {@link filterOf} reads it.
  */
-function ruleRefusal(outcome: RuleOutcome): RefusalReason | null {
+function ruleRefusal(
+  outcome: RuleOutcome,
+  target: AccessTarget,
+  action: AccessAction
+): RefusalReason | null {
   if (!outcome.declared) return null;
   if ("threw" in outcome) return "rule-threw";
-  return outcome.value === true ? null : "rule-refused";
+  const answer = outcomeAnswer(outcome);
+  if (answer.kind === "allow") return null;
+  if (answer.kind === "filter") {
+    return mayAnswerFilter(target.kind, action)
+      ? null
+      : "rule-filter-misplaced";
+  }
+  return answer.kind === "malformed-filter"
+    ? "rule-filter-malformed"
+    : "rule-refused";
+}
+
+/** The filter a rule's outcome answered, or `undefined` for none. */
+function filterOf(outcome: RuleOutcome | undefined): RuleFilter | undefined {
+  if (!outcome?.declared || "threw" in outcome) return undefined;
+  const answer = outcomeAnswer(outcome);
+  return answer.kind === "filter" ? answer.filter : undefined;
+}
+
+/**
+ * The decision once the action's rule has let it through: allowed for every
+ * entry, or only for the entries the filter it answered matches. A filter
+ * from a rule that may not answer one refuses.
+ */
+function withFilter(
+  target: AccessTarget,
+  action: AccessAction,
+  filter: RuleFilter | undefined
+): Decision {
+  if (filter === undefined) return ALLOW;
+  if (!mayAnswerFilter(target.kind, action)) {
+    return refuse("rule-filter-misplaced");
+  }
+  return { allowed: false, reason: "only-matching-entries", filter };
 }
 
 const isLifecycle = (action: AccessAction) =>
@@ -229,13 +313,12 @@ export function judge(
       },
     });
   }
-  if (actor.kind === "principal") {
-    if (!outcomes.action.declared) return refuse("principal-without-rule");
-    const refusal = ruleRefusal(outcomes.action);
-    return refusal ? refuse(refusal) : ALLOW;
+  if (actor.kind === "principal" && !outcomes.action.declared) {
+    return refuse("principal-without-rule");
   }
-  const refusal = ruleRefusal(outcomes.action);
-  return refusal ? refuse(refusal) : ALLOW;
+  const refusal = ruleRefusal(outcomes.action, target, action);
+  if (refusal) return refuse(refusal);
+  return withFilter(target, action, filterOf(outcomes.action));
 }
 
 export async function decide(

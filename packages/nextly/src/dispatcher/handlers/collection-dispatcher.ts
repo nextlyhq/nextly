@@ -189,8 +189,8 @@ function formatToastSummary(summary: {
 /**
  * Both directions of the all-locales lifecycle, as one handler.
  *
- * i18n M7 publishes every language of an entry at once; the takedown is its
- * twin. They differ in exactly two things — the service method and the success
+ * Publishing every language of an entry at once has a twin, the takedown.
+ * They differ in exactly two things — the service method and the success
  * message — and everything else about them is the same identity forwarding and
  * the same attestation. Written twice, they were a 40-line clone whose halves
  * could drift in which credentials they passed, and the drift would show up as
@@ -199,9 +199,9 @@ function formatToastSummary(summary: {
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
  * `routeAuthorized` false, since the route admitted this POST on the
- * `publish-`/`unpublish-` grant alone and attests no gate the service could
- * skip; and `authenticatedScope` so a scoped API key's own grant and the rule
- * are judged by the service, in each language the change puts live.
+ * `publish-`/`unpublish-` grant or on update, and attests no gate the service
+ * could skip; and `authenticatedScope` so a scoped API key's own grant and the
+ * rule are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",

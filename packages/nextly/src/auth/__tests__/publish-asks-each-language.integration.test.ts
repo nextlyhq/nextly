@@ -18,7 +18,10 @@ import {
   fieldGroup,
   text,
 } from "../../config";
+import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import { SingleMutationService } from "../../domains/singles/services/single-mutation-service";
+import { SinglePublishAllService } from "../../domains/singles/services/single-publish-all";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -34,6 +37,8 @@ import {
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  // A case spies on a service's prototype, which outlives its boot.
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -58,8 +63,11 @@ const SHARED_NESTED = "sharednested";
 const SHARED_NESTED_BANNER = "sharednestedbanner";
 const PENDING_BANNER = "pendingbanner";
 const FRENCH_INVOLVED_ARTICLES = "frenchinvolvedarticles";
+const UNPUBLISHABLE_ARTICLES = "unpublishablearticles";
 const FRENCH_INVOLVED_BANNER = "frenchinvolvedbanner";
 const USER = { id: "user-1", isActive: true };
+/** May read and update everything here, and publish nothing. */
+const EDITOR = { id: "editor-1", isActive: true };
 
 /** Every question the publish rule was asked, in order. */
 let asked: { locale?: string; locales: string[] }[] = [];
@@ -148,6 +156,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           read: () => true,
           update: () => true,
           publish: changesWhatGoesLive,
+        },
+        fields: [text({ name: "heading" })],
+      }),
+      defineCollection({
+        slug: UNPUBLISHABLE_ARTICLES,
+        localized: true,
+        status: true,
+        access: {
+          create: () => true,
+          read: () => true,
+          update: () => true,
+          publish: () => false,
         },
         fields: [text({ name: "heading" })],
       }),
@@ -417,6 +437,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   for (const action of ["create", "update", "publish", "unpublish"]) {
     await grantTo(current, USER.id, action, targets);
   }
+  await userWhoMay(current, EDITOR.id, "read", targets);
+  await grantTo(current, EDITOR.id, "update", targets);
   return current;
 }
 
@@ -1226,6 +1248,158 @@ describe.each(getConfiguredTestDialects())(
       const refused = await publishEvery(false);
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(403);
+    });
+
+    /** An entry with an English draft, and a spy on the publish-only work. */
+    async function beforePublishWork(
+      dialect: TestDialect,
+      work: [object, string]
+    ) {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      await singlesOf(t).update(
+        BANNER,
+        { headline: "en" },
+        { overrideAccess: true, locale: "en" }
+      );
+      const spy = vi.spyOn(work[0] as never, work[1] as never);
+      return { t, id, spy };
+    }
+
+    it("asks the publish grant of an entry's every-language write before the languages going live are read", async () => {
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const write = (user: typeof USER) =>
+        handlerOf(t).updateEntry(
+          {
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: false,
+            user,
+            locale: "*",
+          },
+          { status: "published" }
+        );
+
+      expect((await write(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      // The control: a caller holding the grant reaches that work.
+      await write(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of publishing every language of an entry before the languages going live are read", async () => {
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const publishAll = (user: typeof USER) =>
+        handlerOf(t).publishAllLocales({
+          collectionName: ARTICLES,
+          entryId: id,
+          overrideAccess: false,
+          user,
+        });
+
+      expect((await publishAll(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await publishAll(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("refuses a caller with no user before the languages going live are read", async () => {
+      // No one unsigned ever publishes, so the grant fails closed for them.
+      const { t, id, spy } = await beforePublishWork(dialect, [
+        CollectionMutationService.prototype,
+        "languagesToPublish",
+      ]);
+
+      const refused = await handlerOf(t).publishAllLocales({
+        collectionName: ARTICLES,
+        entryId: id,
+        overrideAccess: false,
+      });
+
+      expect(refused.success).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of a Single's every-language write before the languages going live are read", async () => {
+      const { t, spy } = await beforePublishWork(dialect, [
+        SingleMutationService.prototype,
+        "languagesToPublish",
+      ]);
+      const write = (user: typeof USER) =>
+        singlesOf(t).update(
+          BANNER,
+          { status: "published" },
+          { overrideAccess: false, user, locale: "*" }
+        );
+
+      expect((await write(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await write(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("asks the publish grant of publishing every language of a Single before its lifecycle is resolved", async () => {
+      const { t, spy } = await beforePublishWork(dialect, [
+        SinglePublishAllService.prototype,
+        "resolveLifecycle",
+      ]);
+      const publishAll = (user: typeof USER) =>
+        singlesOf(t).publishAllLocales(BANNER, {
+          overrideAccess: false,
+          user,
+        });
+
+      expect((await publishAll(EDITOR)).statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+      await publishAll(USER);
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it("refuses a caller who may not publish an entry before the work only a publish needs", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: UNPUBLISHABLE_ARTICLES,
+        data: { heading: "en", status: "draft" },
+      });
+      const { id } = created.item;
+      if (typeof id !== "string")
+        throw new TypeError("a created entry has an id");
+      // The field groups' readiness, which only a publish goes on to need,
+      // failing: a caller refused the publish never reaches it.
+      const readiness = vi
+        .spyOn(
+          t.getService("fieldGroupDataService"),
+          "assertLocalizedFieldGroupsWritable"
+        )
+        .mockRejectedValue(new Error("field groups unavailable"));
+      const publishAll = (trusted: boolean) =>
+        handlerOf(t).publishAllLocales({
+          collectionName: UNPUBLISHABLE_ARTICLES,
+          entryId: id,
+          ...(trusted
+            ? { overrideAccess: true }
+            : { overrideAccess: false, user: USER }),
+        });
+
+      const refused = await publishAll(false);
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(readiness).not.toHaveBeenCalled();
+      // The control: a trusted publish of every language meets the failure.
+      await publishAll(true).catch(() => undefined);
+      expect(readiness).toHaveBeenCalled();
     });
 
     it("refuses a caller who may not publish a Single before the work only a publish needs", async () => {

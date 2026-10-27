@@ -33,6 +33,7 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
+  isStatusOnlyWrite,
   stripImmutableSystemFields,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -214,6 +215,7 @@ import {
   checkSingleAccess,
   getSingleHookCollection,
   resolveNextlyForHooks,
+  singleGrantRefusal,
 } from "./single-query-service";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -1131,6 +1133,10 @@ export class SingleMutationService extends BaseService {
     // — keep receiving a real locale or nothing. Mirrors the collection write
     // path exactly, because a Single scheduled in a release must behave the way
     // an entry scheduled in the same release behaves.
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate a write asks and the write itself must read the same
+    // body.
+    data = { ...data };
     const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
     const options: UpdateSingleOptions = sweepAllLocales
       ? { ...rawOptions, locale: undefined }
@@ -1274,8 +1280,18 @@ export class SingleMutationService extends BaseService {
       // all of them together: a rule answering by language would otherwise
       // refuse over a language that does not go live.
       const publishesEveryLanguage = sweepAllLocales && gate === "publish";
+      // Its grant is asked here, before any work only a publish needs; its rule
+      // below, in each language, once the languages going live are known.
       const accessDenied = publishesEveryLanguage
-        ? null
+        ? await singleGrantRefusal({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
         : await checkSingleAccess({
             slug,
             operation: gate,
@@ -1640,6 +1656,25 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+
+      // A status-only write was judged by its publish or unpublish gate in
+      // place of update. A hook that made it an edit, naming a field or
+      // dropping the status, asks update now, before anything is written, as
+      // the same edit sent by the caller would have been.
+      if (gate !== "update" && !isStatusOnlyWrite(currentData, "single")) {
+        const editDenied = await checkSingleAccess({
+          slug,
+          operation: "update",
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          // The route admitted a status change, not this edit.
+          routeAuthorized: false,
+          rbacAccessControlService: this.rbacAccessControlService,
+          authenticatedScope: options.authenticatedScope,
+          logger: this.logger,
+        });
+        if (editDenied) return editDenied;
+      }
       const finalStatus = (currentData as { status?: unknown }).status;
 
       // A wildcard that no longer carries a status after hooks has nothing to
@@ -1697,24 +1732,30 @@ export class SingleMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const permissionDenied = await checkSingleAccess({
-          slug,
-          operation: transitionOp,
-          user: options.user,
-          overrideAccess: options.overrideAccess,
-          // Narrows that bypass per RELATED collection. Absent means unchanged;
-          // dropping it here would silently restore the full bypass.
-          trusted: options.trusted,
-          // NOT route-authorized: the route authorizes a Single write as
-          // `update`, never as `publish`/`unpublish`, so the RBAC check for the
-          // transition permission must actually run.
-          routeAuthorized: false,
-          rbacAccessControlService: this.rbacAccessControlService,
-          // A scoped API key is judged on its own publish/unpublish grant, not
-          // the key owner's — the route only checked `update` against the scope.
-          authenticatedScope: options.authenticatedScope,
-          logger: this.logger,
-        });
+        // A status-only write already asked this gate before its hooks ran;
+        // where they left the action as it was, that answer stands, so a rule
+        // is not asked twice about one write, its hooks run between.
+        const permissionDenied =
+          transitionOp === gate
+            ? null
+            : await checkSingleAccess({
+                slug,
+                operation: transitionOp,
+                user: options.user,
+                overrideAccess: options.overrideAccess,
+                // Narrows that bypass per RELATED collection. Absent means unchanged;
+                // dropping it here would silently restore the full bypass.
+                trusted: options.trusted,
+                // NOT route-authorized: the route authorizes a Single write as
+                // `update`, never as `publish`/`unpublish`, so the RBAC check for the
+                // transition permission must actually run.
+                routeAuthorized: false,
+                rbacAccessControlService: this.rbacAccessControlService,
+                // A scoped API key is judged on its own publish/unpublish grant, not
+                // the key owner's — the route only checked `update` against the scope.
+                authenticatedScope: options.authenticatedScope,
+                logger: this.logger,
+              });
         // Only guard under the lock when there is something to enforce there.
         if (permissionDenied) {
           transitionGuard = {
