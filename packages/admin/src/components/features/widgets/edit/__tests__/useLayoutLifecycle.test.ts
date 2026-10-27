@@ -78,7 +78,8 @@ describe("saving a customised dashboard", () => {
       (_, i) => ({
         id: `p${i}`,
         widgetId: `w/${i}`,
-        width: "full",
+        w: 12,
+        h: 3,
         removed: i % 2 === 0,
         ...(i % 2 === 0 ? { config: big } : {}),
       })
@@ -97,8 +98,8 @@ describe("saving a customised dashboard", () => {
 
   it("sends a save that fits exactly as the draft holds it", async () => {
     const placements: WidgetPlacement[] = [
-      { id: "a", widgetId: "w/a", width: "half", removed: false },
-      { id: "b", widgetId: "w/b", width: "half", removed: true },
+      { id: "a", widgetId: "w/a", w: 6, h: 3, removed: false },
+      { id: "b", widgetId: "w/b", w: 6, h: 3, removed: true },
     ];
     expect((await saveDraft(placements)).placements).toEqual(placements);
   });
@@ -108,7 +109,8 @@ describe("staging a reset", () => {
   const card = (widgetId: string): WidgetPlacement => ({
     id: widgetId,
     widgetId,
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
   });
   const draft: LayoutDraft = {

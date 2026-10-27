@@ -17,6 +17,8 @@ import type {
 
 import { WidgetRenderer } from "../WidgetRenderer";
 
+import { gridBounds } from "./grid-bounds";
+
 afterEach(() => {
   clearRegistry();
   vi.restoreAllMocks();
@@ -26,7 +28,7 @@ const metric: DashboardWidget = {
   id: "core/published-posts",
   title: "Published posts",
   archetype: "metric",
-  size: "sm",
+  size: gridBounds(3),
   query: { source: "collection:posts", op: "count" },
 };
 
@@ -140,7 +142,7 @@ describe("WidgetRenderer — an archetype named off Object.prototype", () => {
     id: "acme/evil",
     title: "Evil",
     archetype: "__proto__" as DashboardWidget["archetype"],
-    size: "sm",
+    size: gridBounds(3),
     query: { source: "collection:posts", op: "count" },
   };
 
@@ -197,7 +199,7 @@ describe("WidgetRenderer — an archetype drawn without data", () => {
     id: "core/shortcuts",
     title: "Shortcuts",
     archetype: "actions",
-    size: "sm",
+    size: gridBounds(3),
     actions: [{ label: "New post", href: "/admin/posts/new" }],
   };
 
@@ -223,7 +225,7 @@ describe("WidgetRenderer — custom", () => {
     id: "acme/panel",
     title: "Acme panel",
     archetype: "custom",
-    size: "lg",
+    size: gridBounds(6),
     component: "@acme/admin#Panel",
   };
 
@@ -543,7 +545,7 @@ describe("WidgetRenderer — a data archetype with nothing to draw from", () => 
           id: "acme/queryless",
           title: "Queryless",
           archetype: "metric",
-          size: "sm",
+          size: gridBounds(3),
         }}
         slot={undefined}
       />
@@ -578,7 +580,7 @@ describe("WidgetRenderer — archetypes not built yet", () => {
           id: "core/recent",
           title: "Recent entries",
           archetype: "list",
-          size: "lg",
+          size: gridBounds(6),
           query: { source: "collection:posts", op: "list" },
         }}
         slot={{ ok: true, result: { op: "list", items: [] } }}
@@ -600,7 +602,7 @@ describe("WidgetRenderer — every card is framed", () => {
           id: "acme/team",
           title: "Team",
           archetype: "custom",
-          size: "lg",
+          size: gridBounds(6),
           component: "@t/x#Body",
         }}
         slot={undefined}

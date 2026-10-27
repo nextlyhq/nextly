@@ -14,6 +14,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { useSettingsPreview } from "../useSettingsPreview";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -36,7 +37,7 @@ const WIDGET: DashboardWidget = {
   id: "core/recent",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [{ name: "limit", type: "number", label: "Rows", defaultValue: 5 }],
 };
@@ -173,7 +174,7 @@ describe("the settings sheet's preview", () => {
       id: "core/count",
       title: "Count",
       archetype: "custom",
-      size: "sm",
+      size: gridBounds(3),
       settings: [
         { name: "collection", type: "collection", label: "Collection" },
       ],
