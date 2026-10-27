@@ -1276,6 +1276,13 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
   # `nextly`'s unit suite on Windows, on a runner of its own: 957 files, and
   # 18.7 minutes beside the admin's on one runner. `test` depends on `^build`,
   # so turbo builds what the suite needs and nothing else.
@@ -1345,6 +1352,13 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
   # `@nextlyhq/admin`'s unit suite on Windows, on a runner of its own: 436
   # files, and 13.6 minutes beside nextly's on one runner.
   windows-gates-admin:
@@ -1412,6 +1426,13 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
   # What `@nextlyhq/admin` would publish, read as a production application gets
   # it. The package ships prebuilt, and its build settles what a production
