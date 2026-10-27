@@ -643,3 +643,160 @@ describe("credentials anywhere in a log value", () => {
     expect([...copied.values()]).toEqual(["first", "second"]);
   });
 });
+
+describe("credentials known by their shape, under any name", () => {
+  // Built by joining, so no credential-shaped literal sits in the source for
+  // a secret scanner to report; each is a documented shape and nothing more.
+  const shaped = (...parts: string[]) => parts.join("");
+  const JWT = shaped(
+    "eyJhbGciOiJIUzI1NiJ9",
+    ".",
+    "eyJzdWIiOiJ1c2VyLTEifQ",
+    ".",
+    "c2lnbmF0dXJlLXZhbHVl"
+  );
+  const GITHUB = shaped("gh", "p_", "a".repeat(36));
+  const NPM = shaped("np", "m_", "b".repeat(36));
+  const AWS = shaped("AK", "IA", "ABCDEFGHIJKLMNOP");
+  const PEM = shaped(
+    "-----BEGIN ",
+    "PRIVATE KEY-----\n",
+    "MIIB",
+    "x".repeat(40),
+    "\n-----END ",
+    "PRIVATE KEY-----"
+  );
+
+  /**
+   * What an app's service logger receives for `message` and `meta`: as Node
+   * prints them, and as a JSON writer serialises them, which is where a
+   * `toJSON` runs.
+   */
+  function logged(message: string, meta: Record<string, unknown>) {
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (m: string, fields?: unknown) => received.push(m, fields),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug(message, meta);
+    return {
+      printed: inspect(received, { depth: Infinity }),
+      json: JSON.stringify(received),
+    };
+  }
+
+  it.each([
+    ["a JWT", JWT],
+    ["a GitHub personal token", GITHUB],
+    ["a GitHub OAuth token", shaped("gh", "o_", "c".repeat(36))],
+    ["a GitHub user-to-server token", shaped("gh", "u_", "d".repeat(36))],
+    ["a GitHub server-to-server token", shaped("gh", "s_", "e".repeat(36))],
+    ["a GitHub refresh token", shaped("gh", "r_", "f".repeat(36))],
+    ["a GitHub fine-grained token", shaped("github_", "pat_", "g".repeat(40))],
+    ["an npm token", NPM],
+    ["an AWS access key id", AWS],
+    ["an AWS temporary key id", shaped("AS", "IA", "QRSTUVWXYZ234567")],
+    ["a Stripe secret key", shaped("sk_", "live_", "h".repeat(24))],
+    ["a Stripe restricted key", shaped("rk_", "test_", "i".repeat(24))],
+    ["a webhook signing secret", shaped("whsec_", "j".repeat(32))],
+    ["a GitLab token", shaped("gl", "pat-", "k".repeat(20))],
+    ["a Slack token", shaped("xo", "xb-", "1234567890-", "l".repeat(24))],
+    ["a Google OAuth token", shaped("ya", "29.", "m".repeat(40))],
+  ])("takes %s out of a neutral field and out of text", (_, credential) => {
+    const { printed } = logged(`upstream rejected ${credential} today`, {
+      value: credential,
+      note: `retrying after ${credential} was refused`,
+    });
+    expect(printed).not.toContain(credential);
+    // POPULATION CONTROL: the words around it, and the field, remain.
+    expect(printed).toContain("upstream rejected");
+    expect(printed).toContain("today");
+    expect(printed).toContain("retrying after");
+    expect(printed).toContain("was refused");
+    expect(printed).toContain("value:");
+  });
+
+  it("takes a PEM block out whole, its body as well as its header", () => {
+    // Read from what the logger received rather than from a printed form,
+    // which escapes the block's line breaks and so could never contain it.
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (m: string, fields?: unknown) => received.push(m, fields),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug(`key was ${PEM} and more`, { value: PEM });
+    const [message, fields] = received as [string, { value: string }];
+    for (const text of [message, fields.value]) {
+      expect(text).not.toContain("MIIB" + "x".repeat(40));
+      expect(text).not.toContain("PRIVATE KEY");
+    }
+    // POPULATION CONTROL: the words around it remain.
+    expect(message).toContain("key was");
+    expect(message).toContain("and more");
+  });
+
+  it("takes a shaped credential out of what a toJSON writes under a neutral key", () => {
+    const { json } = logged("line", {
+      slug: "home",
+      detail: { toJSON: () => ({ value: GITHUB, label: "kept-label" }) },
+    });
+    expect(json).not.toContain(GITHUB);
+    expect(json).toContain("kept-label");
+  });
+
+  it("takes shaped credentials out of bare header pairs", () => {
+    const { printed } = logged("line", {
+      pairs: [
+        ["cookie", `sid=${JWT}`],
+        ["authorization", NPM],
+      ],
+      flat: ["X-Api-Key", AWS],
+    });
+    expect(printed).not.toContain(JWT);
+    expect(printed).not.toContain(NPM);
+    expect(printed).not.toContain(AWS);
+    // POPULATION CONTROL: the header names, which are not credentials, remain.
+    expect(printed).toContain("cookie");
+    expect(printed).toContain("sid=");
+    expect(printed).toContain("X-Api-Key");
+  });
+
+  it("keeps ordinary ids, hashes, versions and prose that only resemble a credential", () => {
+    const ordinary = {
+      id: "user_01HZX3K9Q2",
+      uuid: "550e8400-e29b-41d4-a716-446655440000",
+      sha1: "3f786850e387550fdab836ed7e6dc881de23001b",
+      sha256:
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      base64: "dGhpcyBpcyBvcmRpbmFyeSBiYXNlNjQgdGV4dA==",
+      version: "1.2.3",
+      longVersion: "16.2.0-canary.12",
+      kind: "plugin-accounts.identity.unlinked",
+      modulePath: "observability.instrumentation.register",
+      prose: "the token expired, so a new token was requested",
+      mention: "signing secrets start with whsec_ and keys with sk_live_",
+      word: "xoxo-gossip",
+      shortKey: "AKIA-short",
+      opaque: "order-42",
+      // A run with a credential's shape inside a longer word is part of that
+      // word, not a token: one with more after it, one with more before.
+      longerRun: shaped("AK", "IA", "ABCDEFGHIJKLMNOP", "QRS"),
+      snakeId: shaped("job_", "gh", "p_", "a".repeat(30)),
+    };
+    const { printed, json } = logged(
+      "the token expired at version 1.2.3 for plugin-accounts.identity.unlinked",
+      { ...ordinary, detail: { toJSON: () => ({ value: "opaque-kept" }) } }
+    );
+    expect(printed).toContain(
+      "the token expired at version 1.2.3 for plugin-accounts.identity.unlinked"
+    );
+    for (const value of Object.values(ordinary)) {
+      expect(printed).toContain(value);
+    }
+    // A value with no credential's shape, under a name that says nothing, is
+    // ordinary data as far as any log can tell, and stays.
+    expect(json).toContain("opaque-kept");
+  });
+});

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { looksLikeSecret } from "../../../observability/credential-shapes";
 import {
   collectPrincipalKinds,
   publishPrincipalKinds,
@@ -8,7 +9,6 @@ import {
 import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
 import {
   collectPluginAuditKinds,
-  looksLikeSecret,
   projectPluginAuditEvent,
 } from "../plugin-audit";
 

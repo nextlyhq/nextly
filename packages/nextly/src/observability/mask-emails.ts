@@ -22,6 +22,8 @@
 
 import type { Logger } from "../shared/types";
 
+import { redactCredentialTokens } from "./credential-shapes";
+
 // ---------------------------------------------------------------------------
 // The one walk over a log value
 //
@@ -690,13 +692,19 @@ function redactCredentialParameters(text: string): string {
 const COOKIE_HEADER_IN_TEXT = /\b((?:set-)?cookie):[^\r\n]*/gi;
 
 /**
- * Every credential in a piece of text redacted: a `Bearer` or `Basic`
- * credential, the user and password before a host, a quoted cookie header,
- * and the value of a parameter named like a credential or a session.
+ * Every credential in a piece of text redacted: a token with a known
+ * credential's shape (a JWT, a GitHub or npm token, an AWS key id, a PEM
+ * block) wherever it sits, a `Bearer` or `Basic` credential, the user and
+ * password before a host, a quoted cookie header, and the value of a parameter
+ * named like a credential or a session. Since every string the log walk meets
+ * passes through here, a shaped credential under a neutral field name (a
+ * `toJSON` result, a header pair in a list) is taken out too.
  */
 export function redactCredentialsInText(text: string): string {
   return redactCredentialParameters(
-    text
+    // Shapes first: a PEM block is taken whole, before a header rule that
+    // reads one line could leave its body behind.
+    redactCredentialTokens(text, REDACTED)
       .replace(
         CREDENTIAL_IN_TEXT,
         (_, scheme: string) => `${scheme} ${REDACTED}`
