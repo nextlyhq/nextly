@@ -74,8 +74,6 @@ import { recentlyEditedWidget } from "./recently-edited";
 import { teamWidget } from "./team";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
-export { CORE_WIDGET_COMPONENT_PREFIX } from "./shared";
-
 /**
  * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
  * Recently edited, Recent activity, Content, Upcoming releases and Team, each

@@ -27,7 +27,7 @@ import { quote } from "./quote";
  * Core's displays that draw data: today's data archetypes, so a display is a
  * way of drawing that already exists rather than a new vocabulary.
  */
-export const CORE_DISPLAYS = DATA_ARCHETYPES;
+const CORE_DISPLAYS = DATA_ARCHETYPES;
 
 /** One of core's displays that draws data. */
 export type CoreDisplay = DataWidgetArchetype;

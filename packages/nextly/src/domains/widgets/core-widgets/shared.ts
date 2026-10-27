@@ -4,7 +4,11 @@
  * @module domains/widgets/core-widgets/shared
  */
 
-import { DENSITY_OPTIONS, settings } from "../declaration/setting-builders";
+import {
+  DENSITY_OPTIONS,
+  settings,
+  type SettingDeclaration,
+} from "../declaration/setting-builders";
 import type { WidgetSetting } from "../definition";
 import type { AnyWidgetSetting } from "../settings";
 
@@ -36,7 +40,9 @@ const NOTE_MAX_LENGTH = 2000;
  * Its label rides beside the builder's fields: startup holds it to the rules
  * every setting's label is held to, and the settings sheet names it "Note".
  */
-export const NOTE_TEXT = {
+export const NOTE_TEXT: SettingDeclaration<string, "textarea"> & {
+  readonly label: string;
+} = {
   ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
   label: "Note",
 };
@@ -116,12 +122,3 @@ export const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
   label: "Collection",
   ...settings.collection(),
 };
-
-/**
- * The prefix core's dashboard components resolve under.
- *
- * Reserved by the admin's component registry, which refuses both registration
- * and unregistration under it by anything but core -- otherwise a plugin could
- * replace the body drawn for a card the registry still attributes to core.
- */
-export const CORE_WIDGET_COMPONENT_PREFIX = "core#";

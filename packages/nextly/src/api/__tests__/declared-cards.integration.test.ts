@@ -190,7 +190,7 @@ async function userNamed(name: string): Promise<string> {
     };
   };
   const created = await nextly.users.create({
-    load: {
+    data: {
       email: `${name}@example.com`,
       password: "Password123!",
       name,
@@ -229,7 +229,7 @@ async function keyOf(userId: string, slugs: string[]): Promise<string> {
     return found!.id;
   });
   const role = await nextly.roles.create({
-    load: {
+    data: {
       name: `Role ${userId} ${slugs.join(" ")}`,
       slug: `r-${userId.slice(0, 8)}-${slugs.join("-")}`,
       permissionIds: ids,

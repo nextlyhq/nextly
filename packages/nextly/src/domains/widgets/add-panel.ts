@@ -53,7 +53,10 @@ const CORE_GROUPS = {
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */
-const CORE_ORDER = new Map(CORE_WIDGET_IDS.map((id, index) => [id, index]));
+// Keyed by any widget id: the panel asks it of every widget, core's or not.
+const CORE_ORDER = new Map<string, number>(
+  CORE_WIDGET_IDS.map((id, index) => [id, index])
+);
 
 /** What the add panel shows about a widget beside its name. */
 export interface AddPanelFacts {

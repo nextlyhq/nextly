@@ -145,10 +145,6 @@ function toDefinition(
   declaration: DeclaredWidgetShape,
   owner: string
 ): WidgetDefinition {
-  const category =
-    declaration.category ??
-    (owner === CORE_OWNER ? undefined : DEFAULT_CATEGORY);
-  const display = displayOfView(declaration.view);
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
     // held to (`widgetSettingsProblems`), so it is one, named.
@@ -158,23 +154,56 @@ function toDefinition(
     id: declaration.id,
     title: declaration.title,
     description: declaration.description,
-    ...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
-    ...(category === undefined ? {} : { category }),
-    ...(typeof display === "string"
-      ? { archetype: display }
-      : {
-          archetype: "custom" as const,
-          component: display.component,
-        }),
+    ...publishedLabels(declaration, owner),
+    ...drawnBy(displayOfView(declaration.view)),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
+    ...publishedGates(declaration),
+    ...withEmpty(publishedEmpty(declaration.empty)),
+    serverData: true,
+  };
+}
+
+/**
+ * What the add panel shows beside a declared widget's name: its icon, and its
+ * category, "Other" when it names none. Not for core's own, whose cards carry
+ * no category label.
+ */
+function publishedLabels(
+  declaration: DeclaredWidgetShape,
+  owner: string
+): Pick<WidgetDefinition, "icon" | "category"> {
+  const category =
+    declaration.category ??
+    (owner === CORE_OWNER ? undefined : DEFAULT_CATEGORY);
+  return {
+    ...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
+    ...(category === undefined ? {} : { category }),
+  };
+}
+
+/** The archetype a declared view is drawn by, and the component of a view of its own. */
+function drawnBy(
+  display: WidgetDisplay
+): Pick<WidgetDefinition, "archetype" | "component"> {
+  return typeof display === "string"
+    ? { archetype: display }
+    : { archetype: "custom", component: display.component };
+}
+
+/** Who is offered a declared widget, how many times, and whether it leaves while empty. */
+function publishedGates(
+  declaration: DeclaredWidgetShape
+): Pick<
+  WidgetDefinition,
+  "allowsSeveral" | "hidesWhenEmpty" | "requiredPermission"
+> {
+  return {
     ...(declaration.several === true ? { allowsSeveral: true } : {}),
     ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
     ...(declaration.access === undefined
       ? {}
       : { requiredPermission: declaration.access }),
-    ...withEmpty(publishedEmpty(declaration.empty)),
-    serverData: true,
   };
 }
 
