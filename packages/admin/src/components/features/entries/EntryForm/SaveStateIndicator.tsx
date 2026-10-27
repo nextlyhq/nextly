@@ -20,6 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useId } from "react";
 
 import { AlertCircle, Check, Cloud, Loader2 } from "@admin/components/icons";
@@ -209,7 +210,7 @@ export function SaveStateIndicator({
   saveState,
   recovery,
   className,
-}: SaveStateIndicatorProps) {
+}: SaveStateIndicatorProps): JSX.Element {
   const view = saveIndicatorView(saveState, recovery);
 
   return (

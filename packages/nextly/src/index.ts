@@ -309,6 +309,11 @@ export type {
   SendEmailArgs,
   SendTemplateEmailArgs,
   SendEmailResult,
+  // Queued email (experimental)
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
+  QueuedEmail,
+  QueuedEmailState,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;
@@ -353,13 +358,16 @@ export {
 // DI Container - for advanced use cases
 export { Container, container, type Factory } from "./di";
 
-// Service Registration
+// Service Registration. The `./di` barrel leaves registration out, so the
+// registration functions come from `./di/register` itself.
 export {
   registerServices,
   shutdownServices,
+  clearServices,
+} from "./di/register";
+export {
   getService,
   isServicesRegistered,
-  clearServices,
   type NextlyServiceConfig,
   type ServiceMap,
 } from "./di";
@@ -534,6 +542,12 @@ export {
   type PluginMediaService,
   type PluginEmailService,
   type PluginVersionsService,
+  // `ctx.services.versions.pins`: version pins on the plugin's own transaction.
+  type PluginVersionPins,
+  type PluginVersionPinHolder,
+  type PluginVersionPin,
+  type PluginPinOptions,
+  type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
   type PluginHookPointDeclaration,
@@ -637,9 +651,13 @@ export {
   type ComponentDisplay,
   type ContentQuery,
   type CoreDisplay,
+  type AdminDashboardConfig,
   type CoreWidgetId,
   type DashboardContribution,
   type DateRange,
+  type DefaultLayoutCard,
+  type WidgetOverride,
+  type WidgetRef,
   type ChartStyle,
   type WidgetComponentMap,
   type WidgetData,
@@ -650,7 +668,6 @@ export {
   type WidgetProps,
   type WidgetReadServices,
   type WidgetRenderSize,
-  type WidgetWidth,
 } from "./domains/widgets/declaration/public";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
@@ -665,17 +682,15 @@ export type {
 // Every contract a published shape NAMES is published beside it. There is no
 // `nextly/widgets` subpath, so this is the only place a plugin author can
 // reach them, and a public property whose type has no public name can be
-// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
-// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
-// `WidgetSourceKind` and `WidgetOp`.
+// inferred but never annotated: `WidgetDefinition.size` is a
+// `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
+// `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
 // The last three are the data SOURCE contract that `contributes.widgetSources`
 // names: inference covers a resolver written inline, and these are what let an
 // author declare one as a named function instead.
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
+  GRID_COLUMNS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
@@ -699,9 +714,9 @@ export {
   type WidgetStatCell,
   type WidgetQuery,
   type WidgetQuerySpec,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
+  type GridSize,
+  type WidgetSizeDeclaration,
+  type WidgetSizeBounds,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,
@@ -878,6 +893,33 @@ export type {
 // the DI container, and `config` is a CLIENT entry — publishing it there would
 // pull the server graph into a browser bundle.
 export { collectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+
+// Editorial workflows (@experimental): a workflow defined in code, attached
+// to collections and Singles with their `workflow` option. The same exports as
+// `nextly/config`, which a collection file can import them from.
+export {
+  allowsSelfApproval,
+  defineWorkflow,
+  entersReview,
+  isReviewStage,
+  MAX_WORKFLOW_NAME_LENGTH,
+  primaryStep,
+} from "./domains/workflows/define-workflow";
+export {
+  reviewWorkflow,
+  type ReviewWorkflowOptions,
+} from "./domains/workflows/preset";
+export {
+  WORKFLOW_STEP_KINDS,
+  type ResolvedWorkflowStep,
+  type Workflow,
+  type WorkflowInput,
+  type WorkflowStage,
+  type WorkflowStageName,
+  type WorkflowStep,
+  type WorkflowStepKind,
+  type WorkflowStepName,
+} from "./domains/workflows/types";
 export type {
   AuthoredDraftSplitCollection,
   DraftSplitEligibility,
@@ -892,8 +934,10 @@ export {
   registerVersionPinHolder,
   versionPins,
   type VersionPin,
+  type RegisteredVersionPinHolder,
   type VersionPinHolder,
   type VersionPinHolderDefinition,
+  type VersionPinSlot,
 } from "./domains/versions/version-pins";
 export type { VersionRef } from "./domains/versions/versions-repository";
 

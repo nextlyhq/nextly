@@ -8,19 +8,22 @@ import {
   allWidgets,
   canonicalWidgets,
   declaredWidgets,
-  widthFacts,
+  placedByDefault,
+  sizeFacts,
   type CanonicalWidget,
 } from "../canonical";
 import { setGeneratedWidgets } from "../collection-widgets";
 import type { WidgetDefinition } from "../definition";
+import { sizeBounds } from "../grid-size";
 import { clearWidgets, registerWidget } from "../registry";
+import { UNSTATED_WIDGET_SIZE } from "../unstated-size";
 
 function registered(patch: Partial<WidgetDefinition>): WidgetDefinition {
   const definition = {
     id: "core/a",
     title: "A",
     archetype: "custom",
-    defaultSize: "full",
+    size: { default: { w: 12, h: 4 } },
     component: "core#A",
     ...patch,
   };
@@ -83,13 +86,6 @@ describe("the canonical widget set", () => {
     const merged = canonicalWidgets([{ id: "dup/one", defaultOrder: 99 }]);
     expect(merged).toHaveLength(1);
     expect(merged[0].defaultOrder).toBe(99);
-  });
-
-  it("keeps a CONTRIBUTED height the registration did not state", () => {
-    registerWidget(registered({ id: "dup/one" }));
-    expect(
-      canonicalWidgets([{ id: "dup/one", defaultHeight: "tall" }])[0]
-    ).toHaveProperty("defaultHeight", "tall");
   });
 
   it("keeps a CONTRIBUTED dismissible the registration did not state", () => {
@@ -196,6 +192,69 @@ describe("the canonical widget set", () => {
     expect(merged[0]).not.toHaveProperty("visibleWhen");
   });
 
+  it("takes a Collection setting only from the declaration whose settings win", () => {
+    // 🔴 The admin draws the registration's whole settings list wherever it
+    // states one, so a registration stating settings without a Collection
+    // setting draws a widget with none -- and its cards must not be judged by
+    // the contribution's.
+    const contributed: CanonicalWidget = {
+      id: "dup/one",
+      textBounds: [],
+      collectionSetting: { name: "source", type: "collection" },
+    };
+    registerWidget(
+      registered({
+        id: "dup/one",
+        settings: [{ name: "limit", type: "number", defaultValue: 5 }],
+      })
+    );
+    const merged = canonicalWidgets([contributed])[0];
+    expect(merged.collectionSetting).toBeUndefined();
+    expect(merged.textBounds).toEqual([]);
+
+    // The must-differ half: a registration stating no settings keeps the
+    // contribution's, as the admin draws them.
+    clearWidgets();
+    registerWidget(registered({ id: "dup/one" }));
+    expect(canonicalWidgets([contributed])[0].collectionSetting?.name).toBe(
+      "source"
+    );
+  });
+
+  it("takes the registration's queries on a collision, as the admin draws its query", () => {
+    registerWidget(
+      registered({
+        id: "dup/one",
+        archetype: "metric",
+        component: undefined,
+        query: { source: "single:homepage", op: "count" },
+      })
+    );
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([
+      { source: "single:homepage", op: "count" },
+    ]);
+  });
+
+  it("asks nothing on a collision whose registration declares no query, as the admin draws it", () => {
+    // 🔴 The admin's merge takes the registration's query, here none: the
+    // contribution's query is not asked, so its Collection setting names no
+    // collection the card reads.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([]);
+  });
+
   it("does NOT inherit a contributed permission, matching the admin", () => {
     // The asymmetry is deliberate. The registry is the override channel, so a
     // registration that states no permission has stated that, and
@@ -277,16 +336,14 @@ describe("the canonical widget set", () => {
       registered({
         id: "core/team",
         requiredPermission: "read-users",
-        defaultSize: "md",
-        defaultHeight: "tall",
+        size: { default: { w: 4, h: 4 }, max: { w: 6, h: 4 } },
         defaultOrder: 20,
       })
     );
     expect(canonicalWidgets([])[0]).toEqual({
       id: "core/team",
       requiredPermission: "read-users",
-      defaultSize: "md",
-      defaultHeight: "tall",
+      size: { default: { w: 4, h: 4 }, max: { w: 6, h: 4 } },
       defaultOrder: 20,
       // As the registration states it: the add panel draws its sketch from it.
       archetype: "custom",
@@ -331,13 +388,11 @@ describe("the canonical widget set", () => {
     expect(widget).not.toHaveProperty("defaultOrder");
   });
 
-  it("keeps a contributed size this core has never heard of", () => {
-    // A contribution crosses a version boundary. Refusing an unknown size here
-    // would drop the whole card from the arrangement over a value the admin
-    // already survives by falling back.
-    expect(canonicalWidgets([{ id: "p/w", defaultSize: "xxl" }])[0]).toEqual({
+  it("carries a contributed size as the contribution states it", () => {
+    const size = { default: { w: 6, h: 3 } };
+    expect(canonicalWidgets([{ id: "p/w", size }])[0]).toEqual({
       id: "p/w",
-      defaultSize: "xxl",
+      size,
     });
   });
 
@@ -355,7 +410,7 @@ describe("generated cards in the canonical set", () => {
     id: "collection/posts-count",
     title: "posts",
     archetype: "metric",
-    defaultSize: "sm",
+    size: { default: { w: 3, h: 2 } },
     requiredPermission: "read-posts",
     query: { source: "collection:posts", op: "count" },
   } as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
@@ -424,74 +479,91 @@ describe("generated cards in the canonical set", () => {
   });
 });
 
-describe("a widget's widths", () => {
-  it("are derived from the declared sizes when no width terms are stated", () => {
+describe("a widget's size", () => {
+  it("is the declared size with every end filled in", () => {
     expect(
-      widthFacts({
+      sizeFacts({
         id: "w/a",
-        defaultSize: "lg",
-        minSize: "md",
-        maxSize: "xl",
+        size: {
+          default: { w: 6, h: 4 },
+          min: { w: 4, h: 3 },
+          max: { w: 8, h: 6 },
+        },
       })
     ).toEqual({
-      allowedWidths: ["third", "half", "twoThirds"],
-      defaultWidth: "half",
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 8, h: 6 },
+      },
       allowsSeveral: false,
     });
   });
 
-  it("allow every width and start full for a widget that declares nothing", () => {
-    expect(widthFacts({ id: "w/a" })).toEqual({
-      allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-      defaultWidth: "full",
-      allowsSeveral: false,
-    });
-  });
-
-  it("take explicit width terms over the declared sizes", () => {
+  it("fills an unstated minimum with the default and an unstated maximum with the full row at its height", () => {
     expect(
-      widthFacts({
-        id: "w/a",
-        defaultSize: "full",
-        minSize: "sm",
-        allowedWidths: ["half", "full"],
-        defaultWidth: "half",
-        allowsSeveral: true,
-      })
+      sizeFacts({ id: "w/a", size: { default: { w: 4, h: 3 } } }).size
     ).toEqual({
-      allowedWidths: ["half", "full"],
-      defaultWidth: "half",
-      allowsSeveral: true,
+      default: { w: 4, h: 3 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 3 },
     });
   });
 
-  it("read an empty allowed list as no statement, never as no width at all", () => {
-    expect(
-      widthFacts({ id: "w/a", allowedWidths: [], maxSize: "md" }).allowedWidths
-    ).toEqual(["quarter", "third"]);
-  });
-
-  it("carry a registration's size range into the canonical summary", () => {
-    registerWidget(
-      registered({ id: "core/a", defaultSize: "lg", minSize: "md" })
+  it("reads a widget that states no size as the unstated size, as the admin does", () => {
+    // 🔴 One answer for a contribution with no size: the same constant the
+    // admin reads through `nextly/config`, so the server's default placement
+    // and the grid cannot start the card at two sizes.
+    expect(sizeFacts({ id: "w/a" }).size).toEqual(
+      sizeBounds(UNSTATED_WIDGET_SIZE)
     );
-    const [summary] = allWidgets();
-    expect(widthFacts(summary as CanonicalWidget).allowedWidths).toEqual([
-      "third",
-      "half",
-      "twoThirds",
-      "full",
-    ]);
   });
 
-  it("keep a contribution's width terms where the registration states none", () => {
-    registerWidget(registered({ id: "dup/one" }));
-    const [merged] = canonicalWidgets([
-      { id: "dup/one", allowedWidths: ["half"], allowsSeveral: true },
-    ]);
-    expect(merged).toMatchObject({
-      allowedWidths: ["half"],
-      allowsSeveral: true,
+  it("carries a registration's size into the canonical summary", () => {
+    const size = { default: { w: 6, h: 4 }, min: { w: 4, h: 3 } };
+    registerWidget(registered({ id: "core/a", size }));
+    const [summary] = allWidgets();
+    expect(summary?.size).toEqual(size);
+    expect(sizeFacts(summary as CanonicalWidget).size.min).toEqual({
+      w: 4,
+      h: 3,
     });
+  });
+
+  it("takes a colliding id's size from the registration whole, never mixing in a contributed bound", () => {
+    registerWidget(
+      registered({ id: "dup/one", size: { default: { w: 6, h: 4 } } })
+    );
+    const [merged] = canonicalWidgets([
+      {
+        id: "dup/one",
+        size: { default: { w: 3, h: 2 }, min: { w: 3, h: 2 } },
+        allowsSeveral: true,
+      },
+    ]);
+    expect(merged?.size).toEqual({ default: { w: 6, h: 4 } });
+    // The contribution's `allowsSeveral` still stands where the registration
+    // states none.
+    expect(merged?.allowsSeveral).toBe(true);
+  });
+});
+
+describe("a widget offered per collection", () => {
+  const perCollection = {
+    id: "core/count",
+    offered: "per-collection" as const,
+  };
+
+  it("stays off the default dashboard, where every other widget is placed", () => {
+    expect(placedByDefault(perCollection)).toBe(false);
+    expect(placedByDefault({ id: "core/team" })).toBe(true);
+  });
+
+  it("allows several cards, one per collection, unless it says otherwise", () => {
+    expect(sizeFacts(perCollection).allowsSeveral).toBe(true);
+    expect(sizeFacts({ id: "core/team" }).allowsSeveral).toBe(false);
+    expect(
+      sizeFacts({ ...perCollection, allowsSeveral: false }).allowsSeveral
+    ).toBe(false);
   });
 });

@@ -80,9 +80,9 @@ import {
   componentsToStop,
   planReleaseMaterialisation,
 } from "../plan-release-materialisation";
-import {
-  type ReleaseCheckReads,
-  type ReleaseCheckSource,
+import type {
+  ReleaseCheckReads,
+  ReleaseCheckSource,
 } from "../readiness/check-sources";
 import {
   CORE_AUTHOR_SOURCE,
@@ -1991,6 +1991,45 @@ export class ReleasesService {
   async count(query: ReleaseCountQuery, actor: ReleaseActor): Promise<number> {
     await this.authorize(actor, "read");
     return this.deps.repository.countReleases(this.listFilters(query));
+  }
+
+  /**
+   * Whether the caller may read a release at all: one exists that the list
+   * would show them.
+   *
+   * The same authorization `find` makes and the same filters it reads through,
+   * with nothing narrowing them, so it says "yes" exactly where an unfiltered
+   * list would not be empty. One id read with a bound of one, not a count, for
+   * a question a dashboard asks on every load.
+   *
+   * @experimental
+   */
+  async anyReadable(actor: ReleaseActor): Promise<boolean> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.anyRelease(this.listFilters({}));
+  }
+
+  /**
+   * Whether the caller may read releases, by the decision every read here makes.
+   *
+   * For a reader outside this service that must withhold what releases hold
+   * from a caller who may not read them — the entry list's `_inRelease` filter
+   * reveals which documents a release will publish and when — so that it asks
+   * this one rule rather than keeping a second. Only a refusal answers `false`;
+   * any other failure is thrown, so a fault is never mistaken for "may not".
+   *
+   * @experimental
+   */
+  async mayRead(actor: ReleaseActor): Promise<boolean> {
+    try {
+      await this.authorize(actor, "read");
+      return true;
+    } catch (error) {
+      if (error instanceof NextlyError && error.code === "FORBIDDEN") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   /**

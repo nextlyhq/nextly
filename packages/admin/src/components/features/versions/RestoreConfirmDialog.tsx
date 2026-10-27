@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
@@ -55,7 +56,7 @@ export function RestoreConfirmDialog({
   confirmDisabled = false,
   onConfirm,
   isRestoring = false,
-}: RestoreConfirmDialogProps) {
+}: RestoreConfirmDialogProps): JSX.Element {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>

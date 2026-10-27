@@ -28,6 +28,7 @@ import {
 } from "../../users/services/last-super-admin";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
+import { refuseLinkingPublicRole } from "./public-role";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
@@ -96,14 +97,24 @@ export class UserRoleService extends BaseService {
         return { success: false, statusCode: 404, message: "Role not found" };
       }
 
+      // Written as the rows spell them. MySQL matches ids case-insensitively,
+      // so the request's spelling can differ from the row's own, and a stored
+      // assignment is read back by comparing ids.
+      const storedUserId = String(user.id);
+      const storedRoleId = String(roleRow[0].id);
+      // The Public role is what visitors hold, never anyone's role.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [storedRoleId],
+        "assign",
+        { userId: storedUserId }
+      );
       const { userRoles } = this.tables;
-      // One moment for the check and the replacement below, so the row this
-      // request found lapsed is the row it replaces.
-      const now = new Date();
       const userRoleData: UserRoleInsertData = {
         id: randomUUID(),
-        userId,
-        roleId,
+        userId: storedUserId,
+        roleId: storedRoleId,
         expiresAt: opts?.expiresAt ?? null,
       };
 
@@ -118,9 +129,14 @@ export class UserRoleService extends BaseService {
         await refuseGrantingSuperAdmin(
           tx as LastSuperAdminTx,
           this.dialect,
-          [roleId],
-          { userId, roleId }
+          [storedRoleId],
+          { userId: storedUserId, roleId: storedRoleId }
         );
+        // One moment for the check and the replacement below, so the row this
+        // request found lapsed is the row it replaces. Taken once the lock is
+        // held: a role that lapsed while this request waited for it grants
+        // nothing, and is given again rather than answered as held.
+        const now = new Date();
 
         // "Already assigned" means held now. An assignment that has lapsed
         // grants nothing, so answering 409 for it left the role impossible to
@@ -130,8 +146,8 @@ export class UserRoleService extends BaseService {
           .from(userRoles)
           .where(
             and(
-              userRoleAssignmentsInForce(userRoles, userId, now),
-              eq(userRoles.roleId, roleId)
+              userRoleAssignmentsInForce(userRoles, storedUserId, now),
+              eq(userRoles.roleId, storedRoleId)
             )
           )
           .limit(1);
@@ -148,8 +164,8 @@ export class UserRoleService extends BaseService {
           .delete(userRoles)
           .where(
             and(
-              eq(userRoles.userId, userId),
-              eq(userRoles.roleId, roleId),
+              eq(userRoles.userId, storedUserId),
+              eq(userRoles.roleId, storedRoleId),
               not(roleAssignmentInForce(userRoles, now))
             )
           );
@@ -183,7 +199,7 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      await this.invalidateRoleCaches(userId);
+      await this.invalidateRoleCaches(storedUserId);
 
       return {
         success: true,
@@ -211,34 +227,31 @@ export class UserRoleService extends BaseService {
     roleId: string
   ): Promise<{ success: boolean; statusCode: number; message: string }> {
     try {
-      const existingUserRole = await (
-        this.db as RBACDatabaseInstance
-      ).query.userRoles.findFirst({
-        where: { userId: userId, roleId: roleId },
-        columns: { id: true },
-      });
-
-      if (!existingUserRole) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: "Role is not assigned to this user",
-        };
-      }
-
       // In a transaction of its own, which on SQLite goes through the adapter:
       // a plain delete made while another request's transaction is open runs
       // inside it, and that transaction's rollback would hand the user back
       // the role just taken away. The last active super-admin keeps the role,
-      // asked under the lock every removal of one takes, before the delete.
-      await this.withTransaction(async tx => {
+      // asked under the lock every removal of one takes, before the delete,
+      // and the assignment is looked for under it too, so what was found is
+      // what is removed.
+      const assigned = await this.withTransaction(async tx => {
         await refuseRemovingLastSuperAdmin(
           tx as LastSuperAdminTx,
           this.tables,
           this.dialect,
-          userId,
-          { kind: "unassignRole", roleId }
+          { kind: "unassignRole", userId, roleId }
         );
+        const existing = await (tx as LastSuperAdminTx)
+          .select({ id: this.tables.userRoles.id })
+          .from(this.tables.userRoles)
+          .where(
+            and(
+              eq(this.tables.userRoles.userId, userId),
+              eq(this.tables.userRoles.roleId, roleId)
+            )
+          )
+          .limit(1);
+        if (existing.length === 0) return false;
         await (tx as RBACDatabaseInstance)
           .delete(this.tables.userRoles)
           .where(
@@ -247,7 +260,16 @@ export class UserRoleService extends BaseService {
               eq(this.tables.userRoles.roleId, roleId)
             )
           );
+        return true;
       });
+
+      if (!assigned) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Role is not assigned to this user",
+        };
+      }
 
       await this.invalidateRoleCaches(userId);
 
@@ -283,6 +305,14 @@ export class UserRoleService extends BaseService {
   ): Promise<boolean> {
     const db = tx as typeof this.db;
     const { roles, userRoles } = this.tables;
+    // The Public role is what visitors hold, never anyone's role.
+    await refuseLinkingPublicRole(
+      tx as LastSuperAdminTx,
+      this.dialect,
+      roleIds,
+      "assign",
+      { userId }
+    );
     // Compared against the roles held now. A lapsed assignment counted as
     // held made re-granting that role look like no change, so nothing was
     // written and the role stayed lapsed while the caller believed it given.

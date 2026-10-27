@@ -18,7 +18,17 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, text } from "../../../config";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  group,
+  text,
+} from "../../../config";
 import type { HookContext } from "../../../hooks/types";
 import { createAdapter } from "../../../database/factory";
 import {
@@ -68,6 +78,19 @@ async function boot(
   } as Parameters<typeof createAdapter>[0]);
   current = await createTestNextly({
     adapter,
+    // A field group stored in its own table, with a child only BOSS may write.
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "scard",
+        fields: [
+          text({ name: "note" }),
+          text({
+            name: "runbook",
+            access: { update: ({ req }) => req.user?.email === BOSS.email },
+          }),
+        ],
+      }),
+    ],
     singles: [
       defineSingle({
         slug: SLUG,
@@ -110,6 +133,7 @@ async function boot(
             name: "guarded",
             access: { update: ({ req }) => req.user?.email === BOSS.email },
           }),
+          fieldGroup({ name: "card", component: "scard" }),
           text({
             name: "checked",
             ...(strict
@@ -385,6 +409,86 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
   });
 
+  it("refuses, and keeps the draft, when the publisher's field group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        card: { note: "live-note", runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { card: { note: "live-note", runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      {
+        status: "published",
+        card: { note: "clerk-note", runbook: "live-runbook" },
+      },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["card.runbook"]);
+  });
+
+  it("refuses, and keeps the draft, when the publisher's group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        ops: { runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { ops: { runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    // The publisher sends the whole group, the child at its live value. Kept
+    // at the stored value, the child would read as their own input, and the
+    // publish would consume the draft and lose the author's edit.
+    const published = await singles.update(
+      SLUG,
+      { status: "published", ops: { runbook: "live-runbook" } },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+    const drafts = await current!.adapter.select<{ snapshot: unknown }>(
+      "nextly_versions",
+      {
+        where: {
+          and: [
+            { column: "scopeKind", op: "=", value: "single" },
+            { column: "scopeSlug", op: "=", value: SLUG },
+            { column: "versionNo", op: "IS NULL" },
+            { column: "status", op: "=", value: "draft" },
+          ],
+        },
+      }
+    );
+    expect(drafts).toHaveLength(1);
+  });
+
   it("gates a publish a beforeChange hook decides on", async () => {
     // The caller sends no status; the hook turns the write into a publish. A
     // gate placed before the hooks would never see this one.
@@ -599,18 +703,10 @@ describe("a Single's publish re-judges the draft it promotes", () => {
   });
 
   /**
-   * Three languages of a Single whose shared `guarded` only BOSS may write.
-   * English holds a change that edits `guarded` from "L" to "X". German then
-   * publishes "X", begins a change from it and edits it back to "L", and,
-   * unless `revertLive` is false, French publishes "L" again.
-   *
-   * Publishing every language takes each held change's own shared edits,
-   * measured against the version it began from, and keeps the later of two
-   * edits to one field, dated by when that language's history began holding
-   * the value: German's "L", whose history held "X" after English's edit.
-   * English's snapshot still holds "X".
+   * A Single in English, German and French whose shared `guarded` only BOSS
+   * may write, live in every language with `guarded` at "L".
    */
-  async function heldEditsToGuarded(revertLive: boolean) {
+  async function guardedSingle() {
     process.env.DB_DIALECT = "sqlite";
     const adapter = await createAdapter({
       type: "sqlite",
@@ -642,6 +738,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    // Both publishers. A publish needs `publish-prefs` and `update-prefs`, and
+    // a rule only narrows a permission, so each holds both and the field rule
+    // on `guarded` is what tells them apart.
+    for (const publisher of [BOSS, CLERK]) {
+      await userWhoMay(current, publisher.id, "publish", [SLUG]);
+      await grantTo(current, publisher.id, "update", [SLUG]);
+    }
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
@@ -665,6 +768,23 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         { overrideAccess: true, locale }
       );
     }
+    return { singles, asBoss, ok };
+  }
+
+  /**
+   * Three languages of a Single whose shared `guarded` only BOSS may write.
+   * English holds a change that edits `guarded` from "L" to "X". German then
+   * publishes "X", begins a change from it and edits it back to "L", and,
+   * unless `revertLive` is false, French publishes "L" again.
+   *
+   * Publishing every language takes each held change's own shared edits,
+   * measured against the version it began from, and keeps the later of two
+   * edits to one field, dated by when that language's history began holding
+   * the value: German's "L", whose history held "X" after English's edit.
+   * English's snapshot still holds "X".
+   */
+  async function heldEditsToGuarded(revertLive: boolean) {
+    const { singles, asBoss, ok } = await guardedSingle();
     // English's held change edits the shared field, beginning from "L".
     ok(
       await singles.update(
@@ -739,6 +859,44 @@ describe("a Single's publish re-judges the draft it promotes", () => {
       user: BOSS,
     });
     expect(published.success, JSON.stringify(published)).toBe(true);
+    const live = await singles.get(SLUG, {
+      overrideAccess: true,
+      locale: "en",
+    });
+    expect((live.data as { guarded?: unknown }).guarded).toBe("L");
+  });
+
+  it("refuses a publish-all that writes an earlier language's shared edit a later change leaves alone", async () => {
+    const { singles, asBoss, ok } = await guardedSingle();
+    // Only English's held change edits the shared field. German's, saved
+    // later, edits only its own words, so its copy of `guarded` is still the
+    // live "L" and is no edit: "X" is what publishing every language writes.
+    ok(
+      await singles.update(
+        SLUG,
+        { headline: "EN2", guarded: "X" },
+        asBoss("en")
+      )
+    );
+    ok(await singles.update(SLUG, { headline: "DE2" }, asBoss("de")));
+
+    // A publisher who may not write `guarded` is refused, naming it. Judged
+    // on each change as stored, German's later copy of "L" would stand in for
+    // the "X" written, and that publisher would put it live.
+    let issues: Array<{ path: string; code: string }> | undefined;
+    await expect(
+      singles
+        .publishAllLocales(SLUG, { routeAuthorized: true, user: CLERK })
+        .catch(error => {
+          issues = (
+            error as {
+              publicData?: { errors?: Array<{ path: string; code: string }> };
+            }
+          ).publicData?.errors;
+          throw error;
+        })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
     const live = await singles.get(SLUG, {
       overrideAccess: true,
       locale: "en",

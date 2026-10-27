@@ -147,12 +147,12 @@ Render a single the same way you render a collection, reading it with
 
 ## Built-in blocks
 
-Nineteen, from `@nextlyhq/blocks-react/blocks`:
+Twenty, from `@nextlyhq/blocks-react/blocks`:
 
 `core/accordion`, `core/accordion-item`, `core/box`, `core/button`,
 `core/collection-loop`, `core/card`, `core/column`, `core/columns`, `core/divider`,
 `core/embed`, `core/form`, `core/gallery`, `core/heading`, `core/image`, `core/list`,
-`core/quote`, `core/section`, `core/spacer`, `core/text`.
+`core/quote`, `core/rich-text`, `core/section`, `core/spacer`, `core/text`.
 
 Each declares its props (Content tab) and which style groups it supports, and those drive
 the inspector.
@@ -162,7 +162,8 @@ the inspector.
 Drop a **`core/collection-loop`**, set its collection, sort and limit, and place a template
 inside it. At render the loop fetches entries through the route's data access and renders
 the template once per item. Bind any prop on a nested block to an item field (Content tab →
-**Bind** → path, for example `title` or `author.name`); bindings resolve at any depth.
+**Bind** → path, for example `title` or `author.name`). Bindings are stored but not
+resolved yet: each repeated item shows the text its blocks were given in the editor.
 Empty, error and unconfigured states are first-class, and a per-page query budget bounds
 nested loops — depth in a document becomes multiplication in reads.
 
@@ -171,8 +172,10 @@ nested loops — depth in a document becomes multiplication in reads.
 Style values are **typed** (spacing as box-sides, colors, dimensions, …) and compiled to a
 single scoped `<style>` per page via a real CSS parser (never string concatenation).
 Colors may be raw values or design-token references (`{ token: "color.primary" }` →
-`var(--nx-color-primary)`). Breakpoints are desktop-first; per-breakpoint overrides are
-edited in the **Responsive** tab and visible at real device widths in the iframe canvas.
+`var(--nx-color-primary)`). Breakpoints are desktop-first. Style a block separately for each
+breakpoint: the Style tab edits the breakpoint the canvas is sized to, and the canvas resizes
+to each breakpoint's width. The canvas is not an iframe, so it is a breakpoint selector rather
+than a device preview: `vw`/`vh` sizes and hand-written `@media` rules follow the admin window.
 
 ## Extending — add your own block
 

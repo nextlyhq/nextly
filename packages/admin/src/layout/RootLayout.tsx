@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
+import { AdminPending } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
@@ -21,7 +22,7 @@ import {
   useTheme,
 } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
-import { fieldGroupKeys } from "../hooks/queries";
+import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
 
@@ -50,13 +51,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
   useEffect(() => {
     const handler = () => {
       toast.info("Schema updated externally, refreshing...");
-      // void: the cache invalidations are fire-and-forget; downstream
-      // queries refetch on their own when they observe the new key state.
-      void queryClient.invalidateQueries({ queryKey: ["collections"] });
-      void queryClient.invalidateQueries({ queryKey: ["entries"] });
-      void queryClient.invalidateQueries({ queryKey: ["singles"] });
-      void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
-      void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
+      invalidateContentCaches(queryClient);
     };
     window.addEventListener("nextly:schema-updated", handler);
     return () => window.removeEventListener("nextly:schema-updated", handler);
@@ -78,6 +73,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         suppressHydrationWarning
       >
         <ThemePaintScript nonce={nonce} />
+        {/* Painted with the server's HTML, so the first thing a visitor sees
+            says the admin is loading, while its code downloads. */}
+        <AdminPending />
       </div>
     );
   }
@@ -89,6 +87,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
     routeType,
     requiredPermission,
     accessSubject,
+    entityAccess,
     requiresBuilder,
   } = route;
 
@@ -115,6 +114,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         <PermissionGuard
           requiredPermission={requiredPermission}
           subject={accessSubject}
+          entity={entityAccess}
         >
           {componentElement}
         </PermissionGuard>

@@ -96,7 +96,7 @@ export { frameInsetOf } from "./geometry-dom";
  * @experimental The op store: the vocabulary every edit is expressed in, and
  * how one applies.
  *
- * Exported from the package entry because the entry is what `tsup` builds. A
+ * Exported from the package entry because the entry is what `tsdown` builds. A
  * module the entry does not reference is absent from `dist` however thoroughly
  * it is tested — the tests import it by relative path and pass, while a consumer
  * installing the package finds nothing.

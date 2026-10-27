@@ -15,8 +15,16 @@ import {
   type BlockDocument,
   type BreakpointId,
   type StyleState,
+  type StyleCompileContext,
+  type RemotePattern,
+  type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
+import {
+  DEFAULT_PREFERENCES,
+  registrySlotSource,
+  type SlotSource,
+} from "@nextlyhq/builder";
 import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
@@ -24,18 +32,37 @@ import {
   selectionIsInspectable,
   useCanvasDrag,
   widthForBreakpoint,
+  type CanvasDrag,
+  type CanvasPreview,
   type CanvasZoom,
+  type SpacingScrubContext,
 } from "@nextlyhq/builder/shell";
-import { useId, useMemo, useRef, useState } from "react";
+import {
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+  type RefObject,
+  type Dispatch,
+} from "react";
 
-import { classUsageOf } from "../../class-usage";
-import { hostFetchPolicy, readRemotePatterns } from "../../host-policy";
-import { siteSheet } from "../../site-style";
+import { classUsageOf, type ClassUsage } from "../../class-usage";
+import {
+  hostFetchPolicy,
+  readRemotePatterns,
+  type HostFetchPolicy,
+} from "../../host-policy";
+import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
-import { pageRenderInputs } from "../page-render-inputs";
+import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
 
-import { useBreakpointWriter, useClassSurface } from "./site-style-studios";
+import {
+  useBreakpointWriter,
+  useClassSurface,
+  type ClassSurface,
+} from "./site-style-studios";
 import type { EditorMount } from "./use-editor-mount";
 
 /**
@@ -77,7 +104,9 @@ function shownStyleStateFor(
  * stored tier merged over them, the class surface over that, the hosts media
  * may come from, and the writer for the breakpoints.
  */
-export function useSiteStyleInputs(clientConfig: EditorMount["clientConfig"]) {
+export function useSiteStyleInputs(
+  clientConfig: EditorMount["clientConfig"]
+): SiteStyleInputs {
   /*
    * The site style the canvas draws with: the host's config DEFAULTS, already
    * resolved by the plugin factory and delivered as plain data. Narrowed with
@@ -189,7 +218,25 @@ export function useSiteStyleInputs(clientConfig: EditorMount["clientConfig"]) {
 }
 
 /** The site's style as the editor reads it. */
-export type SiteStyleInputs = ReturnType<typeof useSiteStyleInputs>;
+export type SiteStyleInputs = {
+  configSiteStyle: SiteStyleData;
+  canvasSiteStyle: SiteStyleData;
+  storedSiteStyle: SiteStyleData | undefined;
+  unreadableStoredFonts: readonly string[];
+  siteStylePending: boolean;
+  siteStyleError: Error | null;
+  classes: ClassSurface;
+  remotePatterns: readonly RemotePattern[] | undefined;
+  stylePolicy: HostFetchPolicy;
+  saveBreakpoints: (next: BreakpointSet) => Promise<string | undefined>;
+};
+
+/** The canvas's render context, as `useCanvasRender` returns it. */
+type CanvasRender = {
+  canvasRender: PageRenderInputs;
+  canvasPreviewContainer: string | undefined;
+  classSummaryContext: StyleCompileContext;
+};
 
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
@@ -199,7 +246,7 @@ function useCanvasRender({
   canvasSiteStyle,
   stylePolicy,
 }: Pick<EditorMount, "clientConfig" | "documentLimits" | "componentLibrary"> &
-  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">) {
+  Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
   /*
    * The name the canvas box establishes as a query container.
    *
@@ -359,14 +406,28 @@ function useCanvasRender({
   return { canvasRender, canvasPreviewContainer, classSummaryContext };
 }
 
-/** The canvas's render context, as `useCanvasRender` reads it. */
-type CanvasRender = ReturnType<typeof useCanvasRender>;
+/** What `useCanvasViewport` returns. */
+type CanvasViewport = {
+  setRequestedTier: Dispatch<SetStateAction<string | undefined>>;
+  zoom: CanvasZoom;
+  setZoom: Dispatch<SetStateAction<CanvasZoom>>;
+  appliedScale: number;
+  setAppliedScale: Dispatch<SetStateAction<number>>;
+  measuredWidth: number | undefined;
+  editedBreakpoint: string;
+  requestedWidth: number | undefined;
+  canvasPreview: CanvasPreview | undefined;
+  liveBreakpoints: string[];
+};
 
 /** The width the box is asked for and the width it got, and the zoom. */
 function useCanvasViewport({
   canvasRender,
   canvasPreviewContainer,
-}: Pick<CanvasRender, "canvasRender" | "canvasPreviewContainer">) {
+}: Pick<
+  CanvasRender,
+  "canvasRender" | "canvasPreviewContainer"
+>): CanvasViewport {
   /*
    * The two widths, which are two facts and not one.
    *
@@ -492,8 +553,17 @@ function useCanvasViewport({
   };
 }
 
+/** What `useStyleState` returns. */
+type ShownStyleState = {
+  shownStyleState: StyleState;
+  styleStateBinding: {
+    state: StyleState;
+    onChange: Dispatch<SetStateAction<StyleState>>;
+  };
+};
+
 /** The interaction state being edited, and the one shown. */
-function useStyleState(editor: EditorMount["editor"]) {
+function useStyleState(editor: EditorMount["editor"]): ShownStyleState {
   /*
    * The interaction state being edited, owned HERE so the panel and the canvas
    * cannot disagree about it.
@@ -538,11 +608,22 @@ function useStyleState(editor: EditorMount["editor"]) {
   return { shownStyleState, styleStateBinding };
 }
 
+/** What `useCanvasWiring` returns. */
+type CanvasWiring = {
+  slots: SlotSource;
+  canvasRoot: RefObject<HTMLDivElement | null>;
+  canvasElement: HTMLDivElement | null;
+  setCanvasElement: Dispatch<SetStateAction<HTMLDivElement | null>>;
+  blocks: { get: typeof getBlock };
+  drag: CanvasDrag;
+  dragging: boolean;
+};
+
 /** The canvas element, the registry the drag reads, and the drag itself. */
 function useCanvasWiring({
   editor,
   componentLibrary,
-}: Pick<EditorMount, "editor" | "componentLibrary">) {
+}: Pick<EditorMount, "editor" | "componentLibrary">): CanvasWiring {
   /*
    * Dragging blocks on the canvas.
    *
@@ -612,6 +693,13 @@ function useCanvasWiring({
   };
 }
 
+/** What `useStyleReadings` returns. */
+type StyleReadings = {
+  spacingScrub: SpacingScrubContext;
+  styleCascade: PageStyleCascade | undefined;
+  documentClasses: ClassUsage;
+};
+
 /** What the spacing handles, the inspector and the classes manager read. */
 function useStyleReadings({
   editor,
@@ -637,7 +725,7 @@ function useStyleReadings({
   Pick<CanvasRender, "canvasRender" | "canvasPreviewContainer"> & {
     editedBreakpoint: ReturnType<typeof editedBreakpointAtWidth>;
     shownStyleState: StyleState;
-  }) {
+  }): StyleReadings {
   /*
    * What a spacing drag handle writes, and what its live preview compiles with.
    *
@@ -802,7 +890,10 @@ function useStyleReadings({
  * it, the state shown, the element and the drag, and the readings off all of
  * them.
  */
-export function useCanvasInputs(mount: EditorMount, style: SiteStyleInputs) {
+export function useCanvasInputs(
+  mount: EditorMount,
+  style: SiteStyleInputs
+): CanvasInputs {
   const render = useCanvasRender({ ...mount, ...style });
   const viewport = useCanvasViewport(render);
   const styleState = useStyleState(mount.editor);
@@ -817,5 +908,13 @@ export function useCanvasInputs(mount: EditorMount, style: SiteStyleInputs) {
   return { ...render, ...viewport, ...styleState, ...wiring, ...readings };
 }
 
-/** The canvas's inputs, as `useCanvasInputs` reads them. */
-export type CanvasInputs = ReturnType<typeof useCanvasInputs>;
+/**
+ * The canvas's inputs, as `useCanvasInputs` reads them: each part's own
+ * result, so a value one of them adds reaches this type without being listed
+ * again.
+ */
+export type CanvasInputs = CanvasRender &
+  CanvasViewport &
+  ShownStyleState &
+  CanvasWiring &
+  StyleReadings;

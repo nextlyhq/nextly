@@ -167,6 +167,44 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every collection's slug and labels, read without the rest of its record:
+   * what a screen naming every collection needs.
+   */
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "labels">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["labels"]);
+    return records.map(({ slug, labels }) => ({ slug, labels }));
+  }
+
+  /**
+   * Every collection's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every collection's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
+  /**
+   * The slugs of every collection with a Draft/Published lifecycle, read
+   * without the rest of their records: what a decision about publishing
+   * across collections needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getSlugsWithStatus(): Promise<Set<string>> {
+    const records = await this.getAllRecordsWithColumns(["status"]);
+    return new Set(
+      records.filter(({ status }) => status === true).map(({ slug }) => slug)
+    );
+  }
+
   async getAllCollections(
     options?: ListCollectionsOptions
   ): Promise<DynamicCollectionRecord[]> {
@@ -360,9 +398,11 @@ export class CollectionRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && !isPipelineSource(options?.source)) {
-      // Generic forbidden message per §13.8; lock policy detail and slug
-      // move to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "change",
         logContext: {
           reason: "collection-locked",
           slug,
@@ -534,9 +574,11 @@ export class CollectionRegistryService extends BaseRegistryService<
     const existing = await this.getCollection(slug);
 
     if (existing.locked && !options?.force) {
-      // Generic forbidden message; lock policy detail goes to logContext.
+      // Defined in code, as the caller is told; the slug goes to the log.
       // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "delete",
         logContext: { reason: "collection-locked-delete", slug },
       });
     }

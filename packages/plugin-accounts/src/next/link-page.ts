@@ -26,7 +26,9 @@ const LINK_PAGES = [
  *
  * @experimental
  */
-export const linkPageMetadata = {
+export const linkPageMetadata: {
+  readonly referrer: "no-referrer";
+} = {
   referrer: "no-referrer",
 } as const satisfies Metadata;
 

@@ -11,6 +11,8 @@
  * @module components/features/releases/ReleaseRowMenu
  */
 
+import type { JSX } from "react";
+
 import { MoreHorizontal } from "@admin/components/icons";
 import {
   Button,
@@ -112,7 +114,7 @@ export function ReleaseRowDialogs({
   dialog: OpenDialog | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}) {
+}): JSX.Element | null {
   if (!dialog) return null;
   if (dialog.action === "schedule") {
     return (
@@ -151,7 +153,7 @@ export function ReleaseRowMenuButton({
 }: {
   release: Release;
   onOpen: (dialog: OpenDialog) => void;
-}) {
+}): JSX.Element {
   const actions = rowActionsFor(release, onOpen);
   return (
     <DropdownMenu>

@@ -452,7 +452,12 @@ describe("SingleRegistryService", () => {
           { label: "New" },
           { source: "ui" }
         )
-      ).rejects.toThrow(NextlyError);
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Why, in words: the Single is defined in code.
+        publicMessage:
+          "This Single is defined in code, so it can't be changed here.",
+      });
     });
 
     it("allows update when locked and source is 'code'", async () => {
@@ -498,9 +503,13 @@ describe("SingleRegistryService", () => {
     it("throws FORBIDDEN when force is not set", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
 
-      await expect(ctx.service.deleteSingle("site-settings")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(
+        ctx.service.deleteSingle("site-settings")
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Told why, in words: a Single is not deleted from here.
+        publicMessage: "A Single can't be deleted from here.",
+      });
     });
 
     it("force-deletes and removes associated permissions", async () => {

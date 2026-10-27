@@ -399,6 +399,8 @@ const PLUGIN_USER_METHODS = [
 const PLUGIN_EMAIL_METHODS = [
   "send",
   "sendWithTemplate",
+  "queue",
+  "queueWithTemplate",
   "sendPasswordResetEmail",
   "sendEmailVerificationEmail",
   "sendWelcomeEmail",
@@ -2090,7 +2092,7 @@ export function createPluginContext(
         const versions = getServiceFn("versionsService");
         return Object.freeze({
           ...methodFacade(versions, PLUGIN_VERSIONS_READS),
-          ...pluginVersionWrites(() => versions),
+          ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
       },

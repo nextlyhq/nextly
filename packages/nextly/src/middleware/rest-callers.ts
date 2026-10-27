@@ -11,7 +11,10 @@
 import { apiKeyRateLimitRefusal } from "../auth/middleware/api-key-budget";
 import { createJsonErrorResponse } from "../auth/middleware/error-response";
 import { container } from "../di/container";
-import type { ApiKeyService } from "../domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "../domains/auth/services/api-key-service";
 
 import type { ResolvedApiKey } from "./rest-limit-gate";
 
@@ -21,11 +24,15 @@ export interface RestCallerReaders {
   sessionUser(request: Request): Promise<string | null>;
   /**
    * Look a presented key up: the key, `null` when it does not resolve, or
-   * `undefined` when nothing could be asked.
+   * `undefined` when nothing could be asked. Why a key does not resolve is
+   * told to `onRefused`.
    */
-  lookupKey(rawKey: string): Promise<ResolvedApiKey | undefined>;
+  lookupKey(
+    rawKey: string,
+    onRefused?: (cause: ApiKeyRefusalCause) => void
+  ): Promise<ResolvedApiKey | undefined>;
   /** Spend a resolved key's own budget: its refusal once spent. */
-  debitKey(keyId: string): Promise<Response | null>;
+  debitKey(keyId: string, request: Request): Promise<Response | null>;
 }
 
 /**
@@ -80,7 +87,7 @@ export function defaultRestCallerReaders(
 ): RestCallerReaders {
   return {
     sessionUser: verifiedSessionUser,
-    async lookupKey(rawKey) {
+    async lookupKey(rawKey, onRefused) {
       try {
         // Started only when nothing is registered yet. A running process
         // answers with the services it has, as authentication does: asking a
@@ -91,15 +98,17 @@ export function defaultRestCallerReaders(
           await ready();
           service = registeredApiKeyService();
         }
-        return service ? await service.authenticateApiKey(rawKey) : undefined;
+        return service
+          ? await service.authenticateApiKey(rawKey, onRefused)
+          : undefined;
       } catch {
         // Not a verdict on the key: authentication asks again and answers.
         return undefined;
       }
     },
-    async debitKey(keyId) {
+    async debitKey(keyId, request) {
       const refusal = await apiKeyRateLimitRefusal(keyId);
-      return refusal ? createJsonErrorResponse(refusal) : null;
+      return refusal ? createJsonErrorResponse(refusal, request) : null;
     },
   };
 }

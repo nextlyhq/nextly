@@ -90,6 +90,18 @@ The admin sidebar is permission-gated. The built-in mapping is:
 
 Permissions for collections you define in `nextly.config.ts` follow the same slug pattern (`read-posts`, `update-posts`, etc.); they are wired up automatically when the collection is registered. Assign permissions to roles from `/admin/security/roles`.
 
+## Who else is editing
+
+Opening an existing entry or a Single in the admin claims it for you while the editor is open. Anyone else who opens it sees a notice that names you: "… is editing this document. You can read it, or take over." The form is read-only for them until they choose **Take over**, or they can choose **Request edit access**, which tells you that someone is waiting and changes nothing else. If someone takes over from you, your unsaved changes stay on screen, but you can't save them until you take the document back. Plugin views that open inside the editor, such as the Visual Page Builder, are covered by the same claim.
+
+While the editor is open it renews the claim every 15 seconds, and it releases the claim when you leave. A claim that is not renewed, from a tab that closed without saying so, lapses 150 seconds after its last renewal.
+
+### Limits
+
+- **Advisory, not a lock.** Only the admin's editors honour a claim. The server refuses no write because someone else holds the document, so the REST API, the Direct API and anything else that writes go ahead as usual.
+- **One person at a time.** It names whoever holds the document, not everyone who has it open, and a request for edit access does not say who is asking. There is no editing together: no live cursors and no merged edits.
+- **Existing documents only.** A new entry is not claimed while it is being created.
+
 ## Plugins in the admin
 
 A plugin can register sidebar entries via its `admin.placement` setting. Until at least one plugin is installed, the Plugins section is hidden. When a plugin does add entries, they appear under the section the plugin chose (Collections, Singles, Users, Settings, Plugins, or Standalone). You can override the placement and appearance per-plugin from `admin.pluginOverrides` in `nextly.config.ts`; see [Customization](/docs/admin/customization#plugin-overrides).

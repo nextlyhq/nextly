@@ -23,8 +23,10 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
-import { dirname, join, relative } from "node:path";
+import { existsSync, globSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { literalText, parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -56,11 +58,11 @@ import { parseTurboPlan } from "./turbo-plan.mjs";
 
 const PROBE_TIMEOUT_MS = 180_000;
 
-function dryRun() {
+function dryRun(env = process.env) {
   const raw = execFileSync(
     "pnpm",
     ["exec", "turbo", "run", "check-types", "--dry=json"],
-    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env }
   );
   // Located rather than assumed: pnpm emits config warnings and turbo a
   // version banner, and which stream each uses varies between a terminal and a
@@ -71,12 +73,20 @@ function dryRun() {
 
 /**
  * Whether a check-types command writes no build-info file: it runs `tsc` at
- * least once, and every run says `--incremental false`. One `tsc` without it
- * writes the file, so the command still races its own build.
+ * least once, and every run ends up with `--incremental false`. One `tsc`
+ * without it writes the file, so the command still races its own build. tsc
+ * keeps the LAST value of a repeated flag, and a bare `--incremental` means
+ * true, so only the last `--incremental` in each run decides.
  */
 function writesNoBuildInfo(command) {
   const runs = command.match(/\btsc\b[^&|;]*/g) ?? [];
-  return runs.length > 0 && runs.every(run => /--incremental false\b/.test(run));
+  return (
+    runs.length > 0 &&
+    runs.every(run => {
+      const flags = run.match(/--incremental(?:\s+(?:true|false)\b)?/g) ?? [];
+      return flags.at(-1)?.replace(/\s+/g, " ") === "--incremental false";
+    })
+  );
 }
 
 function resolvedTasks() {
@@ -157,8 +167,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       const tracked = trackedTypeScript(task.directory);
 
       // A package may legitimately ship no TypeScript at all — `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and all four still declare `check-types`. So emptiness is a
+      // `prettier-config` and `admin-css` are configuration and CSS, and all
+      // three still declare `check-types`. So emptiness is a
       // valid answer HERE, and the population is asserted once above instead,
       // where an empty read cannot be mistaken for a clean one.
       // A task appears in the dry run whether or not the package defines the
@@ -169,8 +179,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       // assertion here green while its gate quietly stopped existing.
       //
       // Only required of packages that SHIP TypeScript. `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and are legitimately `<NONEXISTENT>`.
+      // `prettier-config` and `admin-css` are configuration and CSS, and are
+      // legitimately `<NONEXISTENT>`.
       if (tracked.length > 0) {
         expect(
           String(task.command),
@@ -230,7 +240,111 @@ function projectConfigs(command) {
     const explicit = /(?:-p|--project)\s+(\S+)/.exec(invocation);
     configs.push(explicit ? explicit[1] : "tsconfig.json");
   }
-  return configs.length > 0 ? configs : ["tsconfig.json"];
+  return configs;
+}
+
+/**
+ * A task's command with each `pnpm <script>` or `pnpm run <script>` step
+ * replaced by the package script it runs, so a build that delegates
+ * (`pnpm build:js && …`) is read for what it executes. A name the package
+ * has no script for, such as `pnpm exec`, is left as written.
+ */
+function expandedCommand(scripts, command, depth = 0) {
+  return String(command).replace(/\bpnpm\s+(?:run\s+)?([\w:-]+)/g, (step, name) =>
+    depth < 5 && Object.hasOwn(scripts, name)
+      ? expandedCommand(scripts, scripts[name], depth + 1)
+      : step
+  );
+}
+
+/** The config file each `tsdown` step in a command builds with. */
+function tsdownConfigs(command) {
+  const configs = [];
+  for (const invocation of String(command).split("&&")) {
+    if (!/\btsdown\b/.test(invocation)) continue;
+    const explicit = /(?:-c|--config)[\s=](\S+)/.exec(invocation);
+    configs.push(explicit ? explicit[1] : "tsdown.config.ts");
+  }
+  return configs;
+}
+
+/**
+ * Prints, for one tsdown config file, each build's entries and the tsconfig it
+ * compiles declarations with. The file is loaded as tsdown loads it, through
+ * tsx, so an entry list computed in the config is read as computed. A config
+ * exported as a function is refused rather than guessed at.
+ */
+const ENTRY_READER = `
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+const loaded = (await import(pathToFileURL(resolve(process.argv[1])).href)).default;
+if (typeof loaded === "function") throw new Error("a tsdown config exported as a function cannot be read");
+const entries = entry =>
+  typeof entry === "string" ? [entry] : Array.isArray(entry) ? entry : Object.values(entry ?? {});
+console.log(JSON.stringify([loaded].flat().map(build => ({
+  entries: entries(build.entry),
+  tsconfig: typeof build.tsconfig === "string" ? build.tsconfig : "tsconfig.json",
+}))));
+`;
+
+function tsdownBuilds(directory, config) {
+  const output = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", ENTRY_READER, config],
+    { cwd: join(REPO_ROOT, directory), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+  );
+  return JSON.parse(output.trim().split("\n").at(-1));
+}
+
+/**
+ * The files a tsdown build reads: its entries and everything they import.
+ *
+ * Not the whole tsconfig, which is what made a build's hash follow its tests
+ * while it was tsup: rolldown bundles from the entries, and rolldown-plugin-dts
+ * roots its declaration program at them too. So the program is the compiler's
+ * own answer for a tsconfig that extends the build's and names only the
+ * entries, written beside it for the probe and removed afterwards.
+ */
+function tsdownProgram(directory, configs) {
+  return configs
+    .flatMap(config => tsdownBuilds(directory, config))
+    .flatMap(({ entries, tsconfig }) => {
+      const files = entries.flatMap(entry =>
+        entry.includes("*") ? globSync(entry, { cwd: join(REPO_ROOT, directory) }) : [entry]
+      );
+      const probe = `tsconfig.turbo-inputs-${process.pid}-${Math.random().toString(36).slice(2)}.json`;
+      const path = join(REPO_ROOT, directory, probe);
+      writeFileSync(
+        path,
+        JSON.stringify({ extends: `./${tsconfig}`, include: [], files: files.map(file => `./${file}`) }),
+        { flag: "wx" }
+      );
+      try {
+        return programFiles(directory, probe);
+      } finally {
+        rmSync(path, { force: true });
+      }
+    });
+}
+
+/**
+ * Every file a task's compiler reads: each tsconfig its `tsc` steps compile,
+ * and each tsdown build's entry graph. A command running neither, such as
+ * `next build`, is taken to read the package's whole tsconfig.
+ */
+function taskProgram(task) {
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, task.directory, "package.json"), "utf8"));
+  const command = expandedCommand(manifest.scripts ?? {}, task.command);
+  const projects = projectConfigs(command);
+  const builds = tsdownConfigs(command);
+  const files = [
+    ...projects.flatMap(config => programFiles(task.directory, config)),
+    ...tsdownProgram(task.directory, builds),
+  ];
+  if (projects.length === 0 && builds.length === 0) {
+    files.push(...programFiles(task.directory, "tsconfig.json"));
+  }
+  return [...new Set(files)];
 }
 
 /**
@@ -308,18 +422,13 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
         .filter(Boolean);
 
       // The UNION over every config the package's command compiles, not just
-      // the implicit one.
-      const configs = projectConfigs(task.command);
-      const program = [
-        ...new Set(
-          configs.flatMap(config => programFiles(task.directory, config))
-        ),
-      ];
+      // the implicit one, and over every tsdown build it runs.
+      const program = taskProgram(task);
       // Guards the guard: a compiler that produced no list would satisfy the
       // assertion below by having read nothing.
       expect(
         program.length,
-        `no program resolved for ${task.package} from ${configs.join(", ")} — the tsc invocation, not the package, is probably wrong`
+        `no program resolved for ${task.package} from ${String(task.command)} — the invocation, not the package, is probably wrong`
       ).toBeGreaterThan(0);
 
       const uncovered = program.filter(file => {
@@ -340,6 +449,120 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
         uncovered,
         `${task.package} compiles ${String(uncovered.length)} tracked file(s) that no hash covers, so editing one leaves its cache valid:\n  ${uncovered.slice(0, 10).join("\n  ")}`
       ).toEqual([]);
+    },
+    PROBE_TIMEOUT_MS
+  );
+});
+
+/**
+ * The directories a package's Tailwind stylesheets scan for class names,
+ * repository-relative. Each `@source "<dir>"` names one, relative to the sheet;
+ * `@import "tailwindcss"` adds automatic detection, which starts where the
+ * build runs the CLI, the package root. `@source not` and `@source inline(…)`
+ * name no directory.
+ */
+function tailwindScans(directory, tracked) {
+  const sheets = [...tracked].filter(
+    file => file.startsWith(`${directory}/src/`) && file.endsWith(".css")
+  );
+  const scans = new Set();
+  for (const sheet of sheets) {
+    const text = readFileSync(join(REPO_ROOT, sheet), "utf8");
+    if (/@import\s+["']tailwindcss["']/.test(text)) scans.add(directory);
+    for (const [, dir] of text.matchAll(/@source\s+["']([^"']+)["']/g)) {
+      scans.add(relative(REPO_ROOT, resolve(REPO_ROOT, dirname(sheet), dir)));
+    }
+  }
+  return [...scans];
+}
+
+describe("every file a Tailwind build scans is in some build hash", () => {
+  // Tailwind reads class names out of every file under the directories it
+  // scans, tests and Markdown included, so a build that compiles it must hash
+  // all of them, or an edit to a class used only there replays a stale sheet.
+  // This is the input the TypeScript-program check above cannot see: the
+  // build reads these files through the Tailwind CLI, not through a compiler.
+  const tracked = trackedPaths();
+  const plan = parseTurboPlan(
+    execFileSync("pnpm", ["exec", "turbo", "run", "build", "--dry=json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+    "turbo run build --dry=json"
+  );
+  const builds = plan.tasks.filter(task => task.task === "build");
+  /** Each build's inputs, as repository paths. */
+  const hashedBy = new Map(
+    builds.map(task => [
+      task.package,
+      new Set(Object.keys(task.inputs).map(file => join(task.directory, file))),
+    ])
+  );
+  const withSheets = builds
+    .map(task => [task, tailwindScans(task.directory, tracked)])
+    .filter(([, scans]) => scans.length > 0);
+
+  it("finds the packages that compile Tailwind", () => {
+    // The control: a reader that found no sheet would assert nothing.
+    expect(withSheets.map(([task]) => task.package).sort()).toEqual(
+      expect.arrayContaining(["@nextlyhq/admin", "@nextlyhq/builder", "@nextlyhq/ui"])
+    );
+  });
+
+  it.each(withSheets.map(([task, scans]) => [task.package, task, scans]))(
+    "%s: hashes every tracked file its stylesheets scan",
+    (_name, task, scans) => {
+      // A file in another package's directory counts as covered when that
+      // package's build hashes it and this build depends on that build, the
+      // edge through which its hash moves this one.
+      const dependencyBuilds = (task.dependencies ?? [])
+        .filter(id => id.endsWith("#build"))
+        .map(id => hashedBy.get(id.split("#")[0]))
+        .filter(Boolean);
+      const own = hashedBy.get(task.package);
+      const scanned = [...tracked].filter(
+        file =>
+          !file.endsWith(".css") &&
+          scans.some(dir => file.startsWith(`${dir}/`))
+      );
+      expect(scanned.length, `no tracked file under ${scans.join(", ")}`).toBeGreaterThan(0);
+      const unhashed = scanned.filter(
+        file => !own.has(file) && !dependencyBuilds.some(inputs => inputs.has(file))
+      );
+      expect(
+        unhashed,
+        `${task.package} compiles Tailwind over ${String(unhashed.length)} file(s) no build hash covers, so editing a class in one replays a stale stylesheet:\n  ${unhashed.slice(0, 10).join("\n  ")}`
+      ).toEqual([]);
+    },
+    PROBE_TIMEOUT_MS
+  );
+});
+
+describe("what a build's compiler reads", () => {
+  it("follows a delegated script to the steps it runs", () => {
+    const scripts = { "build:js": "tsdown && tsdown --config tsdown.server-safe.config.ts" };
+    const command = expandedCommand(scripts, "pnpm build:js && node scripts/build-css.mjs");
+    expect(command).toBe(
+      "tsdown && tsdown --config tsdown.server-safe.config.ts && node scripts/build-css.mjs"
+    );
+    expect(tsdownConfigs(command)).toEqual(["tsdown.config.ts", "tsdown.server-safe.config.ts"]);
+    // `pnpm exec` names no script, and a tsc step is no tsdown build.
+    expect(expandedCommand(scripts, "pnpm exec tsc --noEmit")).toBe("pnpm exec tsc --noEmit");
+    expect(tsdownConfigs("tsc --noEmit -p tsconfig.tests.json")).toEqual([]);
+  });
+
+  it(
+    "reads a tsdown build from its entries, not from its whole tsconfig",
+    () => {
+      // The control for the narrowing: builder's tsconfig compiles its tests,
+      // and the build's own program reaches none of them but does reach its entry.
+      const directory = "packages/builder";
+      const isTest = file => /(?:\.test\.tsx?|\/__tests__\/)/.test(file);
+      expect(programFiles(directory, "tsconfig.json").some(isTest)).toBe(true);
+      const build = tsdownProgram(directory, ["tsdown.config.ts"]);
+      expect(build).toContain(`${directory}/src/shell.ts`);
+      expect(build.filter(isTest)).toEqual([]);
     },
     PROBE_TIMEOUT_MS
   );
@@ -424,6 +647,26 @@ describe("a package's hash covers the program it actually compiles", () => {
     expect(writesNoBuildInfo("tsc --noEmit")).toBe(false);
     expect(writesNoBuildInfo("tsc --noEmit --incremental false && tsc --noEmit -p tsconfig.tests.json")).toBe(false);
     expect(writesNoBuildInfo("next typegen")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental")).toBe(false);
+    expect(writesNoBuildInfo("tsc --noEmit --incremental false --incremental true")).toBe(false);
+    expect(writesNoBuildInfo("tsc --incremental --noEmit --incremental false")).toBe(true);
+  });
+});
+
+describe("the runner's platform is hashed", () => {
+  // The shared remote cache serves Linux, macOS and Windows jobs. A task
+  // hashed without the platform would let a Linux output skip the Windows
+  // job that exists to catch what differs there.
+  it("gives the same task a different hash on another operating system or architecture", () => {
+    const hashOf = (os, arch) => {
+      const plan = dryRun({ ...process.env, RUNNER_OS: os, RUNNER_ARCH: arch });
+      return plan.tasks.find(task => task.taskId === "nextly#check-types")?.hash;
+    };
+    const linux = hashOf("Linux", "X64");
+    expect(linux).toBeTruthy();
+    expect(hashOf("Windows", "X64")).not.toBe(linux);
+    expect(hashOf("Linux", "ARM64")).not.toBe(linux);
+    expect(hashOf("Linux", "X64")).toBe(linux);
   });
 });
 
@@ -438,5 +681,68 @@ describe("the shared TypeScript config is hashed", () => {
   it("counts packages/tsconfig among the global dependencies", () => {
     const globalFiles = Object.keys(dryRun().globalCacheInputs.files);
     expect(globalFiles).toContain("packages/tsconfig/base.json");
+  });
+});
+
+describe("a root script in the global inputs brings its imports with it", () => {
+  // The global inputs name root scripts one by one, because packages read only
+  // a few of the ~200. A listed script that imports another root script makes
+  // that one an input as well: `create-nextly-app`'s build loads
+  // `agent-skills.mjs`, which imports `agent-instructions.mjs`, so an edit to
+  // the latter changes the build while, unlisted, it leaves the hash unmoved.
+  // Every string literal in the script that names an existing file beside it
+  // counts, not only `import`/`require` specifiers: `dev-doctor.mjs` loads
+  // `cli-entry.mjs` through `import(pathToFileURL(path.join(HERE,
+  // "cli-entry.mjs")).href)`, a path built at run time that no specifier
+  // pattern sees. Read from the parsed source, so a file named in a comment
+  // is no edge, and erring only toward listing a file that is merely named.
+  // Running the scripts to record what they load is no option: they act on
+  // the machine when run.
+  const EXTENSIONS = ["", ".mjs", ".js", ".ts", ".cjs"];
+
+  function namedFile(from, text) {
+    const base = normalize(join(dirname(from), text));
+    return EXTENSIONS.map(ext => base + ext).find(candidate => {
+      const path = join(REPO_ROOT, candidate);
+      return existsSync(path) && statSync(path).isFile();
+    });
+  }
+
+  /**
+   * The text of every string literal in the file, from its syntax tree: quoted strings and
+   * templates with no substitutions, which are as statically known.
+   */
+  function stringLiterals(file) {
+    const texts = [];
+    walk(parseSource(readFileSync(join(REPO_ROOT, file), "utf8"), file).program, node => {
+      const text = literalText(node);
+      if (text !== null) texts.push(text);
+    });
+    return texts;
+  }
+
+  function rootScriptImports(file) {
+    const targets = stringLiterals(file).map(text => namedFile(file, text));
+    return [...new Set(targets.filter(target => target?.startsWith("scripts/") && target !== file))];
+  }
+
+  it("follows a script loaded through a path built at run time, and ignores one named in a comment", () => {
+    // `dev-doctor.mjs` builds the path to `cli-entry.mjs`, and
+    // `pnpm-invocation.mjs` names `verify-merge.mjs` only in its comments.
+    expect(rootScriptImports("scripts/dev-doctor.mjs")).toContain("scripts/cli-entry.mjs");
+    expect(rootScriptImports("scripts/pnpm-invocation.mjs")).not.toContain("scripts/verify-merge.mjs");
+  });
+
+  it("lists every root script a listed one imports", () => {
+    const globalFiles = new Set(Object.keys(dryRun().globalCacheInputs.files));
+    const listed = [...globalFiles].filter(file => file.startsWith("scripts/"));
+    // Guards the guard: with no root script listed there is nothing to follow.
+    expect(listed.length).toBeGreaterThan(0);
+    const missing = listed.flatMap(file =>
+      rootScriptImports(file)
+        .filter(target => !globalFiles.has(target))
+        .map(target => `${file} imports ${target}`)
+    );
+    expect(missing).toEqual([]);
   });
 });

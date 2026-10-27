@@ -148,7 +148,8 @@ export async function runReset(): Promise<void> {
     }
     await wipeDbMysql(databaseUrl);
   } else {
-    throw new Error(`Unsupported DB_DIALECT: ${dialect}`);
+    // `dialect` is `never` here, so it is spelled out for the message.
+    throw new Error(`Unsupported DB_DIALECT: ${String(dialect)}`);
   }
 
   // No explicit schema re-creation step. Loading the framework via

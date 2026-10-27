@@ -7,7 +7,7 @@
  *
  * @module blocks/list
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -121,7 +121,7 @@ const LIST_BASE_STYLES = {
   },
 } as const;
 
-export const list = defineBlock<ListProps, PageContext>({
+export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
   name: "core/list",
   version: 1,
   description:

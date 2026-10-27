@@ -15,7 +15,7 @@
  * - Hook errors propagate correctly
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
@@ -38,6 +38,13 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
@@ -248,7 +255,10 @@ describe("CollectionEntryService — Hook Contracts", () => {
         return undefined;
       });
 
-      await service.createEntry({ collectionName: "posts" }, { title: "Test" });
+      await service.createEntry(
+        { overrideAccess: true, collectionName: "posts" },
+        { title: "Test" }
+      );
 
       expect(callOrder[0]).toBe("beforeOperation");
       expect(callOrder[1]).toBe("beforeCreate");
@@ -259,7 +269,10 @@ describe("CollectionEntryService — Hook Contracts", () => {
     it("should pass 'create' as operation type", async () => {
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
-      await service.createEntry({ collectionName: "posts" }, { title: "Test" });
+      await service.createEntry(
+        { overrideAccess: true, collectionName: "posts" },
+        { title: "Test" }
+      );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -272,7 +285,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Test", status: "draft" }
       );
 
@@ -299,7 +312,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Original" }
       );
 
@@ -326,7 +339,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       const result = await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Original" }
       );
 
@@ -376,7 +389,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 
@@ -389,7 +402,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 
@@ -421,6 +434,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -434,6 +448,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -451,6 +466,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       selectData.rows = [entry];
 
       await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -494,7 +510,10 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
-      await svc.createEntry({ collectionName: "posts" }, { title: "Test" });
+      await svc.createEntry(
+        { overrideAccess: true, collectionName: "posts" },
+        { title: "Test" }
+      );
 
       // The service should extract hooks and pass them to StoredHookExecutor
       // Verify collection was fetched
@@ -530,7 +549,10 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
-      await svc.createEntry({ collectionName: "posts" }, { title: "Test" });
+      await svc.createEntry(
+        { overrideAccess: true, collectionName: "posts" },
+        { title: "Test" }
+      );
 
       expect(cs.getCollection).toHaveBeenCalledWith("posts");
     });
@@ -557,7 +579,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       // Should not error with empty hooks
       const result = await svc.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Test" }
       );
 
@@ -574,7 +596,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       );
 
       const result = await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Test" }
       );
 
@@ -591,7 +613,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       const result = await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Test" }
       );
 
@@ -609,6 +631,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       const result = await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -627,7 +650,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
       });
 
       const result = await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 

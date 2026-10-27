@@ -19,6 +19,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useId, useState } from "react";
 
 import { Code } from "@admin/components/icons";
@@ -52,7 +53,7 @@ export function CreateEmailDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}) {
+}): JSX.Element {
   const nameId = useId();
   const copyId = useId();
   const [name, setName] = useState("");

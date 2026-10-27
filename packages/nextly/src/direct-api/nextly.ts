@@ -52,7 +52,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
 import { container } from "../di/container";
-import { isServicesRegistered } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -83,7 +83,7 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-na
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
-import { runAsCaller } from "./namespaces/helpers";
+import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
@@ -213,6 +213,8 @@ import type {
   RevokeApiKeyArgs,
   SendEmailArgs,
   SendTemplateEmailArgs,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
   SetDefaultProviderArgs,
   SetRolePermissionsArgs,
   SubmitFormArgs,
@@ -300,8 +302,10 @@ export class Nextly implements NextlyContext {
 
     this.users = createUsersNamespace(this);
     this.media = createMediaNamespace(this);
-    this.forms = createFormsNamespace(this);
-    this.fieldGroups = createFieldGroupsNamespace(this);
+    // One language list per call, as the collection and Single methods have through
+    // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    this.forms = withLanguagesPinned(createFormsNamespace(this));
+    this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
     this.email = createEmailNamespace(this);
     this.emailProviders = createEmailProvidersNamespace(this);
     this.emailTemplates = createEmailTemplatesNamespace(this);
@@ -1022,6 +1026,9 @@ export const nextly = {
     send: (args: SendEmailArgs) => requireNextly().email.send(args),
     sendWithTemplate: (args: SendTemplateEmailArgs) =>
       requireNextly().email.sendWithTemplate(args),
+    queue: (args: QueueEmailArgs) => requireNextly().email.queue(args),
+    queueWithTemplate: (args: QueueTemplateEmailArgs) =>
+      requireNextly().email.queueWithTemplate(args),
   },
 
   emailProviders: {

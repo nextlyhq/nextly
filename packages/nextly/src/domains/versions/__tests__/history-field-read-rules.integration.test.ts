@@ -85,11 +85,11 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
         access: { read: () => true, update: () => true, create: () => true },
         fields: [
           text({ name: "title" }),
-          // Readable with the rule-facing `posts:read` permission only.
+          // Readable with the `read-posts` permission only.
           text({
             name: "keyed",
             access: {
-              read: ({ permissions }) => permissions.includes("posts:read"),
+              read: ({ permissions }) => permissions.includes("read-posts"),
             },
           }),
           fieldGroup({ name: "banner", component: "banner" }),

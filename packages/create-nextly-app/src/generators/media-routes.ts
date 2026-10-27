@@ -22,17 +22,22 @@ import { ADMIN_API_FOLDER } from "./routes";
  *   lists and deletes media, every request checked against the signed-in
  *   caller's media permissions (`requireAuth: true` in the template);
  * - the public media route, `api/media/...`, which serves reads only;
+ * - the uploads route, `uploads/...`, which serves files stored on local disk
+ *   that `next start` has no static file for, those uploaded since it started;
  * - the health check.
  *
  * `segment` is the URL each route answers. A handler already answering it
  * means the app has its own route there, which is left alone. Next.js leaves
  * route groups `(name)` and slots `@name` out of the URL wherever they sit,
  * and never routes a private folder `_name`, so the folders that answer a URL
- * are found by that rule rather than by name. `catchAll` marks the optional
+ * are found by that rule rather than by name. `catchAll` marks the
  * catch-alls, which serve everything below their URL too: a child folder
- * holding a handler is weighed by {@link childFinding}.
+ * holding a handler is weighed by {@link childFinding}. The uploads route is
+ * a required catch-all rather than an optional one, and is weighed the same
+ * way: a handler at `/uploads` itself, or any route below it, is the app's
+ * own and leaves it unwritten.
  *
- * `role` says what Nextly's route does there, for a media route the app
+ * `role` says what Nextly's route does there, for a media or uploads route the app
  * already has something in place of; the report then carries the route to
  * add by hand.
  */
@@ -61,6 +66,26 @@ const ROUTES = [
     role: null,
   },
 ] as const;
+
+/**
+ * The uploads route, written by {@link generateUploadsRoute} beside the media
+ * routes. Apart from them because it is a different concern: it serves the
+ * files local storage keeps, where they serve the media library's records.
+ */
+const UPLOADS_ROUTE = {
+  path: "uploads/[...path]/route.ts",
+  segment: "uploads",
+  catchAll: true,
+  importsConfig: true,
+  role: (file: string) =>
+    `Nextly's uploads route at ${file} serves files stored on local disk at /uploads, which a production server otherwise answers 404 for until it restarts`,
+} as const;
+
+/** One route this module writes, as {@link ROUTES} and {@link UPLOADS_ROUTE} spell them. */
+type RouteSpec = (typeof ROUTES)[number] | typeof UPLOADS_ROUTE;
+
+/** Every route the existing-app path writes, read from the templates together. */
+const ALL_ROUTES: readonly RouteSpec[] = [...ROUTES, UPLOADS_ROUTE];
 
 /**
  * The import that brings in the Nextly config: the template spells it through
@@ -188,7 +213,7 @@ export async function readMediaRouteTemplates(
   templatesDir: string = resolveTemplatePath()
 ): Promise<MediaRouteTemplates> {
   const texts = new Map<string, string>();
-  for (const route of ROUTES) {
+  for (const route of ALL_ROUTES) {
     const relative = `base/src/app/${route.path}`;
     let text: string;
     try {
@@ -229,7 +254,31 @@ export async function generateMediaRoutes(
   projectInfo: ProjectInfo,
   templates: MediaRouteTemplates
 ): Promise<GeneratedFiles> {
-  const prepared = ROUTES.map(route =>
+  return writeRoutes(cwd, projectInfo, templates, ROUTES);
+}
+
+/**
+ * Write the uploads route into an existing app, by the same rules as
+ * {@link generateMediaRoutes}: never where the app already answers
+ * `/uploads`, never through a link, and under `pageExtensions` reported with
+ * its content rather than written.
+ */
+export async function generateUploadsRoute(
+  cwd: string,
+  projectInfo: ProjectInfo,
+  templates: MediaRouteTemplates
+): Promise<GeneratedFiles> {
+  return writeRoutes(cwd, projectInfo, templates, [UPLOADS_ROUTE]);
+}
+
+/** Write each of `routes` where nothing answers its URL, reporting the rest. */
+async function writeRoutes(
+  cwd: string,
+  projectInfo: ProjectInfo,
+  templates: MediaRouteTemplates,
+  routes: readonly RouteSpec[]
+): Promise<GeneratedFiles> {
+  const prepared = routes.map(route =>
     prepareRoute(cwd, projectInfo, templates, route)
   );
   const pages = await appPageExtensions(cwd);
@@ -273,7 +322,7 @@ function prepareRoute(
   cwd: string,
   projectInfo: ProjectInfo,
   templates: MediaRouteTemplates,
-  route: (typeof ROUTES)[number]
+  route: RouteSpec
 ): PreparedRoute {
   const text = templates.get(route.path);
   if (text === undefined) {

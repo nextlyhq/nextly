@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useEffect, useId, useState } from "react";
 
 import type { PreviewFit } from "@admin/components/shared/preview/previewFrameFit";
@@ -83,7 +84,7 @@ export function PreviewViewportControl({
   onRequestWidth,
   fit,
   viewports,
-}: PreviewViewportControlProps) {
+}: PreviewViewportControlProps): JSX.Element {
   const widthInputId = useId();
 
   /*

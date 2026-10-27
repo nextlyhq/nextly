@@ -96,6 +96,15 @@ describe("requireRouteVersionReadAccess", () => {
       "entry-1"
     );
 
+    // A history names one document: the gate is asked about that document,
+    // so a caller who may not read it is answered as if it were missing.
+    expect(requireRouteCollectionAccessSpy).toHaveBeenCalledWith(
+      expect.any(Request),
+      "read",
+      "posts",
+      expect.objectContaining({ namesOne: true })
+    );
+
     // Without status:"all" a draft reads as absent and history 404s — exactly
     // when an author needs it. routeAuthorized keeps a scoped API key from
     // being re-checked against its creator's stored roles.

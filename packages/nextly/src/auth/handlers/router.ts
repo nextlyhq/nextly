@@ -1,3 +1,4 @@
+import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import {
@@ -5,6 +6,7 @@ import {
   signInLimitUnavailable,
 } from "../../domains/limits/core-limit-outage";
 import type { LimitStore } from "../../domains/limits/limit-store";
+import { NextlyError } from "../../errors/nextly-error";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -603,19 +605,18 @@ async function checkAuthIpRateLimit(
     1,
     Math.ceil((result.resetAt - Date.now()) / 1000)
   );
-  const refused = new Response(
-    JSON.stringify({
-      error: {
-        code: "RATE_LIMIT_EXCEEDED",
-        message: "Too many auth requests from this IP. Please try again later.",
-        retryAfter,
-      },
+  // The one error body every refusal is answered with; the budget's state
+  // rides in its headers.
+  const refused = buildErrorResponse(
+    new NextlyError({
+      code: "RATE_LIMITED",
+      publicMessage:
+        "Too many auth requests from this IP. Please try again later.",
+      publicData: { retryAfterSeconds: retryAfter },
     }),
     {
-      status: 429,
+      requestId: readOrGenerateRequestId(request),
       headers: {
-        "content-type": "application/json",
-        "retry-after": String(retryAfter),
         "x-ratelimit-limit": String(limit),
         "x-ratelimit-remaining": "0",
         "x-ratelimit-reset": String(result.resetAt),

@@ -19,7 +19,10 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
-import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import {
+  errorFromServiceEnvelope,
+  recordServiceRefusal,
+} from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
@@ -922,7 +925,7 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1108,7 +1111,7 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -1279,18 +1282,7 @@ export class CollectionBulkService extends BaseService {
         // below already carries the scope, but this gate ran without it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message || "Access denied",
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE on the pooled connection
     // before the shared transaction, so each worker enforces the create-as-
@@ -1423,17 +1415,7 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE before looping the workers,
     // so each create-as-published is enforced without a per-row permission read.
@@ -1544,18 +1526,7 @@ export class CollectionBulkService extends BaseService {
         // it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
     // connection before the shared transaction, so each worker enforces its
@@ -1700,17 +1671,7 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
     // the workers, so each transition is enforced under the row lock without a
@@ -1804,18 +1765,7 @@ export class CollectionBulkService extends BaseService {
         operation: "delete",
         user: params.user,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
 
     // Every companion verdict the batch needs, resolved on the pool before the shared
     // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
@@ -1975,17 +1925,7 @@ export class CollectionBulkService extends BaseService {
         user: params.user,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
 
     // The shared batch loop. The intents and outbox signal it accumulates are
     // surfaced on the result for the CALLER to flush after ITS commit — this
@@ -2242,13 +2182,23 @@ export class CollectionBulkService extends BaseService {
  * the trusted read is, so every way in (the Direct API, a plugin's service
  * call, the REST bulk routes) is held to it.
  */
-async function assertCallerFilterReadable(params: {
-  collectionName: string;
-  where: WhereFilter;
-  overrideAccess?: boolean;
-  user?: UserContext;
-  authenticatedScope?: AuthenticatedScope;
-}): Promise<void> {
+async function assertCallerFilterReadable(
+  params: {
+    collectionName: string;
+    where: WhereFilter;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  queryService: CollectionQueryService
+): Promise<void> {
+  // A reserved condition on another table is not a field, so the field check
+  // below never sees it. `_pendingChange` and `_inRelease` select rows by what
+  // drafts and releases hold, which a caller who may not read them must not
+  // learn from which rows a write reached, so they are judged here by the
+  // decisions a read makes: the collection's read gate, then the releases'.
+  // A new reserved key that discloses another table needs its judgement there.
+  await queryService.assertWorkflowFilterReadable(params);
   await assertFilterableFields(
     "collection",
     params.collectionName,
@@ -2262,4 +2212,26 @@ async function assertCallerFilterReadable(params: {
       },
     }
   );
+}
+
+/**
+ * The result of a batch the collection gate refused as a whole: every item
+ * failed, each with the refusal's words. The refusal reaches its caller here,
+ * folded into the batch, so it is recorded here, as one converted to an error
+ * is where it is converted.
+ */
+function everyItemRefused(
+  refused: CollectionServiceResult<BatchOperationResult>,
+  count: number
+): BatchOperationResult {
+  recordServiceRefusal(refused);
+  return {
+    successful: 0,
+    failed: count,
+    errors: Array.from({ length: count }, (_, index) => ({
+      index,
+      error: refused.message,
+    })),
+    ids: [],
+  };
 }

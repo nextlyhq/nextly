@@ -191,7 +191,7 @@ export function BreakpointDialog({
   onOpenChange,
   value,
   onSave,
-}: BreakpointDialogProps) {
+}: BreakpointDialogProps): React.JSX.Element {
   const fieldId = React.useId();
   const [draft, setDraft] = React.useState<Record<BreakpointAxis, DraftRow[]>>(
     () => ({

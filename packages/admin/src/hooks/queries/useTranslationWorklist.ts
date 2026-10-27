@@ -8,6 +8,7 @@
  * @module hooks/queries/useTranslationWorklist
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -27,7 +28,10 @@ export function useTranslationWorklist({
   locale,
   state,
   limit = 50,
-}: TranslationWorklistParams) {
+}: TranslationWorklistParams): UseQueryResult<
+  TranslationWorklistResponse,
+  Error
+> {
   return useQuery<TranslationWorklistResponse, Error>({
     queryKey: ["translations", "worklist", locale, state, limit],
     queryFn: () =>

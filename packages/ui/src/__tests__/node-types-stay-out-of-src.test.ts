@@ -22,7 +22,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-import ts from "typescript";
+
+import { listedFiles, showConfig } from "../../../../scripts/tsc-cli.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = resolve(here, "../..");
@@ -43,8 +44,8 @@ const compilerOptions = (config: Record<string, unknown>) =>
 /**
  * The node type files a config's program actually loads.
  *
- * Built through the compiler rather than by spawning `tsc --listFiles`, which answers the same
- * question a second or two slower and would put a subprocess in a unit suite.
+ * Asked of the compiler's command line (`tsc --listFilesOnly`), which answers the same on every
+ * TypeScript version, where its JavaScript API does not.
  *
  * The directory separator in the pattern is load-bearing. pnpm encodes peer dependencies into its
  * directory names, so a path like `vitest@4.1.10_@types+node@20.19.17_...` is a perfectly ordinary
@@ -67,20 +68,13 @@ const PROGRAM_TIMEOUT_MS = 60_000;
 
 function nodeTypeFilesIn(configName: string): string[] {
   const configPath = resolve(pkgRoot, configName);
-  const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
-  // A config that could not be read would otherwise resolve to an empty program, and an empty
-  // program loads no node types — the guard would pass by failing to ask the question.
-  expect(error, `${configName} could not be read`).toBeUndefined();
-  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, pkgRoot);
+  // A config that could not be read throws rather than answering with an empty program, and one
+  // that matched no file loads no node types either — the guard would pass by failing to ask.
   expect(
-    parsed.fileNames.length,
+    showConfig(configPath).files,
     `${configName} matched no files`
-  ).toBeGreaterThan(0);
-  const program = ts.createProgram(parsed.fileNames, parsed.options);
-  return program
-    .getSourceFiles()
-    .map(file => file.fileName)
-    .filter(name => name.includes("/@types/node/"));
+  ).not.toHaveLength(0);
+  return listedFiles(configPath).filter(name => name.includes("/@types/node/"));
 }
 
 describe("node types stay out of the shipped surface", () => {

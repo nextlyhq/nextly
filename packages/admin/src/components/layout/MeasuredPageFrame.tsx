@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
 import { CONTENT_PAGE_MEASURE } from "./content-measure";
@@ -82,7 +82,7 @@ export function MeasuredPageFrame({
   breadcrumbs,
   contentCarriesMeasure = false,
   children,
-}: MeasuredPageFrameProps) {
+}: MeasuredPageFrameProps): JSX.Element {
   const framed = !useSuppressedChrome().has("pageFrame");
 
   // One tree in both states, differing only in props.

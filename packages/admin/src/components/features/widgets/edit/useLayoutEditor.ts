@@ -18,13 +18,17 @@
  * @module components/features/widgets/edit/useLayoutEditor
  */
 
-import { MAX_PLACEMENTS } from "nextly/config";
+import {
+  MAX_PLACEMENTS,
+  UNSTATED_WIDGET_SIZE,
+  type WidgetSizeBounds,
+} from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type {
+  WidgetLayoutFacts,
   WidgetPlacement,
-  WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
 
 import {
@@ -50,8 +54,6 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
    * are not in the draft, and ones that allow several cards.
    */
   available: string[];
-  /** The widths each widget allows, as the server answered them. */
-  factsFor: (widgetId: string) => WidgetWidthFacts | undefined;
   /**
    * Whether the list already holds as many cards as a write may carry.
    *
@@ -85,11 +87,11 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
    */
   reload: () => void;
   /**
-   * Append a new card of this widget, at its default width. Answers the new card's id, so it
+   * Append a new card of this widget, at its default size. Answers the new card's id, so it
    * can be highlighted and focused, or `null` when nothing was added: not customising, or the
    * dashboard already holds as many cards as it can.
    */
-  add: (widgetId: string) => string | null;
+  add: (widgetId: string, settings?: Record<string, unknown>) => string | null;
 }
 
 /**
@@ -124,13 +126,13 @@ export interface LayoutDraft {
 function offerable(
   draft: readonly WidgetPlacement[],
   served: readonly string[],
-  widgets: Readonly<Record<string, WidgetWidthFacts>>
+  widgets: Readonly<Record<string, WidgetLayoutFacts>>
 ): string[] {
   const placed = new Set(draft.map(placement => placement.widgetId));
   return [...new Set([...served, ...Object.keys(widgets)])].filter(widgetId =>
     Object.hasOwn(widgets, widgetId)
       ? widgets[widgetId].allowsSeveral || !placed.has(widgetId)
-      : // A served id the width map does not describe is still the server's
+      : // A served id the facts do not describe is still the server's
         // answer to "may add": kept while unplaced, as it always was.
         !placed.has(widgetId)
   );
@@ -138,7 +140,12 @@ function offerable(
 
 export function useLayoutEditor(
   layout: UseDashboardLayoutResult,
-  isDrawn: IsDrawn
+  isDrawn: IsDrawn,
+  /**
+   * A widget's size bounds, from its declaration: where a new card starts, and
+   * what a resize is held to. `undefined` for a widget this admin cannot draw.
+   */
+  boundsFor: (widgetId: string) => WidgetSizeBounds | undefined
 ): LayoutEditor {
   // `null` means "not customising" and a draft means "customising", so the two
   // facts cannot disagree the way a separate boolean and an array would.
@@ -150,14 +157,8 @@ export function useLayoutEditor(
   );
   const widgets = useMemo(() => layout.layout?.widgets ?? {}, [layout.layout]);
 
-  const factsFor = useCallback(
-    (widgetId: string) =>
-      Object.hasOwn(widgets, widgetId) ? widgets[widgetId] : undefined,
-    [widgets]
-  );
-
   const lifecycle = useLayoutLifecycle(layout, draft, setDraft);
-  const mutations = usePlacementMutations(setDraft, isDrawn, factsFor);
+  const mutations = usePlacementMutations(setDraft, isDrawn, boundsFor);
 
   const reload = useCallback(() => {
     // The draft goes first: it is the thing the reader was warned they would
@@ -170,27 +171,33 @@ export function useLayoutEditor(
   }, [layout]);
 
   const add = useCallback(
-    (widgetId: string): string | null => {
+    (widgetId: string, settings?: Record<string, unknown>): string | null => {
       // Answered from the draft as drawn, so the caller learns the id before the list moves
       // on; `addPlacement` refuses the same cases again inside the update.
       if (draft === null || draft.placements.length >= MAX_PLACEMENTS) {
         return null;
       }
       const id = addedPlacementId(draft.placements, widgetId);
-      // A widget the read did not describe starts full, which is how the server reads a
-      // widget that says nothing.
-      const width = factsFor(widgetId)?.defaultWidth ?? "full";
+      // A widget this admin has no declaration for starts at the size core
+      // gives a widget stating none.
+      const size = boundsFor(widgetId)?.default ?? UNSTATED_WIDGET_SIZE.default;
       setDraft(current =>
         current
           ? {
               ...current,
-              placements: addPlacement(current.placements, widgetId, width, id),
+              placements: addPlacement(
+                current.placements,
+                widgetId,
+                size,
+                id,
+                settings
+              ),
             }
           : current
       );
       return id;
     },
-    [draft, factsFor]
+    [draft, boundsFor]
   );
 
   const placements = draft?.placements ?? server;
@@ -206,7 +213,6 @@ export function useLayoutEditor(
     isEditing: draft !== null,
     placements,
     available,
-    factsFor,
     atCapacity: placements.length >= MAX_PLACEMENTS,
     // A staged reset is a change even when the default happens to match the
     // reader's own list: saving it stops them following their own row.

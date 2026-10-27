@@ -16,7 +16,11 @@
  * so the caller falls through to its public default.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import { clearRuleAnswerNotices } from "../../../auth/access/rule-answer-log";
+import { consoleLogger } from "../../../shared/types";
 
 import { RBACAccessControlService } from "./rbac-access-control-service";
 
@@ -109,5 +113,132 @@ describe("code-defined access for a caller with no session", () => {
         },
       })
     ).resolves.toBe(false);
+  });
+});
+
+describe("a function rule's answer for a caller with no session", () => {
+  beforeEach(() => {
+    clearRuleAnswerNotices();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const answerFor = (answer: unknown) =>
+    service().checkAnonymousCodeAccess({
+      operation: "read",
+      resource: "forms",
+      codeAccess: { read: () => answer as boolean },
+    });
+
+  it("refuses on any answer but true: null, undefined and a truthy value alike", async () => {
+    // Before, any answer but `false` let a visitor through, and `undefined`
+    // read as "no rule", so the public default admitted them.
+    for (const answer of [null, undefined, "yes", 1]) {
+      await expect(answerFor(answer)).resolves.toBe(false);
+    }
+    // The control: only `true` allows.
+    await expect(answerFor(true)).resolves.toBe(true);
+  });
+
+  it("names each newly refused rule once, and not one that refused before", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    await answerFor(null);
+    await answerFor(null);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain(
+      'The read rule of "forms" answered null, so a visitor is now refused'
+    );
+    // `false` refused a visitor before too, and `true` still allows.
+    await answerFor(false);
+    await answerFor(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a rule's answer by its kind only: no value is copied, and none can fail the check", async () => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    // A rule that hands back something it should not have: the notice says
+    // what kind of answer it was, never what was in it.
+    await expect(answerFor("Bearer secret-token")).resolves.toBe(false);
+    expect(String(warn.mock.calls[0][0])).toContain("answered a string");
+    expect(String(warn.mock.calls[0][0])).not.toContain("secret-token");
+    // An answer with no JSON form, or one that refers to itself, still
+    // refuses rather than failing the request.
+    clearRuleAnswerNotices();
+    await expect(answerFor(BigInt(1))).resolves.toBe(false);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    clearRuleAnswerNotices();
+    await expect(answerFor(cyclic)).resolves.toBe(false);
+    // Nor an answer that throws on any inspection, such as a revoked proxy:
+    // awaiting it already reads `then` and throws, which refuses as a rule
+    // that threw, and the notice reads nothing of it either.
+    const revoked = Proxy.revocable([], {});
+    revoked.revoke();
+    clearRuleAnswerNotices();
+    await expect(answerFor(revoked.proxy)).resolves.toBe(false);
+  });
+});
+
+describe("a rule that answers with a filter, for a caller with no session", () => {
+  /** A read rule answering `filter`, which the rule type does not allow yet. */
+  const answering = (filter: unknown) => () => filter as boolean;
+
+  beforeEach(() => {
+    clearRuleFilterReports();
+    clearRuleAnswerNotices();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("refuses a well-formed filter, which this check does not apply", async () => {
+    const reported = vi
+      .spyOn(consoleLogger, "error")
+      .mockImplementation(() => {});
+    const noticed = vi
+      .spyOn(consoleLogger, "warn")
+      .mockImplementation(() => {});
+    await expect(
+      service().checkAnonymousCodeAccess({
+        operation: "read",
+        resource: "posts",
+        codeAccess: { read: answering({ slug: { equals: "probe" } }) },
+      })
+    ).resolves.toBe(false);
+    // A filter where one belongs is no misuse.
+    expect(reported).not.toHaveBeenCalled();
+    // The notice names it a filter, and does not tell its rule to answer only
+    // true or false.
+    expect(noticed).toHaveBeenCalledTimes(1);
+    const notice = String(noticed.mock.calls[0]?.[0]);
+    expect(notice).toContain('The read rule of "posts" answered a filter');
+    expect(notice).toContain("does not apply a rule's filter");
+    expect(notice).not.toContain("false to refuse");
+  });
+
+  it("refuses a filter that is not well formed, and reports it as that once", async () => {
+    const reported = vi
+      .spyOn(consoleLogger, "error")
+      .mockImplementation(() => {});
+    const noticed = vi
+      .spyOn(consoleLogger, "warn")
+      .mockImplementation(() => {});
+    const ask = () =>
+      service().checkAnonymousCodeAccess({
+        operation: "read",
+        resource: "posts",
+        codeAccess: { read: answering({ slug: { in: [] } }) },
+      });
+
+    await expect(ask()).resolves.toBe(false);
+    await expect(ask()).resolves.toBe(false);
+
+    expect(reported).toHaveBeenCalledTimes(1);
+    expect(String(reported.mock.calls[0]?.[0])).toContain(
+      'read rule of "posts"'
+    );
+    // Reported as a malformed filter, not also as a truthy answer.
+    expect(noticed).not.toHaveBeenCalled();
   });
 });

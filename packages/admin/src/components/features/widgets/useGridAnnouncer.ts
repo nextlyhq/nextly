@@ -37,8 +37,8 @@ export interface GridAnnouncer {
     to: number,
     count: number
   ) => void;
-  /** Say the width a card was just set to, by its name ("Half width"). */
-  announceWidth: (title: string, widthName: string) => void;
+  /** Say the size a card was just set to, by its name ("6 columns by 4 rows"). */
+  announceSize: (title: string, sizeName: string) => void;
   /**
    * Say that a card was taken off the dashboard.
    *
@@ -74,12 +74,16 @@ export interface GridAnnouncer {
   /**
    * Say that one of a card's settings changed outside customise mode, once the card shows it:
    * "Activity: Date range set to Last 7 days." The card redraws in place, so without this a
-   * screen reader hears nothing of a change that has already been saved.
+   * screen reader hears nothing of a change that has already been saved. When the card's new
+   * answer was refused (`shown` false) the setting is still saved, and is said as saved with the
+   * card still showing its earlier data: "set to" alone would describe a card not on screen, and
+   * silence would leave the reader unable to tell whether the save worked.
    */
   announceSettingChanged: (
     title: string,
     setting: string,
-    value: string
+    value: string,
+    shown: boolean
   ) => void;
   /**
    * Say one step of a drag: a card picked up, the place it would land, a cancel. The sentence
@@ -159,8 +163,8 @@ export function useGridAnnouncer(
     [say]
   );
 
-  const announceWidth = useCallback(
-    (title: string, widthName: string) => say(`${title} set to ${widthName}.`),
+  const announceSize = useCallback(
+    (title: string, sizeName: string) => say(`${title} set to ${sizeName}.`),
     [say]
   );
 
@@ -201,8 +205,12 @@ export function useGridAnnouncer(
   );
 
   const announceSettingChanged = useCallback(
-    (title: string, setting: string, value: string) =>
-      say(`${title}: ${setting} set to ${value}.`),
+    (title: string, setting: string, value: string, shown: boolean) =>
+      say(
+        shown
+          ? `${title}: ${setting} set to ${value}.`
+          : `${title}: ${setting} saved as ${value}, but the card could not load it and still shows the earlier data.`
+      ),
     [say]
   );
 
@@ -210,7 +218,7 @@ export function useGridAnnouncer(
     announcement,
     announceSettingChanged,
     announceMoved,
-    announceWidth,
+    announceSize,
     announceRemoved,
     announceRestored,
     announceReset,

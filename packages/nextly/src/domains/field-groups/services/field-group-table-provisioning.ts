@@ -8,13 +8,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import {
-  getConfigFromDI,
-  getSchemaRegistryFromDI,
-} from "../../../dispatcher/helpers/di";
+import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { consoleLogger } from "../../../shared/types";
+import { appLocalization } from "../../i18n/configured-locales";
+import { refuseTranslatedUniqueThatCannotHold } from "../../i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   buildCompanionTransitionStatements,
@@ -169,7 +168,22 @@ export async function reconcileComponentCompanion(args: {
   if (!wasLocalized && !localized) return false;
 
   const dialect = adapter.dialect;
-  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+  const defaultLocale = appLocalization()?.defaultLocale ?? "en";
+
+  // A translated field made unique is refused before any DDL where the rule cannot hold: on a
+  // server that cannot key its index, or where a language already holds a value twice. Asked here,
+  // where every field-group path that changes the companion arrives, so the service's own update
+  // is refused as the schema dialog's is, before a statement runs (MySQL commits each one).
+  await refuseTranslatedUniqueThatCannotHold({
+    adapter,
+    entity: slug,
+    tableName,
+    builtBy: "fieldGroup",
+    oldFields,
+    newFields,
+    wasLocalized,
+    isLocalized: localized,
+  });
 
   const companionExists = await adapter.tableExists(`${tableName}_locales`);
   const plan = buildCompanionTransitionStatements({

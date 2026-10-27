@@ -16,7 +16,7 @@
  * @module domains/widgets/declaration/setting-builders
  */
 
-import type { WidgetQuery } from "../query";
+import type { RelativeSpan, WidgetQuery } from "../query";
 import { MAX_WIDGET_ROWS } from "../query-limits";
 
 /**
@@ -119,8 +119,21 @@ export type DependentSettings<S> = {
   >;
 };
 
-/** The date ranges a card can show. */
-export const DATE_RANGES = ["7d", "30d", "90d", "12m"] as const;
+/**
+ * The date ranges a card can show: each a span a query reaches back by, so a
+ * card's range becomes its query's `since` through the one vocabulary the
+ * server resolves. A range outside that vocabulary fails to compile here.
+ *
+ * Each is whole UTC days or months, the current one included: "Last 30 days"
+ * is the thirty UTC days ending today, so for a reader east of UTC the range
+ * starts during their morning, as a daily chart's bars do.
+ */
+export const DATE_RANGES = [
+  "7d",
+  "30d",
+  "90d",
+  "12m",
+] as const satisfies readonly RelativeSpan[];
 export type DateRange = (typeof DATE_RANGES)[number];
 
 /** How a count over time is drawn. */
@@ -227,6 +240,14 @@ export const settings = {
   /** A setting of the widget's own: a line of text. */
   text: (options: { default: string }) =>
     declare<string, "text">("text", options),
+  /**
+   * A setting of the widget's own: text over several lines, at most
+   * `maxLength` characters when given, counted in code points.
+   *
+   * @experimental The shape may still change.
+   */
+  textarea: (options: { default?: string; maxLength?: number } = {}) =>
+    declare<string, "textarea">("textarea", options),
   /** A setting of the widget's own: a number. */
   number: (options: { default: number; min?: number; max?: number }) =>
     declare<number, "number">("number", options),

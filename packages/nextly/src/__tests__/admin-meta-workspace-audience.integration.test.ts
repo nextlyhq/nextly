@@ -20,6 +20,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../config";
+import type { WidgetSetting } from "../domains/widgets/settings";
 import { clearWidgets, registerWidget } from "../domains/widgets/registry";
 import { definePlugin } from "../plugins/plugin-context";
 import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
@@ -41,6 +42,19 @@ const events = defineCollection({
 });
 
 /** The prose the gated cards carry -- what must never reach the wrong reader. */
+/**
+ * A Collection setting defaulting to events. Typed through `unknown` for the
+ * contribution: the plugin surface's setting type does not list the content
+ * kinds yet, while the boot's own validation accepts them, as the
+ * registration channel's type does.
+ */
+const PINNED_TO_EVENTS = {
+  name: "source",
+  label: "Collection",
+  type: "collection",
+  defaultValue: EVENTS,
+} as unknown as WidgetSetting;
+
 const RUNBOOK = "## Runbook\n\nRotate the keys before a release.";
 const EDITORS_ONLY = "Editors: the queue drains at midnight.";
 /** Prose a LATER plugin attaches to an id the first plugin already claimed. */
@@ -60,7 +74,7 @@ const contributor = definePlugin({
           id: "notes/welcome",
           title: "Welcome",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           content: "Welcome to the notes desk.",
         },
         // Gated on a grant the read-only key HOLDS.
@@ -68,7 +82,7 @@ const contributor = definePlugin({
           id: "notes/runbook",
           title: "Runbook",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `read-${NOTES}`,
           content: RUNBOOK,
         },
@@ -77,7 +91,7 @@ const contributor = definePlugin({
           id: "notes/editors",
           title: "For editors",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: EDITORS_ONLY,
         },
@@ -86,7 +100,7 @@ const contributor = definePlugin({
           id: "notes/shortcuts",
           title: "Shortcuts",
           archetype: "actions",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           actions: [
             { label: "All notes", href: "/admin/collections/notes" },
             {
@@ -95,6 +109,16 @@ const contributor = definePlugin({
               requiredPermission: `publish-${NOTES}`,
             },
           ],
+        },
+        // Its Collection setting defaults to events, which a key holding only
+        // read on notes may not read.
+        {
+          id: "notes/pinned",
+          title: "Pinned",
+          archetype: "metric",
+          size: { default: { w: 3, h: 2 } },
+          query: { source: `collection:${NOTES}`, op: "count" },
+          settings: [PINNED_TO_EVENTS],
         },
       ],
     },
@@ -118,7 +142,7 @@ const impostor = definePlugin({
           id: "notes/welcome",
           title: "Welcome (again)",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: IMPOSTOR,
         },
@@ -130,6 +154,7 @@ const impostor = definePlugin({
 interface WorkspaceDeclaration {
   id: string;
   content?: string;
+  settings?: { name: string; defaultValue?: unknown }[];
   actions?: { label: string; requiredPermission?: string }[];
 }
 
@@ -202,7 +227,7 @@ beforeEach(async () => {
       id: "app/ops-notes",
       title: "Ops notes",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       requiredPermission: `create-${NOTES}`,
       content: EDITORS_ONLY,
     },
@@ -213,7 +238,7 @@ beforeEach(async () => {
       id: "app/board",
       title: "Board",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       content: "The board meets on Mondays.",
     },
     { source: "@test/app" }
@@ -223,7 +248,7 @@ beforeEach(async () => {
       id: "app/tools",
       title: "Tools",
       archetype: "actions",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [
         { label: "Search", href: "/admin/search" },
         {
@@ -348,6 +373,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       "notes/welcome",
       "notes/runbook",
       "notes/shortcuts",
+      "notes/pinned",
     ]);
     expect(ids(body.widgets)).toEqual(
       expect.arrayContaining([
@@ -405,7 +431,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         id: "notes/editors",
         title: "Editors (registered)",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: {
           source: `collection:${NOTES}`,
           op: "count",
@@ -432,6 +458,55 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     );
     expect(copies).toHaveLength(1);
     expect(copies[0]?.content).toBe(EDITORS_ONLY);
+  });
+
+  it("withholds a Collection setting's default naming a collection the reader may not read, on both channels", async () => {
+    registerWidget(
+      {
+        id: "app/pinned",
+        title: "Pinned",
+        archetype: "metric",
+        size: { default: { w: 3, h: 2 } },
+        query: { source: `collection:${NOTES}`, op: "count" },
+        settings: [
+          {
+            name: "source",
+            label: "Collection",
+            type: "collection",
+            defaultValue: EVENTS,
+          },
+        ],
+      },
+      { source: "@test/app" }
+    );
+    const defaults = (body: WorkspaceBody) =>
+      ["notes/pinned", "app/pinned"].map(
+        id =>
+          everyDeclaration(body)
+            .find(widget => widget.id === id)
+            ?.settings?.find(setting => setting.name === "source")?.defaultValue
+      );
+
+    // 🔴 The slug is a collection this key may not read: shipped as declared,
+    // the payload names it whether or not the reader holds a card.
+    const lacking = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    expect(ids(everyDeclaration(lacking))).toEqual(
+      expect.arrayContaining(["notes/pinned", "app/pinned"])
+    );
+    expect(defaults(lacking)).toEqual([undefined, undefined]);
+    expect(
+      JSON.stringify(
+        everyDeclaration(lacking).filter(widget =>
+          ["notes/pinned", "app/pinned"].includes(widget.id)
+        )
+      )
+    ).not.toContain(`"${EVENTS}"`);
+
+    // The control: a key that may read events is shipped both defaults.
+    const holding = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `read-${EVENTS}`])
+    );
+    expect(defaults(holding)).toEqual([EVENTS, EVENTS]);
   });
 
   it("withholds an action whose own gate the reader lacks, on both channels", async () => {
@@ -470,6 +545,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       "notes/runbook",
       "notes/editors",
       "notes/shortcuts",
+      "notes/pinned",
     ]);
     expect(ids(body.widgets)).toEqual(
       expect.arrayContaining(["app/board", "app/ops-notes"])

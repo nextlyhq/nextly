@@ -52,4 +52,67 @@ describe("promoting a pending change", () => {
     // The promoted document is judged first, then the live one it replaces.
     expect(seen[0]).toBe("published");
   });
+
+  /**
+   * Every language's pending change writes its shared values to the one main
+   * row, applied in the order given, so the last one's value is what lands.
+   * Each language is judged with that value, not with its own snapshot's.
+   */
+  describe("with more than one language", () => {
+    const fields = [
+      { name: "headline", type: "text", localized: true },
+      { name: "guarded", type: "text", localized: false },
+    ];
+    const promote = (snapshots: Array<[string, string]>) =>
+      assertDraftsMayBePromoted(
+        snapshots.map(([locale, guarded]) => ({
+          locale,
+          snapshot: { headline: locale, guarded },
+        })),
+        {
+          slug: "landing",
+          entryId: "s1",
+          fields: fields as FieldConfig[],
+          grants: async () => ({ permissions: [], roles: [] }),
+          toLogical: doc => doc,
+          liveStoredFor: async locale => ({
+            headline: locale,
+            guarded: "L0",
+          }),
+          status: "published",
+          localizedFieldNames: new Set(["headline"]),
+          enforceLocalizedRequired: true,
+        }
+      );
+
+    afterEach(() => clearFieldFunctions());
+
+    it("judges the shared value the last change writes, not an earlier one's", async () => {
+      // Anyone may hold `guarded` at any value but "X".
+      registerFieldFunctions("single", "landing", [
+        {
+          ...fields[1],
+          access: {
+            update: ({ data }: { data?: Record<string, unknown> }) =>
+              data?.guarded !== "X",
+          },
+        },
+      ]);
+
+      // "X" is superseded by "L" before it is written: allowed.
+      await expect(
+        promote([
+          ["en", "X"],
+          ["de", "L"],
+        ])
+      ).resolves.toBeUndefined();
+      // The same two changes the other way round write "X": refused.
+      await expect(
+        promote([
+          ["de", "L"],
+          ["en", "X"],
+        ])
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+  });
 });

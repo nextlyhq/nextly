@@ -29,12 +29,13 @@ import type {
 import { barsBody } from "../bars";
 import { metricBody } from "../metric";
 import { statsBody } from "../stats";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const metricWidget = {
   id: "acme/pending",
   title: "Pending edits",
   archetype: "metric",
-  size: "sm",
+  size: gridBounds(3),
   query: { source: "system:versions", op: "count" },
 } as DashboardWidget;
 
@@ -42,7 +43,7 @@ const statsWidget = {
   id: "acme/health",
   title: "Content health",
   archetype: "stats",
-  size: "md",
+  size: gridBounds(4),
   cells: [
     { key: "pending", label: "Pending", query: { source: "s", op: "count" } },
   ],
@@ -150,7 +151,7 @@ describe("a grouped count drawn by bars", () => {
     id: "acme/issues",
     title: "Issues by kind",
     archetype: "bars",
-    size: "md",
+    size: gridBounds(4),
     query: { source: "s", op: "groupBy", groupBy: "kind" },
   } as unknown as DashboardWidget;
 

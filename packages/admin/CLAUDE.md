@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (f4c09382b402c1e5). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (9a5b233f5c136cb9). Edit that file, never this one. -->
 
 # packages/admin: Agent Guide
 
@@ -25,7 +25,7 @@ matters inside `packages/admin`.
   catalog is imported from `nextly/field-catalog`.
 - `@tanstack/react-query` is externalized from the bundle and resolved from
   the consumer's node_modules. Keep it (and the other externals listed in
-  `tsup.config.ts`) out of the bundle.
+  `tsdown.config.ts`) out of the bundle.
 
 ## Component conventions
 
@@ -79,7 +79,7 @@ envelope through `src/lib/api/parseApiError.ts`.
 ### Externalized dependencies stay out of the bundle
 
 Flag a change that pulls `@tanstack/react-query`, or another dependency listed
-as external in `tsup.config.ts`, back into the bundle. The consumer resolves
+as external in `tsdown.config.ts`, back into the bundle. The consumer resolves
 these from their own `node_modules`, and bundling one produces two copies with
 separate state.
 

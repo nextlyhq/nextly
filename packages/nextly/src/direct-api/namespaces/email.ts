@@ -49,6 +49,9 @@ import type {
   MutationResult,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
+  QueuedEmail,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
   SendEmailArgs,
   SendEmailResult,
   SendTemplateEmailArgs,
@@ -81,7 +84,68 @@ function directResult(result: EmailSendOutcome): SendEmailResult {
       : {}),
     ...(result.refused ? { refused: result.refused } : {}),
     ...(result.repeat ? { repeat: result.repeat } : {}),
+    ...(result.partlyDelivered
+      ? {
+          partlyDelivered: result.partlyDelivered,
+          recipients: result.recipients,
+        }
+      : {}),
   };
+}
+
+/** The `send` options for a message, from the Direct API's arguments. */
+function messageOptions(args: SendEmailArgs) {
+  return {
+    // Every recipient, as given: the service delivers to each one and
+    // refuses a list it cannot deliver whole.
+    to: args.to,
+    subject: args.subject,
+    html: args.html,
+    plainText: args.text,
+    from: args.from,
+    replyTo: args.replyTo,
+    // Forward cc/bcc so the Direct API matches the REST route and service.
+    cc: args.cc,
+    bcc: args.bcc,
+    providerId: args.providerId,
+    attachments: args.attachments,
+    person: args.person,
+    idempotencyKey: args.idempotencyKey,
+  };
+}
+
+/**
+ * The `sendWithTemplate` options from the Direct API's arguments, or
+ * undefined when none is given, so the template's own defaults apply.
+ */
+function templateOptions(args: SendTemplateEmailArgs) {
+  const options: {
+    providerId?: string;
+    from?: string;
+    replyTo?: string;
+    cc?: string[];
+    bcc?: string[];
+    attachments?: typeof args.attachments;
+    person?: typeof args.person;
+    idempotencyKey?: string;
+  } = {};
+  if (args.providerId) options.providerId = args.providerId;
+  // The send's own From and Reply-To win over the template's, which win
+  // over the provider's default (the service applies that order).
+  if (args.from) options.from = args.from;
+  if (args.replyTo) options.replyTo = args.replyTo;
+  // Only set cc/bcc when non-empty so an empty array doesn't make
+  // options truthy and override the "no options" undefined below.
+  if (args.cc?.length) options.cc = args.cc;
+  if (args.bcc?.length) options.bcc = args.bcc;
+  if (args.attachments) options.attachments = args.attachments;
+  // Anything given is forwarded, so the send validates it as `send` does;
+  // only an absent person is left out.
+  if (args.person !== undefined) options.person = args.person;
+  if (args.idempotencyKey !== undefined) {
+    options.idempotencyKey = args.idempotencyKey;
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 /** The send service as the site's own code sends through it. */
@@ -95,6 +159,10 @@ function siteSender(ctx: NextlyContext): NextlyContext["emailSendService"] {
 export interface EmailNamespace {
   send(args: SendEmailArgs): Promise<SendEmailResult>;
   sendWithTemplate(args: SendTemplateEmailArgs): Promise<SendEmailResult>;
+  /** @experimental Queue an email: stored, sent right after, retried on a temporary failure. */
+  queue(args: QueueEmailArgs): Promise<QueuedEmail>;
+  /** @experimental Queue an email made from a template, rendered at each attempt. */
+  queueWithTemplate(args: QueueTemplateEmailArgs): Promise<QueuedEmail>;
 }
 
 /**
@@ -103,64 +171,34 @@ export interface EmailNamespace {
 export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
   return {
     async send(args: SendEmailArgs): Promise<SendEmailResult> {
-      const result = await siteSender(ctx).send({
-        // Every recipient, as given: the service delivers to each one and
-        // refuses a list it cannot deliver whole.
-        to: args.to,
-        subject: args.subject,
-        html: args.html,
-        plainText: args.text,
-        from: args.from,
-        replyTo: args.replyTo,
-        // Forward cc/bcc so the Direct API matches the REST route and service.
-        cc: args.cc,
-        bcc: args.bcc,
-        providerId: args.providerId,
-        attachments: args.attachments,
-        person: args.person,
-        idempotencyKey: args.idempotencyKey,
-      });
+      const result = await siteSender(ctx).send(messageOptions(args));
       return directResult(result);
     },
 
     async sendWithTemplate(
       args: SendTemplateEmailArgs
     ): Promise<SendEmailResult> {
-      const sendOptions: {
-        providerId?: string;
-        from?: string;
-        replyTo?: string;
-        cc?: string[];
-        bcc?: string[];
-        attachments?: typeof args.attachments;
-        person?: typeof args.person;
-        idempotencyKey?: string;
-      } = {};
-      if (args.providerId) sendOptions.providerId = args.providerId;
-      // The send's own From and Reply-To win over the template's, which win
-      // over the provider's default (the service applies that order).
-      if (args.from) sendOptions.from = args.from;
-      if (args.replyTo) sendOptions.replyTo = args.replyTo;
-      // Only set cc/bcc when non-empty so an empty array doesn't make
-      // sendOptions truthy and override the "no options" undefined below.
-      if (args.cc?.length) sendOptions.cc = args.cc;
-      if (args.bcc?.length) sendOptions.bcc = args.bcc;
-      if (args.attachments) sendOptions.attachments = args.attachments;
-      // Anything given is forwarded, so the send validates it as `send` does;
-      // only an absent person is left out.
-      if (args.person !== undefined) sendOptions.person = args.person;
-      if (args.idempotencyKey !== undefined) {
-        sendOptions.idempotencyKey = args.idempotencyKey;
-      }
-
       const result = await siteSender(ctx).sendWithTemplate(
         args.template,
         // Every recipient, as given (see `send`).
         args.to,
         args.variables ?? {},
-        Object.keys(sendOptions).length > 0 ? sendOptions : undefined
+        templateOptions(args)
       );
       return directResult(result);
+    },
+
+    queue(args: QueueEmailArgs): Promise<QueuedEmail> {
+      return siteSender(ctx).queue(messageOptions(args));
+    },
+
+    queueWithTemplate(args: QueueTemplateEmailArgs): Promise<QueuedEmail> {
+      return siteSender(ctx).queueWithTemplate(
+        args.template,
+        args.to,
+        args.variables ?? {},
+        templateOptions(args)
+      );
     },
   };
 }

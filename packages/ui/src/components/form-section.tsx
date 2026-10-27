@@ -1,5 +1,5 @@
+import { useId, type JSX } from "react";
 import type * as React from "react";
-import { useId } from "react";
 
 import { cn } from "../lib/utils";
 
@@ -30,7 +30,7 @@ export function FormSection({
   description,
   className,
   children,
-}: FormSectionProps) {
+}: FormSectionProps): JSX.Element {
   // The visible label stays a `<p>` — promoting it to a heading would pick a
   // heading LEVEL, which depends on where in the page this section lands and
   // this component has no way to know. `aria-labelledby` names the region

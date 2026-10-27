@@ -10,6 +10,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -102,7 +103,7 @@ export interface IconPickerProps {
   onChange: (iconName: string) => void;
 }
 
-export function IconPicker({ value, onChange }: IconPickerProps) {
+export function IconPicker({ value, onChange }: IconPickerProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 

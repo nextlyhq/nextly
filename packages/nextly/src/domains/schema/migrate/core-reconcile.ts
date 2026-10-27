@@ -18,7 +18,7 @@ import { getTableName, isTable } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
-import { getCoreSchema, getCoreTableNames } from "../../../schemas";
+import { getCoreSchema, getCoreTableNames } from "../../../schemas/core-schema";
 import {
   bindIssuedTokens,
   type BindIssuedTokensResult,
@@ -57,8 +57,8 @@ export interface ReconcileCoreDeps {
   /** NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 lets a destructive core change proceed. */
   allowDestructive?: boolean;
   /**
-   * NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired `accounts` and
-   * `sessions` tables. Its own flag rather than `allowDestructive`, which
+   * NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired `accounts`,
+   * `sessions` and `user_permission_cache` tables. Its own flag rather than `allowDestructive`, which
    * accepts destructive changes to the core schema — a different decision,
    * that an operator makes for a different reason.
    */

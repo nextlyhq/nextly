@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.72",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -29,15 +29,13 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
+    "build": "tsdown && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
     "build:css": "node scripts/build-css.mjs",
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "check:published-build": "node scripts/check-published-build.mjs",
     "report:bundle": "node scripts/bundle-report.mjs",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
     "test": "node scripts/ensure-dist.mjs && vitest run",
     "test:watch": "node scripts/ensure-dist.mjs && vitest",
     "test:ui": "node scripts/ensure-dist.mjs && vitest --ui",
@@ -50,14 +48,13 @@
   },
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
-    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.68",
+    "next": "^15.5.28 || ^16.4.1",
+    "nextly": "0.0.2-alpha.72",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
@@ -68,33 +65,35 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^20.19.17",
+    "@types/node": "^22.20.5",
     "@types/pluralize": "^0.0.33",
-    "@types/react": "19.2.0",
-    "@types/react-dom": "19.2.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "^5.1.0",
-    "@vitest/coverage-v8": "^4.1.0",
-    "@vitest/ui": "^4.1.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/ui": "^5.0.5",
     "autoprefixer": "^10.4.21",
     "chokidar": "^5.0.0",
-    "eslint": "^9.39.1",
     "jsdom": "^27.1.0",
     "nextly": "workspace:*",
+    "oxc-parser": "^0.155.0",
     "postcss": "^8.5.6",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "tailwindcss": "^4.3.2",
     "terser": "^5.44.1",
-    "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
+    "tsdown": "^0.23.1",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
     "@codemirror/lang-javascript": "^6.2.4",
     "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-liquid": "^6.3.3",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/lang-sql": "^6.10.0",
@@ -143,6 +142,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "lexical": "^0.47.0",
+    "liquidjs": "^10.30.0",
     "lucide-react": "^0.544.0",
     "pluralize": "^8.0.0",
     "react-dropzone": "^14.3.8",
@@ -151,7 +151,7 @@
     "tailwind-merge": "^3.4.0",
     "tailwind-variants": "^3.1.1",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^4.6.2"
+    "zod": "^4.6.7"
   },
   "repository": {
     "type": "git",
@@ -164,7 +164,7 @@
     "provenance": true
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "homepage": "https://nextlyhq.com",
   "bugs": {

@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
@@ -33,7 +35,9 @@ const PAGE_LABELS = {
  * Consistent breadcrumb navigation for user management pages.
  * Utilizes the shared Breadcrumbs component for unified styling.
  */
-export function UserBreadcrumbs({ currentPage }: UserBreadcrumbsProps) {
+export function UserBreadcrumbs({
+  currentPage,
+}: UserBreadcrumbsProps): JSX.Element {
   const currentLabel = PAGE_LABELS[currentPage];
   const { hasPermission } = useCurrentUserPermissions();
 

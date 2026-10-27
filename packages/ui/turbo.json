@@ -2,6 +2,21 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    "build": {
+      // The server-safe build writes its metafile through a plugin outside
+      // this package, so the plugin is an input: editing it changes what the
+      // artifact check reads, and a package-scoped hash alone would replay it.
+      //
+      // This build also compiles Tailwind, which scans source files for class
+      // names, tests and Markdown included. So unlike the shared build inputs,
+      // this hash keeps them: a class used only in a test still lands in the
+      // compiled sheet, and leaving it out would replay a stale sheet.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "$TURBO_ROOT$/scripts/tsdown-metafile.mjs"
+      ]
+    },
     "test": {
       // `build` because guards here read this package's OWN `dist`, and the
       // root task depends on `^build`, which builds dependencies and not this
@@ -20,27 +35,16 @@
       // run. That question is answerable without re-implementing turbo's input
       // tracking, which is what the previous attempt tried and abandoned.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
-      // Two guards here read source from OTHER packages: the contrast
-      // alpha-utilities scan, and the tab-indicator contract. Those trees are
-      // therefore real inputs to this package's tests, and a task whose inputs
-      // omit what it reads answers from cache after its subject changed --
-      // reporting a pass over a violation it never saw.
+      // Guards here read source from OTHER packages and trees: the contrast
+      // alpha-utilities scan and the form-measure contract walk packages'
+      // `src`, the comment guard walks all of `apps/playground`, and the
+      // scripts guard reads the templates. Those files are therefore real
+      // inputs to this package's tests, and a task whose inputs omit what it
+      // reads answers from cache after its subject changed -- reporting a pass
+      // over a violation it never saw.
       //
-      // Every first-party tree rather than the three that motivated it,
-      // because the scans walk whole roots and a list of names drifts the
-      // moment one is added. `apps` and `templates` are here for the same
-      // reason `packages` is: the playground declares `@nextlyhq/ui` and a
-      // template is what a scaffolded project starts from, so a call site in
-      // either is a first-party consumer. That is the deliberate cost: an edit
-      // anywhere in the monorepo invalidates this package's test cache. Naming
-      // a subset would be cheaper and would restore exactly the hole this
-      // closes.
-      //
-      // The `**/*.tsx` globs are not redundant with the `src` ones. The tab
-      // scan walks a whole root, so a call site in a fixture or an example
-      // directory beside `src` is one it would report -- and hashing only `src`
-      // leaves that file able to change behind a cached pass. The inputs now
-      // cover every file the scan can read.
+      // The `apps` globs are not redundant with the `src` one: the playground
+      // keeps its routes under `app/`, which the comment guard reads.
       //
       // $TURBO_EXTENDS$ inherits the root test inputs so they stay in sync and
       // nothing is dropped. The root task supplies dependsOn / cache.
@@ -50,17 +54,12 @@
         "$TURBO_ROOT$/packages/*/src/**",
         "$TURBO_ROOT$/apps/*/src/**",
         "$TURBO_ROOT$/templates/**",
-        "$TURBO_ROOT$/packages/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.tsx",
-        // `.jsx` for the same reason as `.tsx`, and it is the extension the
-        // scan reads rather than the one this repo happens to use today:
-        // `create-nextly-app` scaffolds JavaScript projects, so a call site can
-        // arrive in a `.jsx` file. An input the hash does not cover is a file
-        // that can change behind a cached pass.
-        "$TURBO_ROOT$/packages/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
-        "$TURBO_ROOT$/packages/**/*.js",
         "$TURBO_ROOT$/apps/**/*.js",
+        // The tab-indicator rule's suite tests the lint rule, which lives at
+        // the root beside the other lint guards.
+        "$TURBO_ROOT$/lint/**",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
@@ -87,17 +86,12 @@
         "$TURBO_ROOT$/packages/*/src/**",
         "$TURBO_ROOT$/apps/*/src/**",
         "$TURBO_ROOT$/templates/**",
-        "$TURBO_ROOT$/packages/**/*.tsx",
         "$TURBO_ROOT$/apps/**/*.tsx",
-        // `.jsx` for the same reason as `.tsx`, and it is the extension the
-        // scan reads rather than the one this repo happens to use today:
-        // `create-nextly-app` scaffolds JavaScript projects, so a call site can
-        // arrive in a `.jsx` file. An input the hash does not cover is a file
-        // that can change behind a cached pass.
-        "$TURBO_ROOT$/packages/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
-        "$TURBO_ROOT$/packages/**/*.js",
         "$TURBO_ROOT$/apps/**/*.js",
+        // The tab-indicator rule's suite tests the lint rule, which lives at
+        // the root beside the other lint guards.
+        "$TURBO_ROOT$/lint/**",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every

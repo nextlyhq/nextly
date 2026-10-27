@@ -110,7 +110,6 @@ function getLogger(): Logger {
 }
 
 function getServices(): ServiceContainer {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
   const adapter = container.get("adapter") as DrizzleAdapter;
   return new ServiceContainer(adapter);
 }

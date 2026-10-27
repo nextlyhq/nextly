@@ -10,6 +10,7 @@ import {
   Checkbox,
   Label,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import {
@@ -189,7 +190,7 @@ export function PermissionMatrixMobile({
   onToggleAllForContentType,
   isAllSelected,
   isPartiallySelected,
-}: PermissionMatrixMobileProps) {
+}: PermissionMatrixMobileProps): JSX.Element {
   // Memoize count calculations for performance optimization
   const contentTypeCounts = useMemo(
     () =>

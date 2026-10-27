@@ -33,8 +33,8 @@ const { isCliEntry } = await import(
 );
 
 // Workspace integrity check. The two scopes get hoisted differently:
-//   - @nextlyhq/* — consumed by the root package.json (eslint, prettier
-//     configs) and by other packages, so they appear at <root>/node_modules.
+//   - @nextlyhq/* — consumed by the root package.json (the lint plugin,
+//     the prettier config) and by other packages, so they appear at <root>/node_modules.
 //   - @nextlyhq/* — consumed by the playground app and internally between
 //     packages, but never directly by the root, so the actual symlinks
 //     live in <root>/apps/playground/node_modules. This is the layer

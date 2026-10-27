@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import type { PluginContext } from "../../../plugins/plugin-context";
 import {
@@ -124,6 +125,9 @@ async function boot(plugins: unknown[]): Promise<TestNextly> {
     plugins: plugins as never,
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read on notes
+  // for the resolver to count them as.
+  await userWhoMay(t, admin.user.id, "read", [NOTES]);
   return t;
 }
 
@@ -230,6 +234,27 @@ describe("a plugin's widget source, booted", () => {
     );
 
     expect(handed.opts?.signal).toBe(controller.signal);
+  });
+
+  it("fails a query its resolver answers with a declared widget's own data", async () => {
+    // `{ op: "data" }` is a declared widget's answer, which core builds and
+    // sends itself. From a source asked to count it is not an answer to the
+    // question, and passed through it would reach a card drawn from a count.
+    const plugin = acmePlugin() as {
+      contributes: { widgetSources: Array<Record<string, unknown>> };
+    };
+    plugin.contributes.widgetSources[0]!.resolve = async () => ({
+      op: "data",
+      data: { total: 2 },
+    });
+    await boot([plugin]);
+
+    await expect(
+      executeWidgetQuery(
+        validateWidgetQuery({ source: SOURCE_ID, op: "count" }),
+        admin
+      )
+    ).rejects.toThrow();
   });
 
   it("publishes nothing for a DISABLED plugin", async () => {

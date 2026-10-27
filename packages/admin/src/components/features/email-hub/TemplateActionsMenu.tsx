@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -20,7 +21,7 @@ export function TemplateActionsMenu({
 }: {
   name: string;
   actions: TemplateAction[];
-}) {
+}): JSX.Element | null {
   if (actions.length === 0) return null;
   return (
     <DropdownMenu>

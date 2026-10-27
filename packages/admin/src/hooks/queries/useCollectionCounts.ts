@@ -22,7 +22,11 @@ import { useDashboardStats } from "./useDashboardStats";
  *
  * @returns Object with `counts` Map, `isLoading`, and `error`
  */
-export function useCollectionCounts() {
+export function useCollectionCounts(): {
+  counts: Map<string, number>;
+  isLoading: boolean;
+  error: Error | null;
+} {
   const { data, isLoading, error } = useDashboardStats();
 
   const counts = useMemo(() => {

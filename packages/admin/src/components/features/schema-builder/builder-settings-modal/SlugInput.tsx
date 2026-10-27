@@ -11,6 +11,7 @@
 // selectable, copyable and reachable by a screen reader. It is not unavailable;
 // it is settled.
 import { Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -30,7 +31,11 @@ type Props = {
   readOnly?: boolean;
 };
 
-export function SlugInput({ value, onChange, readOnly = false }: Props) {
+export function SlugInput({
+  value,
+  onChange,
+  readOnly = false,
+}: Props): JSX.Element {
   return (
     <Input
       aria-label="Slug"

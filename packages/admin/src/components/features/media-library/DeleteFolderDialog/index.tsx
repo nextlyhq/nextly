@@ -32,7 +32,7 @@ export function DeleteFolderDialog({
   folderId,
   folderName,
   onSuccess,
-}: DeleteFolderDialogProps) {
+}: DeleteFolderDialogProps): React.JSX.Element {
   const { data: folderContents, isLoading: isLoadingContents } =
     useFolderContents(folderId);
   const { mutate: deleteFolderMutation, isPending } = useDeleteFolder();

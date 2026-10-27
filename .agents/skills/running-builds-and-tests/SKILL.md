@@ -25,12 +25,12 @@ held in every session.
   | command                                         | result on a clean tree                    |
   | ----------------------------------------------- | ----------------------------------------- |
   | `pnpm turbo run check-types --continue --force` | `AGENTS.measured.md` → `check-types-cold` |
-  | `pnpm turbo run lint --continue --force`        | `AGENTS.measured.md` → `lint-cold`        |
 
   `check-types` fails because a workspace import resolves through the sibling's
-  package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
-  for the same underlying reason through a different rule: `import-x/no-unresolved`
-  resolves the same specifiers, so an unbuilt sibling is an unresolved import.
+  package exports to a `dist/index.d.ts` that does not exist yet. `lint` reads
+  the same specifiers for its type-aware rules, and on an unbuilt sibling those
+  rules judge types the checker cannot see: a finding there can name your
+  expression for a defect that is only the missing build.
 
   Run `pnpm build` first. The failure is workspace-wide rather than local to one
   package, so the whole-repo build is the honest default.
@@ -61,6 +61,24 @@ held in every session.
   an earlier built state reports a clean tree as passing. That is not a
   hypothetical: the first version of this entry claimed 19 of 21 passing and
   `lint` clean at 22 of 22, and both numbers came from cache hits.
+
+  `--force` reruns the task, not the type check. `incremental` is on in the
+  shared config, so `tsc` reads the `.tsbuildinfo` an earlier run in the same
+  checkout left (git ignores it, so a clean `git status` says nothing) and
+  checks only what changed. To TIME a type check, or to compare one checkout
+  with another, delete every `.tsbuildinfo` first, or pass
+  `--incremental false`, as a fresh checkout in CI has none. Measured on
+  nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
+
+  `check-types` runs TypeScript 7 through `scripts/tsc.mjs`, which passes
+  `--checkers` sized to the machine by `local-limits.mjs`: 4 on a 16 GB machine,
+  2 below that, 1 under `NEXTLY_LOCAL_MAX_WORKERS=1` (`pnpm local-limits` prints
+  it). `scripts/check-types-checkers.test.mjs` holds every package to the
+  wrapper. The number of parallel checkers can occasionally change which
+  diagnostics appear, so a result that looks order-dependent, appearing or
+  vanishing between runs or machines, is ruled in or out by rerunning that
+  package's command with `--singleThreaded`, which checks in one fixed order.
+  Do not change a package's checkers to make a result go away.
 
   `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
   a missing build, and the rebuild is what confirms it. It is not proof on its
@@ -121,9 +139,12 @@ held in every session.
     that is rarely the one you are standing in, and compose then tries to
     CREATE containers whose names are taken and fails. `docker start` addresses
     them by name and does not care which project owns them.
-- Integration files in `packages/nextly` run sequentially on purpose
-  (`fileParallelism: false`, single fork): system-table suites share fixed
-  table names. Do not "fix" slow integration runs by re-enabling parallelism.
+- Integration files in `packages/nextly` run in sequence on one worker by
+  default: system-table suites share fixed table names. More workers
+  (`NEXTLY_INTEGRATION_WORKERS`) run only where each worker has its own
+  database, which `packages/nextly/src/__tests__/worker-database-guard.ts`
+  enforces (today: in-memory SQLite, no TEST\_\*\_URL set). Never run them
+  in parallel on a shared database.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
@@ -136,6 +157,44 @@ held in every session.
   broken one, auditing the instrument you are judging with, and when deleting
   a test is the right call — is the `testing-evidence` skill. Load it before
   adding, changing or judging a test.
+
+## Every export states its type
+
+A package whose tsconfig sets `isolatedDeclarations` has its published
+declarations written by oxc, one file at a time and with no type checker, so
+every export must state its type: a function its return type, a constant its
+annotation. `check-types` reports a missing one (`TS9xxx`), so the rule is
+enforced there; these are the forms to write it in.
+
+- A value's type through `typeof`, never the value copied into the type:
+  `typeof DEFAULT_MAX_DOCUMENT_BYTES`, not `2097152`. The copy is correct on
+  the day it is written and stale on the day the constant changes.
+- Types are imported with `import type`, which oxlint's
+  `consistent-type-imports` holds. A value import for a type pulls a runtime
+  module into the declaration's graph.
+- A component returns `JSX.Element`, with `JSX` imported as a type from
+  `react` (`import type { JSX } from "react"`), or `React.JSX.Element` where
+  `React` is already in scope; `ReactNode` when it may render nothing. Never
+  from `react/jsx-runtime`, which is the runtime the compiler imports for you.
+- A type too long to read inline gets a name: a type alias beside the export,
+  unexported unless consumers need it. Spelling a large inferred type out in
+  full, as for a Drizzle table, states thousands of lines that go stale with
+  every column.
+- A generated module whose value is a large literal checks it against its type
+  and declares it as that type: `satisfies PluginMigration as PluginMigration`.
+  The check stays, and the declaration is the type rather than the literal.
+
+TypeScript's code fix `fixMissingTypeAnnotationOnExports` adds the annotations
+in bulk, headless through the language service. Review what it writes for
+these, each seen in this repository:
+
+- an import list ending in a comma, which it extends into `FC,,` that does not
+  parse;
+- a type it uses without importing, or one that clashes with a local name;
+- a literal value copied into a type, which becomes `typeof` the constant;
+- a value import for a type, which becomes `import type`;
+- a large inferred type spelled out in full, which gets a name or the
+  `satisfies T as T` form above instead.
 
 ## How much of the machine a local gate may take
 

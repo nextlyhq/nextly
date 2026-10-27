@@ -23,8 +23,9 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
@@ -32,11 +33,14 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
+import { DeclaredComponent, useComponentDraw } from "./declared-component";
+import { DREW_NOTHING } from "./draw-failures";
+import type { CardState } from "./frame/card-state";
 import type { SkeletonShape } from "./frame/states";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
-import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
+import { askableQuery } from "./widget-as-asked";
+import { WidgetCard } from "./WidgetCard";
 
 /**
  * The shape a card's skeleton takes while its data has never arrived, from what its
@@ -64,17 +68,6 @@ function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
   return definition.query?.select?.length ?? 0;
 }
 
-/**
- * Whether a freshness line will come for this card: it asked for data, and its answer was not a
- * refusal, which never gets a time. The card holds the line's place until then.
- */
-function awaitsFreshnessFor(
-  definition: DashboardWidget,
-  slot: WidgetSlot | undefined
-): boolean {
-  return definition.query !== undefined && slot?.ok !== false;
-}
-
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
@@ -95,52 +88,50 @@ function skeletonFor(archetype: string): SkeletonShape {
 }
 
 /** Every outcome the frame draws itself, which is all but a plugin's own component. */
-type FramedOutcome = Exclude<WidgetOutcome, { state: "self-drawn" }>;
+type FramedOutcome = Exclude<
+  WidgetOutcome,
+  { state: "self-drawn" } | { state: "answered" }
+>;
 
 /**
- * The card's state props and body for one outcome.
- *
- * One mapping, so each state's rules sit side by side: only a failure offers Retry, and only a
- * card with an answer (content, an empty answer, or an error over a refetch) is handed the
- * batch's freshness and in-flight flag. The card itself withholds what a state should not show.
+ * The state a card with an answer on show is in: refreshing while a new one is on the way, which
+ * keeps the answer drawn and marks it busy rather than replacing it, and otherwise ready.
  */
-function cardForOutcome(
-  outcome: FramedOutcome,
-  live: { updatedAt: Date | null; isFetching: boolean; onRetry?: () => void }
-): { props: Partial<Omit<WidgetCardProps, "children">>; body: ReactNode } {
-  // For a card showing an ANSWER, `isLoading` reports a refetch rather than a first load -- it
-  // marks the body busy and leaves what is already there alone, which is the whole reason the
-  // card marks rather than replaces.
-  const answered = { updatedAt: live.updatedAt, isLoading: live.isFetching };
-  switch (outcome.state) {
-    case "loading":
-      // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
-      return { props: { state: "loading" }, body: null };
-    case "unavailable":
-      return { props: { state: "unavailable" }, body: null };
-    case "failed":
-      return {
-        props: { ...answered, error: outcome.message, onRetry: live.onRetry },
-        body: null,
-      };
-    case "empty":
-      return {
-        props: { ...answered, state: "empty", empty: outcome.empty },
-        body: null,
-      };
-    case "ready":
-      return { props: answered, body: outcome.node };
-  }
+function answeredState(isFetching: boolean): CardState {
+  return isFetching ? { kind: "refreshing" } : { kind: "ready" };
 }
 
 /**
- * A Lucide icon component for the definition's icon NAME, or nothing.
+ * The card's state and body for one outcome.
  *
- * Names arrive from a plugin's declaration, so an unknown one is expected
- * input. It resolves to nothing rather than to a placeholder glyph: an icon is
- * meant to be functional here, and a stand-in that means nothing is worse than
- * the header simply not having one.
+ * One mapping, so each state's rules sit side by side: only a failure offers Retry, and only an
+ * answer is drawn as a body.
  */
+function cardForOutcome(
+  outcome: FramedOutcome,
+  live: { isFetching: boolean; onRetry?: (() => void) | undefined }
+): { state: CardState; body: ReactNode } {
+  switch (outcome.state) {
+    case "loading":
+      // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
+      return { state: { kind: "loading" }, body: null };
+    case "unavailable":
+      return { state: { kind: "no-access" }, body: null };
+    case "failed":
+      return {
+        state: {
+          kind: "error",
+          message: outcome.message,
+          ...(live.onRetry ? { retry: live.onRetry } : {}),
+        },
+        body: null,
+      };
+    case "empty":
+      return { state: { kind: "empty", empty: outcome.empty }, body: null };
+    case "ready":
+      return { state: answeredState(live.isFetching), body: outcome.node };
+  }
+}
 
 export interface WidgetRendererProps {
   definition: DashboardWidget;
@@ -153,14 +144,14 @@ export interface WidgetRendererProps {
    * there covers the icon on any card that declares one, and whatever an
    * unframed plugin component drew in its own corner.
    *
-   * Ignored by the `chrome: "none"` branch, which draws no header at all; the
-   * cell positions it for those.
    */
   headerAction?: ReactNode;
   /**
-   * The card's one quick setting, outside customise mode. The frame draws it before
-   * `headerAction` once the card has an answer; see `WidgetCard`'s `quick`.
+   * The widget's own name, drawn under the title when the title names the card's subject
+   * instead ("Posts", beneath it "Count").
    */
+  subtitle?: string | undefined;
+  /** The card's one quick setting, which the frame draws before `headerAction`. */
   quick?: ReactNode;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
@@ -182,8 +173,6 @@ export interface WidgetRendererProps {
    * so its own `slot` is permanently undefined and this is where its data is.
    */
   slotFor?: CellSlotLookup;
-  /** When the batch this slot came from landed, for the freshness line. */
-  updatedAt?: Date | null;
   /**
    * Whether a request for this widget is in flight RIGHT NOW, including a
    * background refetch that is keeping the previous answer on screen.
@@ -219,33 +208,175 @@ export interface WidgetRendererProps {
    * unarranged dashboard is the one case where the two are genuinely
    * one-to-one. A render outside an arrangement is exactly that case.
    */
-  placement?: { id: string; settings: Record<string, unknown> };
+  placement?: {
+    id: string;
+    settings: Record<string, unknown>;
+    /** The size the card is drawn at, for the size a declared component is handed. */
+    size?: GridSize;
+  };
 }
 
-/** What the card frame is handed whatever the widget draws: its heading, chrome and states. */
+/** What the card frame is handed whatever the widget draws: its heading, controls and skeleton. */
 function sharedCardProps(
   definition: WidgetRendererProps["definition"],
-  slot: WidgetRendererProps["slot"],
   placement: WidgetRendererProps["placement"],
-  chrome: Pick<
+  controls: Pick<
     WidgetRendererProps,
-    "headerAction" | "quick" | "leading" | "customizing" | "answerTier"
+    | "headerAction"
+    | "quick"
+    | "leading"
+    | "customizing"
+    | "answerTier"
+    | "subtitle"
   >
 ) {
   return {
     title: definition.title,
-    // The declaration's one optional line under the title, which the frame draws.
-    description: definition.description,
-    icon: resolveIconName(definition.icon),
     link: definition.link,
-    ...chrome,
+    ...controls,
+    hidesWhenEmpty: definition.hidesWhenEmpty === true,
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
     skeletonFields: skeletonFieldsFor(definition),
-    awaitsFreshness: awaitsFreshnessFor(definition, slot),
-    skeletonCells: definition.cells?.map(cell => cell.label),
+    // A stats card's labels; a custom card's cells draw no skeleton of their own.
+    skeletonCells: definition.cells?.flatMap(cell =>
+      "label" in cell ? [cell.label] : []
+    ),
   };
+}
+
+/**
+ * The props a self-drawn widget's component receives.
+ *
+ * 🔴 RETURNS the published type rather than an inferred one. `PluginSlot`
+ * forwards `Record<string, unknown>`, so nothing downstream would object to a
+ * renamed, dropped or retyped prop here -- and plugin authors compile against
+ * `WidgetComponentProps`, which would go on describing the old shape. That is
+ * the same parallel-definition drift this contract exists to end, so the
+ * producer is held to it here, where a mismatch fails to compile.
+ */
+function componentPropsFor(
+  definition: WidgetRendererProps["definition"],
+  slot: WidgetRendererProps["slot"],
+  placement: WidgetRendererProps["placement"],
+  live: {
+    isFetching: boolean;
+    onRetry?: () => void;
+    cells?: Record<string, WidgetSlot>;
+  }
+): WidgetComponentProps {
+  return {
+    widgetId: definition.id,
+    placementId: placement?.id ?? definition.id,
+    settings: placement?.settings ?? {},
+    slot,
+    // Each declared read's answer by key, for a custom card that declares
+    // several; absent for every other card.
+    ...(live.cells === undefined ? {} : { cells: live.cells }),
+    isFetching: live.isFetching,
+    // The Retry the frame's error offers, for a component whose own data reports an error.
+    ...(live.onRetry ? { onRetry: live.onRetry } : {}),
+    // The query as asked, which `definition` already is: the grid draws each card
+    // from the same declaration the batch sent. One with no source yet was not
+    // asked, so it is not handed on.
+    ...(askableQuery(definition.query) ? { query: definition.query } : {}),
+  };
+}
+
+/**
+ * A custom card's answers by cell key, for a card that declares several reads;
+ * `undefined` for any other card, which is handed `slot` alone.
+ */
+function customCellAnswers(
+  definition: WidgetRendererProps["definition"],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> | undefined {
+  if (definition.archetype !== "custom" || !definition.cells?.length) {
+    return undefined;
+  }
+  return cellAnswersOf(
+    definition.cells.map(cell => cell.key),
+    slotFor
+  );
+}
+
+/** Each cell's answer by key, leaving out the keys with none yet. */
+function cellAnswersOf(
+  keys: readonly string[],
+  slotFor: CellSlotLookup | undefined
+): Record<string, WidgetSlot> {
+  const answers: Record<string, WidgetSlot> = Object.create(null);
+  for (const key of keys) {
+    const answer = slotFor?.(key);
+    if (answer !== undefined) answers[key] = answer;
+  }
+  return answers;
+}
+
+/**
+ * A custom card's own component, inside the frame. It is reached with an answer or while one is
+ * on the way; a failed answer is the frame's (`resolveWidgetOutcome`), and anything the answer
+ * says beyond that the component reports with `FrameState`.
+ */
+function selfDrawnCard(
+  definition: WidgetRendererProps["definition"],
+  shared: ReturnType<typeof sharedCardProps>,
+  componentProps: WidgetComponentProps,
+  isFetching: boolean
+): JSX.Element {
+  return (
+    <WidgetCard {...shared} state={answeredState(isFetching)}>
+      <PluginSlot path={definition.component} props={componentProps} />
+    </WidgetCard>
+  );
+}
+
+/**
+ * A declared widget's own component, with its data, inside the frame, which
+ * has already drawn every other state, marked busy through a refetch like any
+ * card with an answer.
+ *
+ * 🔴 A throw while drawing is the FRAME's error state, not a body swapped
+ * inside a card that still says it is ready: the card's state, its footer and
+ * quick setting, and the grid's count all read it as failed, and its Retry
+ * draws again once the answer it asks for has settled (`useComponentDraw`).
+ */
+function declaredCard(
+  definition: WidgetRendererProps["definition"],
+  shared: ReturnType<typeof sharedCardProps>,
+  data: unknown,
+  draw: ReturnType<typeof useComponentDraw>,
+  live: {
+    placement: WidgetRendererProps["placement"];
+    isFetching: boolean;
+    onRetry: (() => void) | undefined;
+  }
+): JSX.Element {
+  if (draw.failed) {
+    const drawn = cardForOutcome(
+      { state: "failed", message: DREW_NOTHING },
+      { isFetching: live.isFetching, onRetry: draw.retry }
+    );
+    return (
+      <WidgetCard {...shared} state={drawn.state}>
+        {drawn.body}
+      </WidgetCard>
+    );
+  }
+  return (
+    <WidgetCard {...shared} state={answeredState(live.isFetching)}>
+      <DeclaredComponent
+        key={draw.drawKey}
+        definition={definition}
+        placement={live.placement}
+        data={data}
+        refreshing={live.isFetching}
+        {...(live.onRetry ? { onRetry: live.onRetry } : {})}
+        onCaught={draw.caught}
+      />
+    </WidgetCard>
+  );
 }
 
 export function WidgetRenderer({
@@ -258,104 +389,62 @@ export function WidgetRenderer({
   leading,
   customizing = false,
   onRetry,
-  updatedAt = null,
   isFetching = false,
   answerTier,
-}: WidgetRendererProps) {
-  const shared = sharedCardProps(definition, slot, placement, {
+  subtitle,
+}: WidgetRendererProps): JSX.Element {
+  const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
     leading,
     customizing,
     answerTier,
+    subtitle,
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
-
-  /*
-   * Built once, so the two `chrome` branches below cannot drift into handing a
-   * component different props depending on whether its card is framed.
-   *
-   * 🔴 ANNOTATED with the published type rather than inferred. `PluginSlot`
-   * forwards `Record<string, unknown>`, so nothing downstream would object to a
-   * renamed, dropped or retyped prop here -- and plugin authors compile against
-   * `WidgetComponentProps`, which would go on describing the old shape. That is
-   * the same parallel-definition drift this contract exists to end, so the
-   * producer is held to it here, where a mismatch fails to compile.
-   */
-  const componentProps: WidgetComponentProps = {
-    widgetId: definition.id,
-    placementId: placement?.id ?? definition.id,
-    settings: placement?.settings ?? {},
+  // Whether a declared widget's own component threw drawing this answer: asked
+  // for every card, as a hook must be, and false for any other.
+  const draw = useComponentDraw({
     slot,
     isFetching,
-  };
+    ...(onRetry ? { onRetry } : {}),
+    placementId: placement?.id ?? definition.id,
+  });
+  // A custom card that declares several reads is handed each answer by key; a
+  // key with no answer yet is left out, as `slot` is.
+  const cellAnswers = customCellAnswers(definition, slotFor);
 
-  // The escape hatch. A plugin component draws its own body, so the card
-  // asserts nothing about its loading or empty states -- the component knows
-  // what it is showing and the card does not.
+  // Built once, so every card drawn by a component is handed the same props.
+  const componentProps = componentPropsFor(definition, slot, placement, {
+    ...(cellAnswers === undefined ? {} : { cells: cellAnswers }),
+    isFetching,
+    onRetry,
+  });
+
+  // A component drawn with the batch's answer: `custom` may carry a query,
+  // which the grid puts in the batch rather than leaving the component to ask
+  // again. `undefined` while that answer is on the way, which the component
+  // reports as loading; a failed answer never reaches it (`resolveWidgetOutcome`).
   //
-  // It DOES receive its slot. `custom` is deliberately allowed to carry a
-  // query: core's own validator puts it in neither the data set nor the
-  // query-less set, because a widget that draws itself may still want the host
-  // to run its request. The grid honours that by putting the query in the
-  // batch, so withholding the answer here would make every such widget pay for
-  // a database read on every mount and every window focus and then fetch the
-  // same data again for itself. `undefined` while the batch is in flight, and
-  // the component decides what that looks like.
-  //
-  // And it receives the REFETCH state, in both directions. The card is marked
-  // busy like any other -- a queried custom widget keeps its body through a
-  // window-focus refetch exactly as an archetype does, so a reader on a screen
-  // reader needs the same `aria-busy` telling them the dashboard is reading
-  // again. The component is told too, because `slot` alone cannot say it: the
-  // slot holds the PREVIOUS answer during a refetch and is indistinguishable
-  // from idle. The grid already computes both for this widget and this branch
-  // was the one place that dropped them on the floor.
-  //
-  // Both are still `null`/`false` for a query-less custom widget, because the
-  // grid only reports them for a widget that asked -- so nothing here puts a
-  // freshness line under a card that never made a request.
+  // It is told when a refetch is in flight, because `slot` alone cannot say it:
+  // the slot holds the PREVIOUS answer during a refetch and is indistinguishable
+  // from idle. The frame marks the card busy then, as for any card.
   if (outcome.state === "self-drawn") {
-    // A widget that declines the frame draws its own surface, so the card would
-    // be a second one around it -- a heading above its heading, a border around
-    // its border. Core's dashboard sections are exactly that: each already
-    // carries a title, a rule and its own loading and error states.
-    //
-    // Reached only for `custom`, which `validateWidgetDefinition` enforces:
-    // every other archetype has its body composed INTO the card, so unframing
-    // one would leave content with no heading and nothing owning its states.
-    //
-    // Nothing is wrapped around it at all -- not even a fragment with a class --
-    // so a component returning null leaves the grid cell genuinely empty and
-    // `empty:hidden` can collapse it. Anything drawn here to "help" would fill
-    // the cell and reinstate the blank row.
-    if (definition.chrome === "none") {
-      return <PluginSlot path={definition.component} props={componentProps} />;
-    }
-
-    return (
-      <WidgetCard
-        {...shared}
-        // Withheld when the slot is a REFUSAL, for the reason `WidgetCard`
-        // states about its own error branch: the timestamp says when the batch
-        // landed, which is true of the request and not of this card, so
-        // "Updated just now" over a body drawn from a failure tells the reader
-        // the opposite of what happened. The card cannot reach that rule by
-        // itself here -- an error REPLACES a body, and a self-drawn body is
-        // never replaced, so no `error` is passed and the footer's `settled`
-        // gate never sees one.
-        updatedAt={slot?.ok === false ? null : updatedAt}
-        isLoading={isFetching}
-      >
-        <PluginSlot path={definition.component} props={componentProps} />
-      </WidgetCard>
-    );
+    return selfDrawnCard(definition, shared, componentProps, isFetching);
   }
 
-  const drawn = cardForOutcome(outcome, { updatedAt, isFetching, onRetry });
+  if (outcome.state === "answered") {
+    return declaredCard(definition, shared, outcome.data, draw, {
+      placement,
+      isFetching,
+      onRetry,
+    });
+  }
+
+  const drawn = cardForOutcome(outcome, { isFetching, onRetry });
   return (
-    <WidgetCard {...shared} {...drawn.props}>
+    <WidgetCard {...shared} state={drawn.state}>
       {drawn.body}
     </WidgetCard>
   );

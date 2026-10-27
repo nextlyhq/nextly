@@ -13,6 +13,7 @@
 import { Input } from "@nextlyhq/ui";
 import { Eye, EyeOff } from "lucide-react";
 import type { PasswordFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useState } from "react";
 import {
   useController,
@@ -135,7 +136,7 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   className,
   mode,
-}: PasswordInputProps<TFieldValues>) {
+}: PasswordInputProps<TFieldValues>): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
 
   // An explicit admin placeholder always wins; otherwise edit forms explain

@@ -14,10 +14,13 @@
  */
 import { expectTypeOf } from "vitest";
 
-import type { WidgetResultField } from "../../result";
+import type { WidgetSizeDeclaration } from "../../grid-size";
+import type { WidgetRenderSize, WidgetResultField } from "../../result";
+import type { WidgetScope } from "../../resolved-sources";
 import type { QueryAnswer } from "../displays";
 import {
   defineWidget,
+  type WidgetReadServices,
   type WidgetData,
   type WidgetProps,
   type WidgetSettingValues,
@@ -40,8 +43,7 @@ const everySetting = defineWidget({
   title: "Every setting",
   description: "Holds one setting of each kind",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: {
     collection: settings.collection(),
     filter: settings.filter({ of: "collection" }),
@@ -99,8 +101,7 @@ defineWidget({
   title: "Query",
   description: "A query written from its settings",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: {
     collection: settings.collection(),
     items: settings.items(),
@@ -136,6 +137,22 @@ expectTypeOf<Parameters<typeof RevenueCard>[0]>().toEqualTypeOf<
   WidgetProps<typeof revenue>
 >();
 
+// 🔴 Its size in the grid's units and nothing else: columns and rows, and the
+// tier the card's drawn width falls in. No named width rides beside them.
+expectTypeOf<
+  WidgetProps<typeof revenue>["size"]
+>().toEqualTypeOf<WidgetRenderSize>();
+expectTypeOf<keyof WidgetRenderSize>().toEqualTypeOf<"w" | "h" | "tier">();
+expectTypeOf<WidgetRenderSize["w"]>().toEqualTypeOf<number>();
+expectTypeOf<WidgetRenderSize["h"]>().toEqualTypeOf<number>();
+expectTypeOf<WidgetRenderSize["tier"]>().toEqualTypeOf<
+  "small" | "medium" | "large"
+>();
+
+// A declaration states its size in the grid's own type, the one the site
+// config, a stored placement and the admin read.
+expectTypeOf<(typeof revenue)["size"]>().toEqualTypeOf<WidgetSizeDeclaration>();
+
 // The frame's empty test reads the same data the component draws.
 expectTypeOf<
   Parameters<NonNullable<NonNullable<(typeof revenue)["empty"]>["when"]>>[0]
@@ -150,10 +167,13 @@ expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
 // A widget drawn by a core display has that display's data, whatever its own
 // function's literal answer was.
 // `field` describes the grouped field (its label and value labels) when the source declares it;
-// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound.
+// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound,
+// and a bucket's own `atLeast` says that one bucket's count is. `asOf` is the
+// instant the answer was computed at, for a source whose buckets depend on it.
 expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
-  buckets: { value: string | null; count: number }[];
+  buckets: { value: string | null; count: number; atLeast?: boolean }[];
   truncated?: boolean;
+  asOf?: string;
   field?: WidgetResultField;
   atLeast?: boolean;
 }>();
@@ -172,8 +192,32 @@ defineWidget({
   title: "Orders",
   description: "Rows typed by an interface",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ items: rows }),
   display: "list",
 });
+
+// A data function is handed the batch's scope, as core's own sources are, so two cards needing
+// one scan can share it.
+defineWidget({
+  id: "test/shares-a-scan",
+  title: "Orders",
+  description: "A data function reading the batch's scope",
+  category: "Test",
+  size: { default: { w: 12, h: 4 } },
+  data: async ({ scope }) => {
+    expectTypeOf(scope).toEqualTypeOf<WidgetScope>();
+    return { total: await scope.getOrCompute("orders", async () => 3) };
+  },
+  display: "metric",
+});
+
+// A data function's reads take no person, user or access option: who reads is bound by core, so
+// the only options are the ones a read carries. Pinned exactly, so an option added to either is
+// a decision made here, not an accident.
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
+>().toEqualTypeOf<"where" | "signal">();
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>().toEqualTypeOf<"where" | "sort" | "limit" | "select" | "signal">();

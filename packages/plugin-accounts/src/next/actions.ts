@@ -160,7 +160,7 @@ function text(form: FormData, name: string): string {
  *
  * @experimental
  */
-export const signUpAction = accountAction("signUp");
+export const signUpAction: AccountFormAction = accountAction("signUp");
 
 /**
  * Verifies an address by a link's `token`, or by `address` and `code`; with
@@ -168,21 +168,23 @@ export const signUpAction = accountAction("signUp");
  *
  * @experimental
  */
-export const verifyAddressAction = accountAction("verifyAddress");
+export const verifyAddressAction: AccountFormAction =
+  accountAction("verifyAddress");
 
 /**
  * Sends the verification email again (`address`).
  *
  * @experimental
  */
-export const resendVerificationAction = accountAction("resendVerification");
+export const resendVerificationAction: AccountFormAction =
+  accountAction("resendVerification");
 
 /**
  * "This wasn't me": removes an unverified account (a link's `token`).
  *
  * @experimental
  */
-export const removeUnverifiedAccountAction = accountAction(
+export const removeUnverifiedAccountAction: AccountFormAction = accountAction(
   "removeUnverifiedAccount"
 );
 
@@ -192,49 +194,58 @@ export const removeUnverifiedAccountAction = accountAction(
  *
  * @experimental
  */
-export const signInAction = accountAction("signIn", "always");
+export const signInAction: AccountFormAction = accountAction(
+  "signIn",
+  "always"
+);
 
 /**
  * Signs this browser out.
  *
  * @experimental
  */
-export const signOutAction = accountAction("signOut");
+export const signOutAction: AccountFormAction = accountAction("signOut");
 
 /**
  * Signs the account out everywhere.
  *
  * @experimental
  */
-export const signOutEverywhereAction = accountAction("signOutEverywhere");
+export const signOutEverywhereAction: AccountFormAction =
+  accountAction("signOutEverywhere");
 
 /**
  * Sends a reset link (`address`).
  *
  * @experimental
  */
-export const requestPasswordResetAction = accountAction("requestPasswordReset");
+export const requestPasswordResetAction: AccountFormAction = accountAction(
+  "requestPasswordReset"
+);
 
 /**
  * Sets a new password from a reset link (`token`, `password`).
  *
  * @experimental
  */
-export const resetPasswordAction = accountAction("resetPassword");
+export const resetPasswordAction: AccountFormAction =
+  accountAction("resetPassword");
 
 /**
  * Changes the password (`currentPassword`, `newPassword`).
  *
  * @experimental
  */
-export const changePasswordAction = accountAction("changePassword");
+export const changePasswordAction: AccountFormAction =
+  accountAction("changePassword");
 
 /**
  * Asks to change the address (`currentPassword`, `newAddress`).
  *
  * @experimental
  */
-export const changeAddressAction = accountAction("changeAddress");
+export const changeAddressAction: AccountFormAction =
+  accountAction("changeAddress");
 
 /**
  * Confirms an address change by a link's `token`, or by `code`, inside the
@@ -242,18 +253,23 @@ export const changeAddressAction = accountAction("changeAddress");
  *
  * @experimental
  */
-export const confirmAddressChangeAction = accountAction("confirmAddressChange");
+export const confirmAddressChangeAction: AccountFormAction = accountAction(
+  "confirmAddressChange"
+);
 
 /**
  * Cancels an address change (the old address's link's `token`).
  *
  * @experimental
  */
-export const cancelAddressChangeAction = accountAction("cancelAddressChange");
+export const cancelAddressChangeAction: AccountFormAction = accountAction(
+  "cancelAddressChange"
+);
 
 /**
  * Deletes the account (`currentPassword`).
  *
  * @experimental
  */
-export const deleteAccountAction = accountAction("deleteAccount");
+export const deleteAccountAction: AccountFormAction =
+  accountAction("deleteAccount");

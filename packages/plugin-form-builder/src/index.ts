@@ -55,7 +55,8 @@ export {
   type NextlyPlugin,
   type FormBuilderPluginResult,
 } from "./plugin";
-export const formBuilderPlugin = formBuilder().plugin;
+export const formBuilderPlugin: ReturnType<typeof formBuilder>["plugin"] =
+  formBuilder().plugin;
 
 // ============================================================
 // Type Exports

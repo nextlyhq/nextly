@@ -74,7 +74,7 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
-import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
+import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
@@ -101,6 +101,7 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
@@ -286,6 +287,7 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  */
 function SingleFormLanguagePanel({
   actionsDisabled,
+  navigationDisabled,
   enabled,
   hasStatus,
   locale,
@@ -294,6 +296,7 @@ function SingleFormLanguagePanel({
   translations,
 }: {
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   enabled: boolean;
   hasStatus: boolean;
   locale?: string;
@@ -304,12 +307,13 @@ function SingleFormLanguagePanel({
   if (!enabled) return null;
   return (
     <div className={cn("px-6 pt-4", !railCollapsed && "@4xl/content:hidden")}>
-      <LanguagePanel
-        {...(translations === undefined ? {} : { translations })}
-        {...(locale === undefined ? {} : { activeLocale: locale })}
-        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+      <DocumentLanguagePanel
+        translations={translations}
+        locale={locale}
+        onLocaleChange={onLocaleChange}
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
       />
     </div>
   );
@@ -364,6 +368,7 @@ function SingleFormFieldsPanel({
  */
 function SingleFormRail({
   actionsDisabled,
+  navigationDisabled,
   entry,
   hasStatus,
   isDirty,
@@ -372,6 +377,7 @@ function SingleFormRail({
   railCollapsed,
 }: {
   actionsDisabled: boolean;
+  navigationDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   isDirty: boolean;
@@ -389,6 +395,7 @@ function SingleFormRail({
           hasStatus={hasStatus}
           isDirty={isDirty}
           actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
           {...(locale === undefined ? {} : { locale })}
           {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         />
@@ -456,7 +463,7 @@ export function SingleForm({
   className,
   documentActions,
   documentView,
-}: SingleFormProps) {
+}: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
   // error when they aren't user-entered.
@@ -576,10 +583,14 @@ export function SingleForm({
    * The advisory claim, derived before the first write is defined because every
    * write has to be able to ask about it.
    */
+  // A user who may read this Single but not change it gets the same page,
+  // read-only, with no claim made on the document.
+  const readOnlyForReader = useReadOnlyForReader(schema.slug);
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
     entryId: document.id,
+    readOnlyForReader,
   });
 
   // System fields: title (system header) and slug (meta strip). Per the
@@ -616,6 +627,11 @@ export function SingleForm({
   // component creates, so a context read here would report no version on
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  // Changing the content is held for a reader as well.
+  const editsHeld = writesHeld || readOnlyForReader;
+  // A colleague's claim or a reader's page, without the version on screen:
+  // what holds the actions a version's own surfaces offer, Restore among them.
+  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
 
   //
   // The synchronous half of the same gate. `isSubmitting` is render state: it
@@ -656,7 +672,7 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (writesHeld) return submitHeld;
+      if (editsHeld) return submitHeld;
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
@@ -711,7 +727,7 @@ export function SingleForm({
       onSubmit,
       blankPasswordFields,
       busy,
-      writesHeld,
+      editsHeld,
       document.id,
       schema,
       locale,
@@ -907,12 +923,15 @@ export function SingleForm({
     // rule, and the entry editor records on exactly the same terms. A
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
-    enabled: mayRecordRecovery(busy, viewingVersion),
+    // Nor is a reader's form recorded: it cannot change the document.
+    enabled: !readOnlyForReader && mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
   });
   const recovery = useAutosaveRecovery({
-    scope: autosaveScope,
+    // A reader is offered no recovery point: restoring one would make the
+    // read-only form dirty with work it cannot save.
+    scope: readOnlyForReader ? null : autosaveScope,
     form,
     savedCount,
   });
@@ -924,7 +943,7 @@ export function SingleForm({
    * run against it.
    */
   const discardWorkingDraft = async () => {
-    if (writesHeld || busy || submissionLatch.current) {
+    if (editsHeld || busy || submissionLatch.current) {
       return;
     }
     submissionLatch.current = true;
@@ -961,7 +980,10 @@ export function SingleForm({
        localized single's default row and its translations can be in
        different publish states. */
     locale,
-    documentLocked: lock.readOnly,
+    // A colleague's claim, which withholds every write: a reader's read-only
+    // page withholds only the edits, through `canEdit`.
+    documentLocked: lock.actionsDisabled,
+    canEdit: !readOnlyForReader,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1021,7 +1043,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView}
+                open={previewPane.open && !documentView && !readOnlyForReader}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1107,8 +1129,16 @@ export function SingleForm({
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                                  isLinkAvailable={previewLink.isAvailable}
-                                  {...(previewLink.shareDocument === undefined
+                                  // Sharing a preview needs the permission to change
+                                  // the Single on the server, so a reader is not offered it.
+                                  isLinkAvailable={
+                                    previewLink.isAvailable &&
+                                    !readOnlyForReader
+                                  }
+                                  // Withheld from a reader, so the share
+                                  // popover cannot stay mounted for them.
+                                  {...(previewLink.shareDocument ===
+                                    undefined || readOnlyForReader
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1120,10 +1150,17 @@ export function SingleForm({
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                                  {...previewPane.toggle}
+                                  // A reader is offered no preview, as the
+                                  // share link beside it: opening one mints a
+                                  // credential the server grants only to a
+                                  // user who may change the Single.
+                                  {...(readOnlyForReader
+                                    ? {}
+                                    : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
-                                    lock.actionsDisabled,
+                                    // A reader's page holds the slot's writes too.
+                                    versionWritesHeld,
                                     "single",
                                     controllerNames[0]
                                   )}
@@ -1170,7 +1207,9 @@ export function SingleForm({
                                 {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
-                                  actionsDisabled={writesHeld}
+                                  actionsDisabled={editsHeld}
+                                  // A reader may still open the other languages.
+                                  navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
                                   railCollapsed={railCollapsed}
@@ -1195,15 +1234,15 @@ export function SingleForm({
                                   // restore racing the ordinary save would let
                                   // completion order decide which contents
                                   // survive.
-                                  versionActionsHeld={
-                                    lock.actionsDisabled || busy
-                                  }
+                                  // A reader's page holds restoring as well.
+                                  versionActionsHeld={versionWritesHeld || busy}
                                 />
                               </div>
 
                               {/* Rail (collapsible). */}
                               <SingleFormRail
-                                actionsDisabled={writesHeld}
+                                actionsDisabled={editsHeld}
+                                navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
                                 isDirty={isDirty}

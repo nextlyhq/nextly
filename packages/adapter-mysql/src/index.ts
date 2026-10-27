@@ -363,6 +363,7 @@ export class MySqlAdapter extends DrizzleAdapter {
    * string at connect. Undefined until then, which callers treat as not known.
    */
   private sharedRowLock: boolean | undefined;
+  private functionalIndexes: boolean | undefined;
 
   /**
    * Creates a new MySQL adapter instance.
@@ -411,14 +412,21 @@ export class MySqlAdapter extends DrizzleAdapter {
       const connection = await this.pool.getConnection();
       try {
         await connection.query("SELECT 1");
-        const { variant } = await checkDialectVersion(connection, "mysql", {
-          // Why: route variant warnings through the adapter's logger so
-          // users see a single, consistent log surface.
-          onWarning: msg => this.config.logger?.warn?.(msg),
-        });
+        const { variant, functionalIndexes } = await checkDialectVersion(
+          connection,
+          "mysql",
+          {
+            // Why: route variant warnings through the adapter's logger so
+            // users see a single, consistent log surface.
+            onWarning: msg => this.config.logger?.warn?.(msg),
+          }
+        );
         // MariaDB and TiDB connect through this adapter too, and reject
         // `FOR SHARE`; the capability tells callers which lock they can take.
         this.sharedRowLock = acceptsForShare(variant);
+        // Whether a unique index may key on an expression, which per-language uniqueness of a
+        // translated value does.
+        this.functionalIndexes = functionalIndexes;
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -792,6 +800,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
       sharedRowLock: this.sharedRowLock, // Known once connected
+      functionalIndexes: this.functionalIndexes, // Known once connected
     };
   }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useState } from "react";
 
 import { Check, Copy, Info } from "@admin/components/icons";
@@ -32,7 +33,7 @@ export function InviteLinkPanel({
   expiresAt,
   onCreateAnother,
   onDone,
-}: InviteLinkPanelProps) {
+}: InviteLinkPanelProps): JSX.Element {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {

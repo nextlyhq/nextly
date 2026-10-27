@@ -97,7 +97,9 @@ export function linePoints(
 }
 
 /** `M x,y L x,y …` for a set of points, or `""` when there is nothing to draw. */
-export function linePath(points: ReadonlyArray<{ x: number; y: number }>) {
+export function linePath(
+  points: ReadonlyArray<{ x: number; y: number }>
+): string {
   if (points.length === 0) return "";
   const [first, ...rest] = points;
   const head = `M ${round(first.x)},${round(first.y)}`;

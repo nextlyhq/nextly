@@ -11,6 +11,7 @@ import {
   directComponentFields,
   type DirectField,
 } from "nextly/field-group-type";
+import type { JSX } from "react";
 
 import { EditorAlert } from "./EditorAlert";
 
@@ -25,7 +26,7 @@ export function DirectFieldGroupsNotice({
    * a virtual field group stores nothing anywhere, so the write passes it and this must too.
    */
   fields: readonly NoticeField[];
-}) {
+}): JSX.Element | null {
   // The walk the write's refusal and the config's warning use, so all three name the same fields.
   const placed = (directComponentFields(fields) as NoticeField[]).map(field =>
     typeof field.label === "string" && field.label ? field.label : field.name

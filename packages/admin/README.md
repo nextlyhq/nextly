@@ -110,11 +110,11 @@ After running `pnpm dev`, visit [http://localhost:3000/admin/setup](http://local
 
 ## Compatibility
 
-| Tool     | Version                   |
-| -------- | ------------------------- |
-| Next.js  | 16+ (App Router required) |
-| React    | 19+                       |
-| `nextly` | 0.0.x                     |
+| Tool     | Version                       |
+| -------- | ----------------------------- |
+| Next.js  | 16.4.1+ (App Router required) |
+| React    | 19+                           |
+| `nextly` | 0.0.x                         |
 
 ## Documentation
 

@@ -15,6 +15,7 @@
 // barrel: the barrel re-exports this file's own ancestors, so reaching back
 // through it makes every one of those a cycle.
 import { isFieldGroupFieldType } from "nextly/field-group-type";
+import type { JSX } from "react";
 
 import { ComponentFieldEditor } from "../ComponentFieldEditor";
 import { GroupFieldEditor } from "../GroupFieldEditor";
@@ -44,7 +45,7 @@ export function TypeSpecificEditor({
   field,
   readOnly = false,
   onChange,
-}: Props) {
+}: Props): JSX.Element | null {
   // Patch helper — every adapter mutates `field` immutably through here.
   const patch = (changes: Partial<BuilderField>) => {
     if (readOnly) return;
