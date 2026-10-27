@@ -22,10 +22,14 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 const SLUG = "draftedpost";
+/** The same, with a publish rule that refuses every caller. */
+const GUARDED = "guardedpost";
 /** May update and publish: writes the draft. */
 const EDITOR = { id: "editor-1", email: "editor@x.test", roles: [] };
 /** May publish, and holds no update. */
 const PUBLISHER = { id: "publisher-1", email: "publisher@x.test", roles: [] };
+/** May read, and neither update nor publish. */
+const READER = { id: "reader-1", email: "reader@x.test", roles: [] };
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -47,14 +51,23 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         versions: { drafts: true },
         fields: [text({ name: "body" })],
       }),
+      defineCollection({
+        slug: GUARDED,
+        status: true,
+        versions: { drafts: true },
+        access: { publish: () => false },
+        fields: [text({ name: "body" })],
+      }),
     ],
   });
-  await userWhoMay(current, EDITOR.id, "update", [SLUG]);
+  const both = [SLUG, GUARDED];
+  await userWhoMay(current, EDITOR.id, "update", both);
   for (const action of ["read", "publish"]) {
-    await grantTo(current, EDITOR.id, action, [SLUG]);
+    await grantTo(current, EDITOR.id, action, both);
   }
-  await userWhoMay(current, PUBLISHER.id, "publish", [SLUG]);
-  await grantTo(current, PUBLISHER.id, "read", [SLUG]);
+  await userWhoMay(current, PUBLISHER.id, "publish", both);
+  await grantTo(current, PUBLISHER.id, "read", both);
+  await userWhoMay(current, READER.id, "read", both);
   return current;
 }
 
@@ -125,6 +138,63 @@ describe.each(getConfiguredTestDialects())(
         } as never)
       ).rejects.toThrow();
       expect((await liveDoc(t, id)).body).toBe("live");
+    });
+  }
+);
+
+/**
+ * Publishes `body` live in `collection` and holds the editor's change to it
+ * as a draft; answers the entry's id.
+ */
+async function heldDraft(t: TestNextly, collection: string): Promise<string> {
+  const created = await handlerOf(t).createEntry(
+    { collectionName: collection, overrideAccess: true },
+    { body: "live", status: "published" }
+  );
+  const id = (created.data as { id?: string }).id as string;
+  await as(EDITOR.id).update({
+    collection,
+    id,
+    data: { body: "finished draft" },
+  } as never);
+  return id;
+}
+
+/** What `userId` reads of the entry, asking for its pending change. */
+const readAs = (userId: string, collection: string, id: string) =>
+  as(userId).findByID({ collection, id, draft: true } as never) as Promise<
+    Record<string, unknown>
+  >;
+
+describe.each(getConfiguredTestDialects())(
+  "who is shown an entry's pending change (%s)",
+  dialect => {
+    it("shows it to a caller who may publish the entry", async () => {
+      const t = await boot(dialect);
+      const id = await heldDraft(t, SLUG);
+      const read = await readAs(PUBLISHER.id, SLUG, id);
+      expect(read.body).toBe("finished draft");
+      expect(read._isWorkingDraft).toBe(true);
+    });
+
+    it("hides it from a caller whose publish rule refuses the entry", async () => {
+      const t = await boot(dialect);
+      const id = await heldDraft(t, GUARDED);
+      const read = await readAs(PUBLISHER.id, GUARDED, id);
+      expect(read.body).toBe("live");
+      expect(read._isWorkingDraft).toBeUndefined();
+      // POPULATION CONTROL: the editor, who may update, is shown it.
+      expect((await readAs(EDITOR.id, GUARDED, id)).body).toBe(
+        "finished draft"
+      );
+    });
+
+    it("hides it from a caller who may only read", async () => {
+      const t = await boot(dialect);
+      const id = await heldDraft(t, SLUG);
+      const read = await readAs(READER.id, SLUG, id);
+      expect(read.body).toBe("live");
+      expect(read._isWorkingDraft).toBeUndefined();
     });
   }
 );
