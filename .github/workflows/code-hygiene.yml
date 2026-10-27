@@ -68,9 +68,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-store
+          cache: pnpm
 
       # Resolution needs the store: an import is only "unresolved" once its
       # package is known to be absent, and workspace-to-workspace imports
@@ -384,9 +382,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-store
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

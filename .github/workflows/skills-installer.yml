@@ -60,9 +60,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-
-      - name: Restore pnpm store
-        uses: ./.github/actions/pnpm-store
+          cache: pnpm
 
       # The check reads which skills are the user skills through
       # scripts/agent-skills.mjs, which parses frontmatter with a dependency.

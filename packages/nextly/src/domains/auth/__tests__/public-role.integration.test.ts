@@ -166,6 +166,25 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(await publicRoleId(nextly)).toBe(id);
   });
 
+  it("is marked as a role nobody can be given, where roles are listed and read", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const roles = services(nextly).roles;
+
+    const { data } = await roles.listRoles({ limit: 100 });
+    const listed = new Map(data.map(role => [role.id, role.assignable]));
+    expect(listed.get(id)).toBe(false);
+    // The positive control: every other role can be given.
+    expect([...listed.entries()].filter(([other]) => other !== id)).not.toEqual(
+      []
+    );
+    expect(
+      [...listed.entries()].every(([other, can]) => other === id || can)
+    ).toBe(true);
+    expect((await roles.getRoleById(id)).assignable).toBe(false);
+  });
+
   it("can't be deleted or renamed", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();

@@ -19,9 +19,7 @@ runs:
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version-file: .nvmrc
-
-    - name: Restore pnpm store
-      uses: ./.github/actions/pnpm-store
+        cache: pnpm
 
     # Scoped to the JOB, which is the part that matters. Six jobs across four
     # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -50,9 +48,3 @@ runs:
     - name: Install dependencies
       shell: bash
       run: pnpm install --frozen-lockfile
-
-    - name: Save pnpm store
-      if: github.event_name == 'push'
-      uses: ./.github/actions/pnpm-store
-      with:
-        save: "true"

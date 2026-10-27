@@ -109,12 +109,8 @@ test.describe("what the key form says a key will do", () => {
     const { items } = (await roles.json()) as {
       items: { id: string; slug: string; name: string }[];
     };
-    // A role a key may take: not super-admin, and not the built-in Public
-    // role, which the server gives to no person and no key.
-    const role = items.find(
-      candidate => !["super-admin", "public"].includes(candidate.slug)
-    );
-    expect(role, "a role other than super-admin and Public").toBeDefined();
+    const role = items.find(candidate => candidate.slug !== "super-admin");
+    expect(role, "a role other than super-admin").toBeDefined();
 
     await chooseTokenType(page, "Role-based");
     await expect(
