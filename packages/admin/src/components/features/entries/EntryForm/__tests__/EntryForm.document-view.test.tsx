@@ -28,6 +28,7 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
   registerComponent,
@@ -38,9 +39,14 @@ import {
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 
-const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
+const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   update: vi.fn(),
+  // What the editor hands its update mutation, a refused publish's way out
+  // among it.
+  updateOptions: {
+    current: undefined as { refusedForm?: RefusedForm } | undefined,
+  },
   recovery: {
     current: {
       offer: null as { savedAt: Date; snapshot: unknown } | null,
@@ -54,7 +60,10 @@ const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The save is observed where it leaves the editor: the update mutation.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
-  useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
+  useUpdateEntry: (options: { refusedForm?: RefusedForm }) => {
+    updateOptions.current = options;
+    return { mutateAsync: update, isPending: false };
+  },
 }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => recovery.current,
@@ -260,6 +269,36 @@ describe("EntryForm with a document view", () => {
     ).toBeTruthy();
     expect(received).toHaveBeenLastCalledWith(
       expect.objectContaining({ readOnly: true })
+    );
+  });
+
+  it("holds the view read-only, and marks it busy, while a recovery takes the live values", async () => {
+    renderView();
+    const busyAround = () =>
+      screen.getByTestId("builder-view").closest("[aria-busy='true']");
+    expect(busyAround()).toBeNull();
+
+    // Made before the recovery starts, which runs its work a task later.
+    let done: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.run(() => held);
+    });
+    expect(busyAround()).not.toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true })
+    );
+
+    await act(async () => {
+      done();
+      await running;
+    });
+    expect(busyAround()).toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: false })
     );
   });
 

@@ -11,6 +11,8 @@
  * value back live.
  */
 import { renderHook } from "@testing-library/react";
+import { useEffect } from "react";
+import { flushSync } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
@@ -190,13 +192,12 @@ describe("the entry form, for a publish refused over shared values", () => {
 
   it("holds the editor's saves and publishes while the recovery runs", async () => {
     const { result } = render();
+    // Made before the recovery starts, which runs its work a task later.
     let done: () => void = () => {};
-    const running = updateOptions.current?.refusedForm?.run(
-      () =>
-        new Promise<void>(resolve => {
-          done = resolve;
-        })
-    );
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    const running = updateOptions.current?.refusedForm?.run(() => held);
 
     let outcome: unknown;
     await act(async () => {
@@ -232,30 +233,81 @@ describe("the entry form, for a publish refused over shared values", () => {
     );
   });
 
-  it("keeps an edit made during a recovery that creates the entry's first working draft", async () => {
+  it("keeps a value written into the form during a recovery that creates the entry's first working draft", async () => {
     // Published, with no pending change of its own yet.
     const { result, rerender } = render();
-    // Not inside an outer `act`: one would hold back the reload's render
-    // until the recovery had finished, which a browser doesn't.
     let reloaded: Promise<void> | undefined;
     await updateOptions.current?.refusedForm?.run(async () => {
-      // Typed while the recovery saves and takes.
+      // A write that reaches the form without a read-only input, as a field
+      // committing on exit does, while the recovery saves and takes.
       act(() => {
-        result.current.form.setValue("bio", "Typed during the recovery", {
+        result.current.form.setValue("bio", "Committed during the recovery", {
           shouldDirty: true,
         });
       });
-      // The reload settles. As React Query does, the editor is handed the
-      // reloaded entry on a zero-delay timeout queued as it settles: the
-      // same entry and version, now carrying the working draft the
-      // recovery's save created.
+      // The reloaded entry now carries the working draft the recovery's save
+      // created: the same entry and version, the overlay turned on.
       reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
     });
     await reloaded;
 
     expect(result.current.form.getValues("bio")).toBe(
-      "Typed during the recovery"
+      "Committed during the recovery"
     );
+  });
+
+  it("holds the form until the recovery's reloaded entry has reached it", async () => {
+    const { result, rerender } = render();
+    let heldWhenItArrived: boolean | undefined;
+    let reloaded: Promise<void> | undefined;
+    await updateOptions.current?.refusedForm?.run(async () => {
+      // The reload settles, and the editor is handed the entry a task later,
+      // as React Query does: the fields it takes must not be open to typing
+      // until it is on screen.
+      reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
+      void reloaded.then(() => {
+        heldWhenItArrived = result.current.recovering;
+      });
+    });
+    await reloaded;
+
+    expect(heldWhenItArrived).toBe(true);
+    // And given back once it has.
+    await vi.waitFor(() => expect(result.current.recovering).toBe(false));
+  });
+
+  it("reads the form once the hold is on screen, so what commits as it lands is saved", async () => {
+    // A field that commits its work into the form as it goes read-only, as
+    // an editor that commits on leaving does.
+    const { result } = renderHook(() => {
+      const editor = useEntryForm({
+        collection,
+        entry: stored as never,
+        mode: "edit",
+      });
+      const { recovering, form } = editor;
+      useEffect(() => {
+        if (recovering) {
+          form.setValue("bio", "Committed as the hold landed", {
+            shouldDirty: true,
+          });
+        }
+      }, [recovering, form]);
+      return editor;
+    });
+    const refusedForm = updateOptions.current?.refusedForm;
+    let read: Record<string, unknown> | undefined;
+    let running: Promise<unknown> | undefined;
+    // Rendered at once, as an action's state change is.
+    flushSync(() => {
+      running = refusedForm?.run(async () => {
+        read = await refusedForm.pendingChangeNow();
+      });
+    });
+    await running;
+
+    expect(read).toMatchObject({ bio: "Committed as the hold landed" });
+    await vi.waitFor(() => expect(result.current.recovering).toBe(false));
   });
 
   it("goes back to judging the overlay once the recovery's reload has arrived", async () => {

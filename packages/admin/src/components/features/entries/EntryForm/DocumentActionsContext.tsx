@@ -107,6 +107,7 @@ export function SaveActionFormProvider({
   form,
   formId,
   className,
+  recovering,
   children,
 }: Omit<EntryFormProviderProps, "onSubmit">): JSX.Element {
   const { run } = useHostedDocumentActions();
@@ -115,6 +116,7 @@ export function SaveActionFormProvider({
       form={form}
       {...(formId === undefined ? {} : { formId })}
       {...(className === undefined ? {} : { className })}
+      {...(recovering === undefined ? {} : { recovering })}
       onSubmit={async event => {
         // Prevented before anything else: returning without it lets the
         // browser submit natively, reloading the page.

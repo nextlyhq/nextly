@@ -24,6 +24,7 @@ import {
   act,
   cleanup,
   createTestQueryClient,
+  fireEvent,
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
@@ -33,9 +34,23 @@ import {
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock } = vi.hoisted(() => ({ useDocumentLock: vi.fn() }));
+const { useDocumentLock, autosaveOffer } = vi.hoisted(() => ({
+  useDocumentLock: vi.fn(),
+  // A recovery point the editor offers back, when a test sets one.
+  autosaveOffer: {
+    current: null as { savedAt: Date; snapshot: unknown } | null,
+  },
+}));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
+  useAutosaveRecovery: () => ({
+    offer: autosaveOffer.current,
+    isResolved: true,
+    dismiss: () => {},
+    restore: () => {},
+  }),
+}));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/hooks/useDocumentAutosave")
@@ -125,6 +140,7 @@ function refusedFormOf(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  autosaveOffer.current = null;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
@@ -249,13 +265,12 @@ describe("a Single's form, for a publish refused over shared values", () => {
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 
+    // Made before the recovery starts, which runs its work a task later.
     let done: () => void = () => {};
-    const running = refusedFormOf(onSubmit)?.run(
-      () =>
-        new Promise<void>(resolve => {
-          done = resolve;
-        })
-    );
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    const running = refusedFormOf(onSubmit)?.run(() => held);
     await user.click(
       screen.getByRole("button", { name: "Save from the view" })
     );
@@ -265,4 +280,97 @@ describe("a Single's form, for a publish refused over shared values", () => {
     done();
     await running;
   });
+
+  it.each([
+    ["succeeds", (finish: Finish) => finish.resolve()],
+    ["fails", (finish: Finish) => finish.reject(new Error("offline"))],
+  ])(
+    "holds the Single's fields read-only while the recovery runs, and gives them back once it %s",
+    async (_outcome, settle) => {
+      const onSubmit = refusedOnce();
+      // The Single's own fields, not a document view.
+      const { container } = render(
+        <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+        { wrapper: Providers }
+      );
+      const hero = screen.getByRole("textbox", { name: "Hero Title" });
+      fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(hero).not.toHaveAttribute("readonly");
+      expect(writeControls().some(control => !control.disabled)).toBe(true);
+
+      // Made before the recovery starts, which runs its work a task later.
+      const finish = {} as Finish;
+      const held = new Promise<void>((resolve, reject) => {
+        finish.resolve = resolve;
+        finish.reject = reject;
+      });
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running = refusedFormOf(onSubmit)
+          ?.run(() => held)
+          .catch(() => undefined);
+      });
+
+      // Read-only, not disabled, so a field keeps focus.
+      expect(hero).toHaveAttribute("readonly");
+      expect(hero).not.toBeDisabled();
+      expect(hero.closest("form")).toHaveAttribute("aria-busy", "true");
+      // And so is every write the document offers.
+      for (const control of writeControls()) {
+        expect(control, control.textContent ?? "").toBeDisabled();
+      }
+
+      await act(async () => {
+        settle(finish);
+        await running;
+      });
+
+      expect(hero).not.toHaveAttribute("readonly");
+      expect(hero.closest("form")).not.toHaveAttribute("aria-busy");
+      expect(writeControls().some(control => !control.disabled)).toBe(true);
+    }
+  );
+
+  it("withholds an autosave recovery point while the recovery runs", async () => {
+    // Restoring one writes into the form the recovery holds.
+    autosaveOffer.current = { savedAt: new Date(), snapshot: {} };
+    const onSubmit = refusedOnce();
+    const { container } = render(
+      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      { wrapper: Providers }
+    );
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+
+    // Made before the recovery starts, which runs its work a task later.
+    let done: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = refusedFormOf(onSubmit)?.run(() => held);
+    });
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+
+    await act(async () => {
+      done();
+      await running;
+    });
+    expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+  });
 });
+
+/** The document's Save and Publish controls, wherever they are drawn. */
+function writeControls(): HTMLButtonElement[] {
+  return screen.getAllByRole("button", {
+    name: /save|publish/i,
+  }) as HTMLButtonElement[];
+}
+
+interface Finish {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}

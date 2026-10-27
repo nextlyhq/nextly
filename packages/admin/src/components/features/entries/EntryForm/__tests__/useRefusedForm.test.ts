@@ -3,7 +3,7 @@
  * one whose checks refuse, still settles the recovery and releases the
  * editor's latch, so the editor isn't left answering "busy" to every save.
  */
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { UseFormReturn } from "react-hook-form";
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +18,7 @@ function formWhoseSubmitRejects(): UseFormReturn<Record<string, unknown>> {
 }
 
 describe("useRefusedForm", () => {
-  it("rejects, and releases the latch, when the form's own submit rejects", async () => {
+  it("rejects, and releases the hold, when the form's own submit rejects", async () => {
     const latch = { current: false };
     const ownSave = { current: { inFlight: false } };
     const { result } = renderHook(() =>
@@ -29,12 +29,27 @@ describe("useRefusedForm", () => {
       })
     );
 
-    await expect(
-      result.current.refusedForm.run(() =>
-        result.current.refusedForm.pendingChangeNow()
-      )
-    ).rejects.toThrow("The resolver threw.");
-    // A later save finds the editor free, not busy.
+    let outcome: Promise<unknown> | undefined;
+    act(() => {
+      outcome = result.current.refusedForm
+        .run(() => result.current.refusedForm.pendingChangeNow())
+        .then(
+          () => "resolved",
+          (error: unknown) => error
+        );
+    });
+    // Held while it runs: the form, the editor's latch and its own-save mark.
+    expect(result.current.recovering).toBe(true);
+    expect(latch.current).toBe(true);
+    expect(ownSave.current.inFlight).toBe(true);
+
+    let settled: unknown;
+    await act(async () => {
+      settled = await outcome;
+    });
+    expect(settled).toEqual(new Error("The resolver threw."));
+    // And released, so a later save finds the editor free, not busy.
+    expect(result.current.recovering).toBe(false);
     expect(latch.current).toBe(false);
     expect(ownSave.current.inFlight).toBe(false);
   });

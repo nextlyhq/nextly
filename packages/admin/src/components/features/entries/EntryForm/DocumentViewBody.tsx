@@ -83,6 +83,12 @@ export interface DocumentViewBodyProps {
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
+  /**
+   * Whether a refused publish's recovery is taking the live values: the view
+   * is read-only through the lock meanwhile, and marked busy for assistive
+   * technology. The recovery's own toast says so to everyone.
+   */
+  recovering?: boolean;
 }
 
 /**
@@ -225,6 +231,7 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
+  recovering = false,
 }: DocumentViewBodyProps): JSX.Element {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
@@ -289,7 +296,7 @@ export function DocumentViewBody({
         </div>
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
           <ViewArea
             editing={editing}
             refusal={refusal}

@@ -8,13 +8,15 @@
  * change sends. Once the live values are taken into the change, the reloaded
  * document has the same identity as the one on screen, so neither editor
  * resets to it in full: the fields taken are set to it here, when it
- * arrives, and every other edit stays.
+ * arrives, and every other edit stays. From the action until that document
+ * has arrived the form is held read-only, so nothing typed can race it.
  *
  * @module components/features/entries/EntryForm/useRefusedForm
  */
-import { type RefObject, useCallback, useMemo, useRef } from "react";
+import { type RefObject, useCallback, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 
 import { submitBusy, submitHeld, submitInvalid } from "./submit-outcome";
@@ -27,13 +29,13 @@ const HELD = submitHeld.ok ? "" : submitHeld.message;
 const BUSY = submitBusy.ok ? "" : submitBusy.message;
 
 /**
- * Answers once a document a settled reload brought has reached the editor.
- * React Query tells a query's observers of new data on a zero-delay timeout,
- * queued when the refetch settled, and React renders a store change at once,
- * running its effects as it commits; a timeout queued after the reload has
- * settled runs after both.
+ * Answers once what is already on its way to the editor has reached it, a
+ * task later. React renders an action's state change, and a store change, at
+ * once, running its effects as it commits; and React Query tells a query's
+ * observers of new data on a zero-delay timeout, queued when the refetch
+ * settled. A timeout queued after either runs after it.
  */
-function reloadedDocumentRendered(): Promise<void> {
+function nextTask(): Promise<void> {
   return new Promise(resolve => {
     setTimeout(resolve, 0);
   });
@@ -55,10 +57,10 @@ export function useRefusedForm(
      */
     latch: RefObject<boolean>;
     /**
-     * The editor's own-save marker: while it reads in flight, a document
-     * that arrives is taken as this editor's own write coming back, and the
-     * edits made meanwhile are kept. The recovery writes too, and its write
-     * comes back as the reloaded document.
+     * The editor's own-save marker. The recovery's write is this editor's
+     * own, so the document it brings back keeps whatever reached the form
+     * meanwhile without passing a read-only field, such as a field that
+     * commits on exit; even one that now carries the first working draft.
      */
     ownSave: RefObject<{ inFlight: boolean }>;
   }
@@ -69,6 +71,11 @@ export function useRefusedForm(
    * reset: sets the fields taken, if any are waiting, to those values.
    */
   adoptArrived: (arrived: Record<string, unknown>) => void;
+  /**
+   * Whether a recovery is running, from the action through to its reloaded
+   * document: the editor's fields are read-only meanwhile.
+   */
+  recovering: boolean;
 } {
   // Read when the action runs, so the payload follows the fields of the
   // render it runs after.
@@ -79,6 +86,10 @@ export function useRefusedForm(
   gateNow.current = gate;
   // The fields taken, until the document that carries them arrives.
   const awaiting = useRef<readonly string[] | null>(null);
+  // Edits made while a recovery runs would race it: the save reads the form
+  // once, and the fields taken are set over whatever was typed into them
+  // since. So the form is held, as a document someone else holds is.
+  const [recovering, setRecovering] = useState(false);
 
   const refusedForm = useMemo<RefusedForm>(
     () => ({
@@ -114,20 +125,24 @@ export function useRefusedForm(
         if (writesHeld()) throw new Error(HELD);
         if (latch.current) throw new Error(BUSY);
         latch.current = true;
-        // Its write is this editor's own: the document it brings back, even
-        // one that now carries the first working draft, keeps the edits made
-        // while it ran rather than resetting over them.
         ownSave.current.inFlight = true;
+        setRecovering(true);
         try {
+          // The hold on screen before the recovery reads the form: a field
+          // that commits as it goes read-only, such as an editor that commits
+          // on leaving, has its work in what the recovery saves.
+          await nextTask();
           const done = await work();
           // The reload it awaited has settled, but the editor is handed the
-          // reloaded document a task later; the marker and the gate hold until
-          // then, and clear whether or not it differs from the one on screen.
-          await reloadedDocumentRendered();
+          // reloaded document a task later: the form stays held until then,
+          // so nothing typed can meet the fields it takes.
+          await nextTask();
           return done;
         } finally {
+          // Cleared with the hold, once the reloaded document is on screen.
           ownSave.current.inFlight = false;
           latch.current = false;
+          setRecovering(false);
         }
       },
     }),
@@ -153,5 +168,28 @@ export function useRefusedForm(
     [form]
   );
 
-  return { refusedForm, adoptArrived };
+  return { refusedForm, adoptArrived, recovering };
+}
+
+/**
+ * The document's lock affordances while a recovery runs: its fields read-only,
+ * as they are while someone else holds the document. The `readOnly` attribute
+ * rather than `disabled`, so a field keeps focus and the author's place.
+ */
+export function heldWhileRecovering<T extends { readonly readOnly: boolean }>(
+  lock: T,
+  recovering: boolean
+): T {
+  return recovering ? { ...lock, readOnly: true } : lock;
+}
+
+/**
+ * The autosave recovery while a recovery runs: nothing on offer, since
+ * restoring a recovery point writes into the form the recovery holds.
+ */
+export function offerHeldWhileRecovering(
+  recovery: UseAutosaveRecoveryResult,
+  recovering: boolean
+): UseAutosaveRecoveryResult {
+  return recovering ? { ...recovery, offer: null } : recovery;
 }

@@ -73,7 +73,11 @@ import {
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
-import { useRefusedForm } from "@admin/components/features/entries/EntryForm/useRefusedForm";
+import {
+  heldWhileRecovering,
+  offerHeldWhileRecovering,
+  useRefusedForm,
+} from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -565,7 +569,7 @@ export function SingleForm({
   // change the way a status-less save sends it, given the live values it
   // takes when the Single carrying them arrives, and run inside this form's
   // own write gate.
-  const { refusedForm, adoptArrived } = useRefusedForm(
+  const { refusedForm, adoptArrived, recovering } = useRefusedForm(
     form,
     values =>
       withoutPlaceholders(
@@ -630,12 +634,15 @@ export function SingleForm({
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
   const readOnlyForReader = useReadOnlyForReader(schema.slug);
-  const lock = useDocumentLockSurface({
+  // While a refused publish's recovery runs, every field it reaches is
+  // read-only, as it is while someone else holds the Single.
+  const lockSurface = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
     entryId: document.id,
     readOnlyForReader,
   });
+  const lock = heldWhileRecovering(lockSurface, recovering);
 
   // System fields: title (system header) and slug (meta strip). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
@@ -675,7 +682,10 @@ export function SingleForm({
   const editsHeld = writesHeld || readOnlyForReader;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
-  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
+  // A refused publish's recovery holds them too, until its reloaded document
+  // is on screen.
+  const versionWritesHeld =
+    lock.actionsDisabled || readOnlyForReader || recovering;
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
@@ -693,7 +703,13 @@ export function SingleForm({
     documentId: document.id,
     locale,
   });
-  const busy = isSubmitting || discardMutation.isPending;
+  // A save or a discard in flight.
+  const writePending = isSubmitting || discardMutation.isPending;
+  // And a refused publish's recovery: it holds the Single's actions and the
+  // autosave until its reloaded document is on screen, as the lock holds the
+  // fields, and the language panel's copies into the form.
+  const busy = writePending || recovering;
+  const contentHeld = editsHeld || recovering;
 
   // Resolves to what the submission came to, never rejects, as the entry
   // editor's does: the toasts report to the author, the outcome to the caller.
@@ -971,13 +987,16 @@ export function SingleForm({
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
   });
-  const recovery = useAutosaveRecovery({
-    // A reader is offered no recovery point: restoring one would make the
-    // read-only form dirty with work it cannot save.
-    scope: readOnlyForReader ? null : autosaveScope,
-    form,
-    savedCount,
-  });
+  const recovery = offerHeldWhileRecovering(
+    useAutosaveRecovery({
+      // A reader is offered no recovery point: restoring one would make the
+      // read-only form dirty with work it cannot save.
+      scope: readOnlyForReader ? null : autosaveScope,
+      form,
+      savedCount,
+    }),
+    recovering
+  );
 
   /*
    * Throwing away this language's pending change, through the same gate as a
@@ -1039,6 +1058,8 @@ export function SingleForm({
     // is no embedded case to exclude.
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
+      // A save alone: during a recovery, work that reaches the form after its
+      // one read is still unsaved, so leaving still asks.
       disabled={isSubmitting}
       fields={schema.fields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
@@ -1107,7 +1128,7 @@ export function SingleForm({
                     <DocumentSaveShortcuts
                       onCancel={documentView ? undefined : handleCancel}
                       hasUnsavedWork={hasUnsavedWork}
-                      isSubmitting={isSubmitting}
+                      isSubmitting={busy}
                     />
                     {documentView ? (
                       <DocumentViewBody
@@ -1117,6 +1138,7 @@ export function SingleForm({
                         lock={lock}
                         recovery={recovery}
                         viewingVersion={viewingVersion}
+                        recovering={recovering}
                         fields={schema.fields}
                       />
                     ) : (
@@ -1125,7 +1147,10 @@ export function SingleForm({
                             submit-typed Save — runs the Save action, so it
                             stores what Mod+S does and waits for what Save
                             waits for. */}
-                        <SaveActionFormProvider form={form}>
+                        <SaveActionFormProvider
+                          form={form}
+                          recovering={recovering}
+                        >
                           <CopyFromLanguageScope>
                             <FormErrorSummary
                               errors={errors}
@@ -1159,10 +1184,13 @@ export function SingleForm({
                                     schema
                                   )}
                                   historyLifecycle={hasStatus}
-                                  // The whole busy state: the header's spinner,
+                                  // A save or a discard: the header's spinner,
                                   // disabled reasons and discard dialog all
                                   // reflect a discard in flight as well as a save.
-                                  isSubmitting={busy}
+                                  // Not a recovery, which holds the title
+                                  // read-only through the lock rather than
+                                  // disabled.
+                                  isSubmitting={writePending}
                                   hasUnsavedWork={hasUnsavedWork}
                                   entry={entryLike}
                                   collectionSlug={schema.slug}
@@ -1250,7 +1278,7 @@ export function SingleForm({
                                 {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
-                                  actionsDisabled={editsHeld}
+                                  actionsDisabled={contentHeld}
                                   // A reader may still open the other languages.
                                   navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
@@ -1284,7 +1312,7 @@ export function SingleForm({
 
                               {/* Rail (collapsible). */}
                               <SingleFormRail
-                                actionsDisabled={editsHeld}
+                                actionsDisabled={contentHeld}
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}

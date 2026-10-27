@@ -183,12 +183,16 @@ export function useSharedFieldsRecovery(args: {
       const one = stale.fields.length + stale.hiddenCount === 1;
 
       const refusedFor = refusalToastId(scope, locale);
+      // Said while the recovery holds the editor, from the action through to
+      // the reloaded document: the editor's fields are read-only meanwhile.
+      const taking = `${refusedFor}:taking`;
       const take = async () => {
         try {
           // The whole sequence inside the editor's write gate, through to
           // the reloaded document: a Publish between the take and the reload
           // would still send the value the take replaced.
           await form.run(async () => {
+            toast.loading("Taking the live values…", { id: taking });
             // Read now, not when refused: edits made since are part of it.
             const saved = await save(await form.pendingChangeNow());
             const { item } = await versionApi.takeLiveSharedValues(
@@ -204,8 +208,10 @@ export function useSharedFieldsRecovery(args: {
             // it stands either way, and the reload below brings it to
             // whatever is on screen.
             if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
-            // The save committed even when a hook after it failed: the
-            // author hears about both, on the one toast.
+            // Said once both have committed, before the reload, so a reload
+            // that fails can't hide that they did. The save committed even
+            // when a hook after it failed: the author hears about both, on
+            // the one toast.
             toastMutationResult(
               takenMessage(item, language, labelOf),
               saved?.warnings
@@ -216,6 +222,8 @@ export function useSharedFieldsRecovery(args: {
           toast.error(
             apiErrorMessage(failure, "The live values couldn't be taken.")
           );
+        } finally {
+          toast.dismiss(taking);
         }
       };
 

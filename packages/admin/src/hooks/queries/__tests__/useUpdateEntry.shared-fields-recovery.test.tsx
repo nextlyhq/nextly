@@ -13,7 +13,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { update, take, toast } = vi.hoisted(() => ({
   update: vi.fn(),
   take: vi.fn(),
-  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+    loading: vi.fn(),
+  },
 }));
 
 vi.mock("@admin/services/entryApi", async importOriginal => {

@@ -12,6 +12,7 @@ const toast = vi.hoisted(() => ({
   success: vi.fn(),
   warning: vi.fn(),
   error: vi.fn(),
+  loading: vi.fn(),
   dismiss: vi.fn(),
 }));
 vi.mock("@admin/components/ui", async importOriginal => ({
@@ -222,6 +223,64 @@ describe("useSharedFieldsRecovery", () => {
       expect.objectContaining({ duration: 10_000 })
     );
   });
+
+  it.each([
+    [
+      "succeeds",
+      () => undefined,
+      [
+        "hold",
+        "taking",
+        "read",
+        "adopt articleCount",
+        "taken",
+        "reload",
+        "release",
+        "done",
+      ],
+    ],
+    [
+      "fails",
+      () => Promise.reject(new Error("offline")),
+      ["hold", "taking", "read", "release", "failed", "done"],
+    ],
+  ])(
+    "says the live values are being taken while the editor is held, and stops once it %s",
+    async (_outcome, save, expected) => {
+      take.mockResolvedValue({
+        message: "ok",
+        item: { taken: ["articleCount"], outOfDate: [] },
+      });
+      const order: string[] = [];
+      toast.loading.mockImplementation(() => order.push("taking"));
+      toast.success.mockImplementation(() => order.push("taken"));
+      toast.dismiss.mockImplementation(() => order.push("done"));
+      const { recover } = renderRecovery({
+        onTaken: () => order.push("reload"),
+        save,
+      });
+      recover(
+        refusal({
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        }),
+        formHolding({ articleCount: 3 }, order)
+      );
+      toast.error.mockImplementation(() => order.push("failed"));
+
+      actionOf(toast.error.mock.calls[0])();
+      await vi.waitFor(() => expect(order).toContain("done"));
+
+      // Said from the moment the editor is held, and told once the save and
+      // the take have committed; taken down once the hold is released,
+      // however it ended.
+      expect(order).toEqual(expected);
+      const shown = (toast.loading.mock.calls[0] as unknown[])[1] as {
+        id: string;
+      };
+      expect(toast.dismiss).toHaveBeenLastCalledWith(shown.id);
+    }
+  );
 
   it("doesn't take the live values when the form's values can't be saved", async () => {
     const { recover } = renderRecovery({

@@ -312,6 +312,11 @@ export interface UseEntryFormReturn {
   handleCancel: () => void;
   /** Whether form is currently submitting */
   isSubmitting: boolean;
+  /**
+   * Whether a refused publish's recovery is running, through to its reloaded
+   * entry: the fields are read-only meanwhile.
+   */
+  recovering: boolean;
   /** Whether entry is being deleted */
   isDeleting: boolean;
   /** Whether form has unsaved changes */
@@ -406,8 +411,8 @@ function entryIdentity(
 /**
  * How far an arriving entry resets the form. A different entry, language or
  * read starts it again; so does a working-draft overlay coming or going, unless
- * this author's own write is in flight (a recovery that saves the pending
- * change creates the first working draft); so does a new version, unless it is
+ * this author's own write is in flight (a refused publish's recovery, whose
+ * save creates the first working draft); so does a new version, unless it is
  * this author's own save coming back (while the save is in flight, or matching
  * the version it stored). The same identity again — a save's own optimistic
  * copy or rollback, or newer content a working-draft save left the version of
@@ -563,7 +568,7 @@ export function useEntryForm({
   // The form as a refused publish's way out reaches it: saved as the pending
   // change the way a status-less save sends it, and given the live values it
   // takes when the entry carrying them arrives.
-  const { refusedForm, adoptArrived } = useRefusedForm(
+  const { refusedForm, adoptArrived, recovering } = useRefusedForm(
     form,
     values =>
       withoutPlaceholders(
@@ -815,6 +820,7 @@ export function useEntryForm({
     handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
     isSubmitting,
+    recovering,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,
