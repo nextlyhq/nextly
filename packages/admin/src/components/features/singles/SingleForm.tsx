@@ -51,9 +51,11 @@ import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/E
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import { readerStatusWrite } from "@admin/components/features/entries/EntryForm/reader-status-write";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
+  submitFailed,
   submitHeld,
   type SubmitOutcome,
 } from "@admin/components/features/entries/EntryForm/submit-outcome";
@@ -662,6 +664,29 @@ export function SingleForm({
   });
   const busy = isSubmitting || discardMutation.isPending;
 
+  // A write of the status alone, as a reader's publish or unpublish sends it:
+  // it names no field, so the server judges it by that permission alone, and
+  // it does not read the form, which a reader cannot change.
+  const writeStatus = useCallback(
+    async (status: "published" | "draft"): Promise<SubmitOutcome> => {
+      if (busy || submissionLatch.current) return submitBusy;
+      submissionLatch.current = true;
+      try {
+        const stored = await onSubmit({ status });
+        setSavedCount(n => n + 1);
+        if (stored) {
+          ownSave.current.storedKey = singleResetKey(stored, locale);
+        }
+        return { ok: true, item: { id: document.id } };
+      } catch (error) {
+        return submitFailed(error);
+      } finally {
+        submissionLatch.current = false;
+      }
+    },
+    [busy, onSubmit, locale, document.id]
+  );
+
   // Resolves to what the submission came to, never rejects, as the entry
   // editor's does: the toasts report to the author, the outcome to the caller.
   const handleSubmit = useCallback(
@@ -680,7 +705,14 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (editsHeld) return submitHeld;
+      if (editsHeld) {
+        // A reader's publish and unpublish still go, as the status alone.
+        const status = readerStatusWrite(intent, {
+          refused: readOnlyForReader,
+          writesHeld,
+        });
+        return status === undefined ? submitHeld : writeStatus(status);
+      }
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
@@ -736,6 +768,9 @@ export function SingleForm({
       blankPasswordFields,
       busy,
       editsHeld,
+      readOnlyForReader,
+      writesHeld,
+      writeStatus,
       document.id,
       schema,
       locale,

@@ -89,6 +89,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+import { readerStatusWrite } from "./reader-status-write";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
@@ -329,6 +330,7 @@ export function EntryForm({
   const {
     form,
     handleSubmit: submitEntry,
+    writeStatus,
     handleDelete: deleteEntry,
     handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
@@ -655,7 +657,16 @@ export function EntryForm({
     // default lets the browser submit the form natively — reloading the page
     // and dropping the reader's history state.
     event?.preventDefault();
-    return editsHeld ? Promise.resolve(submitHeld) : submitEntry(event, intent);
+    if (!editsHeld) return submitEntry(event, intent);
+    // A reader's publish and unpublish still go, as the status alone, which
+    // their own permissions judge; everything else stays held.
+    const status = readerStatusWrite(intent, {
+      refused: readOnlyForReader,
+      writesHeld,
+    });
+    return status === undefined
+      ? Promise.resolve(submitHeld)
+      : writeStatus(status);
   };
   const handleDelete = () =>
     writesHeld ? Promise.resolve(deleteHeld) : deleteEntry();
