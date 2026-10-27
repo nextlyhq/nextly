@@ -35,6 +35,7 @@ import {
   decide,
   declaresRule,
   judge,
+  outcomeAnswer,
   plainRule,
   type AccessTarget,
   type Decision,
@@ -412,10 +413,14 @@ async function grantJudgedVerdict(
   );
 }
 
-/** A rule allows only by answering `true`; no rule adds no limit. */
+/**
+ * A rule allows every entry only by answering `true`; no rule adds no limit.
+ * A filter allows only the entries it matches, which this gate does not
+ * apply, so it refuses.
+ */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
-  return !("threw" in outcome) && outcome.value === true;
+  return !("threw" in outcome) && outcomeAnswer(outcome).kind === "allow";
 }
 
 /**
@@ -433,7 +438,13 @@ function noticeWhereRuleAllowedBefore(
 ): void {
   if (!outcome.declared || "threw" in outcome) return;
   if (!allowedBefore(outcome.value)) return;
-  noticeRuleNoLongerAllows(q.slug, q.action, caller, outcome.value);
+  noticeRuleNoLongerAllows(
+    q.slug,
+    q.action,
+    caller,
+    outcome.value,
+    outcomeAnswer(outcome)
+  );
 }
 
 /** A visitor's rule refused only by answering `false`. */
