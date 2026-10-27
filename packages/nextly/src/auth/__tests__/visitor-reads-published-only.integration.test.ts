@@ -74,6 +74,7 @@ describe.each(getConfiguredTestDialects())(
       } as never);
       draftId = String((draft.item as { id: string | number }).id);
 
+      // Saved published, then as a draft: the Single's one row is the draft.
       await trusted.updateSingle({
         slug: "vpage",
         data: { title: "published page", status: "published" },
@@ -119,12 +120,18 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toBeTruthy();
     });
 
-    it("returns a Single's published content when a visitor asks for its draft", async () => {
-      const read = (await visitor.findSingle({
+    it("shows a visitor no Single content held as a draft", async () => {
+      // The Single keeps one row, last saved as a draft: there is no
+      // published content for a visitor to read.
+      const stored = (await trusted.findSingle({
         slug: "vpage",
         status: "draft",
       } as never)) as Doc;
-      expect(read.title).toBe("published page");
+      expect(stored.title).toBe("draft page");
+
+      await expect(
+        visitor.findSingle({ slug: "vpage", status: "draft" } as never)
+      ).rejects.toBeTruthy();
     });
   }
 );
