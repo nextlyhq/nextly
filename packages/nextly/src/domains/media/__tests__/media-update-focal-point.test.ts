@@ -11,9 +11,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import { UploadValidator } from "../../../services/upload-validation";
+import type { RequestContext } from "../../../shared/types";
 import { MediaService } from "../services/media-service";
 
-const context = { user: { id: "user-001", email: "test@example.com" } };
+// No user: the update attributes its write to the system, which these don't
+// look at.
+const context: RequestContext = {};
 
 function storedRow() {
   return {
