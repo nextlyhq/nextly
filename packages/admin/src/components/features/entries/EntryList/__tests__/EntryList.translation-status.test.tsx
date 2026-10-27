@@ -14,10 +14,12 @@ import { render } from "@admin/__tests__/utils";
 
 import { EntryList } from "../EntryList";
 
+// The read is still in flight, so the list draws its table rather than the
+// empty state.
 const { useEntries, tableCollection, answers } = vi.hoisted(() => ({
   useEntries: vi.fn((_options: { params: Record<string, unknown> }) => ({
     data: undefined,
-    isLoading: false,
+    isLoading: true,
   })),
   tableCollection: vi.fn((_collection: { localized?: boolean }) => undefined),
   answers: { onScreen: false, defaultLanguage: false },
