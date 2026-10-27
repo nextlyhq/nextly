@@ -304,6 +304,60 @@ describe.each(LOCK_DIALECTS)("the schema lock on %s", dialect => {
     }
   }, 60_000);
 
+  // SQLite has one connection whatever it is asked, and its write transaction keeps every other
+  // process out for as long as it is open; the servers are where a lapsed lease lets one in.
+  (dialect === "sqlite" ? it.skip : it)(
+    "keeps a second run out for the whole of a long transaction on a pool of one",
+    async () => {
+      const single = await world.connect({ poolMax: 1 });
+      const other = await world.connect();
+      try {
+        const run = withSchemaLock(
+          {
+            adapter: single,
+            command: "nextly migrate",
+            whenHeld: "refuse",
+            leaseSeconds: 2,
+            logger: quiet,
+          },
+          () =>
+            single.transaction(async ctx => {
+              await ctx.queryStatement(
+                sql`SELECT 1 AS ${sql.identifier("one")}`
+              );
+              // Two and a half leases in a transaction holding the pool's only connection.
+              await sleep(5_000);
+              return "ran";
+            })
+        );
+        // Another run, started from outside the first one's work, two leases in.
+        await sleep(4_000);
+        const contender = await withSchemaLock(
+          { adapter: other, command: "nextly db:sync", whenHeld: "refuse" },
+          async () => "ran beside it"
+        ).catch((error: unknown) => error);
+
+        await expect(run).resolves.toEqual({ ran: true, value: "ran" });
+        // Refused while the first run's transaction was still open. On PostgreSQL by the schema
+        // lock's row, renewed on a connection of its own; on MySQL by the named lock, which the pool's
+        // only connection holds for the whole run.
+        expect(contender).toMatchObject({
+          code: "NEXTLY_MIGRATE_LOCK_BUSY",
+          logContext: {
+            holder:
+              dialect === "mysql"
+                ? { kind: "earlier-mysql-lock" }
+                : { kind: "schema", command: "nextly migrate" },
+          },
+        });
+      } finally {
+        await single.disconnect();
+        await other.disconnect();
+      }
+    },
+    60_000
+  );
+
   it("excludes db:sync while another process runs nextly migrate", async () => {
     holder = startHolder(world, {
       command: "nextly migrate",

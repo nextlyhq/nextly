@@ -78,6 +78,7 @@ describe("describeHolder", () => {
     );
 
     expect(text).toContain("`nextly:migrate` (connection 12)");
+    expect(text).toContain("this version's or an earlier one's");
     expect(text).toContain("frees it when that connection ends");
   });
 

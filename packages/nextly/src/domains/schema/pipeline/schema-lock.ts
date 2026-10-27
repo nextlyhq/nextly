@@ -494,6 +494,69 @@ function transactionRunner(ctx: TransactionContext): StatementRunner {
   };
 }
 
+/** A connection this run opened for its renewals alone, and how to close it. */
+interface RenewalConnection {
+  readonly runner: StatementRunner;
+  close(): Promise<void>;
+}
+
+/**
+ * A connection of its own for renewals, on a pool that cannot spare one.
+ *
+ * With a pool of one, the work's own transaction holds the only connection for as long as it
+ * runs, so a renewal through the pool waits behind it and the lease lapses under a migration that
+ * is still running, letting another run in. On PostgreSQL one connection opened beside the pool
+ * keeps the renewal independent of the work; a pool of two or more can spare one. MySQL needs none:
+ * a pool of two or more gives the named lock a connection of its own, which renewals use, and with
+ * a pool of one the named lock is held on the only connection for the whole run, so every other
+ * run is refused by it even while the row's renewal waits. SQLite has one connection whatever is
+ * asked of it, and while its work holds a write transaction no other process can take the lock.
+ */
+async function openRenewalConnection(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<RenewalConnection | undefined> {
+  const client = adapter.getDrizzle().$client;
+  return dialect === "postgresql" ? openPostgresRenewal(client) : undefined;
+}
+
+/** node-postgres's pool, as far as a second connection beside it needs. */
+interface PgPoolLike {
+  options?: { max?: number };
+  Client?: new (options: unknown) => {
+    connect(): Promise<void>;
+    query(text: string, params: unknown[]): Promise<{ rows: unknown[] }>;
+    end(): Promise<void>;
+  };
+}
+
+async function openPostgresRenewal(
+  client: unknown
+): Promise<RenewalConnection | undefined> {
+  const pool = client as PgPoolLike | undefined;
+  if (pool?.Client === undefined || (pool.options?.max ?? 10) >= 2) {
+    return undefined;
+  }
+  // The pool's own client class and options, so the connection is made exactly as the pool's are.
+  const connection = new pool.Client(pool.options);
+  await connection.connect();
+  const { PgDialect } = await import("drizzle-orm/pg-core");
+  const compiler = new PgDialect();
+  const query = async <T>(statement: SQL): Promise<T[]> => {
+    const compiled = compiler.sqlToQuery(statement);
+    return (await connection.query(compiled.sql, compiled.params)).rows as T[];
+  };
+  return {
+    runner: {
+      run: async statement => {
+        await query(statement);
+      },
+      query,
+    },
+    close: () => connection.end(),
+  };
+}
+
 /** A runner over a MySQL connection this run holds for itself. */
 function connectionRunner(executor: Executor): StatementRunner {
   return {
@@ -791,6 +854,8 @@ class SchemaLockHold {
   fieldGroupRenewable = false;
   private renewal: ReturnType<typeof setInterval> | undefined;
   private outstandingRenewal: Promise<unknown> = Promise.resolve();
+  /** A connection opened for renewals alone, on a pool that cannot spare one. */
+  private renewalConnection: RenewalConnection | undefined;
 
   constructor(
     readonly options: SchemaLockOptions,
@@ -810,6 +875,19 @@ class SchemaLockHold {
 
   /** Every lock at once, all or nothing. */
   async acquireOnce(): Promise<Attempt> {
+    // The earlier migrate lock first. On MySQL it is the named lock, held on a connection for the
+    // whole run, so a contender refused by it leaves this lock's row alone: taking the row first
+    // would let a contender overwrite a row whose renewal was waiting behind a long transaction
+    // on a pool of one, and the holder would then find its row gone at the end.
+    const taken = await takeEarlierMigrateLock(
+      this.adapter,
+      this.dialect,
+      this.claim,
+      this.timings,
+      this.mayCreateTables
+    );
+    if (!taken.ok) return this.heldByEarlierLock(taken.holder);
+    this.earlier = taken.held;
     if (this.rowReady) {
       const row = await claimRow(
         this.adapter,
@@ -818,21 +896,12 @@ class SchemaLockHold {
         this.options.command,
         this.timings
       );
-      if (!row.ok) return this.heldByRow(row.state);
+      if (!row.ok) {
+        await this.releaseAll();
+        return this.heldByRow(row.state);
+      }
       this.rowHeld = true;
     }
-    const taken = await takeEarlierMigrateLock(
-      this.adapter,
-      this.dialect,
-      this.claim,
-      this.timings,
-      this.mayCreateTables
-    );
-    if (!taken.ok) {
-      await this.releaseAll();
-      return { kind: "held", holder: taken.holder };
-    }
-    this.earlier = taken.held;
     // The earlier field-group lock is taken by the session the work runs in; asked first so a
     // held one is waited for like any other, rather than refused by the session outright.
     const fieldGroup = await observeMigrationLock(this.adapter, this.dialect);
@@ -844,6 +913,20 @@ class SchemaLockHold {
       };
     }
     return { kind: "acquired" };
+  }
+
+  /**
+   * The earlier migrate lock was held: by a run of this version, which holds it beside this lock's
+   * row — reported as that run, with its command and start — by this very context, whose own run
+   * holds it on another adapter, or by a process of an earlier version. The row says which.
+   */
+  private async heldByEarlierLock(holder: SchemaLockHolder): Promise<Attempt> {
+    if (!this.rowReady) return { kind: "held", holder };
+    const state = await this.adapter.transaction(ctx =>
+      readState(ctx, this.dialect, this.timings)
+    );
+    if (state?.live !== true) return { kind: "held", holder };
+    return this.heldByRow(state);
   }
 
   /** The row was not ours to take: someone holds it, or this very context does. */
@@ -871,6 +954,34 @@ class SchemaLockHold {
    * attempt is ever in flight, and a confirmation is dated from before its attempt, so the time
    * left is only ever understated.
    */
+  /** Open a connection of renewals' own where the pool cannot spare one; see `openRenewalConnection`. */
+  async prepareRenewal(): Promise<void> {
+    if (
+      this.renewalConnection !== undefined ||
+      this.earlier?.connection !== undefined
+    ) {
+      return;
+    }
+    this.renewalConnection = await openRenewalConnection(
+      this.adapter,
+      this.dialect
+    );
+  }
+
+  /** The runner a renewal uses when it does not open an adapter transaction. */
+  private ownRunner(): StatementRunner | undefined {
+    const connection = this.earlier?.connection;
+    if (connection !== undefined) return connectionRunner(connection);
+    return this.renewalConnection?.runner;
+  }
+
+  /** Close the renewal connection, once nothing will renew again. */
+  async closeRenewal(): Promise<void> {
+    const connection = this.renewalConnection;
+    this.renewalConnection = undefined;
+    await connection?.close().catch(() => undefined);
+  }
+
   startRenewal(): void {
     let renewing = false;
     this.renewal = setInterval(() => {
@@ -910,15 +1021,9 @@ class SchemaLockHold {
    */
   private renewOnce(): Promise<{ disproved: boolean }> {
     const targets = this.targets();
-    const connection = this.earlier?.connection;
-    if (connection !== undefined) {
-      return renewAll(
-        connectionRunner(connection),
-        this.dialect,
-        this.claim,
-        this.timings,
-        targets
-      );
+    const own = this.ownRunner();
+    if (own !== undefined) {
+      return renewAll(own, this.dialect, this.claim, this.timings, targets);
     }
     return this.adapter.transaction(ctx =>
       renewAll(
@@ -937,10 +1042,8 @@ class SchemaLockHold {
    */
   async stillOwned(): Promise<boolean> {
     const targets = this.targets();
-    const connection = this.earlier?.connection;
-    if (connection !== undefined) {
-      return ownsAll(connectionRunner(connection), this.claim, targets);
-    }
+    const own = this.ownRunner();
+    if (own !== undefined) return ownsAll(own, this.claim, targets);
     // Read as every other read of the lock rows is, inside a transaction.
     return this.adapter.transaction(ctx =>
       ownsAll(transactionRunner(ctx), this.claim, targets)
@@ -1242,6 +1345,7 @@ export async function withSchemaLock<T>(
     return outcome;
   } finally {
     await hold.stopRenewal();
+    await hold.closeRenewal();
     // An interrupt releases on its own path, and then stops the process.
     if (!hold.interrupted) {
       removeSignals();
@@ -1265,6 +1369,7 @@ async function runWhenHeld<T>(
     if (acquired.kind === "reentrant") {
       return { ran: true, value: await work(acquired.held.session) };
     }
+    await hold.prepareRenewal();
     hold.startRenewal();
     const ran = await runHeld(hold, work);
     if (ran.kind === "ran") return { ran: true, value: ran.value };
@@ -1372,7 +1477,7 @@ export function describeHolder(
       );
     case "earlier-mysql-lock":
       return (
-        `a process of an earlier Nextly version holds the MySQL lock \`${holder.name}\`` +
+        `another process — this version's or an earlier one's — holds the MySQL lock \`${holder.name}\`` +
         `${holder.connectionId === null ? "" : ` (connection ${holder.connectionId})`}. ` +
         "MySQL frees it when that connection ends."
       );
