@@ -35,11 +35,11 @@ describe("a deviation", () => {
   it("is recorded once, in the registry's order, however often it fired", async () => {
     const { deviations } = await recordingDeviations(async () => {
       await deviate("key-slug-string-match", true, () => false);
-      await deviate("key-slug-string-match", true, () => false);
+      await deviate("single-route-authorized-visitor", true, () => false);
       await deviate("key-slug-string-match", true, () => false);
     });
     expect(deviations).toEqual([
-      "key-slug-string-match",
+      "single-route-authorized-visitor",
       "key-slug-string-match",
     ]);
   });
@@ -64,7 +64,7 @@ describe("a deviation about a subject", () => {
       await Promise.all([
         aboutSubject("posts", async () => {
           await new Promise(resolve => setTimeout(resolve, 5));
-          await deviate("key-slug-string-match", true, () => false);
+          await deviate("single-route-authorized-visitor", true, () => false);
         }),
         aboutSubject("pages", () => deviate("no-service", true, () => false)),
         aboutSubject("agreed", () => deviate("no-service", true, () => true)),
@@ -72,11 +72,11 @@ describe("a deviation about a subject", () => {
       await deviate("key-slug-string-match", true, () => false);
     });
     expect(deviations).toEqual([
-      "key-slug-string-match",
       "no-service",
+      "single-route-authorized-visitor",
       "key-slug-string-match",
     ]);
-    expect(bySubject.get("posts")).toEqual(["key-slug-string-match"]);
+    expect(bySubject.get("posts")).toEqual(["single-route-authorized-visitor"]);
     expect(bySubject.get("pages")).toEqual(["no-service"]);
     // A subject whose answer agreed recorded nothing.
     expect(bySubject.has("agreed")).toBe(false);
