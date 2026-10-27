@@ -626,6 +626,33 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       expect(companion).toBeLessThan(main);
     });
 
+    it("drops collections deleted together in one file: every junction first, then each in the order given", () => {
+      // POSTS's junction holds a key to TAGS, which is dropped first here, so
+      // a file per collection, applied in name order, would meet TAGS's drop
+      // while the junction still stood.
+      const { migrationSQL, migrationFileName } =
+        service().generateDropTablesMigration([
+          { collectionName: "tags", tableName: "dc_tags", fields: [] },
+          {
+            collectionName: "posts",
+            tableName: "dc_posts",
+            fields: [manyToMany("tags")],
+          },
+        ]);
+      const statements = migrationSQL
+        .split("\n--> statement-breakpoint\n")
+        .map(statement => statement.replace(/^--.*\n/, ""));
+
+      expect(statements).toEqual([
+        `DROP TABLE IF EXISTS ${q(dialect, junction("tags"))};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_tags_locales")};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_tags")}${dialect === "sqlite" ? "" : " CASCADE"};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_posts_locales")};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_posts")}${dialect === "sqlite" ? "" : " CASCADE"};`,
+      ]);
+      expect(migrationFileName).toMatch(/^\d+_drop_tags_posts\.sql$/);
+    });
+
     it("drops nothing extra for a collection with no many-to-many field", () => {
       const { migrationSQL } = service().generateDropTableMigration(
         "posts",

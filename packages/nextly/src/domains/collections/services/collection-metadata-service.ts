@@ -1028,20 +1028,16 @@ export class CollectionMetadataService extends BaseService {
           ),
         }))
       );
-      // Every member's junction tables first: each holds keys to both of its
-      // tables, which the order above does not see, and with all of them
-      // gone only the members' own keys tie one table to another.
-      if (this.isDevelopment()) {
-        for (const collection of collections) {
-          const junctions = this.collectionService.generateDropJunctionsSQL(
-            collection.tableName,
-            collection.fields ?? []
-          );
-          if (junctions !== "") await this.fileManager.runMigration(junctions);
-        }
+      const ordered = order.map(index => ({
+        slug: slugs[index],
+        collection: collections[index],
+      }));
+      for (const { slug, collection } of ordered) {
+        await this.tearDownStoredWithIt(slug, collection);
       }
-      for (const index of order) {
-        await this.deleteCheckedCollection(slugs[index], collections[index]);
+      await this.dropTables(ordered);
+      for (const { slug } of ordered) {
+        await this.unregister(slug);
       }
 
       return {
@@ -1069,11 +1065,11 @@ export class CollectionMetadataService extends BaseService {
   }
 
   /**
-   * Remove one collection that nothing outside its operation depends on: its
-   * field-group values, its translations, its tables, its registry row and
-   * its permissions.
+   * Remove what other tables hold for a collection that nothing outside its
+   * operation depends on, before its tables go: its field-group values and
+   * its translations.
    */
-  private async deleteCheckedCollection(
+  private async tearDownStoredWithIt(
     slug: string,
     collection: DeletedCollectionRow
   ): Promise<void> {
@@ -1094,19 +1090,29 @@ export class CollectionMetadataService extends BaseService {
     await teardownEntityI18n({
       kind: "collection",
       adapter: this.adapter,
-      slug: slug,
+      slug,
       tableName: collection.tableName,
     });
+  }
 
-    // With the fields, so the collection's own many-to-many junctions go with it.
-    const dropArtifacts = this.collectionService.generateDropTableMigration(
-      slug,
-      collection.tableName,
-      collection.fields ?? []
+  /**
+   * Drop the tables of the collections deleted together, in drop order, as
+   * ONE migration: the file is the durable record `nextly migrate` applies
+   * in non-dev/deploy flows, and one file is applied in exactly the order
+   * development runs it here.
+   */
+  private async dropTables(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
+  ): Promise<void> {
+    // With the fields, so the collections' own many-to-many junctions go too.
+    const dropArtifacts = this.collectionService.generateDropTablesMigration(
+      ordered.map(({ slug, collection }) => ({
+        collectionName: slug,
+        tableName: collection.tableName,
+        fields: collection.fields ?? [],
+      }))
     );
 
-    // Persist the drop migration. It is the durable DDL record applied by
-    // `nextly migrate` in non-dev/deploy flows.
     await this.fileManager.saveDropMigration(
       dropArtifacts.migrationSQL,
       dropArtifacts.migrationFileName
@@ -1116,11 +1122,11 @@ export class CollectionMetadataService extends BaseService {
     if (this.isDevelopment()) {
       await this.fileManager.runMigration(dropArtifacts.migrationSQL);
     }
+  }
 
-    // Unregister from metadata
+  /** Remove a dropped collection's registry row and its permissions. */
+  private async unregister(slug: string): Promise<void> {
     await this.collectionService.unregisterCollection(slug);
-
-    // Delete associated permissions
     await deleteResourcePermissions({
       service: this.permissionSeedService,
       slug,

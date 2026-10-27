@@ -2696,34 +2696,6 @@ ${allColumnDefs.join(",\n")}
     return types;
   }
 
-  /** A `DROP TABLE IF EXISTS` for each of a collection's own junction tables. */
-  private dropJunctionStatements(
-    tableName: string,
-    fields: readonly FieldDefinition[]
-  ): string[] {
-    return junctionTablesOf(tableName, fields).map(
-      junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
-    );
-  }
-
-  /**
-   * The statements that drop only a collection's own junction tables, one
-   * per breakpoint, or `""` when it has none. Collections deleted together
-   * run these for every member before any member's own table goes: a
-   * junction holds keys to both of its tables, so while one stands neither
-   * table can be dropped on MySQL, nor on SQLite while it holds a link. Its
-   * collection's drop file still lists it, `IF EXISTS`, so the file stays
-   * whole on its own.
-   */
-  generateDropJunctionsSQL(
-    tableName: string,
-    fields: readonly FieldDefinition[]
-  ): string {
-    return this.dropJunctionStatements(tableName, fields).join(
-      "\n--> statement-breakpoint\n"
-    );
-  }
-
   generateDropTableMigration(
     collectionName: string,
     tableName: string,
@@ -2732,40 +2704,70 @@ ${allColumnDefs.join(",\n")}
     migrationSQL: string;
     migrationFileName: string;
   } {
-    // SQLite doesn't support CASCADE on DROP TABLE
-    const dropStatement =
-      this.dialect === "sqlite"
-        ? `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)};`
-        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`;
+    return this.generateDropTablesMigration([
+      { collectionName, tableName, fields },
+    ]);
+  }
 
-    // The localized companion is excluded from the schema pipeline, so nothing else in a
-    // replayed migration would remove it. It carries an FK to `<main>.id` and therefore has
-    // to be dropped BEFORE the main table. IF EXISTS keeps this a no-op for collections that
-    // were never localized, and for the API delete path that already tore it down in-process.
-    const dropCompanionStatement = `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`;
-
-    // The collection's own many-to-many junctions, for the same reason and in the same
-    // position: each holds an FK to `<main>.id`, and nothing else names them. Only this
-    // collection's fields are known here; a junction another collection's field points at
-    // this table through is that collection's, and stays until its field goes. Named by
-    // `junctionTablesOf`, the list the check before a delete reads, so both name the same tables.
-    const dropJunctionStatements = this.dropJunctionStatements(
-      tableName,
-      fields
+  /**
+   * One migration dropping every table of the collections deleted in one
+   * operation, in the order given: the order their own keys allow.
+   *
+   * Every member's many-to-many junctions come first. A junction holds keys
+   * to both of its tables, so while one stands MySQL drops neither, and
+   * SQLite neither while it holds a link; with all of them gone, only the
+   * members' own keys tie one table to another, and the order given respects
+   * those. One file rather than one per collection, so the sequence a
+   * database receives when the file is applied is the sequence development
+   * ran, whatever order files are read in.
+   */
+  generateDropTablesMigration(
+    collections: ReadonlyArray<{
+      collectionName: string;
+      tableName: string;
+      fields?: readonly FieldDefinition[];
+    }>
+  ): {
+    migrationSQL: string;
+    migrationFileName: string;
+  } {
+    // The collections' own many-to-many junctions. Only their own fields are
+    // known here; a junction another collection's field points at one of
+    // these tables through is that collection's, and stays until its field
+    // goes. Named by `junctionTablesOf`, the list the check before a delete
+    // reads, so both name the same tables.
+    const junctions = collections.flatMap(collection =>
+      junctionTablesOf(collection.tableName, collection.fields ?? []).map(
+        junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+      )
     );
 
+    const tables = collections.flatMap(({ tableName }) => [
+      // The localized companion is excluded from the schema pipeline, so
+      // nothing else in a replayed migration would remove it. It carries an
+      // FK to `<main>.id` and therefore has to be dropped BEFORE the main
+      // table. IF EXISTS keeps this a no-op for collections that were never
+      // localized, and for the API delete path that already tore it down
+      // in-process.
+      `DROP TABLE IF EXISTS ${this.quoteIdentifier(`${tableName}_locales`)};`,
+      // SQLite doesn't support CASCADE on DROP TABLE
+      this.dialect === "sqlite"
+        ? `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)};`
+        : `DROP TABLE IF EXISTS ${this.quoteIdentifier(tableName)} CASCADE;`,
+    ]);
+
+    const names = collections.map(collection => collection.collectionName);
     // One statement per breakpoint, as every other file this service writes:
     // the runner splits on the breakpoint line, and MySQL refuses several
     // statements sent as one.
-    const migrationSQL = `-- Drop dynamic collection: ${collectionName}\n${[
-      ...dropJunctionStatements,
-      dropCompanionStatement,
-      dropStatement,
+    const migrationSQL = `-- Drop dynamic collection${names.length === 1 ? "" : "s"}: ${names.join(", ")}\n${[
+      ...junctions,
+      ...tables,
     ].join("\n--> statement-breakpoint\n")}`;
 
     return {
       migrationSQL,
-      migrationFileName: `${Date.now()}_drop_${collectionName}.sql`,
+      migrationFileName: `${Date.now()}_drop_${names.join("_")}.sql`,
     };
   }
 
