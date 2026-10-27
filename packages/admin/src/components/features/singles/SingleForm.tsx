@@ -1183,6 +1183,10 @@ export function SingleForm({
                                   isRailCollapsed={railCollapsed}
                                   onToggleRail={toggleRail}
                                 />
+                                {/* Directly under the header, as in the entry
+                                    editor: a fact about the whole Single is
+                                    read before the details of its address. */}
+                                {documentBanner}
                                 <EntryMetaStrip
                                   slugField={slugField}
                                   hasStatus={hasStatus}
@@ -1196,8 +1200,6 @@ export function SingleForm({
                                   isRailCollapsed={railCollapsed}
                                   lockSlug
                                 />
-
-                                {documentBanner}
 
                                 {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky

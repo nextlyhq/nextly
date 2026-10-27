@@ -26,12 +26,18 @@ import {
 const schema = {
   slug: "homepage",
   label: "Homepage",
-  fields: [{ type: "text", name: "title", label: "Title" }],
+  // A slug, so the strip that shows it is drawn: the banner belongs above it,
+  // with nothing between it and the header.
+  fields: [
+    { type: "text", name: "title", label: "Title" },
+    { type: "text", name: "slug", label: "Slug" },
+  ],
 } as unknown as SingleSchema;
 const document = {
   id: "homepage",
   updatedAt: "2026-01-01T00:00:00.000Z",
   title: "Homepage",
+  slug: "homepage",
 } as unknown as SingleDocumentData;
 
 describe("the Single editor's document banner", () => {
