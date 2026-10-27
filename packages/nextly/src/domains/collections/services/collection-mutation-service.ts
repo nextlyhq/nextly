@@ -9272,18 +9272,15 @@ export class CollectionMutationService extends BaseService {
           // Each filter that judged the write, matched again on the row as it
           // is locked, so a write that moved the entry out of one since it was
           // judged above changes nothing.
-          for (const check of writeFilters) {
-            const outside = await this.refusalOutsideWriteFilter(
-              tx.getDrizzle<typeof this.db>(),
-              schema,
-              params.entryId,
-              check.match,
-              check.params
-            );
-            if (outside) {
-              transitionDeniedResult = outside;
-              throw new StatusTransitionDeniedError();
-            }
+          const outside = await this.refusalOutsideWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            writeFilters
+          );
+          if (outside) {
+            transitionDeniedResult = outside;
+            throw new StatusTransitionDeniedError();
           }
 
           // The status event uses the true prior value even after a conflict
@@ -10126,22 +10123,15 @@ export class CollectionMutationService extends BaseService {
           // relations are written, and rolled back where it left one. The
           // caller could see the entry, which was inside the filter, so the
           // refusal is in words.
-          for (const check of writeFilters) {
-            const movedOut = await this.movedOutOfWriteFilter(
-              tx,
-              schema,
-              params.entryId,
-              check.match
-            );
-            if (movedOut) {
-              transitionDeniedResult =
-                await this.accessService.refusalOutsideFilter(
-                  check.params,
-                  true,
-                  true
-                );
-              throw new StatusTransitionDeniedError();
-            }
+          const movedOut = await this.refusalMovedOutOfWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            writeFilters
+          );
+          if (movedOut) {
+            transitionDeniedResult = movedOut;
+            throw new StatusTransitionDeniedError();
           }
 
           // Capture a version snapshot of the post-update document atomically
@@ -11300,14 +11290,81 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     match: FilteredWriteMatch
   ): Promise<boolean> {
-    const [row] = await tx
-      .getDrizzle<typeof this.db>()
+    const found = await this.storedWriteMatch(
+      tx.getDrizzle<typeof this.db>(),
+      schema,
+      entryId,
+      match
+    );
+    return found.exists && !found.writes;
+  }
+
+  /**
+   * The refusal of a write to `entryId` where the row, as it is locked on
+   * `tx`, is outside any filter that judged the write: one matched before the
+   * write may have been moved out of it since. `null` where it is inside
+   * every one.
+   */
+  private async refusalOutsideWriteFilters(
+    tx: TransactionContext,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryId: string,
+    checks: readonly FilteredWriteCheck[]
+  ): Promise<CollectionServiceResult | null> {
+    for (const check of checks) {
+      const outside = await this.refusalOutsideWriteFilter(
+        tx.getDrizzle<typeof this.db>(),
+        schema,
+        entryId,
+        check.match,
+        check.params
+      );
+      if (outside) return outside;
+    }
+    return null;
+  }
+
+  /**
+   * The refusal of a write that left `entryId` outside a filter that judged
+   * it, asked on `tx` once the write is in. The caller could see the entry,
+   * which was inside the filter, so the refusal is in words. `null` where the
+   * entry is still inside every one.
+   */
+  private async refusalMovedOutOfWriteFilters(
+    tx: TransactionContext,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryId: string,
+    checks: readonly FilteredWriteCheck[]
+  ): Promise<CollectionServiceResult | null> {
+    for (const check of checks) {
+      if (await this.movedOutOfWriteFilter(tx, schema, entryId, check.match)) {
+        return this.accessService.refusalOutsideFilter(
+          check.params,
+          true,
+          true
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How the stored row of `entryId`, read on `db`, matches a write's filter
+   * and the caller's read access, in one select: the one question both the
+   * check before a write and the one after it ask.
+   */
+  private async storedWriteMatch(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryId: string,
+    match: FilteredWriteMatch
+  ): Promise<ReturnType<typeof writeMatchOf>> {
+    const [row] = await db
       .select({ writes: match.columns.writes, reads: match.columns.reads })
       .from(schema)
       .where(eq(schema.id as never, entryId))
       .limit(1);
-    const found = writeMatchOf(row);
-    return found.exists && !found.writes;
+    return writeMatchOf(row);
   }
 
   /**
@@ -11357,12 +11414,7 @@ export class CollectionMutationService extends BaseService {
     match: FilteredWriteMatch,
     access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
   ): Promise<CollectionServiceResult<T> | null> {
-    const [row] = await db
-      .select({ writes: match.columns.writes, reads: match.columns.reads })
-      .from(schema)
-      .where(eq(schema.id as never, entryId))
-      .limit(1);
-    const found = writeMatchOf(row);
+    const found = await this.storedWriteMatch(db, schema, entryId, match);
     if (!found.exists || found.writes) return null;
     return this.accessService.refusalOutsideFilter<T>(access, found.reads);
   }
@@ -13074,24 +13126,16 @@ export class CollectionMutationService extends BaseService {
       // In the caller's transaction a returned failure would leave the row
       // written, so the refusal aborts the transaction, as a write that
       // cannot stand does.
-      if (
+      const movedOut =
         filteredWrite &&
-        (await this.movedOutOfWriteFilter(
+        (await this.refusalMovedOutOfWriteFilters(
           tx,
           filteredWrite.schema,
           entryId,
-          filteredWrite.match
-        ))
-      ) {
-        throw markWriteIntegrityFailure(
-          errorFromServiceEnvelope(
-            await this.accessService.refusalOutsideFilter(
-              filteredWrite.params,
-              true,
-              true
-            )
-          )
-        );
+          [filteredWrite]
+        ));
+      if (movedOut) {
+        throw markWriteIntegrityFailure(errorFromServiceEnvelope(movedOut));
       }
 
       // The whole of this locale, not only what the patch named. A partial
