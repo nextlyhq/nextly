@@ -1021,11 +1021,13 @@ describe("the requests judged in other languages", () => {
     expect(result.current.can("create-posts")).toBe(false);
   });
 
-  it("falls back to the action's own cell for a server that names no such cell", async () => {
+  it("refuses each request a server names no cell for", async () => {
+    // An older server answers only the actions, each judged in one language;
+    // a request judged in others is not offered on that answer.
     server.capabilities = answering({
       read: true,
       create: true,
-      update: false,
+      update: true,
       publish: true,
     });
     const { result } = render();
@@ -1040,7 +1042,13 @@ describe("the requests judged in other languages", () => {
       may("updateInDefaultLanguage"),
       may("duplicate"),
       may("create"),
-    ]).toEqual([true, true, true, false, true, true]);
+    ]).toEqual([false, false, false, false, false, false]);
+    // POPULATION CONTROL: the actions the answer names still count.
+    expect([may("read"), may("update"), may("publish")]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   });
 });
 
@@ -1063,6 +1071,34 @@ describe("the end the permission list names", () => {
     server.permissions = { ...EDITOR, permissions: [], validUntil: null };
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    await waitFor(() =>
+      expect(result.current.hasPermission("read-posts")).toBe(false)
+    );
+    expect(
+      server.asked.filter(p => p === "/me/permissions").length
+    ).toBeGreaterThan(before);
+  });
+
+  it("asks again while the permission list arrives already past its end", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Read after its end by the browser's clock, as a clock ahead of the
+    // server's reads it; the content answer names no end at all.
+    server.permissions = { ...EDITOR, validUntil: Date.now() - 5_000 };
+    server.capabilities = answering({ read: true });
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() =>
+      expect(result.current.hasPermission("read-posts")).toBe(true)
+    );
+    const before = server.asked.filter(p => p === "/me/permissions").length;
+
+    // The server reaches the end, and the permission goes with it.
+    server.permissions = { ...EDITOR, permissions: [], validUntil: null };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
     });
 
     await waitFor(() =>

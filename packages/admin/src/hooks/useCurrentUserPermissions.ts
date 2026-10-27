@@ -125,12 +125,13 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
 });
 
 /**
- * A cell of the server's answer, or `own` where the answer has none: an older
- * server answers no cell for a request judged in other languages, which the
- * action's own cell then stands for.
+ * A cell of the server's answer, refused where the answer has none. An older
+ * server answers no cell for a request judged in other languages, and the
+ * action's own cell, judged in one language, cannot stand for it: it could
+ * offer what that server refuses.
  */
-function cellOr(cell: boolean | undefined, own: boolean): boolean {
-  return cell ?? own;
+function cellOf(cell: boolean | undefined): boolean {
+  return cell ?? false;
 }
 
 /**
@@ -144,29 +145,22 @@ function collectionsFrom(
 ): Record<string, CollectionCapabilities> {
   const collections: Record<string, CollectionCapabilities> = {};
   for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
-    const canCreate = cellOr(entity.create, false);
     collections[slug] = {
       canRead: entity.read,
       // Every create the admin sends names no language, so the server writes
       // it in the default one: that is the create answered here, for the
       // list's New, the create page and the quick-create modal alike.
-      canCreate: cellOr(entity.createInDefaultLanguage, canCreate),
+      canCreate: cellOf(entity.createInDefaultLanguage),
       canUpdate: entity.update,
-      canDelete: cellOr(entity.delete, false),
+      canDelete: cellOf(entity.delete),
       canPublish: entity.publish,
       canUnpublish: entity.unpublish,
       // Each request judged in other languages, as the server judges it.
-      canReadTranslations: cellOr(entity.readTranslations, entity.read),
-      canReadHistory: cellOr(entity.readHistory, entity.read),
-      canPublishEveryLanguage: cellOr(
-        entity.publishEveryLanguage,
-        entity.publish
-      ),
-      canUpdateInDefaultLanguage: cellOr(
-        entity.updateInDefaultLanguage,
-        entity.update
-      ),
-      canDuplicate: cellOr(entity.duplicate, canCreate),
+      canReadTranslations: cellOf(entity.readTranslations),
+      canReadHistory: cellOf(entity.readHistory),
+      canPublishEveryLanguage: cellOf(entity.publishEveryLanguage),
+      canUpdateInDefaultLanguage: cellOf(entity.updateInDefaultLanguage),
+      canDuplicate: cellOf(entity.duplicate),
     };
   }
   return collections;
@@ -403,6 +397,7 @@ type DeadlineStep =
 interface DeadlineState {
   ends: readonly number[];
   validUntil: number | null;
+  permissionsValidUntil: number | null;
   answeredAt: number;
   permissionsAnsweredAt: number;
   askedAt: number | null;
@@ -431,12 +426,20 @@ function passedEndStep(state: DeadlineState): DeadlineStep | null {
 
 /**
  * The next end to come, or, for an answer the server gave after its own end,
- * a check at most once a second, whichever is sooner.
+ * a check at most once a second, whichever is sooner. Either answer may be
+ * that answer: each names its end from its own read of the roles.
  */
-function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
+function waitingStep({
+  ends,
+  validUntil,
+  permissionsValidUntil,
+  now,
+}: DeadlineState): DeadlineStep {
   const next = Math.min(...ends.filter(end => end > now));
-  const recheck =
-    validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
+  const givenAfterItsEnd = [validUntil, permissionsValidUntil].some(
+    end => end !== null && end <= now
+  );
+  const recheck = givenAfterItsEnd ? now + MIN_RECHECK_MS : Infinity;
   if (recheck < next) {
     return { kind: "wait", at: recheck, since: now, atEnd: false };
   }
@@ -753,6 +756,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     const step = nextDeadlineStep({
       ends: knownEnds,
       validUntil,
+      permissionsValidUntil,
       answeredAt,
       permissionsAnsweredAt,
       askedAt: deadlineAsks.get(queryClient) ?? null,
@@ -789,6 +793,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   }, [
     knownEnds,
     validUntil,
+    permissionsValidUntil,
     answeredAt,
     permissionsAnsweredAt,
     refetch,
