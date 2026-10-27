@@ -43,7 +43,10 @@ import {
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -532,6 +535,11 @@ async function authorizeBy(
   // let the read run unfiltered.
   const question = {
     userId: authResult.userId,
+    // A key is kept apart from its user's other keys and sessions by the
+    // scope its rule is told.
+    ...(authResult.authMethod === "api-key"
+      ? { scope: apiKeyScopeFrom(authResult) }
+      : {}),
     slug: resource,
     action,
     language: currentRuleLanguage(),
