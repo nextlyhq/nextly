@@ -46,7 +46,7 @@ vi.mock("../access/decide", async importOriginal => {
 });
 
 import { recordingDeviations } from "../access/deviations";
-import { apiKeyScope } from "../authenticated-scope";
+import { apiKeyScope, apiKeyScopeFrom } from "../authenticated-scope";
 import { canReadSystemResource } from "../resource-readable";
 
 /** A grant of `action` on `resource`, under its stored slug. */
@@ -81,6 +81,20 @@ describe("canReadSystemResource — API keys", () => {
     await expect(
       canReadSystemResource("users", "owner-1", scope)
     ).resolves.toBe(true);
+  });
+
+  it("counts a key's stored manage slug as its read, where its scope carries no rows", async () => {
+    // A scope of slugs alone is judged by its stored slugs, and
+    // `manage-media` still counts as read on media there as at every gate.
+    const scope = apiKeyScopeFrom({ permissions: ["manage-media"] });
+
+    await expect(
+      canReadSystemResource("media", "owner-1", scope)
+    ).resolves.toBe(true);
+    // The control: it counts on media alone.
+    await expect(
+      canReadSystemResource("users", "owner-1", scope)
+    ).resolves.toBe(false);
   });
 });
 
