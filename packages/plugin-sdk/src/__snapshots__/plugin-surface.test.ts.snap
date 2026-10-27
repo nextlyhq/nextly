@@ -192,6 +192,7 @@ exports[`plugin-sdk public export surface > \`./blocks\` surface is unchanged 1`
   "BlockEditorMeta (type)",
   "BlockExample (type)",
   "BlockIcon (type)",
+  "BlockInspectorProps (type)",
   "BlockIsland (type)",
   "BlockPart (type)",
   "BlockRenderArgs (type)",
