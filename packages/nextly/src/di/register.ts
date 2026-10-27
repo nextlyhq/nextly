@@ -60,6 +60,7 @@ import type { PermissionSeedService } from "../domains/auth/services/permission-
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import { publishDeclaredEntities } from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { resealQueuedMessagesAtBoot } from "../domains/email/queued-send";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import { emailRetentionAfterTransform } from "../domains/email/retention-config";
@@ -2161,6 +2162,13 @@ async function syncCodeFirstEntities(
   // its callers may do. Registration only writes to an in-memory map, so it owes
   // nothing to the table sync above.
   registerCodeDefinedAccess(transformedConfig);
+
+  // The collections and Singles this configuration declares, published for
+  // the write guard: a registry row from code whose slug is not among them is
+  // removed from code, and its entries' writes are refused. Published on
+  // every boot, a configuration declaring none included, for the reason the
+  // access rules above are.
+  publishDeclaredEntities(transformedConfig);
 
   // ----------------------------------------
   // Layer 5: Sync Code-First Components
@@ -4845,6 +4853,9 @@ async function releaseServices(opts: {
     // Collection db options are process-global too; a later registration must
     // start from its own config's, not inherit this one's `allowIdOnCreate`.
     publishCollectionDbOptions([]);
+    // The declared entities are process-global too: unpublished, nothing is
+    // judged removed from code until the next registration publishes its own.
+    publishDeclaredEntities(undefined);
     // The password policy's configured minimum is process-global too; the next
     // registration sets its own, and until then the default stands rather than
     // this instance's.
@@ -4906,6 +4917,7 @@ export function clearServices(): void {
   publishWorkflows(new Map());
   // Cleared for the same reason as in `releaseServices`.
   publishCollectionDbOptions([]);
+  publishDeclaredEntities(undefined);
   // Cleared for the same reason as in `releaseServices`: the configured
   // minimum belongs to this registration, and the next one sets its own.
   resetPasswordPolicy();

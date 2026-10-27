@@ -33,6 +33,10 @@ import {
   publishedCollectionDbOptions,
 } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -1698,6 +1702,14 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The declared collections and Singles the write guard judges by, likewise:
+  // published at commit, and the set in force put back when the reload does
+  // not land, so a refused reload neither refuses nor allows a write.
+  let previousDeclared: ReturnType<typeof publishDeclaredEntities>;
+  let declaredPublished = false;
+  reloadUndo.push(() => {
+    if (declaredPublished) restoreDeclaredEntities(previousDeclared);
+  });
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -1725,6 +1737,8 @@ async function applyReloadHolding(
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
+    previousDeclared = publishDeclaredEntities(newConfig);
+    declaredPublished = true;
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows

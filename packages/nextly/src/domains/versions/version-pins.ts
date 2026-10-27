@@ -38,6 +38,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { VersionsDbApi } from "./db-api";
 import { lockDocument } from "./history-locks";
@@ -254,6 +255,12 @@ async function assertVersionExists(
 function holderHandle(name: string): RegisteredVersionPinHolder {
   return {
     async pin(tx, { ref, slot, versionNo }) {
+      // A pin is held on a document's version, so it is refused when the
+      // document's collection or Single is removed from code, as freeing one
+      // is below. Read on the caller's transaction.
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       assertSlot(slot);
       if (!Number.isInteger(versionNo) || versionNo < 1) {
         throw NextlyError.invalidInput({
@@ -307,6 +314,9 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
       });
     },
     async release(tx, { ref, slot }) {
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       assertSlot(slot);
       // Under the document lock, so a release cannot land between a pin's
       // read of its slot and its write: the pin would report success over a
@@ -323,6 +333,9 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
       });
     },
     async releaseAll(tx, ref) {
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       await lockDocument(tx, ref);
       await tx.delete(PINS_TABLE, {
         and: [
