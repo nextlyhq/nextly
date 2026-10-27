@@ -12,6 +12,7 @@ import {
   BUDGETS,
   budgetBreaches,
   describeBreaches,
+  pinRefusal,
   pinsFrom,
   routeKey,
 } from "./check-bundle-budgets.mjs";
@@ -62,9 +63,49 @@ describe("pinsFrom", () => {
       "page.b": 300 * KB,
     });
   });
+
+  it("refuses two routes that share a stable name rather than keep one", () => {
+    const r = report([
+      ["index-AAAAAAAA.mjs", 300],
+      ["index-BBBBBBBB.mjs", 280],
+    ]);
+    expect(() => pinsFrom(r)).toThrow(/index/);
+  });
+});
+
+describe("pinRefusal", () => {
+  const fresh = {
+    commit: "unversioned",
+    builtAt: "2026-10-27T00:00:00.000Z",
+    buildInfo: { commit: "unversioned" },
+  };
+
+  it("pins a dist its build stamped", () => {
+    expect(pinRefusal(fresh)).toBeNull();
+  });
+
+  it("refuses a dist with no build stamp: its bytes cannot be placed", () => {
+    expect(pinRefusal({ ...fresh, buildInfo: undefined })).toMatch(/stamp/);
+  });
+
+  it("refuses a dist stamped by another commit", () => {
+    expect(
+      pinRefusal({ ...fresh, commit: "bbbbbbb", buildInfo: { commit: "aaaaaaa" } })
+    ).toMatch(/predates|another commit/);
+  });
 });
 
 describe("budgetBreaches", () => {
+  it("fails two routes that share a stable name: one pin cannot hold both", () => {
+    const r = report([
+      ["index-AAAAAAAA.mjs", 300],
+      ["index-BBBBBBBB.mjs", 280],
+    ]);
+    expect(budgetBreaches(r, pins([["index", 300]]))).toEqual([
+      expect.objectContaining({ kind: "duplicate", name: "route index" }),
+    ]);
+  });
+
   it("passes a build within every budget", () => {
     const r = report([["page.a-AAAAAAAA.mjs", 300]]);
     expect(budgetBreaches(r, pins([["page.a", 300]]))).toEqual([]);

@@ -236,6 +236,31 @@ describe("bundle-report", () => {
       expect(line).toContain(`${formatKB(route.directVisit.minifiedBytes)} KB`);
     });
 
+    it("states a direct visit from the shell total the shell budget reads, whatever the shell's chunks are named", () => {
+      // A chunk the entry imports statically whose name matches the CLI
+      // rule: the shell total classifies it as CLI, so a visit summed from
+      // the closure itself would count it where the shell total does not.
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./cli.shared.mjs";
+          const LazyRoute = () => import("./chunk-route.mjs");
+        `,
+        "cli.shared.mjs": `export const shell = "${"c".repeat(3000)}";`,
+        "chunk-route.mjs": `import "./cli.shared.mjs"; export default "${"r".repeat(2000)}";`,
+      });
+
+      const report = measureBundle({ distDir: dist, commit: "abc1234" });
+      const [route] = report.routes;
+      const shell = report.totals.firstScreen;
+
+      expect(route.directVisit.gzippedBytes).toBe(
+        shell.gzippedBytes + route.beyondShell.gzippedBytes
+      );
+      expect(route.directVisit.minifiedBytes).toBe(
+        shell.minifiedBytes + route.beyondShell.minifiedBytes
+      );
+    });
+
     it("calls a dist stamped by another commit stale", () => {
       const result = {
         commit: "unversioned",

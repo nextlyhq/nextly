@@ -25,24 +25,6 @@
  *   node scripts/check-bundle-budgets.mjs --pin   re-measure and rewrite the pins
  */
 
-/**
- * check-bundle-budgets.mjs — the R-3 gate: hold the shipped bundle to the
- * two budgets the spec states.
- *
- * - The shipped total — every browser-loaded chunk the package emits — stays
- *   at most 3,500 KB minified.
- * - Every built-in route's direct visit — the shell plus that route's own
- *   remainder, what a cold URL for the route downloads before it renders —
- *   stays at most 200 KB gzipped.
- *
- * A breach fails naming the measured size and the budget it exceeded; a run
- * within all budgets passes whatever the previous build measured. The
- * numbers come from the merged spec (specs/admin-bundle/spec.md, R-3); the
- * founder amends them there at review, and this file follows the spec.
- *
- * Usage: node scripts/check-bundle-budgets.mjs
- */
-
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +54,23 @@ export function routeKey(root) {
   return root.replace(/-[A-Za-z0-9_-]{8}\.mjs$/, "");
 }
 
+/**
+ * Stable names two or more routes share. Other lazy modules keep the
+ * bundler's `[name]-[hash]` naming, so two `index.ts` files become two
+ * `index` routes; one pin would then judge both, and a new route could hide
+ * behind an old one's pin.
+ */
+function sharedRouteKeys(report) {
+  const seen = new Set();
+  const shared = new Set();
+  for (const route of report.routes) {
+    const key = routeKey(route.root);
+    if (seen.has(key)) shared.add(key);
+    seen.add(key);
+  }
+  return shared;
+}
+
 /** The pins as the gate reads them: each route's own code, in gzipped bytes. */
 export function readPins(file = PINS_FILE) {
   return JSON.parse(readFileSync(file, "utf8"));
@@ -82,6 +81,12 @@ export function readPins(file = PINS_FILE) {
  * stable name, with the commit it was measured at.
  */
 export function pinsFrom(report) {
+  const shared = sharedRouteKeys(report);
+  if (shared.size > 0) {
+    throw new Error(
+      `Cannot pin: several routes are named ${[...shared].join(", ")}. Give each a path-based chunk name in tsdown.config.ts.`
+    );
+  }
   const routes = {};
   for (const route of [...report.routes].sort((a, b) =>
     routeKey(a.root).localeCompare(routeKey(b.root))
@@ -89,6 +94,23 @@ export function pinsFrom(report) {
     routes[routeKey(route.root)] = route.beyondShell.gzippedBytes;
   }
   return { measuredAt: report.commit ?? null, date: report.date ?? null, routes };
+}
+
+/**
+ * Why `report` cannot become the pins, or null when it can. A pin labelled
+ * with this commit must be this commit's bytes: pinning other bytes would
+ * loosen the gate for every later build.
+ */
+export function pinRefusal(report) {
+  // Every build writes the stamp, so a dist without one was built some other
+  // way and nothing says which commit its bytes are.
+  if (report.buildInfo === undefined) {
+    return "the dist has no valid build stamp (.build-info.json)";
+  }
+  if (distStaleness(report).stale) {
+    return "the dist predates this commit, or another commit's build stamped it";
+  }
+  return null;
 }
 
 /**
@@ -118,8 +140,19 @@ export function budgetBreaches(report, pins, budgets = BUDGETS) {
     });
   }
 
+  const shared = sharedRouteKeys(report);
+  for (const key of shared) {
+    breaches.push({
+      kind: "duplicate",
+      name: `route ${key}`,
+      measured: "several routes under this one name",
+      budget: "one pin per route: give each a path-based chunk name in tsdown.config.ts",
+    });
+  }
+
   for (const route of report.routes) {
     const key = routeKey(route.root);
+    if (shared.has(key)) continue;
     const pinned = pins.routes[key];
     const measured = `${formatKB(route.beyondShell.gzippedBytes)} KB gzipped of its own`;
     if (pinned === undefined) {
@@ -163,11 +196,10 @@ async function main() {
   const report = measureBundle();
 
   if (process.argv.includes("--pin")) {
-    // A pin labelled with this commit must be this commit's bytes: pinning an
-    // older build would loosen the gate for every later build.
-    if (distStaleness(report).stale) {
+    const refusal = pinRefusal(report);
+    if (refusal !== null) {
       console.error(
-        "Refusing to pin: the dist predates this commit. Rebuild (pnpm --filter @nextlyhq/admin build) and pin again."
+        `Refusing to pin: ${refusal}. Rebuild (pnpm --filter @nextlyhq/admin build) and pin again.`
       );
       process.exitCode = 1;
       return;
