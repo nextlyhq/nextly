@@ -389,17 +389,24 @@ const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
  * running text. The one definition every log sanitiser uses.
  */
 export const CREDENTIAL_PARAMETER =
-  /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig))=[^\s&"'<>]*/gi;
+  /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig)|[\w-]*(?:session|cookie|csrf)[\w-]*)=[^\s&"'<>]*/gi;
+
+/**
+ * A `Cookie` or `Set-Cookie` header quoted in text, to the end of its line:
+ * every cookie on it, whatever it is named, may be a session.
+ */
+const COOKIE_HEADER_IN_TEXT = /\b((?:set-)?cookie):[^\r\n]*/gi;
 
 /**
  * Every credential in a piece of text redacted: a `Bearer` or `Basic`
- * credential, the user and password before a host, and the value of a
- * parameter named like a credential.
+ * credential, the user and password before a host, a quoted cookie header,
+ * and the value of a parameter named like a credential or a session.
  */
 function redactCredentialsInText(text: string): string {
   return text
     .replace(CREDENTIAL_IN_TEXT, (_, scheme: string) => `${scheme} ${REDACTED}`)
     .replace(URL_USERINFO, `$1${REDACTED}@`)
+    .replace(COOKIE_HEADER_IN_TEXT, `$1: ${REDACTED}`)
     .replace(CREDENTIAL_PARAMETER, `$1=${REDACTED}`);
 }
 

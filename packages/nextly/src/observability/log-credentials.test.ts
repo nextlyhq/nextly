@@ -286,4 +286,21 @@ describe("credentials anywhere in a log value", () => {
 
     expect(out).toContain("home");
   });
+
+  it("takes cookies and session values out of text", () => {
+    const out = receivedBy({
+      error: new Error(
+        "Rejected Cookie: theme=dark; nextly_session=session-secret-value"
+      ),
+      note: "upstream sent Set-Cookie: sid=set-cookie-secret; Path=/",
+      query: "retry with session_id=sid-secret-value&page=2",
+    });
+
+    // POPULATION CONTROL: the words around them remain.
+    expect(out).toContain("Rejected Cookie:");
+    expect(out).toContain("page=2");
+    expect(out).not.toContain("session-secret-value");
+    expect(out).not.toContain("set-cookie-secret");
+    expect(out).not.toContain("sid-secret-value");
+  });
 });
