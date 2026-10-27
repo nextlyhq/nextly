@@ -36,6 +36,7 @@ import { askableCards } from "./widget-layout";
 import {
   failedSlot,
   unavailableSlot,
+  withinSlotBudget,
   type CardAnswer,
   type ReadyCardData,
 } from "./widget-slots";
@@ -313,43 +314,41 @@ function logRefusedAccess(declared: DeclaredWidget): void {
   }
 }
 
+/** What a declared card's data function is handed, once its card has been judged shown. */
+type LoadInput = Parameters<DeclaredWidget["declaration"]["load"]>[0];
+
 /**
- * One card's answer, as the person asking, decided in this order, each before
- * the widget's own `load` runs:
+ * What a card's own rules decide for the person asking, in this order, each before the widget's
+ * own `load` runs:
  *
- * 1. Its `access`: a person it refuses gets the one "not available" answer.
- * 2. Its settings: one with no value asks the reader for it (`needs-setting`).
- * 3. Its `shows`: no leaves the card out for this person (`not-shown`).
- * 4. Its `load`, with its settings, the person, read services bound to them,
- *    the card's signal, the batch's instant and the owner's share scope. What
- *    it throws, and an answer JSON cannot carry, fails this card alone.
+ * 1. Its `access`: a person it refuses is `refused`.
+ * 2. Its settings: one the widget needs with no value is `needs-setting`, naming it.
+ * 3. Its `shows`: anything but `true` is `not-shown`.
  *
- * Then its `isEmpty`, in the same slot, when the declaration states one.
+ * Otherwise it is `shown`, with what `load` would be handed: its settings, the person, read
+ * services bound to them, the card's signal, the batch's instant and the owner's share scope.
+ *
+ * 🔴 The one judgement: a card answered (`answerCard`) and a card asked whether it is shown at all
+ * (`cardIsShownTo`) both read it, so the two cannot come to answer one card differently.
  */
-async function answerCard(
+type CardVerdict =
+  | { kind: "refused" }
+  | { kind: "needs-setting"; label: string }
+  | { kind: "not-shown" }
+  | { kind: "shown"; input: LoadInput };
+
+async function judgeCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
   asked: CardInput
-): Promise<CardAnswer> {
-  if (await refusedAccess(declared, batch)) {
-    // Routine, not a failure: a person without access is answered "not available" on every load,
-    // so it is said at debug level, not as an error (a predicate that threw has warned already).
-    logRefusedAccess(declared);
-    return { settled: unavailableSlot() };
-  }
+): Promise<CardVerdict> {
+  if (await refusedAccess(declared, batch)) return { kind: "refused" };
   const { declaration, collections } = declared;
   const settings = resolveCardSettings(declaration.settings, placement.config);
   const missing = unsetSetting(declaration.settings, settings);
   if (missing !== undefined) {
-    return {
-      settled: {
-        ok: false,
-        error: `Choose ${missing.label} in the card's settings`,
-        code: "needs-setting",
-        setting: missing.label,
-      },
-    };
+    return { kind: "needs-setting", label: missing.label };
   }
   const { signal, scope, now } = asked;
   const input = {
@@ -366,21 +365,113 @@ async function answerCard(
       ...(collections === undefined ? {} : { collections }),
     }),
   };
-  const { shows, load, isEmpty } = declaration;
+  const { shows } = declaration;
   if (shows !== undefined) {
     const shown = await ownCode(declared, "widget-shows-threw", () =>
       shows(input)
     );
-    if (shown !== true) {
+    if (shown !== true) return { kind: "not-shown" };
+  }
+  return { kind: "shown", input };
+}
+
+/**
+ * One card's answer, as the person asking: what its rules decide (`judgeCard`), then its `load`
+ * for a card shown, whose throw, and whose answer JSON cannot carry, fails this card alone. Then
+ * its `isEmpty`, in the same slot, when the declaration states one.
+ */
+async function answerCard(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput
+): Promise<CardAnswer> {
+  const verdict = await judgeCard(declared, placement, batch, asked);
+  switch (verdict.kind) {
+    case "refused":
+      // Routine, not a failure: a person without access is answered "not available" on every
+      // load, so it is said at debug level, not as an error (a predicate that threw has warned).
+      logRefusedAccess(declared);
+      return { settled: unavailableSlot() };
+    case "needs-setting":
+      return {
+        settled: {
+          ok: false,
+          error: `Choose ${verdict.label} in the card's settings`,
+          code: "needs-setting",
+          setting: verdict.label,
+        },
+      };
+    case "not-shown":
       return {
         settled: { ok: false, error: "Not shown for you", code: "not-shown" },
       };
-    }
+    case "shown":
+      break;
   }
-  const value = await ownCode(declared, "widget-load-threw", () => load(input));
+  const { declaration } = declared;
+  const value = await ownCode(declared, "widget-load-threw", () =>
+    declaration.load(verdict.input)
+  );
   const result = cardAnswerResult(declared.display, value, {
     widget: declaration.id,
     owner: declared.owner,
   });
-  return { result, empty: isEmpty?.(value) === true };
+  return { result, empty: declaration.isEmpty?.(value) === true };
+}
+
+/**
+ * Whether this person is shown this card at all, by the card's own rules (`judgeCard`), without
+ * running its `load`: for a dashboard built for them, such as the default they follow, which
+ * leaves out the cards they would not be shown.
+ *
+ * - Refused by its `access`: no.
+ * - A setting it needs has no value: YES. The card asks for that setting itself ("Choose ...
+ *   in the card's settings"), and leaving it out would hide the one step that fixes it.
+ * - Its `shows`, as the person: only `true` is yes.
+ * - No `shows`: yes.
+ *
+ * Judged within the card's own budget, under `signal` as the batch's: a `shows` that throws, or
+ * that does not settle in time, is no, and is logged as the widget's failure. A permission name as
+ * `access` is the caller's to have judged already, as the layout's audience does for every card it
+ * hands over (`askableCards`).
+ *
+ * @param asked the signal the work is given up on, the instant reads measure from, and the
+ * owner's share scope, as a card answered in the batch is handed them.
+ */
+export async function cardIsShownTo(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput
+): Promise<boolean> {
+  try {
+    const verdict = await withinSlotBudget(
+      signal => judgeCard(declared, placement, batch, { ...asked, signal }),
+      () => {
+        throw pluginFailure(declared, "widget-shows-timed-out", undefined);
+      },
+      asked.signal
+    );
+    return verdict.kind === "shown" || verdict.kind === "needs-setting";
+  } catch (error) {
+    // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
+    if (!asked.signal.aborted) logNotJudged(declared, error);
+    return false;
+  }
+}
+
+/** That a card could not be judged shown, so it was not, for the operator. */
+function logNotJudged(declared: DeclaredWidget, error: unknown): void {
+  // Guarded as `failedSlot` guards its own: a log that throws must not decide the card.
+  try {
+    getNextlyLogger().warn({
+      kind: "declared-widget-not-judged",
+      ...(NextlyError.is(error)
+        ? error.toLogJSON("declared-widget")
+        : { owner: declared.owner, widget: declared.declaration.id }),
+    });
+  } catch {
+    // Deliberately swallowed; see above.
+  }
 }
