@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-On the roles screen, Clear All now takes away only the permissions a role holds itself. Permissions it inherits from its base role stay, as the base gives them.
+On the roles screen, Clear All now takes away only the permissions a role holds itself. Permissions it inherits from its base role stay, as the base gives them. Saving a role built on a base role sends only the permissions the role holds itself, so the base's permissions are no longer copied onto it.

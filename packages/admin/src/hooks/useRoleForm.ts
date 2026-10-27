@@ -225,10 +225,21 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setIsLoading(true);
 
     try {
+      // The value holds the base roles' permissions, ticked and locked,
+      // beside the role's own. The save replaces the role's own assignments,
+      // so an inherited permission is sent only where the role already holds
+      // it itself; otherwise it would be copied onto the role and outlast its
+      // removal from the base.
+      const currentIds = (role?.permissions || []).map(p => p.id);
+      const locked = new Set(lockedPermissionIds);
+      const heldItself = new Set(isEditMode ? currentIds : []);
+      const ownIds = values.permissions.filter(
+        id => !locked.has(id) || heldItself.has(id)
+      );
       const roleData = {
         roleName: values.name,
         description: values.description || "",
-        permissions: values.permissions,
+        permissions: ownIds,
         slug: values.slug,
         childRoleIds: selectedBaseRoleIds,
       };
@@ -241,9 +252,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         // a custom one on any save, including a description-only edit.
         await roleApi.updateRole(roleId, roleData);
         try {
-          const currentIds = (role?.permissions || []).map(p => p.id);
-          const nextIds = values.permissions;
-          await roleApi.updateRolePermissions(roleId, currentIds, nextIds);
+          await roleApi.updateRolePermissions(roleId, currentIds, ownIds);
         } finally {
           // The signed-in user may hold this role, so what they may do is
           // asked again, as every other role, permission and assignment change
