@@ -11,7 +11,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-const { sheetMock } = vi.hoisted(() => ({ sheetMock: vi.fn() }));
+const { sheetMock, history } = vi.hoisted(() => ({
+  sheetMock: vi.fn(),
+  /** Whether the server answers that the user may read the whole history. */
+  history: { readable: true },
+}));
+
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: (_slug: string, request: string) =>
+    request !== "readHistory" || history.readable,
+}));
 
 vi.mock("@admin/components/features/versions/VersionHistorySheet", () => ({
   VersionHistorySheet: (props: Record<string, unknown>) => {
@@ -52,12 +62,26 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
 }
 
 describe("EntrySystemHeader version history", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    history.readable = true;
+  });
 
   it("offers history for a saved document", () => {
     renderHeader();
 
     expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
+  });
+
+  it("does not offer history to a user who may not read it in every language", () => {
+    // The history is read in every language, as the server judges it; a user
+    // who may read only some languages would be refused it.
+    history.readable = false;
+    renderHeader();
+
+    expect(
+      screen.queryByRole("button", { name: "History" })
+    ).not.toBeInTheDocument();
   });
 
   it("does not offer history for a document that was never saved", () => {
