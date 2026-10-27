@@ -24,6 +24,7 @@ import type {
 } from "./query";
 import {
   drivesQuery,
+  isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
   type AnyWidgetSetting,
@@ -451,15 +452,14 @@ export interface WidgetDefinition {
    */
   dismissible?: boolean;
   /**
-   * Whether the host frames this widget. Defaults to `"card"`.
+   * Whether the dashboard takes this widget's card out of the grid while its
+   * answer is empty, rather than drawing the empty state. Judged after the
+   * answer arrives; a card that failed, or whose source is not available to
+   * the reader, is never hidden. Customise mode still shows it, marked.
    *
-   * Only a `custom` widget may decline the frame, because only a `custom`
-   * widget supplies the component that would replace it. For every archetype
-   * core draws, the card IS the surface the body is composed against -- it owns
-   * the title, the footer and the busy state -- so an unframed one would render
-   * content with no heading and nothing to report its own loading.
+   * @experimental
    */
-  chrome?: WidgetChrome;
+  hidesWhenEmpty?: boolean;
   /**
    * Whether the host sizes this `custom` widget's list query to the card, as it
    * sizes the lists it draws itself: it asks the rows the card's size draws, at
@@ -657,7 +657,7 @@ type ArchetypeStanding =
  * skew. Only a `custom` widget may ask, since core already sizes the lists it
  * draws, and only for a `list` query, the one kind with rows to size: asked of
  * anything else it would be a validated option that changes nothing. Asked of
- * the archetype only where this core knows it, as `chromeProblem` asks, so a
+ * the archetype only where this core knows it (`archetypeStanding`), so a
  * newer core's archetype is not judged here.
  */
 function sizedQueryProblem(
@@ -686,6 +686,39 @@ function archetypeStanding(value: unknown): ArchetypeStanding {
   return WIDGET_ARCHETYPES.includes(value as WidgetArchetype)
     ? { kind: "known", name: value as WidgetArchetype }
     : { kind: "newer" };
+}
+
+/** The fields read as booleans, which a truthy non-boolean must not stand in for. */
+const BOOLEAN_FIELDS = ["dismissible", "hidesWhenEmpty"] as const;
+
+/**
+ * Why a widget's title, frame or boolean fields are unusable, or `undefined`.
+ *
+ * A title is a STRING in every version, so this is not a vocabulary rule. Blank is permitted
+ * deliberately -- `resolveTitle` trims it and falls back to the widget id -- but a non-string is a
+ * different case: that helper calls `.trim()` on the value, so a number or object throws and takes
+ * widget resolution down rather than rendering a differently-named card.
+ *
+ * The booleans are BOOLEANS in every version: there is no vocabulary here that a newer core could
+ * extend, so anything else is a mistake rather than version skew. Each decides whether the admin
+ * hides a card, and the admin copies a registration's fields verbatim, so a truthy non-boolean
+ * such as `dismissible: "false"` would act on a card whose author declared the opposite. Refusing
+ * the declaration is the only place that mistake is visible to the person who made it.
+ */
+function presentationProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  if (widget.title !== undefined && typeof widget.title !== "string") {
+    return "title, when given, must be a string";
+  }
+  const framed = chromeFieldProblem(widget);
+  if (framed !== undefined) return framed;
+  const field = BOOLEAN_FIELDS.find(
+    name => widget[name] !== undefined && typeof widget[name] !== "boolean"
+  );
+  return field === undefined
+    ? undefined
+    : `${field}, when given, must be a boolean`;
 }
 
 /**
@@ -729,38 +762,8 @@ function geometryShapeProblem(
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
-  // A title is a STRING in every version, so this is not a vocabulary rule.
-  // Blank is permitted deliberately -- `resolveTitle` trims it and falls back
-  // to the widget id -- but a non-string is a different case: that helper calls
-  // `.trim()` on the value, so a number or object throws and takes widget
-  // resolution down rather than rendering a differently-named card.
-  if (widget.title !== undefined && typeof widget.title !== "string") {
-    return "title, when given, must be a string";
-  }
-
-  // Chrome is a STRING in every version. Moving the closed-vocabulary check to
-  // the registry took the shape check with it, so `chrome: 42` was published as
-  // a `WidgetChrome` -- and the renderer treats anything but `"none"` as
-  // `"card"`, so it renders and boot says nothing about a configuration its
-  // author got wrong. Unknown STRING values still pass, which is the version
-  // skew this boundary exists for.
-  if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
-    return "chrome, when given, must be a string";
-  }
-
-  // A BOOLEAN in every version -- unlike `chrome`, there is no vocabulary here
-  // that a newer core could extend, so anything else is a mistake rather than
-  // version skew. It decides whether the admin draws a control that HIDES a
-  // card, and the admin copies a registration's fields verbatim, so a truthy
-  // non-boolean such as `dismissible: "false"` would draw the control on a card
-  // whose author declared the opposite. Refusing the declaration is the only
-  // place that mistake is visible to the person who made it.
-  if (
-    widget.dismissible !== undefined &&
-    typeof widget.dismissible !== "boolean"
-  ) {
-    return "dismissible, when given, must be a boolean";
-  }
+  const presented = presentationProblem(widget);
+  if (presented !== undefined) return presented;
 
   const sized = sizedQueryProblem(widget);
   if (sized !== undefined) return sized;
@@ -1083,23 +1086,6 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  */
 export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
 
-/**
- * Whether the HOST frames a widget, or the widget draws its own surface.
- *
- * `"card"` is the default and the only value most widgets want: the host draws
- * the standard card and the widget supplies a body, so every card on the
- * dashboard shares one anatomy, one busy state and one place its title lives.
- *
- * `"none"` is for a widget that IS already a designed surface -- core's own
- * dashboard sections carry their own heading and rules, and framing one draws a
- * second heading around the first. The distinction Backstage draws between a
- * framed `InfoCard` and bare `Content`.
- */
-export const WIDGET_CHROME = ["card", "none"] as const;
-
-/** How a widget is framed. See {@link WIDGET_CHROME}. */
-export type WidgetChrome = (typeof WIDGET_CHROME)[number];
-
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
 
@@ -1270,69 +1256,18 @@ export function querylessQueryProblem(
  * arbitrarily against each other.
  */
 /**
- * `chrome`, when stated, must be in the vocabulary -- and `"none"` only on
- * `custom`.
+ * Why a declaration that still names `chrome` is refused, or `undefined`.
  *
- * The archetype restriction is the load-bearing half. Accepting `"none"` on an
- * archetype core draws would be a validated option that produces a broken card
- * rather than a refusal: the body renders with no heading and no owner for its
- * loading and error states, and nothing anywhere says why.
+ * Every card is drawn in the dashboard's one frame, which draws its header and
+ * every state; no widget may decline it. A declaration naming the field is
+ * refused rather than ignored, so a plain-JavaScript author who wrote it learns
+ * at startup that their card will be framed, rather than from the dashboard.
+ * Exported, so the contributions channel asks the same question.
  */
-/**
- * Why this `chrome` cannot stand beside this `archetype`, or `undefined`.
- *
- * Non-throwing and exported, like {@link actionProblem},
- * {@link querylessQueryProblem} and {@link defaultOrderProblem}: the
- * CONTRIBUTIONS channel needs the same answer without a throw. Every one of
- * those four was added to one validator and missed by the other, and each time
- * the contributed value was the more permissive of the two.
- *
- * The archetype half is the load-bearing one. Accepting `"none"` on an
- * archetype core draws would be a validated option producing a broken card
- * rather than a refusal: the body renders with no heading and nothing owning
- * its loading and error states, and nothing anywhere says why.
- */
-export function chromeProblem(
-  chrome: unknown,
-  archetype: unknown
-): string | undefined {
-  if (chrome === undefined) return undefined;
-
-  // The VOCABULARY check is not here, and that is the same version boundary the
-  // sizes obey: a newer core may add a chrome value, and refusing it would
-  // abort the install of a plugin whose card this admin would simply frame,
-  // since anything that is not "none" already frames. `validateChrome` keeps
-  // that check on the registry side.
-  //
-  // The archetype rule likewise only where this core KNOWS the archetype --
-  // otherwise it judges a newer core's shape and refuses the whole install.
-  // Through the same four-state reading as the placement rule, so the two
-  // cannot drift into disagreeing about what an absent or newer archetype
-  // means. An ABSENT one resolves to `custom`, which is exactly where `"none"`
-  // is legal; a NEWER one is exempt, since this core cannot say whether its
-  // body is composed into a card.
-  const standing = archetypeStanding(archetype);
-  const effective =
-    standing.kind === "resolved-custom"
-      ? "custom"
-      : standing.kind === "known"
-        ? standing.name
-        : undefined;
-
-  if (chrome === "none" && effective !== undefined && effective !== "custom") {
-    return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
-  }
-
-  return undefined;
-}
-
-function validateChrome(d: Partial<WidgetDefinition>): void {
-  // Registry-only vocabulary, for the reason `chromeProblem` gives.
-  if (d.chrome !== undefined && !WIDGET_CHROME.includes(d.chrome)) {
-    fail(`${d.id}: chrome must be one of ${WIDGET_CHROME.join(", ")}`);
-  }
-  const problem = chromeProblem(d.chrome, d.archetype);
-  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+export function chromeFieldProblem(widget: object): string | undefined {
+  return Object.hasOwn(widget, "chrome")
+    ? "chrome is not a widget field: every card is drawn in the dashboard's frame"
+    : undefined;
 }
 
 /**
@@ -1561,6 +1496,43 @@ export function customAsksTwiceProblem(widget: {
     widget.cells !== undefined &&
     widget.query !== undefined
     ? "a custom card asks through its query or its cells, not both"
+    : undefined;
+}
+
+/**
+ * Why a widget's `limit` setting cannot reach its query, or `undefined`. A
+ * number setting named `limit` sets how many rows the card asks for, and a
+ * query over a `range` refuses a limit, since its range sets how many points
+ * are drawn: offered beside one, the setting would fail every request it
+ * changed. Shared by the registry and the contributed-widget check.
+ */
+export function rangedLimitSettingProblem(widget: {
+  query?: unknown;
+  cells?: unknown;
+  settings?: unknown;
+}): string | undefined {
+  // The setting the limit knob drives, by the knob's own test.
+  const limited =
+    Array.isArray(widget.settings) && widget.settings.some(isLimitSetting);
+  if (!limited) return undefined;
+  const queries = [
+    widget.query,
+    ...(Array.isArray(widget.cells)
+      ? widget.cells.map(cell =>
+          typeof cell === "object" && cell !== null
+            ? (cell as { query?: unknown }).query
+            : undefined
+        )
+      : []),
+  ];
+  const ranged = queries.some(
+    query =>
+      typeof query === "object" &&
+      query !== null &&
+      (query as { range?: unknown }).range !== undefined
+  );
+  return ranged
+    ? 'declares a "limit" setting, and a query with a range draws the points its range sets'
     : undefined;
 }
 
@@ -1888,9 +1860,10 @@ export function validateWidgetDefinition(
   validateWidths(d);
   validateEmpty(d);
   validateCells(d);
+  const rangedLimit = rangedLimitSettingProblem(d);
+  if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
   validateOffered(d);
   validateDefaultOrder(d);
-  validateChrome(d);
   // Judged on what the widget asks, with the filters each source declares: a
   // content setting is admitted where core builds the query, or where a knob
   // drives it on the query's source or on at least one cell's.

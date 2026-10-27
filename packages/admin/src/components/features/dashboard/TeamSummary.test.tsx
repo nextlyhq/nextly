@@ -8,6 +8,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -31,14 +32,16 @@ function answered(figures: { users?: number; roles?: number }) {
 function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   return render(
     <CardTierContext.Provider value={tier}>
-      <TeamSummary
-        widgetId="core/team"
-        placementId="core/team"
-        settings={{}}
-        slot={undefined}
-        isFetching={false}
-        {...props}
-      />
+      {inFrame(
+        <TeamSummary
+          widgetId="core/team"
+          placementId="core/team"
+          settings={{}}
+          slot={undefined}
+          isFetching={false}
+          {...props}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }
@@ -68,11 +71,15 @@ describe("the team card at each tier", () => {
 });
 
 describe("the team card's states", () => {
-  it("holds its place while the first answer is on the way, and draws nothing for no request", () => {
-    const { container, unmount } = draw({ isFetching: true });
-    expect(container).not.toBeEmptyDOMElement();
+  it("holds its place while the first answer is on the way, and is not available with no request", () => {
+    const { unmount } = draw({ isFetching: true });
+    expect(screen.getByTestId("card-skeleton")).toHaveAttribute(
+      "data-shape",
+      "figure"
+    );
     unmount();
-    expect(draw({}).container).toBeEmptyDOMElement();
+    draw({});
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
   });
 
   it("says it is not available when the source refused this reader", () => {

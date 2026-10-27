@@ -6,7 +6,6 @@
 
 export {
   WIDGET_SIZES,
-  WIDGET_CHROME,
   WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   DATA_ARCHETYPES,
@@ -19,7 +18,6 @@ export {
   type WidgetSetting,
   type WidgetStatCell,
   type WidgetSize,
-  type WidgetChrome,
   type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,

@@ -44,6 +44,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import type { AdminDashboardConfig } from "../../domains/widgets/declaration/dashboard";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
@@ -667,6 +668,16 @@ export interface PluginOverride {
 export interface AdminConfig {
   /** Branding customizations: logo, colors, favicon. */
   branding?: AdminBrandingConfig;
+
+  /**
+   * How this site shapes its dashboard: its own widgets, widgets hidden for
+   * everyone, a widget's title, description, widths and starting settings,
+   * the default dashboard, plugin suggestions, and a plugin's alternative in a
+   * built-in's place. Checked at startup against every widget the install has.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  dashboard?: AdminDashboardConfig;
 
   /**
    * Per-plugin overrides for sidebar placement and appearance.

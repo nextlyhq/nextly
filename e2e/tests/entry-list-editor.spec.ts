@@ -2,7 +2,9 @@
  * The control for `entry-list-read-only.spec.ts`: a role that may create,
  * change and delete Posts is offered "New", row checkboxes, bulk delete and a
  * row Delete on the same list. Without it, a list that offered nothing to
- * anyone would pass every absence there.
+ * anyone would pass every absence there. It is also the control for
+ * `entry-opens-read-only.spec.ts`: the same role opens a post editable, with
+ * no reader's banner, and a page with its preview.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -23,6 +25,8 @@ const TITLE = `A post to change ${RUN}`;
 
 let limited: LimitedUser;
 let page: Page;
+let postId: string;
+let blockPageId: string;
 
 test.beforeAll(async ({ browser, playwright }, testInfo) => {
   const baseURL = testInfo.project.use.baseURL;
@@ -32,15 +36,21 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
     storageState: STORAGE_STATE,
   });
   try {
-    await createEntry(admin, "posts", {
+    postId = await createEntry(admin, "posts", {
       title: TITLE,
       slug: `editor-${RUN}`,
+    });
+    blockPageId = await createEntry(admin, "block-pages", {
+      title: `A page to change ${RUN}`,
+      slug: `editor-block-${RUN}`,
     });
     limited = await signInAsLimitedUser(browser, admin, baseURL, [
       "read-posts",
       "create-posts",
       "update-posts",
       "delete-posts",
+      "read-block-pages",
+      "update-block-pages",
     ]);
   } finally {
     await admin.dispose();
@@ -67,6 +77,23 @@ test('offers "New", row checkboxes and bulk delete', async () => {
   await row().getByRole("checkbox", { name: "Select row" }).check();
   await expect(
     page.getByRole("button", { name: /delete selected/i })
+  ).toBeVisible();
+});
+
+test("opens a post editable, with no reader's banner", async () => {
+  await gotoAdmin(page, `/collections/posts/${postId}`);
+  const excerpt = page
+    .locator("main")
+    .getByRole("textbox", { name: "Excerpt", exact: true });
+  await expect(excerpt).toBeEditable();
+  await expect(page.locator('[data-primary="true"]')).toBeVisible();
+  await expect(page.getByTestId("document-lock-banner")).toHaveCount(0);
+});
+
+test("offers the preview of a page it may change", async () => {
+  await gotoAdmin(page, `/collections/block-pages/${blockPageId}`);
+  await expect(
+    page.getByRole("button", { name: /preview options$/i })
   ).toBeVisible();
 });
 
