@@ -386,12 +386,27 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     offered(field) &&
     (!seen.has(field.name) ||
       isGroupKeyDeclaration(declarationOf.get(field.name), field.name));
+  // The fields a row could print: decided from the declaration, by the type
+  // list above, for the title and for a card's Fields setting alike. Asked of
+  // the RETAINED declarations: a duplicate name's later declaration is not the
+  // one this source carries. A system column has no declaration and prints.
+  const printable = new Set(
+    retainedDeclarations(collection.fields)
+      .filter(
+        field => PRINTABLE_FIELD_TYPES.has(field.type) && field.hasMany !== true
+      )
+      .map(field => field.name)
+  );
   // Only the REFUSALS are marked. A date the read would reject is stated as
-  // such, and so is a field no setting may offer; everything else is left
-  // alone, so a source built anywhere else keeps whatever it declared.
+  // such, and so is a field no setting may offer, or no row could print;
+  // everything else is left alone, so a source built anywhere else keeps
+  // whatever it declared.
   const marked = fields.map(field => {
     const refusals = {
       ...(offered(field) ? {} : { offered: false as const }),
+      ...(!seen.has(field.name) || printable.has(field.name)
+        ? {}
+        : { presentable: false as const }),
       ...(canGroup(field) ? {} : { groupable: false as const }),
       ...(field.type === "date" && !canGroup(field)
         ? { bucketable: false as const }
@@ -416,13 +431,6 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   // Asked of the RETAINED declarations, not of `collection.fields`. A duplicate
   // name's later declaration is not the one this source carries, so letting it
   // answer here would qualify a name whose actual declaration stores an array.
-  const printable = new Set(
-    retainedDeclarations(collection.fields)
-      .filter(
-        field => PRINTABLE_FIELD_TYPES.has(field.type) && field.hasMany !== true
-      )
-      .map(field => field.name)
-  );
   const titleField = entryTitleField(
     collection.useAsTitle,
     fields.filter(field => printable.has(field.name)).map(field => field.name)

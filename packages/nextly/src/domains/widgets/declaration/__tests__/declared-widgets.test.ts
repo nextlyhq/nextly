@@ -11,7 +11,6 @@ import { CORE_WIDGETS } from "../../core-widgets";
 import type { WidgetDefinition } from "../../definition";
 import { clearWidgets, getWidget } from "../../registry";
 import {
-  cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
   registerDashboardWidgets,
@@ -218,43 +217,13 @@ describe("registering declared widgets", () => {
     expect(declaredWidget("acme/recent-orders")).toMatchObject({
       owner: SHOP,
       declaration: recentOrders,
+      display: "list",
     });
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders", items: 3 })
-    ).toMatchObject({ source: "collection:orders", op: "list", limit: 3 });
-    expect(cardQueryFor("acme/unknown", {})).toBeUndefined();
-  });
-
-  it("refuses a card's query its display cannot draw, once the card names its collection", () => {
-    // Plain JavaScript, as no type saw it: a list whose query selects nothing.
-    // Its Collection setting has no default, so startup builds no query and
-    // checks nothing; the first query is this card's own.
-    const unselected = {
-      ...recentOrders,
-      id: "acme/unselected",
-      load: {
-        query: ({ settings }: { settings: Record<string, unknown> }) => ({
-          collection: settings.collection,
-          op: "list",
-          limit: settings.items,
-        }),
-      },
-    } as unknown as typeof recentOrders;
-    registerDashboardWidgets({
-      groups: [{ owner: SHOP, declarations: [unselected] }],
-    });
-
-    expect(cardQueryFor("acme/unselected", {})).toBeUndefined();
-    let refused: unknown;
-    try {
-      cardQueryFor("acme/unselected", { collection: "orders" });
-    } catch (error) {
-      refused = error;
-    }
-    expect(refused).toBeInstanceOf(NextlyError);
-    expect((refused as NextlyError).logMessage).toBe(
-      'Declared widget "acme/unselected" cannot draw its query: its query selects no fields, so the "list" display has nothing to show in each row.'
+    // Its load function is kept as the plugin wrote it, to be run per card.
+    expect(declaredWidget("acme/recent-orders")?.declaration.load).toBe(
+      recentOrders.load
     );
+    expect(declaredWidget("acme/unknown")).toBeUndefined();
   });
 
   it("publishes a size stated by its default alone with every end filled in", () => {

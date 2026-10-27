@@ -2,6 +2,7 @@ import type React from "react";
 import { forwardRef } from "react";
 
 import { navigateTo } from "@admin/lib/navigation";
+import { preloadRoute } from "@admin/lib/route-preload";
 
 interface LinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
   href: string; // Accept any string (RouteValue is a string subset — TypeScript collapses the union)
@@ -42,7 +43,28 @@ function prefersNativeNavigation(
 export const Link: React.ForwardRefExoticComponent<
   LinkProps & React.RefAttributes<HTMLAnchorElement>
 > = forwardRef<HTMLAnchorElement, LinkProps>(
-  ({ href, children, className, onClick, target, download, ...props }, ref) => {
+  (
+    {
+      href,
+      children,
+      className,
+      onClick,
+      onMouseEnter,
+      onFocus,
+      onTouchStart,
+      target,
+      download,
+      ...props
+    },
+    ref
+  ) => {
+    // A pointer resting on the link, keyboard focus, or a finger landing on
+    // it each come before the click: the page's code starts downloading then,
+    // so the click doesn't wait for it. Only for admin pages the SPA routes.
+    const preload = () => {
+      if (download === undefined && !isExternalHref(href)) preloadRoute(href);
+    };
+
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
       // Run the consumer's handler first so it can cancel the navigation, and
       // so it still sees the clicks that fall through to the browser.
@@ -66,6 +88,18 @@ export const Link: React.ForwardRefExoticComponent<
         target={target}
         download={download}
         onClick={handleClick}
+        onMouseEnter={e => {
+          onMouseEnter?.(e);
+          preload();
+        }}
+        onFocus={e => {
+          onFocus?.(e);
+          preload();
+        }}
+        onTouchStart={e => {
+          onTouchStart?.(e);
+          preload();
+        }}
         {...props}
       >
         {children}

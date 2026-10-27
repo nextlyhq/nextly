@@ -1275,17 +1275,48 @@ jobs:
           echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
           echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      # This step's failure lets the lints after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after sizing failed
+        if: ${{ !cancelled() && steps.limits.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Design lint
+        id: design-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Design lint failed
+        if: ${{ !cancelled() && steps.design-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Workspace lint
+        id: workspace-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Workspace lint failed
+        if: ${{ !cancelled() && steps.workspace-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Scripts lint
+        id: scripts-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:scripts
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Scripts lint failed
+        if: ${{ !cancelled() && steps.scripts-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       - name: Build
         id: build
@@ -1297,14 +1328,30 @@ jobs:
       # These read what the build wrote, so after a failed build they would
       # report its missing output rather than failures of their own.
       - name: Lint
+        id: lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm lint
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Lint failed
+        if: ${{ !cancelled() && steps.lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Typecheck
+        id: typecheck
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Typecheck failed
+        if: ${{ !cancelled() && steps.typecheck.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       # Every workspace's suite but the two the jobs below run. Together the
       # three run what the hook runs when a push changes the workspace or task
@@ -1323,6 +1370,13 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
   # `nextly`'s unit suite on Windows, on a runner of its own: 957 files, and
   # 18.7 minutes beside the admin's on one runner. `test` depends on `^build`,
@@ -1401,6 +1455,13 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
   # `@nextlyhq/admin`'s unit suite on Windows, on a runner of its own: 436
   # files, and 13.6 minutes beside nextly's on one runner.
   windows-gates-admin:
@@ -1477,6 +1538,13 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
   # What `@nextlyhq/admin` would publish, read as a production application gets
   # it. The package ships prebuilt, and its build settles what a production
   # user sees: built in development mode it shows an error's message and stack
@@ -1549,6 +1617,14 @@ jobs:
         run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/plugin-sdk...
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # The R-3 gate: the shipped bundle holds the two budgets the merged
+      # spec states, failing with each measured size and the budget it
+      # exceeded. It measures THIS release-mode build — the same bytes the
+      # pack check below reads — so the numbers a PR shows are the numbers a
+      # merge would ship.
+      - name: Check the shipped bundle against the spec's budgets
+        run: pnpm --filter @nextlyhq/admin check:budgets
 
       # Packs the package as `pnpm publish` would, and reads the packed files.
       - name: Check what the packed admin gives a production application

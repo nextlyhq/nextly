@@ -55,6 +55,19 @@ const defaultParams: TableParams = {
 };
 
 /**
+ * The Singles list the sidebar asks for, and the browser tab's title with it.
+ *
+ * One declaration, so one cache entry: the sidebar loads the list as it draws
+ * its navigation, and the title reads each Single's label from that same entry
+ * rather than requesting the Single again. Mirrors `NAV_COLLECTIONS_PARAMS`.
+ */
+export const NAV_SINGLES_PARAMS: TableParams = {
+  pagination: { page: 0, pageSize: 100 },
+  sorting: [],
+  filters: {},
+};
+
+/**
  * Query Key Factory for Singles
  *
  * Creates stable, hierarchical query keys that prevent cache misses due to

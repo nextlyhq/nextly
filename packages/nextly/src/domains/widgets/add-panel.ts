@@ -20,7 +20,11 @@
  */
 
 import type { CanonicalWidget } from "./canonical";
-import { CORE_WIDGET_IDS, type CoreWidgetId } from "./core-widgets";
+import {
+  CORE_WIDGET_ID,
+  CORE_WIDGET_IDS,
+  type CoreWidgetId,
+} from "./core-widgets/ids";
 
 /** The groups a widget can be listed in, in the panel's order. */
 export const ADD_PANEL_GROUPS = [
@@ -37,19 +41,19 @@ export type AddPanelGroup = (typeof ADD_PANEL_GROUPS)[number];
  * without a group here does not compile.
  */
 const CORE_GROUPS = {
-  "core/get-started": "overview",
-  "core/content": "overview",
-  "core/quick-create": "overview",
-  "core/team": "team",
-  "core/needs-attention": "overview",
-  "core/recently-edited": "overview",
-  "core/upcoming-releases": "overview",
-  "core/recent-activity": "team",
-  "core/count": "content",
-  "core/breakdown": "content",
-  "core/note": "overview",
-  "core/recent-entries": "content",
-  "core/over-time": "content",
+  [CORE_WIDGET_ID.getStarted]: "overview",
+  [CORE_WIDGET_ID.content]: "overview",
+  [CORE_WIDGET_ID.quickCreate]: "overview",
+  [CORE_WIDGET_ID.team]: "team",
+  [CORE_WIDGET_ID.needsAttention]: "overview",
+  [CORE_WIDGET_ID.recentlyEdited]: "overview",
+  [CORE_WIDGET_ID.upcomingReleases]: "overview",
+  [CORE_WIDGET_ID.recentActivity]: "team",
+  [CORE_WIDGET_ID.count]: "content",
+  [CORE_WIDGET_ID.breakdown]: "content",
+  [CORE_WIDGET_ID.note]: "overview",
+  [CORE_WIDGET_ID.recentEntries]: "content",
+  [CORE_WIDGET_ID.overTime]: "content",
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */

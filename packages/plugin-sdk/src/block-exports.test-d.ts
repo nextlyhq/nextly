@@ -6,6 +6,7 @@ import type {
   AnyBlockDefinition,
   BlockEditorMeta,
   BlockExample,
+  BlockInspectorProps,
   BlockSeoContribution,
   BlockSeoImage,
   BlockRenderArgs,
@@ -206,3 +207,15 @@ defineBlock<{ text: string }>({
   conditionalSlots: ["children"],
   render: () => null,
 });
+
+// A custom inspector typed against its block's props: `commit` names only
+// those props, and `props` holds their stored values, any of which may be
+// absent from a node stored before the prop existed.
+type HeroInspector = BlockInspectorProps<{ title: string; tone: "warm" }>;
+expectTypeOf<Parameters<HeroInspector["commit"]>[0]>().toEqualTypeOf<
+  "title" | "tone"
+>();
+expectTypeOf<HeroInspector["props"]["title"]>().toEqualTypeOf<
+  string | undefined
+>();
+expectTypeOf<HeroInspector["readOnly"]>().toEqualTypeOf<boolean>();

@@ -8,6 +8,7 @@
 import type { WidgetDefinition } from "../definition";
 import { RECENT_EDITS_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
 import {
   LIST_DENSITY,
   RECENTLY_EDITED_ITEMS,
@@ -16,7 +17,7 @@ import {
 } from "./shared";
 
 export const recentlyEditedWidget = {
-  id: "core/recently-edited",
+  id: CORE_WIDGET_ID.recentlyEdited,
   title: "Recently edited",
   description:
     "The entries and Singles most recently saved, newest first, one row each.",

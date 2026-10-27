@@ -28,6 +28,7 @@ import type {
 } from "./query";
 import {
   drivesQuery,
+  fieldsSettingQueryProblem,
   isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
@@ -1669,6 +1670,8 @@ export function validateWidgetDefinition(
   validateCells(d);
   const rangedLimit = rangedLimitSettingProblem(d);
   if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
+  const fieldsQuery = fieldsSettingQueryProblem(d);
+  if (fieldsQuery !== undefined) fail(`${d.id}: ${fieldsQuery}`);
   validateOffered(d);
   validateDefaultOrder(d);
   // Judged on what the widget asks, with the filters each source declares: a

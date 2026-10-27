@@ -7,8 +7,10 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const breakdownWidget = {
-  id: "core/breakdown",
+  id: CORE_WIDGET_ID.breakdown,
   title: "Breakdown",
   description:
     "How a collection's entries divide: by status, or by a field with choices.",

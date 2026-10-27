@@ -21,6 +21,7 @@ import {
   COMPONENT_IMPORT_MAP_FILENAME,
   COMPONENT_PATHS_FILENAME,
   listedPathsOf,
+  mapRegisteredPathsOf,
 } from "./component-import-map";
 
 const shop = {
@@ -188,6 +189,37 @@ describe("a map that no longer registers what its list names", () => {
       await writeFile(join(root, artifact.path), artifact.code);
     }
     expect((await check()).mapMatchesList).toBe(true);
+  });
+});
+
+describe("a map that hands the page builder its editor modules", () => {
+  /** A map as the generator writes one where block editor modules are declared. */
+  const withEditorEntries = (entries: string) =>
+    [
+      "export const componentMapAgreesWithList = true;",
+      "",
+      "const registered = {",
+      '  "@/blocks/editor#Inspector": _p0.Inspector,',
+      "};",
+      "",
+      "const blockEditorEntries = {",
+      entries,
+      "};",
+      "",
+    ].join("\n");
+
+  it("registers its editor modules beside its components, as its own check holds them to its list", () => {
+    expect(
+      mapRegisteredPathsOf(
+        withEditorEntries('  "@/blocks/editor#blocks": _p0.blocks,')
+      )
+    ).toEqual(["@/blocks/editor#Inspector", "@/blocks/editor#blocks"]);
+  });
+
+  it("registers nothing when its editor modules are edited into another shape", () => {
+    expect(
+      mapRegisteredPathsOf(withEditorEntries("  blocks: somewhere,"))
+    ).toBeUndefined();
   });
 });
 
