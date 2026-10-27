@@ -32,7 +32,6 @@ import {
   type UseMutationResult,
   type UseInfiniteQueryResult,
   type InfiniteData,
-  keepPreviousData,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -139,9 +138,15 @@ export function useMedia(
     queryFn: async () => {
       return await fetchMedia(params || defaultParams);
     },
-    // A new page, sort, search or folder keeps showing the current results
-    // until its own arrive, instead of dropping back to the loading skeleton.
-    placeholderData: keepPreviousData,
+    // A new page, sort or search keeps showing the current results until its
+    // own arrive, instead of dropping back to the loading skeleton. A new
+    // folder does not: its heading would sit over the old folder's rows, and
+    // their edit and delete controls would act on files the reader just left.
+    placeholderData: (previous, previousQuery) =>
+      (previousQuery?.queryKey[1] as MediaParams | undefined)?.folderId ===
+      params?.folderId
+        ? previous
+        : undefined,
     ...options,
   });
 }

@@ -6,11 +6,7 @@
  * These pin the request counts, and the file count the delete dialog shows,
  * which read a key the server never sends and so always said 0.
  */
-import {
-  QueryClient,
-  QueryClientProvider,
-  useQuery,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   fireEvent,
@@ -114,6 +110,34 @@ describe("folder tree", () => {
     expect(api.listSubfolders).toHaveBeenCalledWith("f1");
     expect(api.getFolderContents).not.toHaveBeenCalled();
   });
+
+  it("closes an opened folder that turns out to have no subfolders", async () => {
+    api.listRootFolders.mockResolvedValue([folder("f1", "Blog")]);
+    api.listSubfolders.mockResolvedValue([]);
+
+    render(<FolderTreeView {...props} />, { wrapper: Wrapper });
+    fireEvent.click(await screen.findByText("Blog"));
+    expect(await screen.findByText("No subfolders")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Blog"));
+
+    expect(screen.queryByText("No subfolders")).not.toBeInTheDocument();
+  });
+
+  it("says when a folder's subfolders could not load, and asks again on retry", async () => {
+    api.listRootFolders.mockResolvedValue([folder("f1", "Blog")]);
+    api.listSubfolders
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([folder("f9", "2026")]);
+
+    render(<FolderTreeView {...props} />, { wrapper: Wrapper });
+    fireEvent.click(await screen.findByText("Blog"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("2026")).toBeInTheDocument();
+    expect(api.listSubfolders).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("folder contents", () => {
@@ -171,16 +195,33 @@ describe("media list", () => {
     expect(result.current.data).toEqual({ data: [{ id: "page-1" }] });
   });
 
+  it("shows nothing from the folder it left while another folder loads", async () => {
+    api.fetchMedia
+      .mockResolvedValueOnce({ data: [{ id: "in-blog" }] })
+      .mockReturnValueOnce(new Promise(() => {}));
+
+    const { result, rerender } = renderHook(
+      ({ folderId }: { folderId: string }) =>
+        useMedia({ page: 1, limit: 24, folderId }),
+      { wrapper: Wrapper, initialProps: { folderId: "blog" } }
+    );
+    await waitFor(() =>
+      expect(result.current.data).toEqual({ data: [{ id: "in-blog" }] })
+    );
+
+    rerender({ folderId: "team" });
+
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(true);
+  });
+
   it("keeps the list on screen after an edit, refetching it rather than dropping it", async () => {
     api.fetchMedia.mockResolvedValue({ data: [{ id: "m1" }] });
     api.updateMedia.mockResolvedValue(undefined);
 
     const { result } = renderHook(
       () => ({
-        list: useQuery({
-          queryKey: ["media", { page: 1 }],
-          queryFn: () => api.fetchMedia(),
-        }),
+        list: useMedia({ page: 1 }),
         update: useUpdateMedia(),
       }),
       { wrapper: Wrapper }
