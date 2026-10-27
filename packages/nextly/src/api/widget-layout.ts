@@ -37,15 +37,36 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
+  allWidgets,
   declaredWidgets,
+  placedByDefault,
   widthFacts,
   type CanonicalWidget,
   type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
+import {
+  collectionSettingsToken,
+  collectionWidgets,
+  unreadableCollectionCard,
+} from "../domains/widgets/collection-cards";
+import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import {
+  conversionFacts,
+  generatedCardConversion,
+  registeredWidths,
+} from "../domains/widgets/generated-card-conversion";
+import {
+  getStartedDrawn,
+  getStartedPlacement,
+  getStartedView,
+  withoutDormantCard,
+} from "../domains/widgets/get-started-card";
+import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
+  applyRetirements,
   defaultPlacements,
   dismissalsApplied,
   layoutIsArranged,
@@ -57,7 +78,9 @@ import {
   visibilityToken,
   type StoredLayout,
   type WidgetPlacement,
+  type WidgetRetirements,
 } from "../domains/widgets/layout";
+import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -65,6 +88,7 @@ import {
   NO_STORED_LAYOUT_VERSION,
   type WidgetLayoutService,
 } from "../services/widgets/widget-layout-service";
+import { textLength } from "../shared/text-length";
 
 import {
   PRIVATE_NO_STORE_HEADERS,
@@ -137,8 +161,9 @@ function placeable(widget: CanonicalWidget) {
  * removal it was given, and comes back removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
+  const placed = declaredWidgets().filter(placedByDefault);
   return dismissalsApplied(
-    defaultPlacements(declaredWidgets().map(placeable)),
+    defaultPlacements(placed.map(placeable)),
     unarranged
   );
 }
@@ -153,10 +178,20 @@ function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
  * in place. Otherwise a permission granted after that save could never bring
  * them back: the default is consulted only while the reader follows it.
  */
-function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
-  return stored && layoutIsArranged(stored)
-    ? stored.placements
-    : followedDefault(stored);
+function wholeArrangement(
+  stored: StoredLayout | undefined,
+  conversion: WidgetRetirements
+): WidgetPlacement[] {
+  // The saved generated cards as the widgets offered per collection, for THIS
+  // reader (`generatedCardConversion`): applied here, so what a reader is shown, what a
+  // writer carries back and what a query may ask for are one converted
+  // arrangement.
+  return applyRetirements(
+    stored && layoutIsArranged(stored)
+      ? stored.placements
+      : followedDefault(stored),
+    conversion
+  );
 }
 
 /**
@@ -175,9 +210,17 @@ function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
-  visibleIds: ReadonlySet<string>
+  view: {
+    visibleIds: ReadonlySet<string>;
+    conversion: WidgetRetirements;
+    withheld: (placement: WidgetPlacement) => boolean;
+  }
 ): WidgetPlacement[] {
-  const { visible } = partitionPlacements(wholeArrangement(stored), visibleIds);
+  const { visible } = partitionPlacements(
+    wholeArrangement(stored, view.conversion),
+    view.visibleIds,
+    view.withheld
+  );
   return stored && layoutIsArranged(stored)
     ? visible
     : visible.slice(0, MAX_PLACEMENTS);
@@ -252,22 +295,106 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * different set could never match. The first pass, the permission gate,
  * decides what this reader may be told exists; the second decides which
  * transient cards are worth showing now, and a lapsed card is not a refusal.
+ *
+ * The probe the conditions read through is returned, so the Get started steps
+ * share its reads rather than resolving the same collections again.
  */
 async function visibleWidgets(auth: AuthContext) {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
   const audience = await widgetAudience(caller);
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  const probe = conditionProbe(reader);
+  const widgets = await widgetsWhoseConditionHolds(
+    audience.visible,
+    reader,
+    probe
+  );
+  // The collections this reader may read as their cards show them, and every
+  // collection the install holds, both from the refresh the audience pass
+  // just ran: the one answer the conversion, the withheld cards and the scope
+  // are all taken from.
+  const readable = audience.readableCollections;
+  const registered = audience.registeredCollections;
+  // The generated cards from the audience's own snapshot, taken in the same
+  // span as the visible widgets and the registered collections: a re-read of
+  // the global set could hold another request's refresh.
+  const generatedById = new Map(
+    audience.generated.map(widget => [widget.id, widget])
+  );
   return {
     caller,
     audience,
+    probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
+    conversion: generatedCardConversion(
+      readable,
+      registered,
+      new Set(declaredWidgets().map(widget => widget.id)),
+      // Each successor's widths as registered for the install, whether or not
+      // this reader may see the successor.
+      registeredWidths(allWidgets()),
+      // The cards core generates today, by id: only one of them is a retired
+      // core card, and a timeline converts only while it counts as Over time.
+      widgetId => generatedById.get(widgetId)
+    ),
+    // A card set to a collection this reader may not read, withheld as a card
+    // of a widget they may not see is, judged by the Collection setting the
+    // canonical summary carries from either channel.
+    withheld: unreadableCollectionCard(collectionWidgets(widgets), readable),
+    // Over everything that decides what is withheld: the widgets, the gates,
+    // the collections this reader may read, and each Collection setting's
+    // default, which decides a card that stores no value.
     scope: visibilityToken(
       widgets.map(widget => widget.id),
-      audience.heldActionGates
+      audience.heldActionGates,
+      readable,
+      collectionSettingsToken(widgets),
+      conversionFacts(audience.generated)
     ),
   };
+}
+
+/**
+ * The cards this caller was handed, by card id: exactly what a by-card query
+ * may ask for, and nothing else; and the widgets they could place a card of,
+ * which a card not yet saved, or a settings preview, may be asked for.
+ *
+ * 🔴 Read by the same two passes and the same arrangement the layout read
+ * takes ({@link visibleWidgets}, {@link visibleArrangement}), so a card the
+ * reader was never shown -- another person's, a widget they may not see, one
+ * they removed -- is simply not here, and the query endpoint cannot answer it
+ * differently from the dashboard that drew it.
+ */
+export async function askableCards(auth: AuthContext): Promise<{
+  handed: ReadonlyMap<string, WidgetPlacement>;
+  placeable: ReadonlySet<string>;
+}> {
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  return {
+    handed: new Map(
+      visibleArrangement(stored.layout, view)
+        .filter(placement => placement.removed !== true)
+        .map(placement => [placement.id, placement])
+    ),
+    // 🔴 The layout write's own gate (`putWidgetLayout` refuses a placement of
+    // any widget outside it, and `authenticateLayoutWrite` refuses an API key
+    // outright), so a widget whose card may be previewed with settings of the
+    // reader's choosing is exactly one they could place. A key has no admin
+    // screen to place a card on, so it may preview none.
+    placeable: mayWriteLayout(auth) ? view.visibleIds : new Set<string>(),
+  };
+}
+
+/**
+ * Whether this caller may write a dashboard layout at all: a person signed in
+ * to the admin, never an API key. One rule for the write and for the previews
+ * that stand in for one.
+ */
+function mayWriteLayout(auth: AuthContext): boolean {
+  return auth.authMethod !== "api-key";
 }
 
 /**
@@ -291,7 +418,31 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     : stored.layout
       ? "own"
       : "default";
-  const placements = visibleArrangement(stored.layout, view.visibleIds);
+  const arrangement = visibleArrangement(stored.layout, view);
+  // The Get started card is drawn or left dormant from its step answer and its
+  // own settings, which is why this is decided here, after the row is read,
+  // and not by a condition before it. `?getStarted=1` asks for the answer of a
+  // removed card, which the admin needs as it restores one.
+  const askedForSteps = new URL(req.url).searchParams.get("getStarted") === "1";
+  const getStarted = await getStartedView(
+    view.probe,
+    getStartedPlacement(arrangement),
+    askedForSteps
+  );
+  const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  // The default as a reader following it would be handed it: their card has
+  // no settings yet, so it is drawn from the answer alone. The steps are
+  // worked out when this read worked them out, or when the admin asks
+  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
+  // no card of its own still resets onto a default that may draw one.
+  const steps =
+    getStarted.answer === null && !askedForSteps
+      ? null
+      : await view.probe.getStarted();
+  const defaults = withoutDormantCard(
+    visibleArrangement(undefined, view),
+    card => steps !== null && getStartedDrawn(steps, card.config)
+  );
   const widths = widthsOf(view.widgets);
 
   // Widgets this caller may see and may still add. A saved arrangement is a
@@ -304,10 +455,15 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // metadata it renders from; what only this endpoint can answer is WHICH of
   // them this caller is allowed to know about. In the add panel's order, so
   // the panel lists them as sent.
+  //
+  // Never Get started: it is offered back only from Removed, as the card the
+  // reader removed, with its progress and skips.
   const placed = new Set(placements.map(placement => placement.widgetId));
   const available = inAddPanelOrder(
     view.widgets.filter(
-      widget => !placed.has(widget.id) || widths[widget.id].allowsSeveral
+      widget =>
+        widget.id !== GET_STARTED_WIDGET_ID &&
+        (!placed.has(widget.id) || widths[widget.id].allowsSeveral)
     )
   ).map(widget => widget.id);
 
@@ -317,7 +473,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The default as this reader would see it, from the same computation a
       // reader following it is shown: a staged reset draws it, and the admin
       // never works the default out for itself.
-      defaultPlacements: visibleArrangement(undefined, view.visibleIds),
+      defaultPlacements: defaults,
       widgets: widgetFactsOf(view.widgets),
       available,
       version: stored.version,
@@ -326,6 +482,9 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
+      // The Get started steps, from the computation that decided whether the
+      // card is drawn, so the card and its steps cannot disagree.
+      getStarted,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -441,8 +600,9 @@ async function authenticateLayoutWrite(
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  if (auth.authMethod === "api-key") {
-    throw NextlyError.forbidden({
+  if (!mayWriteLayout(auth)) {
+    throw NextlyError.personOnly({
+      doing: "change a dashboard layout",
       logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });
   }
@@ -450,6 +610,31 @@ async function authenticateLayoutWrite(
 }
 
 /** Refuses a submission naming a widget this caller may not see, or an id twice. */
+/**
+ * Refuses a submitted card set to a collection this reader may not read.
+ *
+ * 🔴 One answer whether the collection exists or not: a write that failed for
+ * one and was stored for the other would tell a reader which names exist. And
+ * none is stored, so no card the reader was never allowed to see enters their
+ * row. A card they already held is not in their submission once withheld: it
+ * is carried, not resubmitted.
+ */
+function refuseUnreadableCollections(
+  submitted: readonly WidgetPlacement[],
+  withheld: (placement: WidgetPlacement) => boolean
+): void {
+  if (!submitted.some(withheld)) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "placements",
+        code: "INVALID_VALUE",
+        message: "A card is set to a collection that is not available.",
+      },
+    ],
+  });
+}
+
 function refuseUnknownOrRepeated(
   submitted: readonly WidgetPlacement[],
   visibleIds: ReadonlySet<string>
@@ -531,6 +716,89 @@ function refuseDisallowedWidths(
 }
 
 /**
+ * Refuses a card whose text setting is over the length its widget declares.
+ *
+ * A placement's `config` is otherwise opaque here, bounded only by size; a
+ * widget's own `textarea` setting is the one value this endpoint judges, so a
+ * note a sheet would refuse cannot be saved by writing the layout directly.
+ * Counted with `textLength`, the counter the settings sheet uses, so the sheet
+ * and this write agree on what fits.
+ *
+ * Judged only where the value CHANGED from the one the caller was shown, as
+ * widths are: a note saved before its widget lowered the bound can still be
+ * saved as it is, while a new or edited one is held to the bound.
+ *
+ * The bounds come from the canonical set the caller sees, so a widget is held
+ * to its textarea's bound whichever channel declared it: a contribution's
+ * settings reach no registry, and reading the registry alone let a direct
+ * write store any length of text on a contributed widget.
+ */
+function refuseOverlongText(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widgets: readonly CanonicalWidget[]
+): void {
+  const shownById = new Map(shown.map(p => [p.id, p]));
+  const boundsById = new Map(
+    widgets.map(widget => [widget.id, widget.textBounds ?? []])
+  );
+  for (const placement of submitted) {
+    const overlong = overlongTextIn(
+      placement,
+      shownById.get(placement.id),
+      boundsById.get(placement.widgetId) ?? []
+    );
+    if (overlong) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "TOO_LONG",
+            message: `"${overlong.label}" is at most ${overlong.maxLength} characters.`,
+          },
+        ],
+      });
+    }
+  }
+}
+
+/**
+ * The first textarea setting of `placement` whose value changed from the one
+ * `shown` held and is over its widget's bound, or `undefined`.
+ */
+function overlongTextIn(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined,
+  bounds: readonly TextBound[]
+): { label: string; maxLength: number } | undefined {
+  for (const bound of bounds) {
+    const value = changedText(placement, shown, bound.name);
+    if (value !== undefined && textLength(value) > bound.maxLength) {
+      return { label: bound.label, maxLength: bound.maxLength };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The text `placement` holds for `name`, when it is text and changed from what `shown` held.
+ *
+ * Unchanged only where the shown placement was a card of the SAME widget, as widths are judged:
+ * an id reused for another widget is a new card, so text carried over from a widget with no
+ * bound is held to this one's.
+ */
+function changedText(
+  placement: WidgetPlacement,
+  shown: WidgetPlacement | undefined,
+  name: string
+): string | undefined {
+  const value = placement.config?.[name];
+  const unchanged =
+    shown?.widgetId === placement.widgetId && shown.config?.[name] === value;
+  return typeof value === "string" && !unchanged ? value : undefined;
+}
+
+/**
  * Refuses a second card of a widget that allows one.
  *
  * Counted against what the caller was SHOWN, so an arrangement that already
@@ -593,6 +861,23 @@ function refuseUnconfirmedReplacement(
   });
 }
 
+/**
+ * The widget ids a save replaces, as opposed to carries.
+ *
+ * Every visible widget, except a Get started card the submission does not
+ * hold: a dormant card is never handed to the reader, so their save cannot
+ * hold it, and replacing it would delete it with its skips. Carried instead,
+ * in place, as a card the reader could not see is. A submission that holds
+ * the card replaces it as usual.
+ */
+function carriedUnlessSubmitted(
+  submitted: readonly WidgetPlacement[],
+  visibleIds: ReadonlySet<string>
+): ReadonlySet<string> {
+  if (getStartedPlacement(submitted) !== undefined) return visibleIds;
+  return new Set([...visibleIds].filter(id => id !== GET_STARTED_WIDGET_ID));
+}
+
 export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await authenticateLayoutWrite(req, "write");
 
@@ -640,6 +925,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const view = await visibleWidgets(auth);
   refuseStaleScope(submittedScope, view.scope);
   refuseUnknownOrRepeated(submitted, view.visibleIds);
+  refuseUnreadableCollections(submitted, view.withheld);
 
   const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
   refuseUnconfirmedReplacement(
@@ -647,10 +933,11 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges,
     replaceUnreadable
   );
-  const shown = visibleArrangement(stored.layout, view.visibleIds);
+  const shown = visibleArrangement(stored.layout, view);
   const widths = widthsOf(view.widgets);
   refuseDisallowedWidths(submitted, shown, widths);
   refuseExtraCards(submitted, shown, widths);
+  refuseOverlongText(submitted, shown, view.widgets);
 
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
   // write says: a removal outside customise mode states `false` because IT is
@@ -665,8 +952,9 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     view.caller.userId,
     mergePreservingHidden(
       submitted,
-      wholeArrangement(stored.layout),
-      view.visibleIds
+      wholeArrangement(stored.layout, view.conversion),
+      carriedUnlessSubmitted(submitted, view.visibleIds),
+      view.withheld
     ),
     expectedVersion,
     arranged

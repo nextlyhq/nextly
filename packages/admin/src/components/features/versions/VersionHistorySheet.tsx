@@ -12,6 +12,7 @@
  */
 
 import { X } from "lucide-react";
+import type { JSX } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
@@ -172,7 +173,7 @@ export function VersionHistorySheet({
   lifecycle = false,
   editingLocale = null,
   retention,
-}: VersionHistorySheetProps) {
+}: VersionHistorySheetProps): JSX.Element {
   // The version chosen lives in the address beside the panel's own key, so a
   // link names it; the list shows while none is chosen.
   const { version: selected, setVersion: setSelected } = useHistoryAddress();

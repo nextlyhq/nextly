@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 import { useId } from "react";
 
 interface SettingsRowGroupProps {
@@ -26,7 +26,7 @@ export function SettingsRowGroup({
   label,
   description,
   children,
-}: SettingsRowGroupProps) {
+}: SettingsRowGroupProps): JSX.Element {
   const labelId = useId();
 
   return (

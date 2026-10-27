@@ -29,6 +29,7 @@ import {
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { Control, FieldValues, Path } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
@@ -536,7 +537,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
-}) {
+}): JSX.Element {
   const mount = useEditorMount(initialValue, kinds);
   const { editor, inline } = mount;
 

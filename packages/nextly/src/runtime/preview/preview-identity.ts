@@ -23,7 +23,7 @@
  */
 
 import { buildUserContext } from "../../auth/user-context";
-import { getService } from "../../di/register";
+import { getService } from "../../di/service-access";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { getCachedNextly } from "../../init";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";

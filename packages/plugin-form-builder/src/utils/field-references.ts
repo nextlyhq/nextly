@@ -15,7 +15,7 @@ import type { AnyFormField, FormNotification } from "../types";
  * straight to the mail provider. Both sides read this constant so the question
  * has one answer.
  */
-export const FIELD_REF_PATTERN = /^\{\{(\w+)\}\}$/;
+export const FIELD_REF_PATTERN: RegExp = /^\{\{(\w+)\}\}$/;
 
 /** The field named by a reference, or `null` when the value is not one. */
 export function parseFieldRef(value: string | undefined): string | null {

@@ -35,6 +35,7 @@ import type {
 } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import { lazy, Suspense, useState, useEffect } from "react";
+import type { JSX } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -252,7 +253,7 @@ export function FieldRenderer({
   disabled,
   readOnly,
   mode,
-}: FieldRendererProps) {
+}: FieldRendererProps): JSX.Element | null {
   const {
     formState: { errors },
     control,

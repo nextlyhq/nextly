@@ -7,6 +7,7 @@ import { relatedRowReads } from "../../../auth/access/population-read";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
+import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -40,21 +41,32 @@ import {
   boundReaches,
   TRUSTS_EVERY_COLLECTION,
 } from "../../../services/collections/trust-grant";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
+  callerAccessGrants,
+  type CallerGrants,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  liveFieldGroupReadPass,
+  withFieldGroupEvidence,
+  type LiveFieldGroupReadPass,
+} from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -80,6 +92,24 @@ import {
  * camelCase form some conversions produce).
  */
 const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
+
+/**
+ * What one read's walk has resolved for the field groups its related rows
+ * hold: each target's pass, and the caller's grants. Keyed by the read's
+ * access context, so a walk reaching one target through many rows resolves
+ * its field-group schemas once, and reads the caller's roles once.
+ */
+interface RelatedFieldGroupState {
+  passes: Map<string, Promise<LiveFieldGroupReadPass | undefined>>;
+  grants: () => Promise<CallerGrants>;
+  /**
+   * The field groups' own evidence, across every pass the walk makes: a later
+   * one restores what an earlier removed, and the entity's own pass is shown
+   * it too (`withFieldGroupEvidence`), since its store cannot hold it.
+   */
+  redactions: ReadAccessRedactions;
+}
+const relatedFieldGroupState = new WeakMap<object, RelatedFieldGroupState>();
 
 /**
  * Default depth for relationship population.
@@ -1379,6 +1409,23 @@ type TargetTableColumns = {
   id: unknown;
   status?: unknown;
 };
+
+/**
+ * Strip a related row to its identity (`id` and `label`), in place: the answer
+ * for a row whose schema cannot be resolved, which leaves no field to judge.
+ */
+function stripToIdentity(row: Record<string, unknown>): void {
+  for (const key of Object.keys(row)) {
+    if (key !== "id" && key !== "label") delete row[key];
+  }
+  // Defense in depth: the label is normally a display field (never a
+  // password — a password can't be configured as a label), but a row
+  // migrated from before that guard could carry a bcrypt hash here, so
+  // drop a hash-shaped label rather than surface it.
+  if (typeof row.label === "string" && row.label.startsWith("$2")) {
+    delete row.label;
+  }
+}
 
 export class CollectionRelationshipService extends BaseService {
   /**
@@ -3003,6 +3050,27 @@ export class CollectionRelationshipService extends BaseService {
    * never describes a related collection's fields.
    */
   /**
+   * {@link redactWalkedRow} for a row the nested walk resolved, by its own
+   * collection's fields and table as the walk cached them.
+   */
+  private async redactNestedRow(
+    resolved: { collection: string; row: Record<string, unknown> },
+    state: NestedHookState
+  ): Promise<void> {
+    const targetFields = await this.fieldsForNestedWalk(
+      resolved.collection,
+      state
+    );
+    this.redactWalkedRow(
+      resolved.collection,
+      resolved.row,
+      targetFields,
+      await this.tableForNestedWalk(resolved.collection, state),
+      await this.passwordReach(targetFields)
+    );
+  }
+
+  /**
    * Redact one row the relationship walk has just populated.
    *
    * Both walks do the same three things and did them in two copies; a
@@ -3018,10 +3086,12 @@ export class CollectionRelationshipService extends BaseService {
     row: Record<string, unknown>,
     targetFields: FieldDefinition[],
     /** The physical table `collection` reads from; see `tableForNestedWalk`. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    if (hasPasswordField(targetFields)) {
-      stripPasswordFieldValues(row, targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
+      stripPasswordFieldValues(row, targetFields, reach);
     }
     if (isSystemEntity(collection)) {
       for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
@@ -3067,26 +3137,16 @@ export class CollectionRelationshipService extends BaseService {
     }
     const targetFields = target?.fields ?? null;
     if (targetFields === null) {
-      for (const row of rows) {
-        for (const key of Object.keys(row)) {
-          if (key !== "id" && key !== "label") delete row[key];
-        }
-        // Defense in depth: the label is normally a display field (never a
-        // password — a password can't be configured as a label), but a row
-        // migrated from before that guard could carry a bcrypt hash here, so
-        // drop a hash-shaped label rather than surface it.
-        if (typeof row.label === "string" && row.label.startsWith("$2")) {
-          delete row.label;
-        }
-      }
+      for (const row of rows) stripToIdentity(row);
       // Nothing but id/label survives, so there is no field left to judge.
       return;
     }
     // Secrets first, and for every caller: a trusted read has no more use for a
     // password hash than an anonymous one.
-    if (hasPasswordField(targetFields)) {
+    const reach = await this.passwordReach(targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
       for (const row of rows) {
-        stripPasswordFieldValues(row, targetFields);
+        stripPasswordFieldValues(row, targetFields, reach);
       }
     }
     // Secrets above are unconditional and stay here. The target's FIELD rules
@@ -3590,16 +3650,7 @@ export class CollectionRelationshipService extends BaseService {
       );
       // Secrets a hook could reintroduce, stripped for the same reason the walk
       // strips them: unconditional, override included.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
       // Rebuild the label from what survived, as the walk does before returning to a
       // parent: a field hook can mutate an existing child so its label field flips
       // from allowed to denied, and this access pass removes the field but leaves the
@@ -3816,16 +3867,7 @@ export class CollectionRelationshipService extends BaseService {
       // using the source collection's schema, so they would never look at this
       // one. Stripped again here for the same reason a direct read strips after
       // its own hooks.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
     }
   }
 
@@ -3895,21 +3937,112 @@ export class CollectionRelationshipService extends BaseService {
     // one restores what an earlier removed as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
     // caught while an unchanged verdict stays put.
+    // What an earlier field-group pass on these rows removed, which the
+    // target's own rules are judged against as the row stores it.
+    const fieldGroupEvidence = relatedFieldGroupState.get(access)?.redactions;
     for (const row of rows) {
-      await applyFieldReadAccess(
-        {
-          kind: "collection",
-          slug: targetCollection,
-          entry: row,
-          // The field-access identity, never the hook one: a preview judges a
-          // related row's fields as the sharer while every hook goes on seeing
-          // the anonymous bearer who is actually asking.
-          user: access.fieldAccessUser ?? access.user,
-          overrideAccess: false,
-        },
-        redactions
-      );
+      const judge = () =>
+        applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: targetCollection,
+            entry: row,
+            // The field-access identity, never the hook one: a preview judges a
+            // related row's fields as the sharer while every hook goes on
+            // seeing the anonymous bearer who is actually asking.
+            user: access.fieldAccessUser ?? access.user,
+            overrideAccess: false,
+          },
+          redactions
+        );
+      await (fieldGroupEvidence
+        ? withFieldGroupEvidence(row, fieldGroupEvidence, judge)
+        : judge());
     }
+    await this.applyRelatedFieldGroupReadAccess(targetCollection, rows, access);
+  }
+
+  /**
+   * Evaluate the rules on fields inside the field groups a related row holds,
+   * by the TARGET collection's schema, so a populated row withholds what a
+   * direct read of it would. Its store, kept for the read, lets a later pass
+   * restore what an earlier one removed as evidence.
+   */
+  private async applyRelatedFieldGroupReadAccess(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!anyFieldGroupHasAccessRule("read")) return;
+    const user = access.fieldAccessUser ?? access.user;
+    let state = relatedFieldGroupState.get(access);
+    if (!state) {
+      // A scoped API key's own grants, never its owner's.
+      state = {
+        passes: new Map(),
+        grants: callerAccessGrants(user, access.authenticatedScope),
+        redactions: new WeakMap(),
+      };
+      relatedFieldGroupState.set(access, state);
+    }
+    let pending = state.passes.get(targetCollection);
+    if (!pending) {
+      pending = this.relatedFieldGroupPass(targetCollection);
+      state.passes.set(targetCollection, pending);
+    }
+    const pass = await pending;
+    if (!pass) return;
+    const caller = {
+      user,
+      authenticatedScope: access.authenticatedScope,
+      grants: state.grants,
+      redactions: state.redactions,
+    };
+    for (const row of rows) await pass(row, caller);
+  }
+
+  /** The field-group read pass for one target collection's related rows. */
+  private async relatedFieldGroupPass(
+    targetCollection: string
+  ): Promise<LiveFieldGroupReadPass | undefined> {
+    const target = await this.getRedactionTarget(targetCollection);
+    // The schema resolved when the row was loaded, but this read of it failed:
+    // what the row's field groups hold cannot be judged, so the row is
+    // withheld to its identity, as a row whose schema never resolved is.
+    if (target === null) {
+      return row => {
+        stripToIdentity(row);
+        return Promise.resolve();
+      };
+    }
+    const source = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
+      : undefined;
+    return liveFieldGroupReadPass(target.fields as FieldConfig[], source);
+  }
+
+  /**
+   * Where the password strip follows the field groups a target's fields hold
+   * inline, once per field list: a walk caches each target's fields for the
+   * batch, so a target read many times resolves them once.
+   */
+  private readonly passwordReaches = new WeakMap<
+    readonly unknown[],
+    Promise<FieldGroupReach>
+  >();
+
+  private passwordReach(fields: readonly unknown[]): Promise<FieldGroupReach> {
+    let reach = this.passwordReaches.get(fields);
+    if (!reach) {
+      reach = passwordReachOf(
+        fields,
+        container.has("fieldGroupDataService")
+          ? container.get<FieldGroupDataService>("fieldGroupDataService")
+          : undefined
+      );
+      this.passwordReaches.set(fields, reach);
+    }
+    return reach;
   }
 
   /**

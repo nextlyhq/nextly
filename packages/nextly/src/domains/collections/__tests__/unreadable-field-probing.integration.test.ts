@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -86,6 +87,11 @@ async function boot(dialect: TestDialect): Promise<Handler> {
       } as never),
     ],
   });
+  // A code rule only narrows the permission, so both callers hold read on
+  // vaults; the field rules are what tell them apart.
+  for (const caller of [BOSS, AGENT]) {
+    await userWhoMay(current, caller.id, "read", [VAULTS]);
+  }
   const h = current.getService("collectionsHandler") as unknown as Handler;
   for (const [title, codename, owner, ownerNote] of [
     ["north", "alpha", "agent", "zebra"],

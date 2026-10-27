@@ -381,7 +381,8 @@ export interface AuthorizedSharer {
  */
 function refuseApiKey(auth: { authMethod: "session" | "api-key" }): void {
   if (auth.authMethod === "api-key") {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "manage preview links",
       logContext: {
         reason: "preview-link-action-by-api-key",
         remedy:

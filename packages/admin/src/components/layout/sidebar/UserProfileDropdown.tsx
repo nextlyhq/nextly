@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { User as UserIcon, LogOut } from "@admin/components/icons";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -27,7 +28,7 @@ export function UserProfileDropdown({
   user,
   onLogout,
   className,
-}: UserProfileDropdownProps) {
+}: UserProfileDropdownProps): JSX.Element {
   return (
     <div className={className}>
       <DropdownMenu>

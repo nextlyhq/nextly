@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -23,7 +24,7 @@ import type { ActionResponse } from "@admin/lib/api/response-types";
 
 import { useSetupTokenRequired } from "./useSetupTokenRequired";
 
-export function Setup() {
+export function Setup(): JSX.Element {
   const { api } = useApi();
   const appName = useAppName();
 

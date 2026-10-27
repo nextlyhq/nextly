@@ -9,11 +9,12 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { EyeOff, Send, Trash2, X } from "@admin/components/icons";
-import { useCan } from "@admin/hooks/useCan";
 
 import type { CollectionForColumns } from "./EntryTableColumns";
+import { useEntryBulkActions } from "./useEntryBulkActions";
 
 // ============================================================================
 // Types
@@ -85,21 +86,15 @@ export function BulkActionBar({
   isPublishing = false,
   onClear,
   itemLabel = "entry",
-}: BulkActionBarProps) {
-  // Publishing is its own permission, distinct from editing, and gated per
-  // button rather than together: a user may hold one without the other. The
-  // slug is empty when there is no collection, which no permission matches, so
-  // the hook stays unconditional (a rule of hooks) and resolves to denied.
-  const canPublish = useCan(`publish-${collection?.slug ?? ""}`);
-  const canUnpublish = useCan(`unpublish-${collection?.slug ?? ""}`);
-
-  // Publish / Unpublish are only meaningful for collections with the built-in
-  // Draft / Published lifecycle (`status: true`), and only offered to a caller
-  // permitted to make the transition — matching the server, which refuses it
-  // otherwise. Each button is shown independently.
-  const showPublish = collection?.status === true && !!onPublish && canPublish;
-  const showUnpublish =
-    collection?.status === true && !!onUnpublish && canUnpublish;
+}: BulkActionBarProps): JSX.Element {
+  // Each action is offered on its own permission, as the server answers it:
+  // a user may hold one without the others. Publish / Unpublish are only
+  // meaningful for collections with the built-in Draft / Published lifecycle,
+  // which the shared answer already folds in, and each button also needs the
+  // callback that performs it.
+  const offered = useEntryBulkActions(collection);
+  const showPublish = offered.publish && !!onPublish;
+  const showUnpublish = offered.unpublish && !!onUnpublish;
   const showPublishActions = showPublish || showUnpublish;
   // Pluralize the label. "entry" -> "entries", "category" -> "categories",
   // "collection" -> "collections", "user" -> "users". Already-plural labels
@@ -169,16 +164,18 @@ export function BulkActionBar({
           </>
         )}
 
-        {/* Delete selected */}
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={onDelete}
-          className="gap-1.5"
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete selected
-        </Button>
+        {/* Delete selected, only for a caller who may delete here. */}
+        {offered.delete && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onDelete}
+            className="gap-1.5"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete selected
+          </Button>
+        )}
       </div>
     </div>
   );

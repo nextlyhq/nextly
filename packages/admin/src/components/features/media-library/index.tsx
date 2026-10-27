@@ -128,7 +128,7 @@ export function MediaLibrary({
   defaultSortOrder = "desc",
   allowedTypes,
   className,
-}: MediaLibraryProps = {}) {
+}: MediaLibraryProps = {}): React.JSX.Element {
   // State: Pagination
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination({
     initialPageSize: defaultPageSize,

@@ -1,8 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,8 +9,9 @@ import {
   compareToBaseline,
   compile,
   contextOnlyWorthRecording,
-  deprecatedPropertiesIn,
+  deprecationsIn,
   declaredNamesIn,
+  declaredValuesIn,
   extensionFor,
   extractFrom,
   identityOf,
@@ -27,13 +27,14 @@ import {
   readerOwnedMention,
   usedOnlyAsValue,
   withDerivedCoverage,
-  workspaceValueExports,
   parseSample,
   rebaseContextDiagnostics,
   unaccountedFor,
   unterminatedFences,
   withEarlierContext,
 } from "./check-doc-samples.mjs";
+import { topLevelOnly } from "./top-level-text.mjs";
+import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 /**
  * Each guard is asserted against a CONTROL that reproduces what the checker did
@@ -43,22 +44,14 @@ import {
  * old scoring accept what the new scoring rejects is.
  */
 
-/** A compiler host serving one in-memory `/probe.d.ts`, for the control below. */
-const declarationHost = text => {
-  const host = ts.createCompilerHost({});
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, langVersion, ...rest) =>
-    name === "/probe.d.ts"
-      ? ts.createSourceFile(name, text, langVersion, true, ts.ScriptKind.TS)
-      : original(name, langVersion, ...rest);
-  host.fileExists = name => name === "/probe.d.ts" || ts.sys.fileExists(name);
-  host.readFile = name =>
-    name === "/probe.d.ts" ? text : ts.sys.readFile(name);
-  return host;
-};
-
 /** What the baseline held before fences were part of an identity. */
 const messageOnly = line => line.slice(line.indexOf("  ") + 2);
+
+/**
+ * Export sets naming nothing, so a reader-ownership question is asked without
+ * the workspace's, which needs a build.
+ */
+const NOTHING_EXPORTED = { names: new Set(), values: new Set() };
 
 /** A fingerprint keyed the old way, for the control side of each comparison. */
 const fingerprintBy = (key, byFile) =>
@@ -736,6 +729,52 @@ describe("declaredNamesIn under the right grammar", () => {
   });
 });
 
+describe("declaredNamesIn on a sample that parses", () => {
+  // Each sample is a program the text reading gets wrong about one name, which
+  // the control shows: a slash after `!` that a later slash on the line makes
+  // look like a regular expression, an apostrophe in JSX text read as opening
+  // a string, and a declaration written inside a top-level template literal.
+  it.each([
+    [
+      "function f(value: number) { const x = (value! / 2) / 3; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    [
+      "function f() { return <p>Don't</p>; }\nconst pageValue = 1;",
+      ["f", "pageValue"],
+      "pageValue",
+    ],
+    ["const doc = `\nconst ghost = 1;\n`;", ["doc"], "ghost"],
+  ])(
+    "reads its top-level declarations from the parse: %s",
+    (code, names, misread) => {
+      expect(declaredNamesIn(code).sort()).toEqual(names);
+      // The control: the top-level text has the name exactly when the program
+      // does not declare it there.
+      expect(new RegExp(`\\b${misread}\\b`).test(topLevelOnly(code))).toBe(
+        !names.includes(misread)
+      );
+    }
+  );
+
+  it("reads every binding of a pattern and which names are values", () => {
+    const code = [
+      "const { a, b: { c }, ...rest } = obj;",
+      "export default function Shown() {}",
+      "interface Shape {}",
+      "enum Mode { A }",
+    ].join("\n");
+
+    expect(declaredNamesIn(code).sort()).toEqual(
+      ["Mode", "Shape", "Shown", "a", "c", "rest"].sort()
+    );
+    expect(declaredValuesIn(code).sort()).toEqual(
+      ["Shown", "a", "c", "rest"].sort()
+    );
+  });
+});
+
 describe("unaccountedFor", () => {
   const complete = {
     total: 10,
@@ -792,41 +831,39 @@ describe("unterminatedFences and closing lines", () => {
   });
 });
 
-describe("isModule asks the compiler rather than listing node kinds", () => {
-  /**
-   * The kinds this used to enumerate, as the control.
-   *
-   * A list answers only for what somebody thought of, and this one was short in
-   * both directions at once, which is the shape a list always fails in.
-   */
-  const byKindList = (code, extension = "ts") =>
-    parseSample(code, extension).statements.some(
-      statement =>
-        ts.isImportDeclaration(statement) ||
-        ts.isImportEqualsDeclaration(statement) ||
-        ts.isExportDeclaration(statement) ||
-        ts.isExportAssignment(statement) ||
-        (ts.getModifiers?.(statement) ?? statement.modifiers ?? []).some(
-          modifier => modifier.kind === ts.SyntaxKind.ExportKeyword
-        )
-    );
-
+describe("isModule answers as TypeScript decides a file is a module", () => {
   it("compiles a fence whose only module syntax is import.meta", () => {
-    // TypeScript sets its module indicator for `import.meta`, so this fence is
-    // a module to the compiler that would compile it while the list read it as
-    // a fragment. Neither the reviewer nor the list found this one.
+    // TypeScript calls a file with `import.meta` a module, so the compiler that
+    // would compile this fence treats it as one. A list of declaration kinds
+    // read it as a fragment.
     const code = "const here = import.meta.url;\nconsole.log(here);\n";
     expect(isModule(code, "ts")).toBe(true);
-    expect(byKindList(code)).toBe(false);
   });
 
-  it("leaves a namespace alias alone", () => {
+  it("leaves a namespace alias alone, and loads through an import equals", () => {
     // `import A = N.M` names an existing namespace rather than loading a
-    // module, and TypeScript does not call the file a module for it. The list
-    // matched every ImportEqualsDeclaration, so it read this as a program.
-    const code = "import A = N.M;\n";
+    // module, and TypeScript does not call the file a module for it; the
+    // `require` form loads one, and it does.
+    expect(isModule("import A = N.M;\n", "ts")).toBe(false);
+    expect(isModule('import fs = require("node:fs");\n', "ts")).toBe(true);
+    expect(isModule("const a = 1;\nexport = a;\n", "ts")).toBe(true);
+  });
+
+  it("does not take top-level await for module syntax", () => {
+    // The parser's own "has module syntax" counts top-level `await`, which
+    // TypeScript does not, and the Direct API pages are full of fragments that
+    // await a call. Read that way, sixty of them became modules.
+    const code = "const posts = await nextly.find({ collection: 'posts' });\n";
     expect(isModule(code, "ts")).toBe(false);
-    expect(byKindList(code)).toBe(true);
+    expect(parseSample(code, "ts").module.hasModuleSyntax).toBe(true);
+  });
+
+  it("reads a fence that does not parse as declaring and loading nothing", () => {
+    // The parser answers a syntax error with an empty program, not a partial
+    // one, so a placeholder fragment is a fragment.
+    const code = 'import { a } from "b";\nconst c = { ... };\n';
+    expect(parseSample(code, "ts").program.body).toEqual([]);
+    expect(isModule(code, "ts")).toBe(false);
   });
 
   it("still answers for the cases the list got right", () => {
@@ -933,20 +970,64 @@ describe("a fence whose only module syntax is a namespace export", () => {
     expect(asScript.join("\n")).toContain("TS2304");
     // The control: the same body under the options a declaration file would get
     // is silent, so "compiled" would not mean "checked".
-    const program = ts.createProgram(
-      ["/probe.d.ts"],
-      {
-        noEmit: true,
-        strict: true,
-        skipLibCheck: true,
-        target: ts.ScriptTarget.ES2022,
-        lib: ["lib.es2022.d.ts"],
-      },
-      declarationHost(`${broken}\nexport {};\n`)
+    const dir = mkdtempSync(join(tmpdir(), "declaration-probe-"));
+    try {
+      writeFileSync(join(dir, "probe.d.ts"), `${broken}\nexport {};\n`);
+      writeFileSync(
+        join(dir, "tsconfig.json"),
+        JSON.stringify({
+          compilerOptions: {
+            noEmit: true,
+            strict: true,
+            skipLibCheck: true,
+            target: "es2022",
+            lib: ["es2022"],
+            types: [],
+          },
+          files: ["probe.d.ts"],
+        })
+      );
+      expect(compileWithTsc(["-p", join(dir, "tsconfig.json")], dir)).toEqual(
+        []
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("compiling the samples on the compiler's command line", () => {
+  const sample = (index, code) => ({
+    file: "docs/a.mdx",
+    index,
+    lang: "ts",
+    meta: "",
+    code,
+  });
+
+  it("still type-checks the other samples when one does not parse", () => {
+    // tsc reports only parse errors while any file fails to parse, so one
+    // malformed block would hide every type error on every other page. The
+    // run is repeated without it; reading the first run as complete reports
+    // the parse error alone.
+    const reported = compile(
+      [sample(0, "const broken = ;"), sample(1, 'const wrong: number = "x";')],
+      "test-parse-and-type"
+    ).join("\n");
+    expect(reported).toContain("docs/a.mdx#0:1  error TS1109");
+    expect(reported).toContain("docs/a.mdx#1:1  error TS2322");
+  });
+
+  it("writes a message chain on one line, each step at its depth", () => {
+    // The baseline's identities are read from this text, so it must say what
+    // the compiler API's flattened message said: a step keeps its indentation.
+    const reported = compile(
+      [sample(0, "const f: (x: number) => void = (x: string) => {};")],
+      "test-chain"
+    ).join("\n");
+    expect(reported).toContain(
+      "is not assignable to type '(x: number) => void'.   Types of parameters 'x' and 'x' are incompatible.     Type 'number' is not assignable to type 'string'."
     );
-    expect(
-      program.getSemanticDiagnostics(program.getSourceFile("/probe.d.ts"))
-    ).toEqual([]);
   });
 });
 
@@ -1082,253 +1163,52 @@ describe("contextOnlyWorthRecording deduplicates on identity", () => {
   });
 });
 
+// Which properties the audit reports, and on what the compiler's language
+// server answers, is `deprecated-properties.test.mjs`'s question: the cases
+// once asked of the checker here are asked of the server there, with the
+// control that the compiler reports none of them itself.
 describe("a sample that writes a property the API has deprecated", () => {
-  /** A two-file program: one declaring the API, one writing against it. */
-  const program = source => {
-    const dir = mkdtempSync(join(tmpdir(), "deprecated-"));
-    writeFileSync(
-      join(dir, "api.ts"),
-      [
-        "export interface Plugin {",
-        "  /** @deprecated Prefer contributes.collections */",
-        "  collections?: string[];",
-        "  contributes?: { collections?: string[] };",
-        "  admin?: { order?: number };",
-        "}",
-        "export interface Legacy {",
-        '  kind: "legacy";',
-        "  /** @deprecated Prefer nu */",
-        "  old?: string;",
-        "}",
-        "export interface Current {",
-        '  kind: "current";',
-        "  nu?: string;",
-        "}",
-        "export interface StillOffered {",
-        '  kind: "kept";',
-        "  old?: string;",
-        "}",
-        "export interface Current2 {",
-        '  kind: "current";',
-        "  old?: string;",
-        "}",
-        "",
-      ].join("\n")
+  it("refuses an audit that did not report its probe, or left a file unanswered", () => {
+    const answered = { name: "old", start: 0, line: 1, note: "probe" };
+    // Silence about the probe is an audit that could not answer, not a clean
+    // corpus.
+    expect(() =>
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/a.ts": [],
+        "/d/probe.ts": [],
+      }))
+    ).toThrow(/did not answer/);
+    expect(() =>
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/probe.ts": [answered],
+      }))
+    ).toThrow(/did not answer/);
+    // The control: the same audit with the probe answered is read.
+    expect(
+      deprecationsIn("/d", ["/d/a.ts"], "/d/probe.ts", () => ({
+        "/d/a.ts": [],
+        "/d/probe.ts": [answered],
+      }))
+    ).toEqual([{ file: "/d/a.ts", found: [] }]);
+  });
+
+  it("is charged to its page with the deprecation's own note", () => {
+    const code = [
+      "interface Plugin {",
+      "  /** @deprecated Prefer contributes.collections */",
+      "  collections?: string[];",
+      "  admin?: { order?: number };",
+      "}",
+      'export const p: Plugin = { collections: ["a"], admin: { order: 1 } };',
+    ].join("\n");
+    const lines = compile(
+      [{ file: "docs/a.mdx", index: 0, lang: "ts", meta: "", code }],
+      "test-deprecated"
     );
-    writeFileSync(join(dir, "use.ts"), source);
-    const files = [join(dir, "api.ts"), join(dir, "use.ts")];
-    const built = ts.createProgram(files, {
-      noEmit: true,
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      skipLibCheck: true,
-    });
-    return {
-      dir,
-      sourceFile: built.getSourceFile(join(dir, "use.ts")),
-      checker: built.getTypeChecker(),
-      program: built,
-      files,
-    };
-  };
-
-  const namesFlaggedIn = source => {
-    const { sourceFile, checker, dir } = program(source);
-    try {
-      return deprecatedPropertiesIn(sourceFile, checker).map(d => d.name);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
-
-  it("names the deprecated property and leaves its siblings alone", () => {
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { collections: ["a"], admin: { order: 1 } };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("judges a nested literal against its own property's type", () => {
-    // `contributes.collections` is a different property from the one beside
-    // it, and only one of the two is deprecated. A check that matched on the
-    // name would fail this.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { contributes: { collections: ["a"] } };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("skips a literal with no declared shape to be judged against", () => {
-    // Nothing contextual, so nothing can be deprecated against it. This is
-    // what keeps the check narrow rather than matching every property named
-    // `collections` in the corpus.
-    expect(
-      namesFlaggedIn('export const p = { collections: ["a"] };\n')
-    ).toEqual([]);
-  });
-
-  it("carries the deprecation's own note, which is where the fix is written", () => {
-    const { sourceFile, checker, dir } = program(
-      'import type { Plugin } from "./api";\n' +
-        'export const p: Plugin = { collections: ["a"] };\n'
-    );
-    try {
-      expect(deprecatedPropertiesIn(sourceFile, checker)[0].note).toBe(
-        "Prefer contributes.collections"
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("reads a quoted key, which names the same member", () => {
-    // `{ "collections": [] }` and `{ collections: [] }` are the same property.
-    // Reading only identifiers let the quoted spelling walk past.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { "collections": ["a"] };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("looks inside a union rather than at the union", () => {
-    // `getProperty` on a union answers for the union: a property present on one
-    // constituent comes back undefined, so a deprecated option in a
-    // union-shaped API passed unread.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current } from "./api";\n' +
-          'export const u: Legacy | Current = { kind: "legacy", old: "x" };\n'
-      )
-    ).toEqual(["old"]);
-  });
-
-  it("answers from the arm the literal says it is", () => {
-    // `{ kind: "legacy", old: "x" }` is not ambiguous: the discriminant names
-    // the arm. Asking every arm and requiring agreement gave that up, so a key
-    // deprecated on the arm actually being written passed whenever another arm
-    // still offered it.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current2 } from "./api";\n' +
-          'export const u: Legacy | Current2 = { kind: "legacy", old: "x" };\n'
-      )
-    ).toEqual(["old"]);
-    // The other arm of the same union, which does not deprecate it.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, Current2 } from "./api";\n' +
-          'export const u: Legacy | Current2 = { kind: "current", old: "x" };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("reads a computed key whose expression is a literal", () => {
-    // `{ ["collections"]: [] }` names the same member and TypeScript resolves
-    // it the same way. Only an expression that has to be evaluated is skipped.
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'export const p: Plugin = { ["collections"]: ["a"] };\n'
-      )
-    ).toEqual(["collections"]);
-  });
-
-  it("stays quiet when one arm of a union still offers the name", () => {
-    // Which arm this literal is depends on a discriminant, and nothing here
-    // reads discriminants. Charging the page would be claiming the writer meant
-    // the obsolete arm.
-    expect(
-      namesFlaggedIn(
-        'import type { Legacy, StillOffered } from "./api";\n' +
-          'export const u: Legacy | StillOffered = { kind: "kept", old: "x" };\n'
-      )
-    ).toEqual([]);
-  });
-
-  it("says nothing about a computed key it cannot resolve", () => {
-    expect(
-      namesFlaggedIn(
-        'import type { Plugin } from "./api";\n' +
-          'const k = "collections" as const;\n' +
-          "export const p: Plugin = { [k]: ['a'] };\n"
-      )
-    ).toEqual([]);
-  });
-
-  it("is not something TypeScript already reports", () => {
-    // The control, and the whole reason this function exists. Adding
-    // suggestion diagnostics was the obvious answer and does not work: a
-    // deprecated FUNCTION is reported, a deprecated property written in an
-    // object literal is not, and the corpus's suggestions are otherwise
-    // "declared but never read" on samples that show a shape rather than run.
-    const {
-      files,
-      program: built,
-      dir,
-    } = program(
-      'import type { Plugin } from "./api";\n' +
-        'export const p: Plugin = { collections: ["a"] };\n'
-    );
-    try {
-      const service = ts.createLanguageService({
-        getScriptFileNames: () => files,
-        getScriptVersion: () => "1",
-        getScriptSnapshot: f =>
-          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
-        getCurrentDirectory: () => dir,
-        getCompilationSettings: () => built.getCompilerOptions(),
-        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
-        fileExists: ts.sys.fileExists,
-        readFile: ts.sys.readFile,
-        readDirectory: ts.sys.readDirectory,
-        directoryExists: ts.sys.directoryExists,
-        getDirectories: ts.sys.getDirectories,
-      });
-      const reported = files.flatMap(f =>
-        service.getSuggestionDiagnostics(f).filter(d => d.reportsDeprecated)
-      );
-      expect(reported).toEqual([]);
-      // And the control on the control: the same service DOES report a
-      // deprecated call, so the empty result above is a limit of what
-      // TypeScript reports rather than a service that answers nothing.
-      const fnDir = mkdtempSync(join(tmpdir(), "deprecated-fn-"));
-      const fnFile = join(fnDir, "fn.ts");
-      writeFileSync(
-        fnFile,
-        "/** @deprecated */\nfunction old(): void {}\nold();\nexport {};\n"
-      );
-      const fnProgram = ts.createProgram([fnFile], { noEmit: true });
-      const fnService = ts.createLanguageService({
-        getScriptFileNames: () => [fnFile],
-        getScriptVersion: () => "1",
-        getScriptSnapshot: f =>
-          ts.ScriptSnapshot.fromString(readFileSync(f, "utf-8")),
-        getCurrentDirectory: () => fnDir,
-        getCompilationSettings: () => fnProgram.getCompilerOptions(),
-        getDefaultLibFileName: o => ts.getDefaultLibFilePath(o),
-        fileExists: ts.sys.fileExists,
-        readFile: ts.sys.readFile,
-        readDirectory: ts.sys.readDirectory,
-        directoryExists: ts.sys.directoryExists,
-        getDirectories: ts.sys.getDirectories,
-      });
-      expect(
-        fnService
-          .getSuggestionDiagnostics(fnFile)
-          .filter(d => d.reportsDeprecated).length
-      ).toBeGreaterThan(0);
-      rmSync(fnDir, { recursive: true, force: true });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    expect(lines).toEqual([
+      "docs/a.mdx#0:6  error TS6385: 'collections' is deprecated. Prefer contributes.collections",
+    ]);
+  }, 60_000);
 });
 
 describe("a missing name the reader owns", () => {
@@ -1380,135 +1260,10 @@ describe("a missing name the reader owns", () => {
   });
 });
 
-describe("the workspace's own exported names", () => {
-  // The rule above is stated against a fixture, so this is what ties it to
-  // reality. Read from `src`, which is present whether or not a build has run,
-  // so it answers the same on a clean checkout as on a laptop.
-  //
-  // The timeout is explicit because this is the one test that builds the real
-  // program over every published entry. It took 13.7 seconds on an inspected
-  // clean checkout, and vitest's 5-second default made that a red run on a
-  // slower machine rather than a slow one.
-  const BUILDS_THE_PROGRAM = 120_000;
-
-  it(
-    "knows what this workspace publishes and what it does not",
-    () => {
-      expect(readerOwnedName("Media")).toBe(false);
-      expect(readerOwnedName("Skeleton")).toBe(false);
-      // Published from a subpath and deliberately kept out of the root barrel.
-      expect(readerOwnedName("BuilderShell")).toBe(false);
-      // Entries whose output name does not mirror their source, which is what
-      // made this answer depend on a build. `nextly/document-lock` is built
-      // from `src/domains/document-lock/contract.ts`, and `@nextlyhq/ui`
-      // declares its subpath sources in a module beside its build config, so
-      // neither is reachable by turning `dist/X.d.ts` into `src/X.ts`. Each of
-      // these read as the reader's on a clean checkout and as ours after a
-      // build, which is the case that silences a real finding.
-      expect(readerOwnedName("DocumentLockHolder")).toBe(false);
-      expect(readerOwnedName("FieldTypeCatalogEntry")).toBe(false);
-      expect(readerOwnedName("Hsv")).toBe(false);
-      expect(readerOwnedName("FIELD_TYPE_CATALOG")).toBe(false);
-      expect(readerOwnedName("WidgetResult")).toBe(false);
-      // The reader's, and the control: a set that answered "exported" to
-      // everything would satisfy every assertion above. `Users` is the one that
-      // catches the opposite error: a scan of all source rather than of the
-      // published entries picks up an icon barrel's `Users` and charges four
-      // diagnostics for a name every reader generates.
-      expect(readerOwnedName("Posts")).toBe(true);
-      expect(readerOwnedName("MyCollection")).toBe(true);
-      expect(readerOwnedName("Users")).toBe(true);
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "separates the names that can supply a value",
-    () => {
-      // `Media` is exported as a type by `nextly` and as an interface by
-      // `@nextlyhq/admin`, and by nothing as a value.
-      expect(workspaceValueExports().has("Media")).toBe(false);
-      // Declared type-only over a target that IS a value.
-      // `export type { QueryClient } from "./types/query"` points at TanStack's
-      // runtime class, so resolving the alias and stopping there called it a
-      // value that `@nextlyhq/admin` cannot actually supply.
-      expect(workspaceValueExports().has("QueryClient")).toBe(false);
-      // The control: the same set answers yes for a real component and for a
-      // value published from a subpath, so the two checks above are a namespace
-      // distinction rather than an empty set.
-      expect(workspaceValueExports().has("Skeleton")).toBe(true);
-      expect(workspaceValueExports().has("BuilderShell")).toBe(true);
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "keeps a broken sample rather than calling its name the reader's",
-    () => {
-      // Three shapes that are not reader-owned however they look: a class the
-      // sample forgot to import, one of ours with a letter missing, and a
-      // component of ours misspelled.
-      expect(
-        readerOwnedMention("S3Client", "const s = new S3Client({});", "ts")
-      ).toBe(false);
-      expect(
-        readerOwnedMention("NextlyEror", "const e: NextlyEror = x;", "ts")
-      ).toBe(false);
-      expect(
-        readerOwnedMention("Skelton", "const s = <Skelton />;", "tsx")
-      ).toBe(false);
-      // Construction settles it even for a name the workspace does export,
-      // because a type-only export cannot supply the class either.
-      expect(
-        readerOwnedMention("QueryClient", "const q = new QueryClient();", "ts")
-      ).toBe(false);
-      // The control, and the reason the rule exists: the reader's own names
-      // are still set aside, including the two that sit one character from a
-      // model this workspace exports.
-      for (const name of ["Posts", "Users", "Page", "Chart", "MyCollection"]) {
-        expect(
-          readerOwnedMention(
-            name,
-            `const c = { collections: [${name}] };`,
-            "ts"
-          )
-        ).toBe(true);
-      }
-    },
-    BUILDS_THE_PROGRAM
-  );
-
-  it(
-    "reads a type-only name by how the block used it",
-    () => {
-      // `collections: [Posts, Users, Media]` needs a value, and no import here
-      // can supply one, so that `Media` is the reader's own collection exactly
-      // as `Posts` is.
-      expect(
-        readerOwnedMention(
-          "Media",
-          "const config = { collections: [Posts, Users, Media] };",
-          "ts"
-        )
-      ).toBe(true);
-      // The opposite, and the control: as a type it IS importable, so a sample
-      // using it without the import is a defect a reader meets.
-      expect(readerOwnedMention("Media", "declare const m: Media;", "ts")).toBe(
-        false
-      );
-      // And `typeof Media` needs the value, which nothing here exports, so it
-      // is the reader's the way `collections: [Media]` is.
-      expect(readerOwnedMention("Media", "type X = typeof Media;", "ts")).toBe(
-        true
-      );
-      // A name exported as a value stays a finding however it is used.
-      expect(
-        readerOwnedMention("Skeleton", "const el = <Skeleton />;", "tsx")
-      ).toBe(false);
-    },
-    BUILDS_THE_PROGRAM
-  );
-});
+// The workspace's own export sets are held to names whose answer is known by
+// `workspaceSetProblems` in check-doc-samples.mjs, which the gate runs before
+// judging any page: the sets are read from the published declarations, and CI
+// runs this suite before the build.
 
 describe("a name this workspace does not export", () => {
   // Not exporting a name is not the same as the reader owning it, and treating
@@ -1597,7 +1352,10 @@ describe("a name this workspace does not export", () => {
     const exported = new Set(["NextlyError"]);
     expect(misspelledExport("NNextlyError", exported)).toBe(true);
     expect(
-      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts")
+      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts", {
+        names: exported,
+        values: exported,
+      })
     ).toBe(false);
   });
 
@@ -1681,6 +1439,7 @@ describe("a missing name in object shorthand", () => {
     const { readerNames, real } = await classifyDocDiagnostics({
       diagnostics: [shorthand("Page"), shorthand("baseUrl")],
       samples,
+      exported: NOTHING_EXPORTED,
     });
     const named = lines => lines.map(l => /property '([^']+)'/.exec(l)[1]);
     // The reader's own component, set aside.
@@ -1692,23 +1451,93 @@ describe("a missing name in object shorthand", () => {
   });
 });
 
+describe("TypeScript 7's spellings of the same diagnostics", () => {
+  const samples = [
+    {
+      file: "docs/x.mdx",
+      index: 0,
+      code: 'import "./generated/admin-imports";\nimport { Posts } from "./collections/Posts";\nexport const components = [MyCollection, baseUrl, Posts];',
+      lang: "ts",
+    },
+  ];
+  const at = rest => `docs/x.mdx#0  #0:1  error ${rest}`;
+
+  it("reads a missing name with a spelling suggestion as the missing name", async () => {
+    // TypeScript 7 adds "Did you mean" far more often, which turns TS2304 into
+    // TS2552. Read as anything else, a reader's own name was charged or set
+    // aside according to whether the compiler found a lookalike.
+    const suggested = name =>
+      at(`TS2552: Cannot find name '${name}'. Did you mean 'HTMLCollection'?`);
+    expect(nameIn(suggested("MyCollection"))).toBe("MyCollection");
+    const { readerNames, real } = await classifyDocDiagnostics({
+      diagnostics: [suggested("MyCollection"), suggested("baseUrl")],
+      samples,
+      exported: NOTHING_EXPORTED,
+    });
+    const named = lines => lines.map(l => /name '([^']+)'/.exec(l)[1]);
+    expect(named(readerNames)).toEqual(["MyCollection"]);
+    // The control: a lowercase name is still an unfinished example.
+    expect(named(real)).toEqual(["baseUrl"]);
+  });
+
+  it("reads an unresolved side-effect import of the reader's file as one, leaving the sample unchecked", async () => {
+    // TypeScript 7 checks side-effect imports by default and reports TS2882,
+    // where TypeScript 5 said nothing. It binds no names, but it can load
+    // global or module augmentations, so the sample is unchecked exactly as
+    // one with an unresolved import that binds is.
+    const readAs = async line =>
+      classifyDocDiagnostics({
+        diagnostics: [line],
+        samples,
+        exported: NOTHING_EXPORTED,
+      });
+    for (const line of [
+      at(
+        "TS2882: Cannot find module or type declarations for side-effect import of './generated/admin-imports'."
+      ),
+      at(
+        "TS2307: Cannot find module './collections/Posts' or its corresponding type declarations."
+      ),
+    ]) {
+      const read = await readAs(line);
+      expect(read.readerFiles).toEqual([line]);
+      expect([...read.uncheckedSamples]).toEqual(["docs/x.mdx#0"]);
+    }
+    // The control: a diagnostic about something other than a module is no
+    // reader file and leaves the sample checked.
+    const other = await readAs(
+      at("TS2322: Type 'string' is not assignable to type 'number'.")
+    );
+    expect(other.readerFiles).toEqual([]);
+    expect([...other.uncheckedSamples]).toEqual([]);
+  });
+});
+
 describe("a diagnostic whose block cannot be found", () => {
   it("keeps its finding rather than reading the name alone", () => {
     // Two of the three tests need the block, so answering from the name alone
     // was the permissive direction: a constructed name and a misspelled export
     // would both have been set aside there.
-    expect(mentionIsReaderOwned("Posts", "docs/nope.mdx", 0, [])).toBe(false);
+    expect(
+      mentionIsReaderOwned("Posts", "docs/nope.mdx", 0, [], NOTHING_EXPORTED)
+    ).toBe(false);
     // The control: with the block present the same name is the reader's, so
     // the line above is the fallback answering and not the rule.
     expect(
-      mentionIsReaderOwned("Posts", "docs/a.mdx", 0, [
-        {
-          file: "docs/a.mdx",
-          index: 0,
-          code: "const c = [Posts];",
-          lang: "ts",
-        },
-      ])
+      mentionIsReaderOwned(
+        "Posts",
+        "docs/a.mdx",
+        0,
+        [
+          {
+            file: "docs/a.mdx",
+            index: 0,
+            code: "const c = [Posts];",
+            lang: "ts",
+          },
+        ],
+        NOTHING_EXPORTED
+      )
     ).toBe(true);
   });
 });

@@ -118,6 +118,23 @@ export interface ErrorResponseOptions {
    * boundary is the only frame that can still see it.
    */
   flattened?: readonly NextlyError[];
+  /**
+   * Headers of the answer's own, such as a limit's `X-RateLimit-*`. They never
+   * replace the content type, the request id or the retry hint set here.
+   */
+  headers?: Readonly<Record<string, string>>;
+}
+
+/** `headers` with lower-case names, so one spelling of each name is kept. */
+function lowerCased(
+  headers: Readonly<Record<string, string>> | undefined
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers ?? {}).map(([name, value]) => [
+      name.toLowerCase(),
+      value,
+    ])
+  );
 }
 
 /**
@@ -158,6 +175,7 @@ export function buildErrorResponse(
   }
 
   const responseHeaders: Record<string, string> = {
+    ...lowerCased(options.headers),
     "content-type": "application/problem+json",
     "x-request-id": options.requestId,
     // Any error carrying a retry hint: RATE_LIMITED, DATABASE_BUSY.

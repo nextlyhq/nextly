@@ -9,7 +9,7 @@
  *
  * @module blocks/paragraph
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -38,37 +38,38 @@ export function renderParagraph({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const paragraph = defineBlock<ParagraphProps, PageContext>({
-  name: "core/text",
-  version: 1,
-  description:
-    "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Text",
-    icon: "text",
-    category: CONTENT,
-    keywords: ["paragraph", "copy", "body", "prose"],
-  },
-  props: { text: { role: "content", type: "textarea", inline: true } },
-  defaultProps: { text: "" },
-  // The opening prose is what a search result should quote. Offered whole and
-  // untruncated: how long a description may be is the metadata layer's rule,
-  // and a block trimming to its own guess would fight it.
-  // Normalized as the render does, for the same reason the heading is.
-  seo: props => ({ description: text(props.text) }),
-  example: { props: { text: "A paragraph of text." } },
-  supports: {
-    typography: true,
-    color: true,
-    spacing: true,
-    dimensions: true,
-    background: true,
-    border: true,
-    effects: true,
-    position: true,
-  },
-  render: renderParagraph,
-});
+export const paragraph: BlockDefinition<ParagraphProps, PageContext> =
+  defineBlock({
+    name: "core/text",
+    version: 1,
+    description:
+      "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Text",
+      icon: "text",
+      category: CONTENT,
+      keywords: ["paragraph", "copy", "body", "prose"],
+    },
+    props: { text: { role: "content", type: "textarea", inline: true } },
+    defaultProps: { text: "" },
+    // The opening prose is what a search result should quote. Offered whole and
+    // untruncated: how long a description may be is the metadata layer's rule,
+    // and a block trimming to its own guess would fight it.
+    // Normalized as the render does, for the same reason the heading is.
+    seo: props => ({ description: text(props.text) }),
+    example: { props: { text: "A paragraph of text." } },
+    supports: {
+      typography: true,
+      color: true,
+      spacing: true,
+      dimensions: true,
+      background: true,
+      border: true,
+      effects: true,
+      position: true,
+    },
+    render: renderParagraph,
+  });

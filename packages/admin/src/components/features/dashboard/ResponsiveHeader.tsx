@@ -34,7 +34,10 @@ interface ResponsiveHeaderProps {
  *
  * Provides a sticky header with hamburger menu button for mobile navigation.
  */
-export function ResponsiveHeader({ onMenuClick, user }: ResponsiveHeaderProps) {
+export function ResponsiveHeader({
+  onMenuClick,
+  user,
+}: ResponsiveHeaderProps): React.JSX.Element {
   const logout = useLogout();
   const [activeMenu, setActiveMenu] = React.useState<"user" | null>(null);
 

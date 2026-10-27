@@ -16,15 +16,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { executeWidgetQuery } from "../../widgets/execute";
 import { RELEASE_TABS, releaseTabOf, type ReleaseTab } from "../release-tabs";
+import { RELEASES_SOURCE_ID } from "../releases-widget-source";
 import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository, type ReleaseRow } from "../releases-repository";
+import { seedLiveAuthor } from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   publishAsItStands,
@@ -431,6 +435,43 @@ describe.each(getConfiguredTestDialects())(
       expect(overdue.total).toBe(1);
     });
 
+    it("answers the Upcoming releases card's attention counts with the list's own, as the reader", async () => {
+      // What the card shows ("1 stopped · 1 overdue") and what each part links
+      // to must agree: both are counted by the releases service for one reader.
+      const app = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      // The first account, which core makes super-admin, so the read is allowed.
+      const reader = await seedLiveAuthor(app);
+      await seedOneOfEach(new ReleasesRepository(app.adapter), new Date());
+
+      const answer = (await executeWidgetQuery(
+        {
+          source: RELEASES_SOURCE_ID,
+          op: "list",
+          select: ["kind", "reason", "count", "title"],
+        },
+        { user: { id: reader, roles: [] } }
+      )) as { items: Record<string, unknown>[] };
+      const attention = answer.items.filter(item => item.kind === "attention");
+
+      const listed = async (reason: "stopped" | "overdue") =>
+        app.nextly.releases.count({ tab: "attention", reason });
+      expect(attention).toEqual([
+        {
+          kind: "attention",
+          reason: "stopped",
+          count: await listed("stopped"),
+        },
+        {
+          kind: "attention",
+          reason: "overdue",
+          count: await listed("overdue"),
+        },
+      ]);
+      // Not two zeros agreeing: the seed holds one of each.
+      expect(attention.map(item => item.count)).toEqual([1, 1]);
+    });
+
     it("returns a release's members in the order they were added", async () => {
       // Added within one second, which on SQLite is ONE stored instant: the
       // creation time alone cannot order them there, so the id has to carry
@@ -622,6 +663,28 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         app.nextly.releases.blockingReasons({ releaseId: missing })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("says a release exists exactly where the list would hold one, reading one id", async () => {
+      // One where clause for both, so the existence check can never say "yes"
+      // where the list is empty: asked with no filter, and with a filter that
+      // leaves the list empty while releases exist.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const now = new Date();
+      const agree = async (query: Parameters<typeof repo.anyRelease>[0]) => {
+        const page = await repo.findReleasePage({ ...query, limit: 1 });
+        const exists = await repo.anyRelease(query);
+        expect(exists).toBe(page.rows.length > 0);
+        return exists;
+      };
+
+      expect(await agree({})).toBe(false);
+      await repo.createRelease({ title: "Draft" });
+      expect(await agree({})).toBe(true);
+      // Releases exist, and none is in the Done tab: the list there is empty.
+      expect(await agree({ tab: "done", now })).toBe(false);
+      expect(await agree({ tab: "drafts", now })).toBe(true);
     });
   }
 );

@@ -53,7 +53,8 @@ import type { StyleAddress } from "./style-values";
  * editor is two answers to "did the hand mean to move", and an author who has
  * learned one of them on the canvas would meet a different one an inch away.
  */
-export const SPACING_ACTIVATION_PX = DEFAULT_ACTIVATION_PX;
+export const SPACING_ACTIVATION_PX: typeof DEFAULT_ACTIVATION_PX =
+  DEFAULT_ACTIVATION_PX;
 
 /** How much one arrow key moves a value, in CSS pixels. */
 export const SPACING_STEP_PX = 1;

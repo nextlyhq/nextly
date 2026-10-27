@@ -115,7 +115,7 @@ export function MediaPickerDialog({
   allowCreate = true,
   title,
   className,
-}: MediaPickerDialogProps) {
+}: MediaPickerDialogProps): React.JSX.Element {
   const queryClient = useQueryClient();
 
   // Refetch folder/media data when dialog opens to ensure fresh data

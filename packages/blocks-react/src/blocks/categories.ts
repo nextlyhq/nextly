@@ -55,6 +55,11 @@ export const INTERACTIVE = "interactive";
  * deriving it from registration order would rearrange the palette whenever an
  * unrelated plugin loaded first.
  */
-export const CORE_CATEGORIES = [LAYOUT, CONTENT, MEDIA, INTERACTIVE] as const;
+export const CORE_CATEGORIES: readonly [
+  typeof LAYOUT,
+  typeof CONTENT,
+  typeof MEDIA,
+  typeof INTERACTIVE,
+] = [LAYOUT, CONTENT, MEDIA, INTERACTIVE] as const;
 
 export type CoreCategory = (typeof CORE_CATEGORIES)[number];

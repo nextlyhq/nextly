@@ -767,6 +767,68 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("carries a bucket's own floor through, and only a true one", async () => {
+      // A bucket's floor is its own claim: dropped, the card would draw "12"
+      // where the source said "12 or more".
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [
+              { value: "unpublished", count: 12, atLeast: true },
+              { value: "overdue", count: 2, atLeast: false },
+              { value: "scheduled", count: 1, atLeast: "yes" },
+            ],
+            atLeast: true,
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [
+            { value: "unpublished", count: 12, atLeast: true },
+            { value: "overdue", count: 2 },
+            { value: "scheduled", count: 1 },
+          ],
+          atLeast: true,
+        },
+      });
+    });
+
+    it("carries a grouped answer's instant through only as an exact instant", async () => {
+      // The card measures its "this week" link from this instant, so a value
+      // that is not one is dropped and the card falls back to its own clock.
+      const answer = (asOf: unknown) =>
+        slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "overdue", count: 1 }],
+            asOf,
+          },
+        });
+      expect(await answer("2026-10-22T12:00:00.000Z")).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [{ value: "overdue", count: 1 }],
+          asOf: "2026-10-22T12:00:00.000Z",
+        },
+      });
+      for (const asOf of [
+        "2026-10-22",
+        "2026-02-30T12:00:00.000Z",
+        1761134400000,
+      ]) {
+        expect(await answer(asOf)).toEqual({
+          ok: true,
+          result: { op: "groupBy", buckets: [{ value: "overdue", count: 1 }] },
+        });
+      }
+    });
+
     it("keeps the buckets when the grouped field is malformed", async () => {
       expect(
         await slotFor({

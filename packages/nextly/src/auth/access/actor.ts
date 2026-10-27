@@ -20,6 +20,7 @@ import type { AccessOperation } from "../../services/access/types";
 import type { AccessRuleContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
 
+import { manageCounts } from "./manage-bridge";
 import { buildRuleContext } from "./rule-context";
 
 /**
@@ -188,31 +189,8 @@ export function holdsPermission(
   );
 }
 
-/**
- * The system resources whose `manage-` permission still counts as read,
- * create, update and delete on that same resource: a bridge for installs
- * whose roles were given `manage-<resource>` before every action had a plain
- * permission of its own. It never counts as publish or unpublish, as any
- * other action, or on any other resource, and a collection's `manage-`
- * permission means nothing here.
- */
-const MANAGE_COUNTS_ON: ReadonlySet<string> = new Set([
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-]);
-const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
-  "read",
-  "create",
-  "update",
-  "delete",
-]);
-
-/** Whether a `manage-` permission on `resource` can count for `action`. */
-export function manageCounts(action: string, resource: string): boolean {
-  return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);
-}
+// Decided in a leaf module of its own, which the admin's copy is held to.
+export { manageCounts } from "./manage-bridge";
 
 /**
  * Whether the actor holds `action` on a system resource through that
@@ -248,19 +226,14 @@ export function isSuperAdmin(actor: Actor): boolean {
  * the Public role grants decides whether the visitor holds the permission,
  * but a rule written against an anonymous caller is asked with none, as it
  * always has been, so the same rule answers the same way.
- *
- * `rule` is the rule being asked, so a deprecated permission spelling it
- * checks is warned about once for that rule.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
   operation: AccessAction,
-  target: { readonly kind: "collection" | "single"; readonly slug: string },
-  rule: object
+  target: { readonly kind: "collection" | "single"; readonly slug: string }
 ): AccessRuleContext {
   const staff = actor.kind === "user" || actor.kind === "key";
   return buildRuleContext(
-    rule,
     {
       user: staff ? { id: actor.userId } : null,
       roles: staff ? actor.roles : [],

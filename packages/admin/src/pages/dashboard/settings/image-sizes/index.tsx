@@ -317,7 +317,7 @@ function ImageSizesContent({
 // Page Export
 // ============================================================
 
-export default function ImageSizesSettingsPage() {
+export default function ImageSizesSettingsPage(): React.JSX.Element {
   const [search, setSearch] = React.useState("");
 
   return (

@@ -14,7 +14,7 @@
 
 import type { FieldConfig } from "nextly/config";
 import { readFieldGroupType } from "nextly/field-group-type";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { Badge } from "@admin/components/ui";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -561,7 +561,7 @@ export function FieldValueDisplay({
   value,
   dense = false,
   className,
-}: FieldValueDisplayProps) {
+}: FieldValueDisplayProps): JSX.Element {
   const label =
     (field as { label?: string }).label ?? field.name ?? "Untitled field";
 
@@ -603,7 +603,7 @@ export function FieldValue({
    * string to its JSON primitive. When set, the value is rendered as-is.
    */
   preNormalized?: boolean;
-}) {
+}): ReactNode {
   const normalized = preNormalized ? value : normalizeStoredValue(field, value);
 
   // A `json` field may legitimately store the JSON primitive `null`, which

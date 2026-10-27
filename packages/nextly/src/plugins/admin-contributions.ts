@@ -1,5 +1,4 @@
 import type {
-  WidgetChrome,
   DataWidgetArchetype,
   CellWidgetArchetype,
   WidgetStatCell,
@@ -216,7 +215,13 @@ interface PluginAdminWidgetBase {
    * the browser hid it. Declaring the type narrower than what boot accepts is
    * what made that reachable.
    */
-  requiredPermission?: PermissionSlug | readonly PermissionSlug[];
+  requiredPermission?:
+    | PermissionSlug
+    | readonly PermissionSlug[]
+    /** @experimental Every entry must hold; each is a slug or an any-of array. */
+    | {
+        readonly allOf: readonly (PermissionSlug | readonly PermissionSlug[])[];
+      };
   title?: string;
   description?: string;
   icon?: string;
@@ -259,6 +264,11 @@ interface PluginAdminWidgetBase {
    * the reasoning and the fact that dismissal is recorded as hiding.
    */
   dismissible?: boolean;
+  /**
+   * @experimental Whether the dashboard takes this card out of the grid while its answer is
+   * empty, rather than drawing the empty state; see `WidgetDefinition.hidesWhenEmpty`.
+   */
+  hidesWhenEmpty?: boolean;
   /**
    * What a reader may change about this card, drawn by the settings panel.
    *
@@ -312,18 +322,17 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
  * with no query is a real declaration, and core reports that card as undrawable
  * so the component is what renders.
  *
- * `chrome` is the part that cannot stay open. It is split across two
- * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
- * declines the frame must supply the surface itself, and for every archetype
- * core draws the card IS the surface the body is composed against -- it owns
- * the title, the footer and the busy state. Expressed as a constraint rather
- * than left to `validateChrome`, which still refuses the pair at boot: a type
- * that permits it makes the runtime refusal the FIRST time an author learns,
- * after the plugin ships.
  */
 export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
   (
-    | { archetype?: "custom"; chrome?: WidgetChrome }
+    | {
+        archetype?: "custom";
+        /**
+         * @experimental Whether the host sizes this widget's list query to the
+         * card; see `WidgetDefinition.sizedQuery`.
+         */
+        sizedQuery?: boolean;
+      }
     // A queryless archetype is not a fallback case: `text` IS its prose and
     // `actions` IS its list, so a component beside either still needs the
     // payload, and only the arms that require it can say so. Routed there.
@@ -332,7 +341,7 @@ export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
           WidgetArchetype,
           "custom" | QuerylessWidgetArchetype
         >;
-        chrome?: never;
+        sizedQuery?: never;
       }
   );
 

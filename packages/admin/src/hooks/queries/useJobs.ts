@@ -10,6 +10,7 @@
  * forgotten tab costs an installation nothing.
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { ListResponse } from "@admin/lib/api/response-types";
@@ -21,7 +22,10 @@ export const JOBS_POLL_INTERVAL_MS = 15_000;
 
 export const jobKeys = {
   all: () => ["background-jobs"] as const,
-  list: (params: ListJobsParams) => [...jobKeys.all(), "list", params] as const,
+  list: (
+    params: ListJobsParams
+  ): readonly ["background-jobs", "list", ListJobsParams] =>
+    [...jobKeys.all(), "list", params] as const,
 };
 
 /**
@@ -33,7 +37,7 @@ export const jobKeys = {
 export function useJobs(
   params: ListJobsParams = {},
   options?: { enabled?: boolean }
-) {
+): UseQueryResult<ListResponse<JobListItem>, Error> {
   return useQuery<ListResponse<JobListItem>, Error>({
     queryKey: jobKeys.list(params),
     queryFn: () => jobsApi.listJobs(params),

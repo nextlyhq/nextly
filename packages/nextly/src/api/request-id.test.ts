@@ -63,3 +63,15 @@ describe("request-id", () => {
     });
   });
 });
+
+describe("one request, one id", () => {
+  it("gives a request that brought no id the same one however often it is asked", () => {
+    const request = new Request("https://example.com/api/posts");
+    const first = readOrGenerateRequestId(request);
+    expect(readOrGenerateRequestId(request)).toBe(first);
+    // A different request is given its own.
+    expect(
+      readOrGenerateRequestId(new Request("https://example.com/api/posts"))
+    ).not.toBe(first);
+  });
+});

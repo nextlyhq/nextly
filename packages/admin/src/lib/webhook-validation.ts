@@ -76,7 +76,41 @@ const headerRowSchema = z.object({
     ),
 });
 
-export const webhookFormSchema = z
+export const webhookFormSchema: z.ZodObject<{
+  name: z.ZodString;
+  url: z.ZodString;
+  allEvents: z.ZodBoolean;
+  eventTypes: z.ZodArray<
+    z.ZodEnum<{
+      "entry.created": "entry.created";
+      "entry.updated": "entry.updated";
+      "entry.deleted": "entry.deleted";
+      "entry.published": "entry.published";
+      "entry.unpublished": "entry.unpublished";
+      "entry.status_changed": "entry.status_changed";
+      "single.updated": "single.updated";
+      "single.published": "single.published";
+      "single.unpublished": "single.unpublished";
+      "media.uploaded": "media.uploaded";
+      "media.updated": "media.updated";
+      "media.deleted": "media.deleted";
+      "user.created": "user.created";
+      "user.deleted": "user.deleted";
+      "form.submission.created": "form.submission.created";
+    }>
+  >;
+  headers: z.ZodArray<
+    z.ZodObject<
+      {
+        name: z.ZodString;
+        value: z.ZodString;
+      },
+      z.core.$strip
+    >
+  >;
+  clearExistingHeaders: z.ZodBoolean;
+  enabled: z.ZodBoolean;
+}> = z
   .object({
     name: z
       .string()

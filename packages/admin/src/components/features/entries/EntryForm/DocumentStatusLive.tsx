@@ -20,6 +20,7 @@
  * @module components/features/entries/EntryForm/DocumentStatusLive
  */
 
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import type { DocumentSaveState } from "./useDocumentActionBindings";
@@ -76,7 +77,7 @@ export function DocumentStatusLive({
   pendingRecovery = false,
   translatedCount,
   localeCount,
-}: DocumentStatusLiveProps) {
+}: DocumentStatusLiveProps): JSX.Element {
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState("");
   // What was last announced, so an unchanged status does not re-fire. Held in a

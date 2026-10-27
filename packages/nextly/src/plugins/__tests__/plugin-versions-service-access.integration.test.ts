@@ -515,7 +515,11 @@ describe.each(getConfiguredTestDialects())(
             { ref, status: "draft", snapshot, createdBy: editorId },
             asUser(editorId)
           )
-        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          statusCode: 403,
+          publicMessage: "Autosave is turned off for this collection.",
+        });
         expect(await versions.getAutosave(ref, editorId)).toBeUndefined();
       });
 

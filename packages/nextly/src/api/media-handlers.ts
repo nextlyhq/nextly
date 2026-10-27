@@ -54,6 +54,7 @@
 
 import { z } from "zod";
 
+import { LIST_READ_GATES, requireListRead } from "../auth/list-read-gates";
 import {
   createJsonErrorResponse,
   isErrorResponse,
@@ -196,9 +197,13 @@ async function gateMediaRoute(
   // The permission check reads from the DI container, so make sure Nextly is
   // initialised on this worker before it runs.
   await ensureInitialized();
-  const auth = await requirePermission(request, action, "media");
+  // The list's gate is the one the dashboard's media count reads.
+  const auth =
+    route.type === "list-media"
+      ? await requireListRead(request, LIST_READ_GATES.media)
+      : await requirePermission(request, action, "media");
   if (isErrorResponse(auth)) {
-    return createJsonErrorResponse(auth);
+    return createJsonErrorResponse(auth, request);
   }
   // Surface both the acting user id (for uploader attribution on the DB row)
   // and the full actor (session vs API key) so media writes record the true
@@ -698,7 +703,7 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
          */
         if (route.type === "serve-media-bytes") {
           await ensureInitialized();
-          return await handleServeMediaBytes(route.mediaId!);
+          return await handleServeMediaBytes(route.mediaId!, request);
         }
         const gate = await gateMediaRoute(
           request,

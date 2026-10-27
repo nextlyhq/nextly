@@ -25,6 +25,7 @@ import { toDbError } from "../../database/errors";
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
 import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
+import { effectiveWidgetLimit } from "../../domains/widgets/query-limits";
 import { NextlyError } from "../../errors";
 import type { LockableRead } from "../../shared/lib/row-lock";
 import { BaseService } from "../base-service";
@@ -37,7 +38,7 @@ import {
 import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
-import { activityMetadataOf } from "./activity-changes";
+import { activityMetadataOf, isContentSave } from "./activity-changes";
 import {
   afterRun,
   isSettingsNamespace,
@@ -247,6 +248,25 @@ export interface ActivityLogQueryOptions {
    * unknown, and showing every Single's row would show the hidden ones too.
    */
   singles?: ActivitySingles;
+  /**
+   * The collections kept off the dashboard, whose rows the feed leaves out for
+   * every caller, a super-admin included: the dashboard shows what the admin's
+   * navigation shows (`keptOffDashboard`). Omitted, none are left out, as the
+   * activity count treats an omitted set. From a registry read that did not
+   * complete, the feed answers no rows at all, as the dashboard's activity
+   * count answers none: which collections are hidden is then unknown, and a
+   * hidden one's rows cannot be told from the rest.
+   */
+  keptOffCollections?: ActivityKeptOffCollections;
+}
+
+/**
+ * The collections one registry read found kept off the dashboard. `complete` is
+ * false when the read did not finish, and `slugs` then describes nothing.
+ */
+export interface ActivityKeptOffCollections {
+  slugs: ReadonlySet<string>;
+  complete: boolean;
 }
 
 /**
@@ -298,14 +318,18 @@ function singlesKeptOffClause(
 type SinglesKeptOff = Pick<ActivitySingles, "keptOff" | "complete">;
 
 /**
- * The conditions every read of the feed starts from: inside what the caller may read, and
- * without the rows of Singles kept off the dashboard. `null` when the scope admits nothing,
- * which is answered without a query: an empty `IN ()` is a syntax error on some dialects.
+ * The conditions every read of the feed starts from, the feed's and the activity count's alike:
+ * inside what the caller may read, and without the rows of Singles and collections kept off the
+ * dashboard. `null` when the scope admits nothing, which is answered without a query (an empty
+ * `IN ()` is a syntax error on some dialects), and when the kept-off collections could not be
+ * read, so a hidden collection's rows are never shown for want of knowing it is hidden.
  */
 function feedConditions(
   scope: ReadableResources,
-  singles: SinglesKeptOff | undefined
+  singles: SinglesKeptOff | undefined,
+  keptOffCollections: ActivityKeptOffCollections | undefined
 ): NonNullable<WhereClause["and"]> | null {
+  if (keptOffCollections?.complete === false) return null;
   const conditions: NonNullable<WhereClause["and"]> = [];
   if (scope.kind === "some") {
     if (scope.resources.size === 0) return null;
@@ -317,12 +341,16 @@ function feedConditions(
   }
   const singlesClause = singlesKeptOffClause(singles);
   if (singlesClause !== undefined) conditions.push(singlesClause);
+  const collectionsClause = collectionsKeptOffClause(
+    keptOffCollections?.slugs ?? new Set()
+  );
+  if (collectionsClause !== undefined) conditions.push(collectionsClause);
   return conditions;
 }
 
 /**
- * The condition that leaves the rows of collections kept off the dashboard out of a count. A
- * row that states no kind is read as a collection's, as the feed reads it, so only rows stating
+ * The condition that leaves the rows of collections kept off the dashboard out of the feed and
+ * its count. A row that states no kind is read as a collection's, as the feed reads it, so only rows stating
  * another kind are spared; `IN` is unknown on that row's NULL, and the slug decides.
  */
 function collectionsKeptOffClause(
@@ -335,6 +363,39 @@ function collectionsKeptOffClause(
       { column: "collection", op: "NOT IN", value: [...keptOff] },
     ],
   };
+}
+
+/** Options for the documents most recently saved; see `getRecentEdits`. */
+export interface RecentEditsOptions {
+  /** How many documents the card shows; clamped as every widget query is. */
+  limit?: number;
+  /** Which resources the caller may read; omitted, it denies, as the feed's does. */
+  scope?: ReadableResources;
+  /** WHO is reading, so each save's document can be authorized; omitted, nothing is answered. */
+  caller?: ReadCaller;
+  singles?: ActivitySingles;
+  keptOffCollections?: ActivityKeptOffCollections;
+  /** Only this collection's entries: never a Single, which may share its slug. */
+  collection?: string;
+  /**
+   * Only saves this person made. A PERSON's id: a row whose actor is an API
+   * key never matches it, though a key's id and a person's could be equal.
+   */
+  savedBy?: string;
+}
+
+/**
+ * One document's latest save, as the feed maps a row, with the language it was
+ * saved in: null for a document's only or default language.
+ */
+export type RecentEdit = ActivityLogEntry & { locale: string | null };
+
+/** The documents most recently saved, newest first, one row each. */
+export interface RecentEdits {
+  /** Each document's latest save the caller may see. */
+  edits: RecentEdit[];
+  /** Whether another document lies past them, read and authorized like the rest. */
+  hasMore: boolean;
 }
 
 /** Options for counting recent activity; see `countRecentActivity`. */
@@ -856,13 +917,43 @@ function feedWhere(
   if (options?.userId) {
     filters.push({ property: "userId", op: "=", value: options.userId });
   }
-  const starting = feedConditions(scope, options?.singles);
+  const starting = feedConditions(
+    scope,
+    options?.singles,
+    options?.keptOffCollections
+  );
   if (starting === null) return null;
   const conditions: NonNullable<WhereClause["and"]> = [
     ...filters.map(f => ({ column: f.property, op: f.op, value: f.value })),
     ...starting,
   ];
   return conditions.length > 0 ? { and: conditions } : undefined;
+}
+
+/**
+ * Each document's newest save among `rows`, newest first: rows that are not a
+ * save are passed over, and a document is the kind, the slug and the id
+ * together, since a Single and a collection may share a slug. A row whose id
+ * was redacted names no document, and is passed over too.
+ */
+function latestSaves(
+  rows: readonly Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const latest: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    if (typeof row.entryId !== "string" || row.entryId.length === 0) continue;
+    if (!isContentSave(row.action, row.metadata)) continue;
+    const document = JSON.stringify([
+      row.subjectKind ?? "collection",
+      row.collection,
+      row.entryId,
+    ]);
+    if (seen.has(document)) continue;
+    seen.add(document);
+    latest.push(row);
+  }
+  return latest;
 }
 
 /** One page of the feed, from the runs the walk read. */
@@ -1104,7 +1195,9 @@ export class ActivityLogService extends BaseService {
   async getRecentActivity(
     options?: ActivityLogQueryOptions
   ): Promise<ActivityLogResult> {
-    const limit = Math.min(options?.limit ?? 10, 50);
+    // The one clamp for every door onto the feed, the endpoint's and the
+    // widget source's: what any widget query is held to.
+    const limit = effectiveWidgetLimit(options?.limit);
     const first = firstReadOf(options);
     if (first === null) return { activities: [], hasMore: false };
 
@@ -1117,7 +1210,8 @@ export class ActivityLogService extends BaseService {
     try {
       const where = feedWhere(options, scope);
       // A scope that admits nothing matches nothing, the intended answer for a caller who may
-      // read nothing, and is answered before any query is built.
+      // read nothing, and is answered before any query is built; so is a feed whose kept-off
+      // collections could not be read.
       if (where === null) return { activities: [], hasMore: false };
 
       // Read until one row PAST the page exists, counted in rows the feed
@@ -1169,26 +1263,25 @@ export class ActivityLogService extends BaseService {
    * The cost is up to that many page reads and their authorization, where one aggregate used to
    * run.
    *
-   * Collections kept off the dashboard are left out as well, which the feed itself does not do:
-   * the figure promises to leave them out. Their rows are removed from the candidates before the
-   * walk, so the walk is still the only thing deciding what may be seen.
+   * Collections kept off the dashboard are left out as the feed leaves them out, by the same
+   * conditions (`feedConditions`): the figure counts the rows the feed would show. Their rows are
+   * removed from the candidates before the walk, so the walk is still the only thing deciding
+   * what may be seen.
    */
   async countRecentActivity(
     options: RecentActivityCountOptions
   ): Promise<RecentActivityCount> {
     const starting = feedConditions(
       options.scope ?? someResources([]),
-      options.singles
+      options.singles,
+      // The figure's caller leaves out kept-off collections only once it has read them whole.
+      { slugs: options.keptOffCollections ?? new Set(), complete: true }
     );
     if (starting === null) return { count: 0, atLeast: false };
-    const keptOff = collectionsKeptOffClause(
-      options.keptOffCollections ?? new Set()
-    );
     const where: WhereClause = {
       and: [
         ...starting,
         { column: "createdAt", op: ">", value: options.since },
-        ...(keptOff === undefined ? [] : [keptOff]),
       ],
     };
     // As many rows as the walk can find, so it stops at the table's end or at its own bound.
@@ -1201,6 +1294,110 @@ export class ActivityLogService extends BaseService {
       () => false
     );
     return { count: visible.rows.length, atLeast: !visible.end };
+  }
+
+  /**
+   * The documents most recently saved, newest first: one row per document, its
+   * latest save this caller may see.
+   *
+   * The same walk as the feed, read and authorized row by row, so a save the
+   * caller may not see never stands for its document, and saves they may not
+   * read never leave the card short while readable ones lie further back: the
+   * walk pages on until the card is full or its rounds run out, as the feed's
+   * does. Checked, THEN collapsed: a document's newest readable save is its
+   * row, which keeps a readable save behind a newer one the caller may not
+   * read (another language's, say).
+   *
+   * A save is what `isContentSave` says it is. A publish or an unpublish on its
+   * own never takes the row of the person who made the edits, and a deletion
+   * and the redacted history of a removed document name no document to list.
+   * Settings changes name none either, and are left out by kind.
+   */
+  async getRecentEdits(options: RecentEditsOptions): Promise<RecentEdits> {
+    const limit = effectiveWidgetLimit(options.limit);
+    const starting = feedConditions(
+      options.scope ?? someResources([]),
+      options.singles,
+      options.keptOffCollections
+    );
+    if (starting === null) return { edits: [], hasMore: false };
+    const where: WhereClause = {
+      and: [
+        ...starting,
+        // Deletions are never a save; filtered by the database, not the walk.
+        { column: "action", op: "IN", value: ["create", "update"] },
+        { column: "entryId", op: "IS NOT NULL" },
+        // A row that states no kind is a collection's, as the feed reads it.
+        {
+          or: [
+            { column: "subjectKind", op: "IS NULL" },
+            {
+              column: "subjectKind",
+              op: "IN",
+              value: ["collection", "single"],
+            },
+          ],
+        },
+        ...(options.collection === undefined
+          ? []
+          : [
+              {
+                column: "collection",
+                op: "=" as const,
+                value: options.collection,
+              },
+              {
+                or: [
+                  { column: "subjectKind", op: "IS NULL" as const },
+                  {
+                    column: "subjectKind",
+                    op: "=" as const,
+                    value: "collection",
+                  },
+                ],
+              },
+            ]),
+        ...(options.savedBy === undefined
+          ? []
+          : [
+              { column: "userId", op: "=" as const, value: options.savedBy },
+              // A row written before the kind was recorded is a person's.
+              {
+                or: [
+                  { column: "actorType", op: "IS NULL" as const },
+                  { column: "actorType", op: "=" as const, value: "user" },
+                ],
+              },
+            ]),
+      ],
+    };
+    try {
+      // Read until one document PAST the card is in hand, which is what makes
+      // `hasMore` an observation rather than a guess.
+      const visible = await this.visibleActivity(
+        where,
+        0,
+        options.caller,
+        rows => latestSaves(rows).length > limit
+      );
+      const saves = latestSaves(visible.rows);
+      return {
+        edits: saves.slice(0, limit).map(row => ({
+          ...this.mapRow(row, options.singles?.labels),
+          locale: toNullableString(row.locale),
+        })),
+        // A walk that stopped at its bound before the table's end has not seen
+        // what lies past it, so older documents may still exist: "more" then,
+        // as the feed's own paging says, rather than a claim that the list
+        // ended.
+        hasMore: saves.length > limit || !visible.end,
+      };
+    } catch (error) {
+      this.logger.error("Failed to query recent edits", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
   }
 
   /**

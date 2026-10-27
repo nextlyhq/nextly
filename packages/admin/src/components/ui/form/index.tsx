@@ -21,6 +21,7 @@ import {
   type ControllerProps,
   type FieldPath,
   type FieldValues,
+  type FieldError,
 } from "react-hook-form";
 
 import { cn } from "@admin/lib/utils";
@@ -59,7 +60,7 @@ const FormField = <
   TName extends FieldPath<TFieldValues> = FieldPath<TFieldValues>,
 >({
   ...props
-}: ControllerProps<TFieldValues, TName>) => {
+}: ControllerProps<TFieldValues, TName>): React.JSX.Element => {
   return (
     <FormFieldContext.Provider value={{ name: props.name }}>
       <Controller {...props} />
@@ -67,7 +68,20 @@ const FormField = <
   );
 };
 
-const useFormField = () => {
+const useFormField = (): {
+  invalid: boolean;
+  isDirty: boolean;
+  isTouched: boolean;
+  isValidating: boolean;
+  error?: FieldError;
+  id: string;
+  name: string;
+  formItemId: string;
+  formDescriptionId: string;
+  formMessageId: string;
+  hasDescription: boolean;
+  setHasDescription: (present: boolean) => void;
+} => {
   const fieldContext = useContext(FormFieldContext);
   const itemContext = useContext(FormItemContext);
   const { getFieldState } = useFormContext();
@@ -96,7 +110,10 @@ const FormItemContext = createContext<FormItemContextValue>(
   {} as FormItemContextValue
 );
 
-function FormItem({ className, ...props }: ComponentProps<"div">) {
+function FormItem({
+  className,
+  ...props
+}: ComponentProps<"div">): React.JSX.Element {
   const id = useId();
   const [hasDescription, setHasDescription] = useState(false);
 
@@ -121,7 +138,7 @@ function FormItem({ className, ...props }: ComponentProps<"div">) {
 function FormLabel({
   className,
   ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+}: React.ComponentProps<typeof LabelPrimitive.Root>): React.JSX.Element {
   const { error, formItemId } = useFormField();
 
   return (
@@ -135,7 +152,9 @@ function FormLabel({
   );
 }
 
-function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
+function FormControl({
+  ...props
+}: React.ComponentProps<typeof Slot>): React.JSX.Element {
   const {
     error,
     formItemId,
@@ -175,7 +194,10 @@ function FormControl({ ...props }: React.ComponentProps<typeof Slot>) {
  * text sits under the control it describes instead, where `aria-describedby`
  * has always claimed it was.
  */
-function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
+function FormDescription({
+  className,
+  ...props
+}: React.ComponentProps<"p">): React.JSX.Element | null {
   const { formDescriptionId, setHasDescription } = useFormField();
   const present = Boolean(props.children);
 
@@ -200,7 +222,10 @@ function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
   );
 }
 
-function FormMessage({ className, ...props }: React.ComponentProps<"p">) {
+function FormMessage({
+  className,
+  ...props
+}: React.ComponentProps<"p">): React.JSX.Element | null {
   const { error, formMessageId } = useFormField();
   const body = error ? String(error?.message ?? "") : props.children;
 

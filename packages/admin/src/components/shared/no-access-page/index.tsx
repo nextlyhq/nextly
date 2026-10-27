@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { Lock } from "@admin/components/icons";
 import { StatusPage } from "@admin/components/shared/status-page";
 import type { AccessSubject } from "@admin/types/access-subject";
@@ -23,7 +25,7 @@ export interface NoAccessPageProps {
  * holds. It also says nothing about whether the collection or Single exists
  * beyond the address the user already typed.
  */
-export function NoAccessPage({ subject }: NoAccessPageProps) {
+export function NoAccessPage({ subject }: NoAccessPageProps): JSX.Element {
   const noun = subject ? SUBJECT_NOUN[subject] : "this page";
   return (
     <StatusPage

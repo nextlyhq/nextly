@@ -28,6 +28,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Lock } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -66,7 +67,7 @@ export function DocumentLockBanner({
   onTakeOver,
   onRequestAccess,
   className,
-}: DocumentLockBannerProps) {
+}: DocumentLockBannerProps): JSX.Element | null {
   // Answered here rather than at each call site: two editors mount this, and a
   // question asked in both is a question that can be answered differently in one.
   if (notice === null) return null;

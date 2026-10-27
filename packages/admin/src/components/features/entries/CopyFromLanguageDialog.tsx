@@ -22,10 +22,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { CopyFromLanguage } from "./useCopyFromLanguage";
 
-export function CopyFromLanguageDialog({ copy }: { copy: CopyFromLanguage }) {
+export function CopyFromLanguageDialog({
+  copy,
+}: {
+  copy: CopyFromLanguage;
+}): JSX.Element {
   const { pending, pendingLabel, activeLabel, busy } = copy;
   return (
     <AlertDialog

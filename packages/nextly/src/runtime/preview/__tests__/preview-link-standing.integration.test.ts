@@ -23,6 +23,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import {
@@ -153,6 +154,11 @@ async function boot(dialect: TestDialect): Promise<Install> {
   // sharer is not.
   const founder = await account(current, "founder@example.com");
   const sharer = await account(current, "sharer@example.com");
+  // A preview link is judged as its sharer for read and update, and a rule
+  // only narrows a permission, so the sharer holds both on the page and the
+  // Single, and read on the authors whose rule withholds them below.
+  await grantTo(current, sharer, "read", ["pages", "site-settings", "authors"]);
+  await grantTo(current, sharer, "update", ["pages", "site-settings"]);
   return { t: current, founder, sharer };
 }
 

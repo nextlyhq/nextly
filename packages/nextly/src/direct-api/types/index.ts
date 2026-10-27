@@ -156,6 +156,10 @@ export type {
   SendEmailArgs,
   SendTemplateEmailArgs,
   SendEmailResult,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
+  QueuedEmail,
+  QueuedEmailState,
 } from "./email";
 
 export type {

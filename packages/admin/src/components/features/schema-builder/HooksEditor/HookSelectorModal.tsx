@@ -19,6 +19,7 @@ import {
   Input,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo } from "react";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -40,7 +41,7 @@ export function HookSelectorModal({
   onOpenChange,
   onSelect,
   addedHookIds,
-}: HookSelectorModalProps) {
+}: HookSelectorModalProps): JSX.Element {
   const [searchQuery, setSearchQuery] = useState("");
 
   // Group hooks by category

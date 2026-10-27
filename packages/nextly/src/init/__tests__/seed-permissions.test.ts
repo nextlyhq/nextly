@@ -15,7 +15,7 @@ const assignNewPermissionsToSuperAdmin = vi.fn();
 
 const config: Record<string, unknown> = {};
 
-vi.mock("../../di/register", () => ({
+vi.mock("../../di/service-access", () => ({
   getService: (name: string) =>
     name === "config"
       ? config

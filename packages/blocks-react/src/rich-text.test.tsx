@@ -2,6 +2,7 @@
 import {
   INLINE_STYLE_PROPERTIES,
   TEXT_FORMAT,
+  type RichTextNode,
   type RichTextValue,
 } from "@nextlyhq/blocks-engine";
 import { render, screen } from "@testing-library/react";
@@ -9,7 +10,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { RichText } from "./rich-text";
+import {
+  holdsBlockContent,
+  holdsInteractive,
+  MAX_PARTITION_DEPTH,
+  partitionPhrasing,
+  RichText,
+} from "./rich-text";
 
 afterEach(cleanup);
 
@@ -2380,6 +2387,9 @@ describe("rich-text a decoration that adds a second line", () => {
   });
 });
 
+/** How deep the render tests nest; see the comment above them. */
+const RENDERED_DEPTH = 500;
+
 describe("a passage nested far deeper than any document limit", () => {
   /**
    * Containers that neither scan stops at.
@@ -2421,11 +2431,25 @@ describe("a passage nested far deeper than any document limit", () => {
     return doc([{ type: "heading", tag: "h2", children: [node] }]);
   }
 
+  /*
+   * The depth these renders use is React's budget, not the component's.
+   * React's server renderer recurses once per element, so a few thousand nested
+   * elements can reach the end of the stack inside React itself. Where that
+   * happens depends on the worker's stack, and React then defers the subtree to
+   * a task the synchronous render cannot wait for: "A component suspended while
+   * responding to synchronous input" on one runner and not another; five
+   * thousand levels did that on CI's default stack. Five hundred keeps a tenfold
+   * margin under it and is still five times the partition's own bound, so the
+   * route past that bound is rendered too. The document limits do not stop a
+   * tree this deep: `maxDepth` counts BLOCK nodes, and only `maxBytes` (2 MiB)
+   * reaches the inline tree inside a prop, which allows about fifty thousand
+   * levels. That the component's own scans hold at that depth is asserted
+   * without React, in the describe below.
+   */
   it("renders block content buried under a heading", () => {
-    // The route that rearranges rather than merely scans. Measured: 5,000
-    // levels threw `RangeError` here after the scans were already iterative.
+    // The route that rearranges rather than merely scans.
     const html = renderToStaticMarkup(
-      <RichText value={nestedUnderHeading(5000)} />
+      <RichText value={nestedUnderHeading(RENDERED_DEPTH)} />
     );
 
     expect(html).toContain("MARKER");
@@ -2441,10 +2465,93 @@ describe("a passage nested far deeper than any document limit", () => {
      * A throw here is not one bad passage rendering as a placeholder. It escapes
      * the render and takes the page route with it, so a visitor gets nothing.
      */
-    const html = renderToStaticMarkup(<RichText value={nested(5000)} />);
+    const html = renderToStaticMarkup(
+      <RichText value={nested(RENDERED_DEPTH)} />
+    );
 
     // Asserted on the OUTPUT rather than on the absence of a throw: a scan that
     // silently stopped descending would also not throw, and would be wrong.
     expect(html).toContain("MARKER");
+  });
+});
+
+describe("the scans themselves, at a depth no stack would survive recursively", () => {
+  /*
+   * Fifty thousand levels: about two megabytes, the default document byte cap
+   * (`DEFAULT_LIMITS.maxBytes`), and the only limit that reaches this tree. The
+   * other limits count BLOCK nodes, and this is the tree inside one prop. A
+   * recursive walk throws `RangeError` well before this depth on any stack; the
+   * scans walk with an explicit stack and the partition stops rearranging at its
+   * own bound, so all of them answer. Called directly, so React's recursion,
+   * which the render tests above have to stay within, is not what is measured.
+   */
+  const DEPTH = 50_000;
+
+  /** A chain of unknown containers around one leaf, built by a loop. */
+  function chain(leaf: RichTextNode, levels = DEPTH): RichTextNode[] {
+    let node = leaf;
+    for (let i = 0; i < levels; i++)
+      node = { type: "wrapper", children: [node] };
+    return [node];
+  }
+
+  it("finds block content at the bottom", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    expect(holdsBlockContent(chain(paragraph))).toBe(true);
+    expect(holdsBlockContent(chain({ type: "text", text: "x" }))).toBe(false);
+  });
+
+  it("finds an interactive node at the bottom", () => {
+    const link = { type: "link", url: "/", children: [] };
+    expect(holdsInteractive(chain(link))).toBe(true);
+    expect(holdsInteractive(chain({ type: "text", text: "x" }))).toBe(false);
+  });
+
+  /*
+   * The bound itself, from both sides. A chain of N wrappers puts its last
+   * wrapper at depth N - 1, so a paragraph under MAX_PARTITION_DEPTH of them is
+   * still rearranged and one more level is not. Asserting only the deep case
+   * would pass for a partition that never moved anything; the case below the
+   * bound catches that, and the authored-depth case catches a bound lowered
+   * into the depths editors actually produce, which the two cases measured
+   * from the constant would follow down.
+   */
+  it("moves block content out at a depth an editor produces", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(chain(paragraph, 10), new Set());
+
+    expect(keeps).toEqual([]);
+    expect(holdsBlockContent(moves)).toBe(true);
+  });
+
+  it("moves a heading's block content out up to its bound", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(
+      chain(paragraph, MAX_PARTITION_DEPTH),
+      new Set()
+    );
+
+    expect(keeps).toEqual([]);
+    expect(holdsBlockContent(moves)).toBe(true);
+  });
+
+  it("keeps it where it is one level past the bound", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(
+      chain(paragraph, MAX_PARTITION_DEPTH + 1),
+      new Set()
+    );
+
+    expect(keeps).toHaveLength(1);
+    expect(moves).toEqual([]);
+  });
+
+  it("answers at any depth past the bound", () => {
+    const paragraph = { type: "paragraph", children: [] };
+    const { keeps, moves } = partitionPhrasing(chain(paragraph), new Set());
+
+    // Past the bound the passage is kept where it is, not split.
+    expect(keeps).toHaveLength(1);
+    expect(moves).toEqual([]);
   });
 });

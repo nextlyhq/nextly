@@ -14,6 +14,10 @@ import { cleanUpNextWrites, stop } from "../support/playground-dev-server";
 
 import { E2E_NEXTLY_SECRET } from "./support/preview-links";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
 
 /**
  * A development server whose component map lacks a dashboard widget's
@@ -68,7 +72,15 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
 
 /** Removes what this spec's server wrote: its build directory and database. */
 function removeOwnFiles(): void {
-  rmSync(path.join(PLAYGROUND, DIST_DIR), { recursive: true, force: true });
+  // Retried: a recursive removal of a build directory the server has only just
+  // stopped writing can meet `ENOTEMPTY` while the tree settles, which Node's
+  // `maxRetries` exists for. Seen on macOS with a second worker busy beside it.
+  rmSync(path.join(PLAYGROUND, DIST_DIR), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
   rmSync(path.join(PLAYGROUND, DB_FILE), { force: true });
 }
 

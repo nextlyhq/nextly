@@ -6,7 +6,10 @@ import type { TemplateFormVariable } from "./schema";
 
 // Variables the layout composition injects automatically. Everything else
 // comes from the send payload and the custom variables declared below.
-export const BUILT_IN_VARIABLES = [
+export const BUILT_IN_VARIABLES: {
+  name: string;
+  description: string;
+}[] = [
   { name: "appName", description: "Your application name" },
   { name: "year", description: "Current year" },
 ];

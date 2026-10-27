@@ -14,6 +14,7 @@
 
 import { Input } from "@nextlyhq/ui";
 import type { DateFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -186,7 +187,7 @@ export function DateInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: DateInputProps<TFieldValues>) {
+}: DateInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const getDefaultValue = () => {
     if (typeof field.defaultValue === "function") {

@@ -10,6 +10,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { Control, FieldPath } from "react-hook-form";
 
 import { FormField } from "@admin/components/ui/form";
@@ -99,7 +100,7 @@ export function ProviderConfigFields({
    * it, and typing would append to the bullets.
    */
   recordId?: string;
-}) {
+}): JSX.Element | null {
   if (descriptor.configFields.length === 0) return null;
 
   return (

@@ -3,6 +3,8 @@
 // tree; which files each applies to, and which are exempt, is the config's
 // business (oxlint.config.mjs).
 
+import { tabIndicator } from "./tab-indicator/call-sites.mjs";
+
 /** Every built-in error constructor: each carries no code, so each is a 500. */
 const BUILT_IN_ERRORS = new Set([
   "Error",
@@ -232,6 +234,65 @@ const noStaticRestrictedImport = {
   },
 };
 
+/** The nodes whose body runs in a promise of its own when it awaits. */
+const FUNCTIONS = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+]);
+
+/** Whether `node` is in no function at all, so the module itself waits on it. */
+function inModuleBody(node) {
+  for (let at = node.parent; at; at = at.parent) {
+    if (FUNCTIONS.has(at.type)) return false;
+  }
+  return true;
+}
+
+/**
+ * A module waiting at its top level, in any of the three ways the language
+ * has: an `await` expression, a `for await` loop, or an `await using`
+ * declaration, whose disposal the module awaits when its body ends. Each is in
+ * no function, which makes its module wait while it loads.
+ *
+ * What it catches: the one way an import cycle hidden from
+ * `import/no-cycle` can deadlock. That rule leaves every dynamic `import()` out
+ * of the cycles it reports, and a module that waits on a dynamic import closing
+ * a cycle back to itself waits forever. Refusing the wait covers every route to
+ * it, a loader defined in another module and called from the top level
+ * included, since what deadlocks is the waiting, not the call that leads there.
+ *
+ * What it deliberately leaves alone: an `import()` the module does not wait on,
+ * however it is reached, even one that runs while the module loads. The
+ * importing module finishes evaluating before the imported one runs, so it
+ * neither deadlocks nor reads a binding before its value is set, and the
+ * modules it loads appear in the unit suite's module budget. An `await` inside
+ * any function, one invoked in place included, waits in that function's
+ * promise, not the module's.
+ */
+const noTopLevelAwait = {
+  meta: { type: "problem", schema: [] },
+  create(context) {
+    const report = node =>
+      context.report({
+        node,
+        message:
+          "A top-level await makes the module wait while it loads, and an import it waits on deadlocks if it closes a cycle back here. Do the work inside a function the caller awaits.",
+      });
+    return {
+      AwaitExpression(node) {
+        if (inModuleBody(node)) report(node);
+      },
+      ForOfStatement(node) {
+        if (node.await && inModuleBody(node)) report(node);
+      },
+      VariableDeclaration(node) {
+        if (node.kind === "await using" && inModuleBody(node)) report(node);
+      },
+    };
+  },
+};
+
 /** The lifecycle methods React deprecated in 16.9, by the name a class component defines. */
 const LEGACY_LIFECYCLES = new Set([
   "componentWillMount",
@@ -289,6 +350,8 @@ export default {
     "api-key-scope": apiKeyScope,
     "no-keyboard-listener": noKeyboardListener,
     "no-static-restricted-import": noStaticRestrictedImport,
+    "no-top-level-await": noTopLevelAwait,
     "no-legacy-lifecycle": noLegacyLifecycle,
+    "tab-indicator": tabIndicator,
   },
 };

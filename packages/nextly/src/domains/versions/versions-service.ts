@@ -19,7 +19,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors";
-import type { VersionStatus } from "../../schemas/versions/types";
+import type {
+  VersionScopeKind,
+  VersionStatus,
+} from "../../schemas/versions/types";
 import { recordWriteEvent } from "../content-events/write-event";
 
 import type { PartVersion } from "./comparison-baselines";
@@ -85,6 +88,21 @@ export class VersionsService {
       order: input.order,
       ...(input.after ? { after: input.after } : {}),
     });
+  }
+
+  /**
+   * Which languages of each of `entryIds` hold pending changes: a working
+   * draft not yet published, null for a document's only or default language.
+   * One query for the documents of one scope, absent for one with none.
+   */
+  async pendingChangeLocales(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string,
+    entryIds: readonly string[]
+  ): Promise<Map<string, Set<string | null>>> {
+    return this.repo.findPendingChangeLocales(scopeKind, scopeSlug, [
+      ...entryIds,
+    ]);
   }
 
   /** Version metadata for one document, newest-first. Never loads snapshots. */

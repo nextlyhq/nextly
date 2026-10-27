@@ -22,7 +22,7 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { cn } from "@nextlyhq/ui/utils";
 import { Check, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { type JSX, useCallback, useState } from "react";
 
 import {
   builderChecklist,
@@ -115,7 +115,7 @@ export function OnboardingChecklist({
   steps,
   onDismiss,
   className,
-}: OnboardingChecklistProps) {
+}: OnboardingChecklistProps): JSX.Element | null {
   if (steps.length === 0) return null;
   const done = checklistDoneCount(steps);
   const complete = checklistComplete(steps);

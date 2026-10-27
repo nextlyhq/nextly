@@ -5,11 +5,11 @@ import { signIn } from "./tests/support/session";
 export { STORAGE_STATE } from "./tests/support/session";
 
 /**
- * Signs in once, before the first test, and stores the session every test
- * opens with; `tests/support/test` renews it as the suite runs.
+ * Signs the seeded dev user in once, before the first test, and stores the
+ * session that `tests/support/test` makes each spec file's own account with,
+ * and renews as the suite runs.
  *
- * Doing it here once is Playwright's documented shape for authentication, and
- * it buys the smoke tests the right to say "no request failed" and mean it.
+ * Doing it here once is Playwright's documented shape for authentication.
  *
  * Runs after `webServer` is up, which is Playwright's order and the order this
  * needs: the database is empty until the server boots, applies the schema and
