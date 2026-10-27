@@ -28,6 +28,7 @@ import {
   listEffectiveGrants,
   listPublicGrants,
   listRoleSlugsForUser,
+  type PublicRoleDatabase,
 } from "../../services/lib/permissions";
 import { consoleLogger } from "../../shared/types";
 import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
@@ -219,13 +220,14 @@ export function actorForPrincipal(principal: Principal): PrincipalActor {
 /**
  * A caller with no session, no key and no plugin person, holding what the
  * Public role grants. With `executor`, the grants are read on the caller's
- * transaction rather than the pool, as a user's lookups are inside one. A
+ * transaction rather than the pool, as a user's lookups are inside one; with
+ * `own` too, on a database of the caller's own (see `listPublicGrants`). A
  * lookup that fails refuses: it throws, as a user's lookups do.
  */
 export async function actorForVisitor(
-  options: { executor?: unknown } = {}
+  options: { executor?: unknown; own?: PublicRoleDatabase } = {}
 ): Promise<VisitorActor> {
-  return visitorActor(await listPublicGrants(options.executor));
+  return visitorActor(await listPublicGrants(options.executor, options.own));
 }
 
 /**
