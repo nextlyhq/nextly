@@ -1,3 +1,4 @@
+
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
   EMAIL_HUB_PERMISSIONS,
@@ -43,153 +44,67 @@ import { lazyRoute } from "./lazy-route";
 const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
 const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
 const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
-const CreateEmailTemplatePage = lazyRoute(
-  () => import("./dashboard/email/messages/create")
-);
-const EditEmailTemplatePage = lazyRoute(
-  () => import("./dashboard/email/messages/edit/[id]")
-);
-const CreateEmailProviderPage = lazyRoute(
-  () => import("./dashboard/email/sending/create")
-);
-const EditEmailProviderPage = lazyRoute(
-  () => import("./dashboard/email/sending/edit/[id]")
-);
-const EmailProvidersPage = lazyRoute(
-  () => import("./dashboard/email/sending/index")
-);
-const EditEntryPage = lazyRoute(
-  () => import("./dashboard/entries/[slug]/[id]/index")
-);
-const EntryVersionsPage = lazyRoute(
-  () => import("./dashboard/entries/[slug]/[id]/versions")
-);
-const APIPlaygroundPage = lazyRoute(
-  () => import("./dashboard/entries/[slug]/api")
-);
-const CreateEntryPage = lazyRoute(
-  () => import("./dashboard/entries/[slug]/create")
-);
-const CollectionEntriesPage = lazyRoute(
-  () => import("./dashboard/entries/[slug]/index")
-);
-const FieldGroupsPage = lazyRoute(
-  () => import("./dashboard/field-group/index")
-);
+const CreateEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/create"));
+const EditEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/edit/[id]"));
+const CreateEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/create"));
+const EditEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/edit/[id]"));
+const EmailProvidersPage = lazyRoute(() => import("./dashboard/email/sending/index"));
+const EditEntryPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/index"));
+const EntryVersionsPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/versions"));
+const APIPlaygroundPage = lazyRoute(() => import("./dashboard/entries/[slug]/api"));
+const CreateEntryPage = lazyRoute(() => import("./dashboard/entries/[slug]/create"));
+const CollectionEntriesPage = lazyRoute(() => import("./dashboard/entries/[slug]/index"));
+const FieldGroupsPage = lazyRoute(() => import("./dashboard/field-group/index"));
 const DashboardPage = lazyRoute(() => import("./dashboard/index"));
 const MediaLibraryPage = lazyRoute(() => import("./dashboard/media/index"));
 const PluginDetailPage = lazyRoute(() => import("./dashboard/plugins/[slug]"));
-const PluginSettingsPage = lazyRoute(
-  () => import("./dashboard/plugins/[slug]/settings")
-);
+const PluginSettingsPage = lazyRoute(() => import("./dashboard/plugins/[slug]/settings"));
 const PluginBrowsePage = lazyRoute(() => import("./dashboard/plugins/browse"));
-const PluginsOverviewPage = lazyRoute(
-  () => import("./dashboard/plugins/index")
-);
-const CollectionsLandingRedirect = lazyRoute(
-  () => import("./dashboard/redirects/CollectionsLandingRedirect")
-);
-const EmailSettingsRedirect = lazyRoute(
-  () => import("./dashboard/redirects/EmailSettingsRedirect")
-);
-const FieldGroupsLandingRedirect = lazyRoute(
-  () => import("./dashboard/redirects/FieldGroupsLandingRedirect")
-);
-const SinglesLandingRedirect = lazyRoute(
-  () => import("./dashboard/redirects/SinglesLandingRedirect")
-);
+const PluginsOverviewPage = lazyRoute(() => import("./dashboard/plugins/index"));
+const CollectionsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/CollectionsLandingRedirect"));
+const EmailSettingsRedirect = lazyRoute(() => import("./dashboard/redirects/EmailSettingsRedirect"));
+const FieldGroupsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/FieldGroupsLandingRedirect"));
+const SinglesLandingRedirect = lazyRoute(() => import("./dashboard/redirects/SinglesLandingRedirect"));
 const ReleaseDetailPage = lazyRoute(() => import("./dashboard/releases/[id]"));
 const ReleasesPage = lazyRoute(() => import("./dashboard/releases/index"));
 const RolesPage = lazyRoute(() => import("./dashboard/roles"));
 const RolesCreatePage = lazyRoute(() => import("./dashboard/roles/create"));
 const RolesEditPage = lazyRoute(() => import("./dashboard/roles/edit"));
-const CreateApiKeyPage = lazyRoute(
-  () => import("./dashboard/settings/api-keys/create")
-);
-const EditApiKeyPage = lazyRoute(
-  () => import("./dashboard/settings/api-keys/edit/[id]")
-);
-const ApiKeysPage = lazyRoute(
-  () => import("./dashboard/settings/api-keys/index")
-);
-const BackgroundJobsPage = lazyRoute(
-  () => import("./dashboard/settings/background-jobs/index")
-);
-const CreateImageSizePage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/create")
-);
-const EditImageSizePage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/edit/[id]")
-);
-const ImageSizesSettingsPage = lazyRoute(
-  () => import("./dashboard/settings/image-sizes/index")
-);
+const CreateApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/create"));
+const EditApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/edit/[id]"));
+const ApiKeysPage = lazyRoute(() => import("./dashboard/settings/api-keys/index"));
+const BackgroundJobsPage = lazyRoute(() => import("./dashboard/settings/background-jobs/index"));
+const CreateImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/create"));
+const EditImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/edit/[id]"));
+const ImageSizesSettingsPage = lazyRoute(() => import("./dashboard/settings/image-sizes/index"));
 const SettingsPage = lazyRoute(() => import("./dashboard/settings/index"));
-const SettingsPermissionsPage = lazyRoute(
-  () => import("./dashboard/settings/permissions/index")
-);
-const WebhookDeliveryDetailPage = lazyRoute(
-  () => import("./dashboard/settings/webhooks/[id]/deliveries/[deliveryId]")
-);
-const WebhookDeliveriesPage = lazyRoute(
-  () => import("./dashboard/settings/webhooks/[id]/deliveries/index")
-);
-const CreateWebhookPage = lazyRoute(
-  () => import("./dashboard/settings/webhooks/create")
-);
-const EditWebhookPage = lazyRoute(
-  () => import("./dashboard/settings/webhooks/edit/[id]")
-);
-const WebhooksPage = lazyRoute(
-  () => import("./dashboard/settings/webhooks/index")
-);
-const SingleAPIPlaygroundPage = lazyRoute(
-  () => import("./dashboard/singles/[slug]/api")
-);
-const SingleEditPage = lazyRoute(
-  () => import("./dashboard/singles/[slug]/index")
-);
-const SingleVersionsPage = lazyRoute(
-  () => import("./dashboard/singles/[slug]/versions")
-);
+const SettingsPermissionsPage = lazyRoute(() => import("./dashboard/settings/permissions/index"));
+const WebhookDeliveryDetailPage = lazyRoute(() => import("./dashboard/settings/webhooks/[id]/deliveries/[deliveryId]"));
+const WebhookDeliveriesPage = lazyRoute(() => import("./dashboard/settings/webhooks/[id]/deliveries/index"));
+const CreateWebhookPage = lazyRoute(() => import("./dashboard/settings/webhooks/create"));
+const EditWebhookPage = lazyRoute(() => import("./dashboard/settings/webhooks/edit/[id]"));
+const WebhooksPage = lazyRoute(() => import("./dashboard/settings/webhooks/index"));
+const SingleAPIPlaygroundPage = lazyRoute(() => import("./dashboard/singles/[slug]/api"));
+const SingleEditPage = lazyRoute(() => import("./dashboard/singles/[slug]/index"));
+const SingleVersionsPage = lazyRoute(() => import("./dashboard/singles/[slug]/versions"));
 const SinglesPage = lazyRoute(() => import("./dashboard/singles/index"));
-const TranslationsPage = lazyRoute(
-  () => import("./dashboard/translations/index")
-);
+const TranslationsPage = lazyRoute(() => import("./dashboard/translations/index"));
 const CreateUserPage = lazyRoute(() => import("./dashboard/users/create"));
 const EditUserPage = lazyRoute(() => import("./dashboard/users/edit"));
-const CreateUserFieldPage = lazyRoute(
-  () => import("./dashboard/users/fields/create")
-);
-const EditUserFieldPage = lazyRoute(
-  () => import("./dashboard/users/fields/edit/[id]")
-);
-const UserFieldsPage = lazyRoute(
-  () => import("./dashboard/users/fields/index")
-);
+const CreateUserFieldPage = lazyRoute(() => import("./dashboard/users/fields/create"));
+const EditUserFieldPage = lazyRoute(() => import("./dashboard/users/fields/edit/[id]"));
+const UserFieldsPage = lazyRoute(() => import("./dashboard/users/fields/index"));
 const DashboardUsersPage = lazyRoute(() => import("./dashboard/users/index"));
 
 // Heavy builder dependencies (@dnd-kit, Lexical, CodeMirror,
 // schema-builder components) stay in chunks fetched when a builder opens, and
 // the wrapper gives them the same retry a failed fetch gets anywhere else.
-const CollectionBuilderPage = lazyRoute(
-  () => import("./dashboard/collections/builder/index")
-);
-const CollectionBuilderEditPage = lazyRoute(
-  () => import("./dashboard/collections/builder/[slug]")
-);
-const FieldGroupBuilderPage = lazyRoute(
-  () => import("./dashboard/field-group/builder/index")
-);
-const FieldGroupBuilderEditPage = lazyRoute(
-  () => import("./dashboard/field-group/builder/[slug]")
-);
-const SingleBuilderPage = lazyRoute(
-  () => import("./dashboard/singles/builder/index")
-);
-const SingleBuilderEditPage = lazyRoute(
-  () => import("./dashboard/singles/builder/[slug]")
-);
+const CollectionBuilderPage = lazyRoute(() => import("./dashboard/collections/builder/index"));
+const CollectionBuilderEditPage = lazyRoute(() => import("./dashboard/collections/builder/[slug]"));
+const FieldGroupBuilderPage = lazyRoute(() => import("./dashboard/field-group/builder/index"));
+const FieldGroupBuilderEditPage = lazyRoute(() => import("./dashboard/field-group/builder/[slug]"));
+const SingleBuilderPage = lazyRoute(() => import("./dashboard/singles/builder/index"));
+const SingleBuilderEditPage = lazyRoute(() => import("./dashboard/singles/builder/[slug]"));
 
 interface RouteConfigBase {
   component: React.ComponentType<PageProps>;
