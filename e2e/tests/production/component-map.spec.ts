@@ -1,13 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
   pnpmInvocation,
   treeKillCommand,
 } from "../../../scripts/pnpm-invocation.mjs";
 import {
-  BASE_URL,
   NEXTLY_ROOT,
   PORT,
   productionServerEnv,
@@ -15,20 +14,21 @@ import {
 
 /**
  * A production build whose committed component map lacks a dashboard widget's
- * component refuses the admin, naming the plugin, the widget and the fix, and
- * keeps the public site serving.
+ * component serves the admin, and only that widget's card draws its error
+ * state, saying it could not be loaded without naming the component; the card
+ * beside it draws. Nothing reads or checks the map at boot.
  *
- * The refusal is the build under test's own: a second `next start` from the
- * same build, with the fixture plugin that declares the widget switched on.
- * Its own server, because a refused admin is the point, and the suite's main
- * server keeps its admin for the other specs. The main server is the control:
- * the same build with the map whole serves the admin.
+ * The build under test's own: a second `next start` from the same build, with
+ * the fixture plugin that declares the widget switched on. Its own server, so
+ * the suite's main server keeps its dashboard for the other specs.
  *
  * @module tests/production/component-map
  */
 
-const REFUSING_PORT = PORT + 7;
-const REFUSING_URL = `http://localhost:${REFUSING_PORT}`;
+const FIXTURE_PORT = PORT + 7;
+const FIXTURE_URL = `http://localhost:${FIXTURE_PORT}`;
+const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
+const MISSING = "missing-widget-fixture/never-built";
 
 let server: ChildProcess | undefined;
 let output = "";
@@ -51,7 +51,7 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
 test.beforeAll(async () => {
   const env = {
     ...process.env,
-    ...productionServerEnv(REFUSING_PORT),
+    ...productionServerEnv(FIXTURE_PORT),
     NEXTLY_E2E_MISSING_WIDGET: "1",
   };
   // A production boot refuses a configured plugin no install has recorded, so
@@ -101,7 +101,7 @@ test.beforeAll(async () => {
       output += String(chunk);
     });
   }
-  await waitForHealth(REFUSING_URL, 120_000);
+  await waitForHealth(FIXTURE_URL, 120_000);
 });
 
 test.afterAll(() => {
@@ -116,38 +116,87 @@ test.afterAll(() => {
   spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
 });
 
+interface Layout {
+  version: number;
+  scope: string;
+  placements: Array<{ widgetId: string }>;
+}
+
+/** Signs in through the real form, as dev auto-login is blocked in production. */
+async function signIn(page: Page): Promise<void> {
+  await page.goto(`${FIXTURE_URL}/admin`);
+  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
+  // By role, because a label match also finds the "Show password" toggle.
+  await page
+    .getByRole("textbox", { name: /password/i })
+    .fill(DEV_USER.password);
+  await page.getByRole("button", { name: /sign in|log in/i }).click();
+  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+}
+
+/** Puts the fixture's card first on the reader's dashboard, beside the cards already there. */
+async function placeMissingCard(page: Page): Promise<void> {
+  const read = await page.request.get(
+    `${FIXTURE_URL}/admin/api/dashboard/layout`
+  );
+  expect(read.ok()).toBe(true);
+  const layout = (await read.json()) as Layout;
+  const write = await page.request.put(
+    `${FIXTURE_URL}/admin/api/dashboard/layout`,
+    {
+      data: {
+        placements: [
+          { id: "e2e-missing", widgetId: MISSING, w: 12, h: 4, removed: false },
+          ...layout.placements.filter(each => each.widgetId !== MISSING),
+        ],
+        version: layout.version,
+        scope: layout.scope,
+      },
+    }
+  );
+  expect(write.ok(), await write.text()).toBe(true);
+}
+
 test.describe("a production build missing a widget's component", () => {
-  test("refuses the admin, and logs the plugin, the widget and the fix", async ({
+  test("serves the admin, and nothing at boot reads or checks the map", async ({
     request,
   }) => {
-    const admin = await request.get(`${REFUSING_URL}/admin`);
-    expect(admin.status()).toBe(500);
-    await expect
-      .poll(() => output, { timeout: 10_000 })
-      .toContain(
-        'plugin "missing-widget-fixture", widget "missing-widget-fixture/never-built"'
-      );
-    expect(output).toContain(
-      "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt"
-    );
-    expect(output).toContain("Run `npx nextly generate:types`");
-  });
-
-  test("keeps the public site serving", async ({ request }) => {
-    // Only the admin is refused: the check runs in the admin's layout. The
-    // home page answers as it does on the suite's own server, whatever that
-    // is for this seed, and never with a server error.
-    const home = await request.get(`${REFUSING_URL}/`);
-    const control = await request.get(`${BASE_URL}/`);
-    expect(home.status()).toBeLessThan(500);
-    expect(home.status()).toBe(control.status());
-  });
-
-  test("serves the admin from the same build when the map is whole", async ({
-    request,
-  }) => {
-    // The control: the suite's own server, started without the fixture.
-    const admin = await request.get(`${BASE_URL}/admin`);
+    const admin = await request.get(`${FIXTURE_URL}/admin`);
     expect(admin.status()).toBe(200);
+    expect(output).not.toContain("admin-component-map");
+    expect(output).not.toContain("NEXTLY_ADMIN_COMPONENT_MAP");
+  });
+
+  test("draws that card's error state without naming its component, and the card beside it draws", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await placeMissingCard(page);
+    try {
+      await page.goto(`${FIXTURE_URL}/admin`);
+      const card = page.getByRole("region", { name: "Never built" });
+      await expect(card).toHaveAttribute("data-state", "error", {
+        timeout: 30_000,
+      });
+      await expect(card).toContainText("Its component could not be loaded.");
+      await expect(card).not.toContainText("NeverBuilt");
+      // The rest of the dashboard draws: some other card reaches an answer.
+      await expect(
+        page
+          .getByRole("region")
+          .filter({ hasNot: page.getByText("Never built") })
+          .and(page.locator('[data-state="ready"], [data-state="empty"]'))
+          .first()
+      ).toBeVisible();
+    } finally {
+      // The database is the suite's: the reader's layout goes back to the default.
+      const read = await page.request.get(
+        `${FIXTURE_URL}/admin/api/dashboard/layout`
+      );
+      const { version, scope } = (await read.json()) as Layout;
+      await page.request.delete(
+        `${FIXTURE_URL}/admin/api/dashboard/layout?version=${version}&scope=${encodeURIComponent(scope)}`
+      );
+    }
   });
 });

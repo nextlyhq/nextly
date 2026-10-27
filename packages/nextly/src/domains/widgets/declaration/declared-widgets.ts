@@ -157,7 +157,7 @@ function toDefinition(
     title: declaration.title,
     description: declaration.description,
     ...publishedLabels(declaration, owner),
-    ...drawnBy(displayOfView(declaration.view)),
+    ...drawnBy(displayOfView(declaration.view), owner),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),
@@ -184,13 +184,17 @@ function publishedLabels(
   };
 }
 
-/** The archetype a declared view is drawn by, and the component of a view of its own. */
+/**
+ * The archetype a declared view is drawn by, and for a view of its own, its component and who
+ * declared it, so a card whose component is missing can name both.
+ */
 function drawnBy(
-  display: WidgetDisplay
-): Pick<WidgetDefinition, "archetype" | "component"> {
+  display: WidgetDisplay,
+  owner: string
+): Pick<WidgetDefinition, "archetype" | "component" | "owner"> {
   return typeof display === "string"
     ? { archetype: display }
-    : { archetype: "custom", component: display.component };
+    : { archetype: "custom", component: display.component, owner };
 }
 
 /** Who is offered a declared widget, how many times, and whether it leaves while empty. */
