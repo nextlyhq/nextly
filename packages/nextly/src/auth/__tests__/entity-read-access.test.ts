@@ -33,7 +33,7 @@ vi.mock("../../di/container", () => ({
   container: {
     has: hasSpy,
     get: () => ({
-      checkAccess: checkAccessSpy,
+      checkAccessApplyingFilter: checkAccessSpy,
       getRegisteredAccess: registeredAccessSpy,
       // The registered target, built from what the spy registers, as the
       // service derives one from the other.
@@ -47,6 +47,8 @@ vi.mock("../../di/container", () => ({
 
 import { userActor } from "../access/actor";
 import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
+import { routeVerdictFor, runWithAccessMemo } from "../access/request-memo";
+import { ruleLanguageKey } from "../access/rule-language";
 import { apiKeyScope } from "../authenticated-scope";
 import {
   authorizationScheduler,
@@ -103,7 +105,7 @@ describe("canReadEntity — API key callers", () => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
   });
 
   it("refuses a key whose row holds the read under a slug of its own", async () => {
@@ -157,7 +159,7 @@ describe("canReadEntity — API key callers", () => {
     // `checkAccess` bypasses everything for a super admin, which is correct for
     // a session and wrong for a key: a read-only key issued by an administrator
     // would otherwise carry their whole account.
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
 
     await expect(
       canReadEntity("posts", apiKey(["update-posts"]))
@@ -293,20 +295,20 @@ describe("canReadEntity — session callers", () => {
     // lookup that cannot read them does not fail it.
     actorForUserSpy.mockRejectedValue(new Error("grants unreadable"));
     registeredAccessSpy.mockReturnValue({ read: true });
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
 
     await expect(canReadEntity("posts", session)).resolves.toBe(true);
     expect(actorForUserSpy).not.toHaveBeenCalled();
   });
 
-  it("lets a declared read rule decide alone, its answer handed back as given", async () => {
-    // Kept as today: the service asks the rule once, whatever the grants,
-    // and its answer comes back as the rule gave it.
+  it("lets a declared read rule decide alone", async () => {
+    // The service asks the rule once, whatever the grants, and its refusal
+    // refuses.
     actorForUserSpy.mockResolvedValue(readerOf());
     registeredAccessSpy.mockReturnValue({ read: () => true });
-    checkAccessSpy.mockResolvedValue(null);
+    checkAccessSpy.mockResolvedValue({ allowed: false });
 
-    await expect(canReadEntity("posts", session)).resolves.toBeNull();
+    await expect(canReadEntity("posts", session)).resolves.toBe(false);
     expect(checkAccessSpy).toHaveBeenCalledWith({
       userId: "u1",
       operation: "read",
@@ -315,11 +317,40 @@ describe("canReadEntity — session callers", () => {
   });
 });
 
+describe("canReadEntity — a declared read rule that answers a filter", () => {
+  const filter = { team: { equals: "public" } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hasSpy.mockReturnValue(true);
+    registeredAccessSpy.mockReturnValue({ read: () => filter });
+    checkAccessSpy.mockResolvedValue({ allowed: false, filter });
+  });
+
+  it("answers yes inside a request, keeping the filter for the reads it lets run", async () => {
+    const [answer, kept] = await runWithAccessMemo(async () => [
+      await canReadEntity("posts", session),
+      routeVerdictFor({
+        userId: "u1",
+        slug: "posts",
+        action: "read",
+        language: ruleLanguageKey(),
+      }),
+    ]);
+    expect(answer).toBe(true);
+    expect(kept).toEqual({ filter });
+  });
+
+  it("answers no outside a request, where nothing can carry the filter", async () => {
+    await expect(canReadEntity("posts", session)).resolves.toBe(false);
+  });
+});
+
 describe("canReadEntity — degenerate input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
     registeredAccessSpy.mockReturnValue(undefined);
   });
 
@@ -346,7 +377,7 @@ describe("readableEntities", () => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
     actorForUserSpy.mockResolvedValue(readerOf("posts", "pages", "broken"));
   });
 

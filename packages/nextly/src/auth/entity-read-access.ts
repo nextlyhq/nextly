@@ -17,7 +17,10 @@ import { NextlyError } from "../errors/nextly-error";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { readsEntity } from "./access/entity-read";
+import { rememberRouteVerdict } from "./access/request-memo";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
+import { readOf, type FilteredRead } from "./access/rule-answer";
+import { ruleLanguageKey } from "./access/rule-language";
 import { scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
@@ -94,15 +97,48 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
  *
  * `slug` is entity-generic — `getRegisteredTarget` reads the collection and
  * single maps alike, so a Single resolves its own rules with no branch here.
+ *
+ * A read rule's filter answers yes: the caller may read the entries it
+ * matches. See {@link entityReadFor}, which keeps the filter for the reads
+ * this answer lets run.
  */
 export async function canReadEntity(
   slug: string,
   caller: ReadAccessCaller
 ): Promise<boolean> {
-  if (!caller.userId || !slug) return false;
+  const read = await entityReadFor(slug, caller);
+  return read.allowed || read.filter !== undefined;
+}
+
+/**
+ * What this caller may read of the entity behind `slug`: every entry, none,
+ * or the entries a read rule's filter matches.
+ *
+ * A filter is kept for the request, as a route keeps its verdict, so a read
+ * this answer lets run with `routeAuthorized` (a document's history, its
+ * lock, a worklist's list) applies it rather than reading every entry. A
+ * request that cannot keep it reads none, rather than let such a read run
+ * unfiltered.
+ */
+export async function entityReadFor(
+  slug: string,
+  caller: ReadAccessCaller
+): Promise<FilteredRead> {
+  if (!caller.userId || !slug) return readOf(false);
   // Before the container is up there is no service to read rules from; the
   // reader answers as it does without one, which refuses a signed-in user.
-  return readsEntity(slug, caller, getRBACService());
+  const read = await readsEntity(slug, caller, getRBACService());
+  if (read.filter === undefined) return read;
+  const kept = rememberRouteVerdict(
+    {
+      userId: caller.userId,
+      slug,
+      action: "read",
+      language: ruleLanguageKey(),
+    },
+    { filter: read.filter }
+  );
+  return kept ? read : readOf(false);
 }
 
 /**
