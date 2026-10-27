@@ -2148,9 +2148,12 @@ jobs:
   # `always()` so it reads the jobs whatever they concluded; on a pull request
   # it never runs. A run in which they were skipped (superseded) or cancelled
   # tested nothing and leaves the issue as it is (`scripts/main-red-issue.mjs`).
+  # A run dispatched on `main` counts as a push does: under a run of merges
+  # every push run is superseded, and main-catch-up.yml's dispatched run is
+  # the one that tests main.
   main-red:
     name: Report main's advisory jobs
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs:
       - e2e
       - e2e-production

@@ -98,38 +98,53 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
       console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${current.number}'s ${state.sha.slice(0, 9)}; leaving it`);
       return 0;
     }
+    const run = { sha, runUrl, runId: env.GITHUB_RUN_ID, repository, context };
     if (failed.length === 0) {
-      if (!current) return 0;
-      const named = state?.jobs ?? Object.keys(ADVISORY);
-      const unproven = named.filter(id => !passed.includes(id));
-      if (unproven.length > 0) {
-        console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
-        return 0;
-      }
-      await write(`repos/${repository}/issues/${current.number}/comments`, context, "POST", {
-        body: `${named.map(id => ADVISORY[id] ?? id).join(", ")} passed on ${sha.slice(0, 9)} (${runUrl}).`,
-      });
-      await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { state: "closed", state_reason: "completed" });
-      console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
-      return 0;
-    }
-    const names = failed.map(id => ADVISORY[id]);
-    const tests = await failingTests(env.GITHUB_RUN_ID, names, { repository, context });
-    const title = `main is red: ${names.join(", ")} on ${sha.slice(0, 9)}`;
-    const body = issueBody({ sha, jobs: failed }, names, runUrl, tests);
-    if (current) {
-      await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { title, body });
-      console.log(`main-red-issue: updated #${current.number}: ${title}`);
+      if (current) await closeIfProven(current, state, passed, run);
     } else {
-      await ensureLabel({ repository, context });
-      await write(`repos/${repository}/issues`, context, "POST", { title, body, labels: [LABEL] });
-      console.log(`main-red-issue: opened: ${title}`);
+      await report(current, state, { failed, passed }, run);
     }
     return 0;
   } catch (error) {
     console.log(`::error title=Main red issue::${commandText(`could not report main's advisory jobs (${error.message})`)}`);
     return 1;
   }
+}
+
+/** Closes the open issue once every job it names has passed in this run, having run its test; else leaves it open. */
+async function closeIfProven(current, state, passed, { sha, runUrl, repository, context }) {
+  const named = state?.jobs ?? Object.keys(ADVISORY);
+  const unproven = named.filter(id => !passed.includes(id));
+  if (unproven.length > 0) {
+    console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
+    return;
+  }
+  await write(`repos/${repository}/issues/${current.number}/comments`, context, "POST", {
+    body: `${named.map(id => ADVISORY[id] ?? id).join(", ")} passed on ${sha.slice(0, 9)} (${runUrl}).`,
+  });
+  await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { state: "closed", state_reason: "completed" });
+  console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
+}
+
+/** Opens the issue for this run's failures, or updates the open one. */
+async function report(current, state, { failed, passed }, { sha, runUrl, runId, repository, context }) {
+  // A job the issue names stays named until a run has tested it and it
+  // passed, whatever else this run failed: a run that did not test it says
+  // nothing about it.
+  const carried = (state?.jobs ?? []).filter(id => id in ADVISORY && !failed.includes(id) && !passed.includes(id));
+  const jobs = Object.keys(ADVISORY).filter(id => failed.includes(id) || carried.includes(id));
+  const names = failed.map(id => ADVISORY[id]);
+  const tests = await failingTests(runId, names, { repository, context });
+  const title = `main is red: ${jobs.map(id => ADVISORY[id]).join(", ")} on ${sha.slice(0, 9)}`;
+  const body = issueBody({ sha, jobs }, names, carried.map(id => ADVISORY[id]), runUrl, tests);
+  if (current) {
+    await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { title, body });
+    console.log(`main-red-issue: updated #${current.number}: ${title}`);
+    return;
+  }
+  await ensureLabel({ repository, context });
+  await write(`repos/${repository}/issues`, context, "POST", { title, body, labels: [LABEL] });
+  console.log(`main-red-issue: opened: ${title}`);
 }
 
 /** Creates the label on its first use, so the issue it marks can be found again. */
@@ -180,11 +195,12 @@ async function failingTests(runId, failedNames, { repository, context }) {
 }
 
 /**
- * The issue's text: a marker recording the commit and failed jobs (read back
- * to order later runs and to know what must pass), the jobs, commit and run,
- * then the failing tests or why they are missing.
+ * The issue's text: a marker recording the commit and the jobs still red (read
+ * back to order later runs and to know what must pass), the jobs this run
+ * failed and those still red from an earlier one, the commit and run, then the
+ * failing tests or why they are missing.
  */
-function issueBody(state, failed, runUrl, tests) {
+function issueBody(state, failed, carried, runUrl, tests) {
   const { sha } = state;
   const lines = [
     `<!-- main-red ${JSON.stringify(state)} -->`,
@@ -192,10 +208,11 @@ function issueBody(state, failed, runUrl, tests) {
     "",
     ...failed.map(name => `- **${name}**`),
     "",
-    `Commit: ${sha}`,
-    `Run: ${runUrl}`,
-    "",
   ];
+  if (carried.length > 0) {
+    lines.push("Still red from an earlier run, and not tested again since:", "", ...carried.map(name => `- **${name}**`), "");
+  }
+  lines.push(`Commit: ${sha}`, `Run: ${runUrl}`, "");
   if (tests === null) lines.push("The failed jobs' logs could not be read; the run above has the failures.");
   else if (tests.length === 0) lines.push("The logs name no failing test; the run above has the failures.");
   else {

@@ -111,6 +111,23 @@ describe("the issue on main", () => {
     expect(writes()).toEqual([]);
   });
 
+  it("keeps a job it names until that job passes, though a later run fails another without testing it", async () => {
+    // Dev reload is still red from an earlier run; this run decided it could
+    // not affect dev reload, and failed Browser tests instead.
+    const untested = all("success", { e2e: "failure" }, { "dev-reload": { tested: "false" } });
+    const first = api({ [openIssues]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    expect(await main(env(untested), { fetchImpl: first.fetchImpl })).toBe(0);
+    const [updated] = first.writes();
+    expect(updated.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e","dev-reload"]} -->`);
+    expect(updated.body.title).toBe(`main is red: Browser tests, Dev reload applies a saved schema edit on ${SHA.slice(0, 9)}`);
+
+    // Once dev reload has run its test and passed, only the job still failing stays named.
+    const retested = all("success", { e2e: "failure" }, { "dev-reload": { tested: "true" } });
+    const second = api({ [openIssues]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    expect(await main(env(retested), { fetchImpl: second.fetchImpl })).toBe(0);
+    expect(second.writes()[0].body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"]} -->`);
+  });
+
   it("leaves it alone when this run's commit is older than the one it records", async () => {
     // Each main commit runs in a concurrency group of its own, so an older
     // run can finish after a newer one; it must neither close nor rewrite it.
@@ -172,10 +189,15 @@ describe("the job that runs it", () => {
     for (const [id, name] of Object.entries(ADVISORY)) expect(String(ci.jobs[id].name).replace(/ \(\$\{\{[^}]*\}\}\)$/, "")).toBe(name);
   });
 
-  it("runs on pushes to main only, whatever the jobs before it did, with issues write and nothing more", () => {
+  it("runs on main's pushes and dispatched runs only, whatever the jobs before it did, with issues write and nothing more", () => {
+    // Under a run of merges every push run is superseded and tests nothing;
+    // the catch-up dispatched on main (main-catch-up.yml) is the one that does.
     expect(job.if).toContain("always()");
     expect(job.if).toContain("github.event_name == 'push'");
+    expect(job.if).toContain("github.event_name == 'workflow_dispatch'");
     expect(job.if).toContain("github.ref == 'refs/heads/main'");
+    expect(job.if).not.toContain("pull_request");
+    expect(job.if).not.toContain("merge_group");
     expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "write" });
   });
 
