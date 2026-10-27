@@ -229,10 +229,10 @@ function validateSourceLabel(s: Partial<WidgetSource>): void {
 /**
  * Confirms `titleField`, when given, names a field this source declares.
  *
- * 🔴 The value becomes a `select` entry on a generated card, and `select` is
- * checked against this source's own field allowlist when the query runs — so a
- * source naming a field it does not declare produces a card whose every request
- * is refused, with the refusal arriving per reader rather than at the point the
+ * 🔴 The value becomes a `select` entry on a card that lists the source's
+ * entries, and `select` is checked against this source's own field allowlist
+ * when the query runs — so a source naming a field it does not declare
+ * produces a card whose every request is refused, with the refusal arriving per reader rather than at the point the
  * source was registered. A plugin registering its own source is the caller this
  * protects: core's own derivation takes the name FROM `fields`, so it cannot
  * disagree with itself.
@@ -349,8 +349,8 @@ function validateSourceKind(s: Partial<WidgetSource>): void {
  * Confirms `lifecycleStatus`, when given, is actually a boolean.
  *
  * The consumer tests `=== true`, so a source registered with `"true"` from
- * JavaScript or decoded JSON is read as NOT having a lifecycle -- and the card
- * that fact exists to enable is silently never generated. A truthiness test
+ * JavaScript or decoded JSON is read as NOT having a lifecycle -- and every
+ * status-bounded read that fact exists to enable is silently refused. A truthiness test
  * would accept the string and be wrong in the other direction; the field is
  * refused instead, where the mistake was made.
  */

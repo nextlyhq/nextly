@@ -234,8 +234,8 @@ type ComponentDef = {
  *
  * That row is not merely cosmetic. Anything deciding whether an entity's table
  * can be queried reads it -- the widget source refresh does -- so a field edit
- * under `next dev` silently withdrew that entity's generated cards from the
- * dashboard for the rest of the session.
+ * under `next dev` silently withdrew that entity's widget source, and with it
+ * every card set to it, from the dashboard for the rest of the session.
  *
  * The edited set is taken from the SYNC'S OWN REPORT rather than from the
  * snapshot, because the snapshot answers "did this table exist before the

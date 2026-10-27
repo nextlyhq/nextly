@@ -119,10 +119,11 @@ describe("a site config that names what exists", () => {
     );
   });
 
-  it("starts with a generated card's id it cannot see yet, still checking the config's own shape", () => {
-    // 🔴 Generated cards are derived when the dashboard is first read, after
-    // this check: refused as unknown, a valid config would not start.
-    expect(() =>
+  it("refuses an id in a retired per-collection namespace, naming it and what replaced it", () => {
+    // 🔴 Core no longer makes a card per collection or per Single, so an id in
+    // `collection/` or `single/` names nothing, wherever the config names it:
+    // `hide`, `overrides` and `defaultLayout` alike.
+    const message = refusal(() =>
       resetWidgetRegistries([shop], {
         hide: ["single/home-card"],
         overrides: {
@@ -130,35 +131,22 @@ describe("a site config that names what exists", () => {
         },
         defaultLayout: [{ widget: "collection/posts-count", w: 6, h: 3 }],
       })
-    ).not.toThrow();
-    // Its shape is still checked: a key the entry does not take is refused,
-    // so is a size the grid cannot draw, and so is placing a hidden
-    // generated card.
-    const message = refusal(() =>
-      resetWidgetRegistries([shop], {
-        hide: ["collection/pages-count"],
-        overrides: {
-          "collection/posts-count": {
-            widht: "half",
-            size: { default: { w: 13, h: 4 } },
-          },
-        },
-        defaultLayout: [
-          "collection/pages-count",
-          { widget: "collection/posts-count", w: 0 },
-        ],
-      })
     );
-    expect(message).toContain('overrides entry has "widht"');
+    const told =
+      "a per-collection card core no longer makes; use a core widget with a Collection setting instead (core/count, core/breakdown, core/over-time, core/recent-entries), set to that collection";
+    expect(message).toContain(`hide names "single/home-card", ${told}`);
     expect(message).toContain(
-      'overrides.size.default must be { w, h } with w a whole number from 1 to 12 and h a whole number from 2 to 12, got {"w":13,"h":4}'
+      `overrides names "collection/posts-count", ${told}`
     );
     expect(message).toContain(
-      'defaultLayout places "collection/pages-count", which hide hides'
+      `defaultLayout names "collection/posts-count", ${told}`
     );
-    expect(message).toContain(
-      "defaultLayout w must be a whole number from 1 to 12, got 0"
-    );
+    // The control: an unknown id outside those namespaces gets the ordinary
+    // refusal, so the wording above is the namespace's and not every unknown
+    // id's.
+    expect(
+      refusal(() => resetWidgetRegistries([shop], { hide: ["collections/x"] }))
+    ).toContain('hide names "collections/x", which no widget declares');
   });
 
   it("says nothing when it sets no key", () => {

@@ -71,6 +71,7 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
+import { inRetiredWidgetNamespace } from "../domains/widgets/retired-widget-namespaces";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -260,22 +261,21 @@ function sizesOf(
  * {@link addPanelFacts} is the one place it is decided.
  */
 function widgetFactsOf(widgets: readonly CanonicalWidget[]) {
-  // Each offered widget's place in the panel's order, by the rule that orders
+  // Each widget's place in the panel's order, by the rule that orders
   // `available`, so the panel can list a placed widget (as "on dashboard")
-  // where it would be offered, without ordering anything itself.
+  // where it would be offered, without ordering anything itself. Every
+  // widget has one: the panel offers each widget the install declares.
   const rank = new Map(
     inAddPanelOrder(widgets).map((widget, index) => [widget.id, index])
   );
   return Object.fromEntries(
     widgets.map(widget => {
-      const facts = addPanelFacts(widget);
       return [
         widget.id,
         {
           allowsSeveral: sizeFacts(widget).allowsSeveral,
-          ...(facts === undefined
-            ? {}
-            : { ...facts, rank: rank.get(widget.id) }),
+          ...addPanelFacts(widget),
+          rank: rank.get(widget.id),
         },
       ];
     })
@@ -605,7 +605,6 @@ async function authenticateLayoutWrite(
   return auth;
 }
 
-/** Refuses a submission naming a widget this caller may not see, or an id twice. */
 /**
  * Refuses a submitted card set to a collection this reader may not read.
  *
@@ -631,10 +630,34 @@ function refuseUnreadableCollections(
   });
 }
 
+/**
+ * Refuses a submission naming a widget this caller may not see, a card of a
+ * retired per-collection namespace, or a placement id twice.
+ */
 function refuseUnknownOrRepeated(
   submitted: readonly WidgetPlacement[],
   visibleIds: ReadonlySet<string>
 ): void {
+  // A card in a namespace core once filled per collection or per Single
+  // (`collection/`, `single/`) is refused by its namespace before anything
+  // else, and told what replaced it. No widget answers to one, so the check
+  // below would refuse it too; this one says why. It discloses nothing: the
+  // namespaces are core's, the same for every install and every reader.
+  const retired = submitted.find(placement =>
+    inRetiredWidgetNamespace(placement.widgetId)
+  );
+  if (retired) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "placements",
+          code: "INVALID_VALUE",
+          message: `"${retired.widgetId}" is a per-collection card core no longer makes. Add a Content widget set to that collection instead.`,
+        },
+      ],
+    });
+  }
+
   // Refused rather than silently dropped. A placement naming a widget this
   // caller cannot see was never in what they were handed; accepting it would
   // let any caller confirm a widget's existence by watching which ids survive.

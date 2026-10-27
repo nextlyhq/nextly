@@ -221,6 +221,48 @@ describe("reading a stored row", () => {
     expect(read.unarranged).toBeUndefined();
   });
 
+  it("drops every card of a retired per-collection or per-Single namespace, and keeps every other id", () => {
+    // 🔴 By namespace: core once minted `collection/<slug>-<kind>` and
+    // `single/<slug>-<kind>` cards from each install's own content, so no list
+    // of ids could name them all. An id the registry does not know is NOT
+    // dropped in general -- a disabled plugin's card comes back with its
+    // plugin -- so `acme/x` is the control, and `collections/x`, whose
+    // namespace only starts with the same letters, is kept as well.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("count", "collection/posts-count", { config: { n: 1 } }),
+          card("team", "core/team"),
+          card("about", "single/about-card", { removed: true }),
+          card("x", "acme/x"),
+          card("near", "collections/x"),
+        ],
+      })
+    );
+    expect(row.placements.map(p => p.widgetId)).toEqual([
+      "core/team",
+      "acme/x",
+      "collections/x",
+    ]);
+  });
+
+  it("lets a dropped card claim no placement id", () => {
+    // A retired card sharing an id with a live one would otherwise rekey the
+    // live card's repeat, for a card nobody can be shown.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("p", "collection/posts-count"),
+          card("p", "core/team"),
+        ],
+      })
+    );
+    expect(row.placements).toEqual([card("p", "core/team")]);
+    expect(row.duplicatePlacementIds).toBeUndefined();
+  });
+
   it("keeps the unarranged mark through a round trip", () => {
     expect(readRow(serializeLayout([card("a")], false)).unarranged).toBe(true);
   });

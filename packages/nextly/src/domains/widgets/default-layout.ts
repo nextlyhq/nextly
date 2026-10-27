@@ -117,14 +117,12 @@ function suggestedWidgets(
 /**
  * Whether a widget of the older shape is suggested by being declared: one
  * placed on the default before suggestions existed. Never one of core's, whose
- * place is the base's to give, nor one core generated or one offered (per
- * collection, or on request), which are offered and never placed.
+ * place is the base's to give, nor one offered (per collection, or on
+ * request), which is offered and never placed.
  */
 function suggestedByItsShape(widget: CanonicalWidget): boolean {
   return (
-    !CORE_IDS.has(widget.id) &&
-    widget.generated !== true &&
-    placedByDefault(widget)
+    !CORE_IDS.has(widget.id) && placedByDefault(widget)
   );
 }
 
