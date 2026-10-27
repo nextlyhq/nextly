@@ -96,6 +96,7 @@ export async function readCompanionHistory(
         for (const column of intent.spec.columns) columns.delete(column.name);
         break;
       case "archive":
+      case "unique":
         break;
     }
     history.set(key, columns);

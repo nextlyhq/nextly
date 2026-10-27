@@ -25,6 +25,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
+import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetQuery } from "../query";
 import {
   deregisterWidget,
@@ -33,7 +34,6 @@ import {
   widgetSource,
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
-import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
 import { declaredQueryProblem } from "./displays";
@@ -65,20 +65,17 @@ export interface DeclaredWidget {
 /** The fields of a declaration this module reads, checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
-  /**
-   * The widths the widget allows, in core's own words, gaps included: what
-   * publishing it to the registry carries through as its allowed widths.
-   */
-  readonly widths: readonly WidgetWidth[];
+  /** The card's size and the bounds it may be resized within, in grid units. */
+  readonly size: WidgetSizeDeclaration;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
   readonly display?: unknown;
-  /** What publishing reads: the card's words, its starting width, and its gates. */
+  /** What publishing reads: the card's words and its gates. */
   readonly title: string;
   readonly description: string;
   readonly category: string;
-  readonly width: WidgetWidth;
   readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
   readonly permission?: string;
   readonly sketch?: WidgetDefinition["sketch"];
   readonly empty?: {
@@ -124,9 +121,8 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * data function, the query function and the empty test stay on the server,
  * and a field a declaration gains later reaches the browser only once it is
  * named here. `serverData` says core builds the card's data, so there is no
- * query. The widths are carried as declared, gaps included, in the
- * arrangement's own words; the size is only the span of the starting width,
- * for what still reads sizes.
+ * query. The size is published with every end filled in (`sizeBounds`), the
+ * one reading of a declared size, so no reader fills a missing end its own way.
  */
 function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
   const display = declaration.display;
@@ -147,12 +143,9 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
           component: (display as { component: string }).component,
         }),
     ...(settings.length > 0 ? { settings } : {}),
-    defaultSize: sizeFromWidth(declaration.width),
-    allowedWidths: WIDGET_WIDTHS.filter(width =>
-      declaration.widths.includes(width)
-    ),
-    defaultWidth: declaration.width,
+    size: sizeBounds(declaration.size),
     ...(declaration.several === true ? { allowsSeveral: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
     ...(declaration.permission === undefined
       ? {}
       : { requiredPermission: declaration.permission }),

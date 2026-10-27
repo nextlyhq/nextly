@@ -3241,8 +3241,9 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // The site's content languages, for Settings.
-  if (resource === "languages") {
+  // The site's content languages, for Settings. Only the bare path: a trailing segment is another
+  // address, which must answer not found rather than list or change the languages.
+  if (resource === "languages" && id === undefined) {
     const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
     const operation = httpMethod === "GET" ? "list" : "update";
     return { service: "languages", operation, method, routeParams };

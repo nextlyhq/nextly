@@ -5,6 +5,7 @@
 import type { GetStartedAnswer, GetStartedStep } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 import {
   AtRestSettingsWriteProvider,
@@ -74,13 +75,15 @@ const atRest: AtRestSettingsWrite = {
 function draw(settings: AtRestSettingsWrite = atRest) {
   return render(
     <AtRestSettingsWriteProvider value={settings}>
-      <GetStartedCard
-        widgetId="core/get-started"
-        placementId="started"
-        settings={{}}
-        slot={undefined}
-        isFetching={false}
-      />
+      {inFrame(
+        <GetStartedCard
+          widgetId="core/get-started"
+          placementId="started"
+          settings={{}}
+          slot={undefined}
+          isFetching={false}
+        />
+      )}
     </AtRestSettingsWriteProvider>
   );
 }
@@ -106,7 +109,7 @@ describe("the Get started card", () => {
     expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
   });
 
-  it("says it could not check setup, offers Retry, and shows no step as waiting", () => {
+  it("says in the frame that it could not check setup, offers Retry, and shows no step as waiting", () => {
     // 🔴 Not known drawn as steps would show "Create a collection" as waiting
     // to a reader whose registry simply could not be read.
     const retry = vi.fn();
@@ -115,16 +118,16 @@ describe("the Get started card", () => {
       retry,
     });
     draw();
-    expect(screen.getByText(/couldn't check your setup/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not be read just now/i)).toBeInTheDocument();
     expect(screen.queryByText("Invite a teammate")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
     expect(retry).toHaveBeenCalledOnce();
   });
 
   it("says the same when the layout read failed", () => {
     read = readOf({ isUnavailable: true });
     draw();
-    expect(screen.getByText(/couldn't check your setup/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not be read just now/i)).toBeInTheDocument();
   });
 
   it("counts done and skipped steps as done, and names a Single by its label", () => {
@@ -202,7 +205,7 @@ describe("the Get started card", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "The database refused it."
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
     (write.mock.calls.at(-1)?.[3] as { onLanded: () => void }).onLanded();
     expect(seed.startSeed).toHaveBeenCalledTimes(1);
   });
@@ -232,13 +235,15 @@ describe("the Get started card", () => {
     read = readOf({ answer: STEPS });
     render(
       <AtRestSettingsWriteProvider value={undefined}>
-        <GetStartedCard
-          widgetId="core/get-started"
-          placementId="started"
-          settings={{}}
-          slot={undefined}
-          isFetching={false}
-        />
+        {inFrame(
+          <GetStartedCard
+            widgetId="core/get-started"
+            placementId="started"
+            settings={{}}
+            slot={undefined}
+            isFetching={false}
+          />
+        )}
       </AtRestSettingsWriteProvider>
     );
     const skip = screen.getByRole("button", {
@@ -280,6 +285,7 @@ describe("the Get started card", () => {
   });
 
   it("draws no heading of its own in any state: the frame's title is its one heading", () => {
+    // Drawn inside the frame, whose title is the one heading there should be.
     for (const state of [
       readOf({ isPending: true }),
       readOf({ isUnavailable: true }),
@@ -288,7 +294,7 @@ describe("the Get started card", () => {
     ]) {
       read = state;
       const { unmount } = draw();
-      expect(screen.queryAllByRole("heading")).toHaveLength(0);
+      expect(screen.queryAllByRole("heading")).toHaveLength(1);
       unmount();
     }
   });

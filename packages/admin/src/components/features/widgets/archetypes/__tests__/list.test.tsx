@@ -15,13 +15,14 @@ import type {
 
 import { listBody } from "../list";
 import { CardEmpty } from "../../frame/states";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
     id: "acme/recent",
     title: "Recent posts",
     archetype: "list",
-    size: "md",
+    size: gridBounds(4),
     query: {
       source: "collection:posts",
       op: "list",

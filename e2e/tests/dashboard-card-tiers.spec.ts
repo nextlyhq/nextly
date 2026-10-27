@@ -2,17 +2,18 @@
  * A dashboard card lays itself out by its OWN width: small below 340 px, medium to 699 px,
  * large from 700 px, whatever the window is.
  *
- * Drawn with a Recent entries card set to Posts at every width it allows (a third to the full
- * width), and a Count card set to Posts at the quarter width Recent entries does not, on a
- * 1,200 px and a 900 px dashboard and in a 358 px phone column, and at the transitions the
- * bands create: a half card on 680 and 720 px dashboards, and the single column at 330 and
- * 350 px. The dashboard's width is the container's, not the window's, so the window is sized
- * until the container measures what each case names.
+ * Drawn with a Recent entries card set to Posts at 4, 6, 8 and 12 columns, and a Count card set
+ * to Posts at the 3 columns Recent entries does not allow, on a 1,200 px and a 900 px dashboard
+ * and in a 358 px phone column, and at the transitions the bands and gaps create: a 6-column card
+ * on 680 and 720 px dashboards, a 3-column card on 1,420 and 1,440 px, where the gap across is
+ * 24 px, and the single column at 330 and 350 px. The dashboard's width is the container's, not
+ * the window's, so the window is sized until the container measures what each case names.
  */
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -20,13 +21,12 @@ test.describe.configure({ lock: [LOCK.dashboard] });
 
 /** A list card, the one the table case draws: Recent entries, set to Posts. */
 const RECENT_ENTRIES = "core/recent-entries";
-/** A card that allows a quarter, which Recent entries does not: Count, set to Posts. */
+/** A card that allows 3 columns, which Recent entries does not: Count, set to Posts. */
 const COUNT = "core/count";
-type Width = "quarter" | "third" | "half" | "twoThirds" | "full";
 
-/** The card each width is drawn with: Count at a quarter, Recent entries otherwise. */
-function cardFor(width: Width): string {
-  return width === "quarter" ? COUNT : RECENT_ENTRIES;
+/** The card each width is drawn with: Count at 3 columns, Recent entries otherwise. */
+function cardFor(w: number): string {
+  return w === 3 ? COUNT : RECENT_ENTRIES;
 }
 
 interface Layout {
@@ -37,21 +37,28 @@ interface Layout {
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
   }>;
 }
 
 /**
- * Put `widgetId`'s card, set to Posts, at `width` in the saved layout: neither is on the default
- * dashboard, so a fresh install places it here, and one already placed is moved to the width.
+ * Put `widgetId`'s card, set to Posts, `w` columns wide at its default height in the saved
+ * layout: neither is on the default dashboard, so a fresh install places it here, and one already
+ * placed is moved to the size.
  */
 async function placeCard(
   page: Page,
   widgetId: string,
-  width: Width
+  w: number
 ): Promise<void> {
+  const bounds = await sizeBoundsOf(page, widgetId);
+  // The write holds a changed size to the widget's bounds; a case outside them says so here.
+  expect(w).toBeGreaterThanOrEqual(bounds.min.w);
+  expect(w).toBeLessThanOrEqual(bounds.max.w);
+  const h = bounds.default.h;
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
   const placed = layout.placements.some(
@@ -62,7 +69,7 @@ async function placeCard(
   const placements = placed
     ? layout.placements.map(placement =>
         placement.widgetId === widgetId
-          ? { ...placement, width, removed: false }
+          ? { ...placement, w, h, removed: false }
           : placement
       )
     : [
@@ -70,7 +77,8 @@ async function placeCard(
         {
           id: `e2e-${widgetId.replace("/", "-")}`,
           widgetId,
-          width,
+          w,
+          h,
           removed: false,
           config: { collection: "posts" },
         },
@@ -129,38 +137,38 @@ test.afterEach(async ({ page }) => {
   );
 });
 
-const CASES: Array<[number, Width, string]> = [
-  [1200, "quarter", "small"],
-  [1200, "third", "medium"],
-  [1200, "half", "medium"],
-  [1200, "twoThirds", "large"],
-  [1200, "full", "large"],
-  [900, "quarter", "medium"],
-  [900, "third", "medium"],
-  [900, "half", "medium"],
-  [900, "twoThirds", "large"],
-  [900, "full", "large"],
-  [358, "quarter", "medium"],
-  [358, "half", "medium"],
-  [358, "full", "medium"],
+const CASES: Array<[number, number, string]> = [
+  [1200, 3, "small"],
+  [1200, 4, "medium"],
+  [1200, 6, "medium"],
+  [1200, 8, "large"],
+  [1200, 12, "large"],
+  [900, 3, "medium"],
+  [900, 4, "medium"],
+  [900, 6, "medium"],
+  [900, 8, "large"],
+  [900, 12, "large"],
+  [358, 3, "medium"],
+  [358, 6, "medium"],
+  [358, 12, "medium"],
 ];
 
-for (const [dashboardWidth, width, tier] of CASES) {
-  test(`a ${width} card on a ${dashboardWidth}px dashboard is ${tier}`, async ({
+for (const [dashboardWidth, w, tier] of CASES) {
+  test(`a ${w}-column card on a ${dashboardWidth}px dashboard is ${tier}`, async ({
     page,
   }) => {
     await gotoAdmin(page, "/");
-    await placeCard(page, cardFor(width), width);
+    await placeCard(page, cardFor(w), w);
     await page.reload();
-    await expectTierAt(page, cardFor(width), dashboardWidth, tier);
+    await expectTierAt(page, cardFor(w), dashboardWidth, tier);
   });
 }
 
-test("a full card on a 900px dashboard draws its rows as a table", async ({
+test("a 12-column card on a 900px dashboard draws its rows as a table", async ({
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await placeCard(page, RECENT_ENTRIES, "full");
+  await placeCard(page, RECENT_ENTRIES, 12);
   await page.reload();
   await sizeDashboard(page, 900);
   await expect(
@@ -172,12 +180,19 @@ test("crosses from small to medium where the bands put the edge", async ({
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await placeCard(page, RECENT_ENTRIES, "half");
+  await placeCard(page, RECENT_ENTRIES, 6);
   await page.reload();
   await expectTierAt(page, RECENT_ENTRIES, 680, "small");
   await expectTierAt(page, RECENT_ENTRIES, 720, "medium");
 
-  await placeCard(page, RECENT_ENTRIES, "full");
+  // From 1,280 px the gap across is 24 px: a 3-column card is 337 px on 1,420 px, where a
+  // 16 px gap would make it 343 px and medium.
+  await placeCard(page, COUNT, 3);
+  await page.reload();
+  await expectTierAt(page, COUNT, 1420, "small");
+  await expectTierAt(page, COUNT, 1440, "medium");
+
+  await placeCard(page, RECENT_ENTRIES, 12);
   await page.reload();
   await expectTierAt(page, RECENT_ENTRIES, 330, "small");
   await expectTierAt(page, RECENT_ENTRIES, 350, "medium");

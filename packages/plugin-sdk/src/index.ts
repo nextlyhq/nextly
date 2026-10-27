@@ -18,11 +18,19 @@ export { definePlugin } from "nextly";
 
 /**
  * @experimental `defineWidget` — declares a dashboard widget once: its
- * settings, its data and how it draws. A widget drawn by its own component is
- * handed `WidgetProps<typeof widget>`; the types are here and in `./widgets`.
+ * settings, its data, its size and how it draws. A widget drawn by its own
+ * component is handed `WidgetProps<typeof widget>`; the types are here and in
+ * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
+ * on a grid twelve columns wide, the one way a card's size is stated.
  */
 export { defineWidget } from "nextly";
-export type { WidgetData, WidgetProps, WidgetRenderSize } from "nextly";
+export type {
+  GridSize,
+  WidgetData,
+  WidgetProps,
+  WidgetRenderSize,
+  WidgetSizeDeclaration,
+} from "nextly";
 
 /**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
@@ -397,8 +405,13 @@ export type {
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
  *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
  *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
+ *   `email` and `versions` expose), `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work), and the
+ *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
+ *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
+ *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
+ *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
+ *   `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -414,6 +427,13 @@ export type {
   PluginEmailService,
   PluginVersionsService,
   PluginCollectionTransaction,
+  PluginVersionPins,
+  PluginVersionPinHolder,
+  PluginVersionPin,
+  PluginPinOptions,
+  PluginPinTransaction,
+  VersionPinHolderDefinition,
+  VersionRef,
 } from "nextly";
 
 /**
@@ -724,7 +744,7 @@ export type {
  * so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
- * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
+ * root export does: `WidgetDefinition.size` is a `WidgetSizeDeclaration`, and a
  * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
  * `WidgetOp` — a public property whose type has no public name can be inferred
  * but never annotated.
@@ -755,9 +775,6 @@ export type {
  * grants instead of the roles of whoever minted it.
  */
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
@@ -774,9 +791,6 @@ export {
   type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,

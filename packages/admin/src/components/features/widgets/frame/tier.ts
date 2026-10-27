@@ -14,13 +14,16 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { effectiveWidgetLimit, MAX_WIDGET_ROWS } from "nextly/config";
+import {
+  effectiveWidgetLimit,
+  GRID_COLUMNS,
+  MAX_WIDGET_ROWS,
+} from "nextly/config";
 import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
-import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
-import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
+import { columnGapPx, drawnSpan } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -35,33 +38,34 @@ export function tierForWidth(width: number | null): SizeTier | undefined {
 }
 
 /**
- * The outer width, in pixels, of a card drawn at `width` on a dashboard `dashboardWidth` wide.
+ * The outer width, in pixels, of a card of `w` columns on a dashboard `dashboardWidth` wide.
  *
- * Twelve tracks with a gap between each: a card spanning n of them takes n twelfths of the
- * dashboard and its share of the gaps, less the gap that follows it. This is the width the card
- * measures once drawn, so a tier read from it is the tier the card then measures.
+ * Twelve columns with a gap between each: a card spanning n of them takes n twelfths of the
+ * dashboard and its share of the gaps, less the gap that follows it, at the span its band draws
+ * it across and the gap that width draws (`sizes.ts`). This is the width the card measures once
+ * drawn, so a tier read from it is the tier the card then measures.
  */
-export function cardOuterWidth(
-  width: WidgetWidth,
-  dashboardWidth: number
-): number {
-  const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
-  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+export function cardOuterWidth(w: number, dashboardWidth: number): number {
+  const span = drawnSpan(w, dashboardWidth);
+  const gap = columnGapPx(dashboardWidth);
+  return ((dashboardWidth + gap) * span) / GRID_COLUMNS - gap;
 }
 
 /**
  * A card's tier before it is drawn: the tier its predicted outer width reads as.
  *
  * What a card's first query is sized by, since the query is asked before the card can measure
- * itself. Read through {@link tierForWidth}, the rule the measured tier uses, so the two cannot
- * disagree about a width; `undefined` while the dashboard itself has no width yet.
+ * itself. Only a prediction: once drawn, the card's tier is the one its own rendered width
+ * reads as, never the window's. Read through {@link tierForWidth}, the rule the measured tier
+ * uses, so the two cannot disagree about a width; `undefined` while the dashboard itself has no
+ * width yet.
  */
 export function predictedTier(
-  width: WidgetWidth,
+  w: number,
   dashboardWidth: number | null | undefined
 ): SizeTier | undefined {
   if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
-  return tierForWidth(cardOuterWidth(width, dashboardWidth));
+  return tierForWidth(cardOuterWidth(w, dashboardWidth));
 }
 
 /** The most rows a small card draws: below 340 px a fourth row is a scroll. */

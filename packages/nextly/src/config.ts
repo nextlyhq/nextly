@@ -239,7 +239,7 @@ export type { HookWarning } from "./hooks/side-effect-warnings";
 // restating them. `buildPluginAdminMeta` copies a contributed widget verbatim
 // into that payload, so the two were one shape declared twice -- and they
 // drifted, twice: `component` was optional on one side and required on the
-// other, and the whole declarative half (`title`, `archetype`, `defaultSize`,
+// other, and the whole declarative half (`title`, `archetype`, `size`,
 // `query`, `link`, ...) was added here and never on the admin's copy, so admin
 // code reading a property that was present on the wire got a type error.
 //
@@ -283,9 +283,6 @@ export type {
   WidgetAction,
   WidgetStatCell,
   WidgetQueryCell,
-  WidgetHeight,
-  WidgetSize,
-  WidgetChrome,
 } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
@@ -331,12 +328,6 @@ export type {
   TimeseriesRange,
   WidgetQuery,
 } from "./domains/widgets/query";
-// A VALUE, and for the same reason as the batch limit below: the admin resolves
-// a contributed widget's deprecated `size` alias into the enum, and so does the
-// server when it reduces the same declaration to a canonical summary. Two
-// copies of that mapping is two answers to one question, and the copies had
-// already drifted -- only one of them existed.
-export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 /*
  * The admin applies a reader's stored settings to the query it composes, so the
  * rule that decides which setting drives which knob is exported rather than
@@ -386,12 +377,7 @@ export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
 // and a second copy of it on the client is a second answer that drifts.
 // From the import-free `layout-limits.ts`, not `layout.ts`: that module
 // imports `node:crypto`, and this entry is published as safe for a browser.
-export {
-  COLUMN_COUNTS,
-  DEFAULT_COLUMN_COUNT,
-  MAX_PLACEMENTS,
-  type ColumnCount,
-} from "./domains/widgets/layout-limits";
+export { MAX_PLACEMENTS } from "./domains/widgets/layout-limits";
 // The endpoint's own size check, so the editor can trim a save to what the
 // endpoint accepts by bytes as well as by count. From `layout-payload.ts`,
 // which reaches only `layout-limits.ts`, for the reason above.
@@ -402,17 +388,29 @@ export {
 // A text's length in characters, as the layout write counts a note against its
 // bound, so the settings sheet counts it the same way. Import-free.
 export { textLength } from "./shared/text-length";
-// The width vocabulary a dashboard stores and draws: the five widths in their
-// ranking, and the one conversion from a declared size. The admin derives its
-// own list, check and size map from these rather than restating them, since a
-// width added or renamed in core would otherwise draw wrongly with no error.
-// `widths.ts` imports only a type, so this entry stays safe for a browser.
+// The one size vocabulary a dashboard declares, stores and draws: `{ w, h }`
+// on a grid of twelve columns, a declaration's bounds, and the functions that
+// fill a missing end and hold a size inside its bounds. The admin sizes,
+// clamps and offers sizes through these rather than restating them, so the
+// grid cannot judge a size one way and the server another. `grid-size.ts`
+// imports nothing, so this entry stays safe for a browser.
 export {
-  WIDGET_WIDTHS,
-  isWidgetWidth,
-  widthFromSize,
-  type WidgetWidth,
-} from "./domains/widgets/widths";
+  GRID_COLUMNS,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
+  clampSize,
+  isGridSize,
+  narrowedSizeBounds,
+  sizeBounds,
+  sizeDeclarationProblems,
+  sizeWithinBounds,
+  type GridSize,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+} from "./domains/widgets/grid-size";
+// The size a contributed widget that states none is drawn at, the same answer
+// the server's summary reads. Imports only a type.
+export { UNSTATED_WIDGET_SIZE } from "./domains/widgets/unstated-size";
 // The row count a widget query runs at, its one rule, and the most rows a card
 // draws. The admin decides a card's rows from them before any data arrives, so
 // it asks the validator's own question. From `query-limits.ts`, which has no

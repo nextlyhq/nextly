@@ -691,13 +691,8 @@ export {
 
 // Dashboard Components
 export { StatsCard } from "./components/features/dashboard/StatsCard";
-export {
-  RecentActivity,
-  type RecentActivityProps,
-} from "./components/features/dashboard/RecentActivity";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
-export { RecentEntriesWidget } from "./components/features/dashboard/RecentEntriesWidget";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
 export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
@@ -740,13 +735,14 @@ export type { ProjectStatItem } from "./types/dashboard/project-stats";
 // a card part reads the tier of the card it is drawn in.
 // @experimental while the dashboard widget SDK settles.
 export {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
   type CardEmptyContent,
   type SkeletonShape,
 } from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
 export { CardFigure } from "./components/features/widgets/frame/figure";
 export {
   cardChange,

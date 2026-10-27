@@ -542,6 +542,12 @@ export {
   type PluginMediaService,
   type PluginEmailService,
   type PluginVersionsService,
+  // `ctx.services.versions.pins`: version pins on the plugin's own transaction.
+  type PluginVersionPins,
+  type PluginVersionPinHolder,
+  type PluginVersionPin,
+  type PluginPinOptions,
+  type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
   type PluginHookPointDeclaration,
@@ -662,7 +668,6 @@ export {
   type WidgetProps,
   type WidgetReadServices,
   type WidgetRenderSize,
-  type WidgetWidth,
 } from "./domains/widgets/declaration/public";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
@@ -677,17 +682,15 @@ export type {
 // Every contract a published shape NAMES is published beside it. There is no
 // `nextly/widgets` subpath, so this is the only place a plugin author can
 // reach them, and a public property whose type has no public name can be
-// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
-// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
-// `WidgetSourceKind` and `WidgetOp`.
+// inferred but never annotated: `WidgetDefinition.size` is a
+// `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
+// `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
 // The last three are the data SOURCE contract that `contributes.widgetSources`
 // names: inference covers a resolver written inline, and these are what let an
 // author declare one as a named function instead.
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
+  GRID_COLUMNS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
@@ -711,9 +714,9 @@ export {
   type WidgetStatCell,
   type WidgetQuery,
   type WidgetQuerySpec,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
+  type GridSize,
+  type WidgetSizeDeclaration,
+  type WidgetSizeBounds,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,
@@ -931,8 +934,10 @@ export {
   registerVersionPinHolder,
   versionPins,
   type VersionPin,
+  type RegisteredVersionPinHolder,
   type VersionPinHolder,
   type VersionPinHolderDefinition,
+  type VersionPinSlot,
 } from "./domains/versions/version-pins";
 export type { VersionRef } from "./domains/versions/versions-repository";
 

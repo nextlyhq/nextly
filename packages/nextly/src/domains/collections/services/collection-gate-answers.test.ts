@@ -21,7 +21,7 @@
  */
 import { join } from "node:path";
 
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi, beforeAll } from "vitest";
 
 import {
   GATE_SETUPS,
@@ -40,6 +40,13 @@ import {
 } from "../__tests__/collection-test-helpers";
 
 import { CollectionAccessService } from "./collection-access-service";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 vi.mock("../../../services/lib/permissions", async importOriginal =>
   (

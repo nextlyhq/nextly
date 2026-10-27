@@ -27,8 +27,7 @@ export const kitCardWidget = defineWidget({
   description:
     "Exists for the e2e suite: a card built only from the plugin widget kit.",
   category: "Fixtures",
-  widths: ["half", "full"],
-  width: "half",
+  size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
   data: async () => ({
     total: 1234,
     groups: [
@@ -46,10 +45,43 @@ const throwingCardWidget = defineWidget({
   description:
     "Exists for the e2e suite: its component throws; the error stays in its own card.",
   category: "Fixtures",
-  widths: ["half", "full"],
-  width: "half",
+  size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
   data: async () => ({ total: 0 }),
   display: { component: THROWING_CARD_COMPONENT },
+});
+
+/**
+ * A card whose answer is always empty and whose widget hides when empty: off the dashboard at
+ * rest, and shown marked "Hidden while empty" in customise mode, where it can still be removed.
+ * Drawn by core's bars display, whose own rule reads no groups as empty, so it needs no component
+ * of its own in the generated map.
+ */
+const hidesWhenEmptyWidget = defineWidget({
+  id: "widget-kit-fixture/hides-when-empty",
+  title: "Test fixture: hidden while empty",
+  description:
+    "Exists for the e2e suite: always empty, so it leaves the dashboard at rest.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
+  hidesWhenEmpty: true,
+  data: async () => ({ buckets: [] }),
+  display: "bars",
+});
+
+/**
+ * A card that is always the full twelve columns, drawn by a core display, so
+ * the grid spec has a widget whose minimum is the whole row to draw in the
+ * one-column band. A core display needs no component, so it is not in the
+ * component map.
+ */
+const fullWidthWidget = defineWidget({
+  id: "widget-kit-fixture/full-width",
+  title: "Test fixture: full width",
+  description: "Exists for the e2e suite: always the full twelve columns wide.",
+  category: "Fixtures",
+  size: { default: { w: 12, h: 2 }, min: { w: 12, h: 2 } },
+  data: async () => ({ total: 12 }),
+  display: "metric",
 });
 
 export const widgetKitFixturePlugin = definePlugin({
@@ -57,6 +89,13 @@ export const widgetKitFixturePlugin = definePlugin({
   version: "0.0.0",
   nextly: "*",
   contributes: {
-    dashboard: { widgets: [kitCardWidget, throwingCardWidget] },
+    dashboard: {
+      widgets: [
+        kitCardWidget,
+        throwingCardWidget,
+        hidesWhenEmptyWidget,
+        fullWidthWidget,
+      ],
+    },
   },
 });

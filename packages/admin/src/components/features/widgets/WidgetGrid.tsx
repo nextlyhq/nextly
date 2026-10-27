@@ -3,7 +3,8 @@
 /**
  * The dashboard's widget grid.
  *
- * Twelve columns, one cell per visible widget, and ONE request for all of them.
+ * Twelve columns, rows of one fixed height, one cell per visible widget, and
+ * ONE request for all of them.
  * The grid is where the three cross-cutting decisions live, because none of
  * them can be made correctly by a widget on its own:
  *
@@ -62,7 +63,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { bandForWidth, drawnWidth } from "./sizes";
+import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -117,14 +118,15 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The grid the cards will be drawn on, so the placeholders take the rows a card would.
+        className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (
           <div
             key={row}
             aria-hidden
-            className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+            style={cardRowStyle(2)}
+            className="col-span-12 animate-pulse rounded-lg bg-muted"
           />
         ))}
       </section>
@@ -165,7 +167,7 @@ function askedWith(
     // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
     // the query is asked before the card can measure itself, and sized for that tier.
     const tier = predictedTier(
-      drawnWidth(row.width, row.allowedWidths),
+      drawnSize(row.size, row.widget.size).w,
       dashboardWidth
     );
     const sized = tier ? { ...row, tier } : row;
@@ -192,8 +194,7 @@ const NO_CARDS: [] = [];
  *
  * Each query is sized for the tier it will be drawn at. The width is measured before the first
  * paint, and no card is asked before it is known, so every first query is sized for its card's
- * tier. Dragging is decided from the same width's band: on wherever more than one column is
- * drawn.
+ * tier. Dragging is decided from the same width: on wherever more than one column is drawn.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
@@ -215,13 +216,11 @@ function useCardsAtDashboardWidth(
         : askedWith(visible, dashboardWidth, editing, sources),
     [visible, dashboardWidth, editing, sources]
   );
-  const band =
-    dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
   // Cards whose own component threw drawing a fine answer, counted as failed.
   const draws = useDrawFailures();
   return {
     dashboardRef,
-    drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
+    drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
     ...useWidgetBatch(cards, draws.failed),
     reportDraw: draws.report,
   };
@@ -248,7 +247,7 @@ function cardActions(
 ): ComponentProps<typeof ArrangedGrid>["on"] {
   return {
     move: arrangement.moveCard,
-    setWidth: arrangement.setCardWidth,
+    setSize: arrangement.setCardSize,
     // A removal is the next change, so the card ringed for the last one is no longer news.
     remove: placementId => {
       arrangement.ring.highlight(null);

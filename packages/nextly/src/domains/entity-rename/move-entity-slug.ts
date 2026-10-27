@@ -29,6 +29,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 
+import { loadDialectTables } from "../../database/dialect-tables";
 import { getDialectTables } from "../../database/index";
 import { resolveRelations } from "../../database/resolve-relations";
 import { NextlyError } from "../../errors";
@@ -99,6 +100,10 @@ export async function moveEntitySlug(
 ): Promise<void> {
   const { dialect, present, move } = input;
   if (move.from === move.to) return;
+  // The width refusal below measures every dialect's declared columns, and a
+  // process loads only its own dialect's tables when its adapter is created,
+  // so the others are loaded here. Renames are rare; later ones reuse the load.
+  await Promise.all(DIALECTS.map(each => loadDialectTables(each)));
   const columns = writtenColumns()
     .filter(column => present.has(column.table))
     .filter(
