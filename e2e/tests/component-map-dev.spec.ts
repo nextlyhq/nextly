@@ -155,6 +155,28 @@ interface Layout {
   placements: Array<{ widgetId: string }>;
 }
 
+/**
+ * The message of the server's warning about an out-of-date map, or "" before it is logged. The
+ * logger writes each entry as one line of JSON, so the message is read back rather than searched
+ * for, its quotes and line breaks escaped.
+ */
+function staleMapWarning(log: string): string {
+  for (const line of log.split("\n")) {
+    if (!line.includes('"admin-component-map-stale"')) continue;
+    try {
+      const entry = JSON.parse(line.slice(line.indexOf("{"))) as {
+        kind?: string;
+        message?: string;
+      };
+      if (entry.kind === "admin-component-map-stale")
+        return entry.message ?? "";
+    } catch {
+      // A line that only mentions the kind, not the entry itself.
+    }
+  }
+  return "";
+}
+
 test.describe("a development server missing a widget's component, with regeneration off", () => {
   test("serves the admin, warning with the widget, its owner, the component and the switch", async ({
     request,
@@ -165,11 +187,11 @@ test.describe("a development server missing a widget's component, with regenerat
     });
     expect(admin.status()).toBe(200);
     await expect
-      .poll(() => output, { timeout: 30_000 })
+      .poll(() => staleMapWarning(output), { timeout: 30_000 })
       .toContain(
         `- missing: plugin "missing-widget-fixture", widget "${MISSING}": ${COMPONENT}`
       );
-    expect(output).toContain(
+    expect(staleMapWarning(output)).toContain(
       "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0)"
     );
   });
