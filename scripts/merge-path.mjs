@@ -18,8 +18,9 @@
  *   tests everything and fails, because the switch is on with nothing behind it.
  * - `tripwire`, on each push to `main` while the switch is on: a queue merge
  *   lands the very commit the queue tested, so every first-parent commit a push
- *   brings must have a `merge_group` run on its own SHA. One without came in
- *   directly, which means a bypass exists, and the run fails saying so. It
+ *   brings must have a passing CI run from the merge queue on its own SHA. One
+ *   without came in directly, which means a bypass exists, and the run fails
+ *   saying so. It
  *   cannot stop that merge; it makes the first one loud, and `main`'s own run
  *   still tests everything the merge brought.
  * - `enablement`, run by hand with an admin login before the switch is flipped:
@@ -135,6 +136,22 @@ export function directPaths(rulesets, branchRules) {
   return problems;
 }
 
+/**
+ * Every page of a list endpoint, or null when any page failed. GitHub pages
+ * these at 30 by default, so a rule or ruleset on a later page would otherwise
+ * go unread.
+ */
+async function allPagesOrNull(path, context) {
+  const items = [];
+  for (let page = 1; ; page++) {
+    const separator = path.includes("?") ? "&" : "?";
+    const batch = await readOrNull(`${path}${separator}per_page=100&page=${page}`, context);
+    if (!Array.isArray(batch)) return null;
+    items.push(...batch);
+    if (batch.length < 100) return items;
+  }
+}
+
 /** A GitHub read's JSON, or null when it failed. */
 async function readOrNull(path, context) {
   try {
@@ -162,7 +179,7 @@ async function select(env, context, repo) {
   const event = env.GITHUB_EVENT_NAME ?? "";
   const switchValue = env[SELECTION_SWITCH] ?? "";
   // Read only when the answer can depend on it, so a push or a queue run asks GitHub nothing.
-  const rules = event === "pull_request" && switchValue === "on" ? await readOrNull(`repos/${repo}/rules/branches/main`, context) : [];
+  const rules = event === "pull_request" && switchValue === "on" ? await allPagesOrNull(`repos/${repo}/rules/branches/main`, context) : [];
   const verdict = selectionMode({ event, switchValue, rules });
   console.log(`merge-path: ${verdict.mode}, because ${verdict.reason}`);
   setJobVariable(env, MODE_VARIABLE, verdict.mode);
@@ -173,11 +190,21 @@ async function select(env, context, repo) {
   return 0;
 }
 
-/** For each commit, whether a `merge_group` run tested it, or null when that could not be read. */
+/**
+ * The workflow whose passing `merge_group` run means the queue tested a commit:
+ * CI, which runs every unit test. Another workflow's queue run on the same SHA
+ * does not count, and neither does a CI run that failed or was cancelled.
+ */
+const QUEUE_WORKFLOW = "ci.yml";
+
+/** For each commit, whether CI passed on it in the merge queue, or null when that could not be read. */
 async function queueRunsFor(chain, context, repo) {
   const runs = new Map();
   for (const sha of chain) {
-    const page = await readOrNull(`repos/${repo}/actions/runs?head_sha=${sha}&event=merge_group&per_page=1`, context);
+    const page = await readOrNull(
+      `repos/${repo}/actions/workflows/${QUEUE_WORKFLOW}/runs?head_sha=${sha}&event=merge_group&status=success&per_page=1`,
+      context
+    );
     runs.set(sha, page && typeof page.total_count === "number" ? page.total_count > 0 : null);
   }
   return runs;
@@ -200,15 +227,15 @@ async function tripwire(env, context, repo, before, after) {
     console.log("::error title=Selection guard::could not read the merge-queue runs for every commit this push brought; check by hand");
     return 1;
   }
-  console.log(`merge-path: ${chain.length} commit(s) checked, ${direct.length} without a merge-queue run`);
+  console.log(`merge-path: ${chain.length} commit(s) checked, ${direct.length} without a passing CI run in the merge queue`);
   for (const sha of direct) {
-    console.log(`::error title=Selection guard::${sha} reached main without the merge queue, so a direct-merge path exists while ${SELECTION_SWITCH} is on. Switch it off.`);
+    console.log(`::error title=Selection guard::${sha} reached main without a passing CI run in the merge queue, so a direct-merge path exists while ${SELECTION_SWITCH} is on. Switch it off.`);
   }
   return direct.length === 0 ? 0 : 1;
 }
 
 async function enablement(context, repo) {
-  const branchRules = await readOrNull(`repos/${repo}/rules/branches/main`, context);
+  const branchRules = await allPagesOrNull(`repos/${repo}/rules/branches/main`, context);
   if (!Array.isArray(branchRules)) {
     console.log("merge-path enablement: FAIL, main's rules could not be read");
     return 1;

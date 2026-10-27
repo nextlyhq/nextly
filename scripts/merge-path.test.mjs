@@ -99,6 +99,9 @@ describe("directPaths", () => {
   });
 });
 
+/** One page of main's rules, as the guard asks for it. */
+const rulesPage = page => `repos/${REPO}/rules/branches/main?per_page=100&page=${page}`;
+
 /** A fetch answering each route given and 404 to anything else, recording what was asked. */
 function api(routes) {
   const asked = [];
@@ -114,10 +117,23 @@ function api(routes) {
 describe("main", () => {
   it("sets the mode for the job's later steps and fails the step on a switch with no queue behind it", async () => {
     const output = join(mkdtempSync(join(tmpdir(), "merge-path-")), "out");
-    const { fetchImpl } = api({ [`repos/${REPO}/rules/branches/main`]: [{ type: "pull_request" }] });
+    const { fetchImpl } = api({ [rulesPage(1)]: [{ type: "pull_request" }] });
     const env = { GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: "pull_request", [SELECTION_SWITCH]: "on", GITHUB_ENV: output };
     expect(await main(["select"], env, { fetchImpl })).toBe(1);
     expect(readFileSync(output, "utf8")).toBe(`${MODE_VARIABLE}=full\n`);
+  });
+
+  it("reads every page of main's rules, so a merge queue on a later page still counts", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ type: "required_status_checks", ruleset_id: index }));
+    const routes = { [rulesPage(1)]: firstPage, [rulesPage(2)]: [{ type: "merge_queue", ruleset_id: 200 }] };
+    const env = { GITHUB_REPOSITORY: REPO, GITHUB_EVENT_NAME: "pull_request", [SELECTION_SWITCH]: "on" };
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await main(["select"], env, api(routes))).toBe(0);
+      expect(log.mock.calls.map(call => String(call[0]))).toContainEqual(expect.stringContaining("merge-path: select"));
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("asks GitHub nothing for a run that cannot select", async () => {
@@ -127,7 +143,7 @@ describe("main", () => {
   });
 
   const compare = { commits: [{ sha: "q1", parents: [{ sha: "b" }] }, { sha: "d1", parents: [{ sha: "q1" }] }] };
-  const runs = sha => `repos/${REPO}/actions/runs?head_sha=${sha}&event=merge_group&per_page=1`;
+  const runs = sha => `repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=merge_group&status=success&per_page=1`;
   const tripwireEnv = { GITHUB_REPOSITORY: REPO, [SELECTION_SWITCH]: "on" };
 
   it("trips on a push whose commit never ran in the queue, and passes when every commit did", async () => {
@@ -147,6 +163,15 @@ describe("main", () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("trips on a commit whose only queue runs are another workflow's, or a CI run that did not pass", async () => {
+    // The CI-and-passed route answers none for d1; any other run on d1 is not asked about.
+    const routes = { [`repos/${REPO}/compare/b...d1?per_page=250`]: compare, [runs("q1")]: { total_count: 1 }, [runs("d1")]: { total_count: 0 } };
+    const { fetchImpl, asked } = api(routes);
+    expect(await main(["tripwire", "b", "d1"], tripwireEnv, { fetchImpl })).toBe(1);
+    expect(asked).toContain(runs("d1"));
+    expect(asked.some(path => path.startsWith(`repos/${REPO}/actions/runs?`))).toBe(false);
   });
 
   it("checks nothing while the switch is off", async () => {

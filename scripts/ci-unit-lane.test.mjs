@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { affectedPackages, failuresSince, missesOf, recordsDriftReason, shadowLine } from "./ci-unit-lane.mjs";
+import { affectedPackages, failuresSince, laneTurboFlags, missesOf, recordsDriftReason, shadowLine } from "./ci-unit-lane.mjs";
 
 describe("affectedPackages", () => {
   // admin -> ui -> tokens; builder -> ui; docs depends on nothing. Listed with
@@ -39,6 +39,17 @@ describe("recordsDriftReason", () => {
 
   it("runs in full when no restored record says which commit it describes", () => {
     expect(recordsDriftReason(null)).not.toBeNull();
+  });
+});
+
+describe("laneTurboFlags", () => {
+  it("keeps a lane's own turbo flags and drops its filters", () => {
+    const script = "turbo run test --concurrency=50% --filter='./packages/*' --filter='!nextly' --filter='!@nextlyhq/admin'";
+    expect(laneTurboFlags(script)).toEqual(["--concurrency=50%"]);
+  });
+
+  it("is empty for a lane that passes none", () => {
+    expect(laneTurboFlags("turbo run test --filter=nextly")).toEqual([]);
   });
 });
 

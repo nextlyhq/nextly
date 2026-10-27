@@ -25,7 +25,10 @@
  *   which commit each package's dependency records now describe. Only a
  *   package whose records this job rewrote is stamped; one turbo replayed
  *   keeps its earlier stamp, which still describes it, since a replay means
- *   its inputs did not change.
+ *   its inputs did not change. A package with no records at all (one turbo
+ *   has replayed since before records were kept) is run once more with
+ *   `--force` so it gains them; without that it would run in full on every
+ *   pull request.
  *
  * A pull request's run tests GitHub's merge commit, so the change under test is
  * that commit against its first parent, `main` as tested (`HEAD^1`, the default
@@ -82,6 +85,18 @@ export function recordsDriftReason(drift) {
   return drift.length > 0
     ? `${drift[0]} differs between the commit its records describe and main as tested`
     : null;
+}
+
+/**
+ * The turbo flags a lane's own script passes, other than its filters: its
+ * `--concurrency` above all, which sizes the run to the runner. Every turbo
+ * call this makes for the lane carries them, so narrowing never runs more
+ * tasks at once than the lane does.
+ */
+export function laneTurboFlags(script) {
+  return String(script ?? "")
+    .split(/\s+/)
+    .filter(token => token.startsWith("--") && !token.startsWith("--filter"));
 }
 
 /** One package's plan as the line shadow mode prints, in a form a search can count. */
@@ -162,18 +177,24 @@ function planLane(root, lane, base) {
   });
 }
 
+/** The lane's own turbo flags, read from the root manifest's script of that name. */
+function laneFlags(root, lane) {
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  return laneTurboFlags(manifest.scripts?.[lane]);
+}
+
 function turbo(root, args) {
   const { command, args: argv, shell } = pnpmInvocation(["turbo", "run", "test", ...args]);
   return spawnSync(command, argv, { cwd: root, stdio: "inherit", shell }).status ?? 1;
 }
 
-/** Runs a planned lane, and returns how many turbo calls failed. */
-function runLane(root, planned) {
+/** Runs a planned lane with the lane's own turbo flags, and returns how many turbo calls failed. */
+function runLane(root, planned, flags) {
   let failures = 0;
   const full = planned.filter(entry => entry.plan.full);
   if (full.length > 0) {
     for (const entry of full) console.log(`ci-unit-lane: ${entry.name}: every test, because ${entry.plan.reason}`);
-    if (turbo(root, ["--continue", ...full.map(entry => `--filter=${entry.name}`)]) !== 0) failures += 1;
+    if (turbo(root, [...flags, "--continue", ...full.map(entry => `--filter=${entry.name}`)]) !== 0) failures += 1;
   }
   for (const entry of planned.filter(item => !item.plan.full)) {
     if (entry.plan.files.length === 0) {
@@ -181,7 +202,7 @@ function runLane(root, planned) {
       continue;
     }
     console.log(`ci-unit-lane: ${entry.name}: ${entry.plan.files.length} of ${entry.total ?? "?"} test file(s)`);
-    if (turbo(root, [`--filter=${entry.name}`, "--", ...entry.plan.files]) !== 0) failures += 1;
+    if (turbo(root, [...flags, `--filter=${entry.name}`, "--", ...entry.plan.files]) !== 0) failures += 1;
   }
   return failures;
 }
@@ -202,6 +223,11 @@ function resultFilesOf(root, dir) {
       return [];
     }
   });
+}
+
+/** Whether a package holds any dependency records at all. */
+function hasRecords(root, dir) {
+  return recordsRewrittenSince(root, dir, 0);
 }
 
 /** Whether Vitest rewrote any of a package's dependency records at or after `since`. */
@@ -230,7 +256,7 @@ function planCommand(root, [command, lane, ...rest]) {
   for (const entry of planned) console.log(shadowLine(entry.name, entry.plan, entry.total));
   const out = rest.find(arg => arg.startsWith("--out="))?.slice("--out=".length);
   if (out) writeFileSync(out, JSON.stringify(planned));
-  return command === "run" && runLane(root, planned) > 0 ? 1 : 0;
+  return command === "run" && runLane(root, planned, laneFlags(root, lane)) > 0 ? 1 : 0;
 }
 
 /** `misses`: the failed files each planned package's selection left out, after the full run. */
@@ -251,10 +277,20 @@ function missesCommand(root, [, planFile, since]) {
   return 0;
 }
 
-/** `stamp`: marks each lane package whose records this job rewrote as describing HEAD. */
+/**
+ * `stamp`: marks each lane package whose records this job rewrote as describing
+ * HEAD, after running once more, with `--force`, each package that has none.
+ * A seeding run that fails stamps nothing and fails nothing: the lane already
+ * passed, and that package keeps running in full until a later run records it.
+ */
 function stampCommand(root, [, lane, since]) {
-  const workspaces = workspacesFrom(pnpmWorkspaces(root), root);
-  for (const workspace of laneWorkspaces(root, lane, workspaces)) {
+  const workspaces = laneWorkspaces(root, lane, workspacesFrom(pnpmWorkspaces(root), root));
+  const unrecorded = workspaces.filter(workspace => !hasRecords(root, workspace.dir));
+  if (unrecorded.length > 0) {
+    console.log(`ci-unit-lane: recording ${unrecorded.map(workspace => workspace.name).join(", ")}, which hold no records yet`);
+    turbo(root, [...laneFlags(root, lane), "--force", "--continue", ...unrecorded.map(workspace => `--filter=${workspace.name}`)]);
+  }
+  for (const workspace of workspaces) {
     if (!recordsRewrittenSince(root, workspace.dir, Number(since))) continue;
     stampFullRun(root, workspace.dir);
     console.log(`ci-unit-lane: ${workspace.name}: records stamped at HEAD`);
