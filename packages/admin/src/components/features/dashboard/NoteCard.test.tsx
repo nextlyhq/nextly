@@ -11,6 +11,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { NoteCard } from "./NoteCard";
 
 beforeAll(() => {
@@ -30,7 +31,7 @@ function props(text: unknown): WidgetComponentProps {
 }
 
 async function drawn(text: string): Promise<HTMLElement> {
-  render(<NoteCard {...props(text)} />);
+  render(inFrame(<NoteCard {...props(text)} />));
   // Lazy, as the text archetype's renderer is; given longer than the default
   // second for the same reason its own test gives.
   return waitFor(
@@ -78,10 +79,10 @@ describe("a note", () => {
   });
 
   it("says it is empty until it is written, and for a value that is not text", () => {
-    const { unmount } = render(<NoteCard {...props("   ")} />);
+    const { unmount } = render(inFrame(<NoteCard {...props("   ")} />));
     expect(screen.getByTestId("card-empty")).toHaveTextContent("An empty note");
     unmount();
-    render(<NoteCard {...props(42)} />);
+    render(inFrame(<NoteCard {...props(42)} />));
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
   });
 });

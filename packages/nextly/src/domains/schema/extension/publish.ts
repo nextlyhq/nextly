@@ -19,7 +19,7 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
-import { CORE_TABLE_NAMES } from "../../../schemas";
+import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import {
   resolveCollectionTableName,

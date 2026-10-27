@@ -24,7 +24,7 @@ import {
 } from "../../auth/entity-read-access";
 
 import { allWidgets, type CanonicalWidget } from "./canonical";
-import { registeredCollectionSlugs } from "./collection-sources";
+import { collectionSettingsToken } from "./collection-cards";
 import {
   generatedWidgets,
   refreshCollectionWidgets,
@@ -32,6 +32,7 @@ import {
 import type { WidgetDefinition } from "./definition";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
+import { listSources, sourceTarget } from "./sources";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
 // where every caller already reaches for the gate, and the decision now lives
@@ -99,7 +100,7 @@ async function decide(caller: ReadAccessCaller): Promise<{
   visible: CanonicalWidget[];
   verdicts: Map<string, boolean>;
   generated: WidgetDefinition[];
-  registeredCollections: ReadonlySet<string> | undefined;
+  readableCollections: ReadonlySet<string>;
 }> {
   // The same freshness on every surface that asks. A set derived on some
   // earlier request would offer a card for a collection deleted since and
@@ -113,9 +114,12 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // re-read that may hold a different definition under the same id.
   const generated = generatedWidgets();
   const all = allWidgets();
-  // The registry record the same refresh wrote, taken in the same span for
-  // the same reason: a later read could hold another request's refresh.
-  const registeredCollections = registeredCollectionSlugs();
+  // The collections a card may be set to: each one with a content source,
+  // which a collection kept off the dashboard never has. Taken in the same
+  // span, from the same refresh.
+  const offeredCollections = listSources()
+    .filter(source => source.kind === "collection")
+    .map(source => sourceTarget(source.id));
 
   const verdicts = await permissionVerdicts(
     all.map(widget => widget.requiredPermission),
@@ -129,10 +133,20 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // the widget query endpoint asks the second. A key those rules reject had
   // the card offered here and every query for it refused. The same question,
   // asked once per entity.
+  //
+  // Asked of every offered collection too, not only those with a generated
+  // card: two collections whose slugs spell one id (`a_b`, `a-b`) lose their
+  // generated cards to the collision, and must not lose the reader's verdict
+  // with them -- a card set to either would read as one they may not read.
   const readable = await readableEntities(
-    all
-      .map(widget => widget.collection)
-      .filter((slug): slug is string => slug !== undefined),
+    [
+      ...new Set([
+        ...all
+          .map(widget => widget.collection)
+          .filter((slug): slug is string => slug !== undefined),
+        ...offeredCollections,
+      ]),
+    ],
     caller
   );
 
@@ -146,7 +160,14 @@ async function decide(caller: ReadAccessCaller): Promise<{
     }
     return holdsWidgetPermission(widget.requiredPermission, verdicts);
   });
-  return { visible, verdicts, generated, registeredCollections };
+  return {
+    visible,
+    verdicts,
+    generated,
+    readableCollections: new Set(
+      offeredCollections.filter(slug => readable.has(slug))
+    ),
+  };
 }
 
 /**
@@ -206,17 +227,23 @@ export interface WidgetAudience {
    */
   token: string;
   /**
-   * Every collection the install held at this answer's refresh, or `undefined`
-   * when the registry has never been read (`registeredCollectionSlugs`). From
-   * the same refresh as `visible`, so the two describe one snapshot.
+   * The collections this reader may read that a card may be set to: each
+   * collection with a content source the entity read gate admits them to.
+   * From the same refresh as `visible`.
+   *
+   * 🔴 The ONE readable verdict the dashboard asks: which cards set to a
+   * collection are withheld, which collections a card's content settings may
+   * name, and which Collection defaults the workspace payload ships. Asked of
+   * the collections themselves, not read off the generated cards, which a slug
+   * collision drops.
    */
-  registeredCollections: ReadonlySet<string> | undefined;
+  readableCollections: ReadonlySet<string>;
 }
 
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const { visible, verdicts, generated, registeredCollections } =
+  const { visible, verdicts, generated, readableCollections } =
     await decide(caller);
   const declared = new Set<string>();
   const generatedIds = new Set<string>();
@@ -243,10 +270,16 @@ export async function widgetAudience(
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
     heldActionGates,
-    registeredCollections,
+    readableCollections,
+    // Over what the workspace payload is built from beyond the ids and gates:
+    // the readable collections, which decide the Collection defaults it ships,
+    // and each Collection setting whole, which the settings sheet draws. A
+    // change to either leaves every id and gate as it was.
     token: visibilityToken(
       visible.map(widget => widget.id),
-      heldActionGates
+      heldActionGates,
+      readableCollections,
+      collectionSettingsToken(visible)
     ),
   };
 }

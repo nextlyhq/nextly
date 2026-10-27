@@ -23,6 +23,9 @@ import {
   requirePermission,
   requireAnyPermission,
   requireCollectionAccess,
+  requireCollectionWriteAccess,
+  requireLifecycleAccess,
+  admittedActionOf,
   createJsonErrorResponse,
   isErrorResponse,
   type AuthContext,
@@ -124,6 +127,7 @@ import {
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
+import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
@@ -135,6 +139,7 @@ import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -774,13 +779,11 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * Every method here runs the caller through `checkCollectionAccess`, which
- * reads roles twice over: the super-admin bypass is keyed on the role set
- * (`isSuperAdminContext`), and the RBAC gate matches the caller's permissions
- * against the roles forwarded in the request context. A caller arriving
- * without roles is therefore treated as a non-super-admin holding no roles, so
- * a role-based rule denies a legitimately permitted reader and a super-admin
- * loses the bypass and gets owner-filtered instead.
+ * Every method here runs the caller through `checkCollectionAccess`, whose
+ * RBAC gate matches the caller's permissions against the roles forwarded in
+ * the request context. A caller arriving without roles is therefore treated
+ * as holding no roles, so a role-based rule denies a legitimately permitted
+ * reader. Super-admin authority is not among them: the gate looks it up.
  *
  * The version methods surface that denial as a 404, since their gate does not
  * disclose existence, and the two version `get*` methods additionally return a
@@ -795,8 +798,7 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
 const ROLE_AWARE_READ_METHODS = new Set([
   // The autosave reads run through the same gate the version reads use, so
   // they need resolved roles for the same reason: without them a caller arrives
-  // as a non-super-admin holding no roles, and the gate answers not-found for
-  // the author whose own
+  // holding no roles, and the gate answers not-found for the author whose own
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
@@ -854,10 +856,7 @@ export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
  * What a refused read of permissions names, whichever of the grants it
  * accepts the caller lacked.
  */
-const READING_PERMISSIONS: RefusalTarget = {
-  action: "read",
-  resource: "permissions",
-};
+const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.names;
 
 /**
  * Centralized permission resolver for all API service endpoints.
@@ -867,6 +866,31 @@ const READING_PERMISSIONS: RefusalTarget = {
  *
  * @returns Auth result — either `{ user }` on success or `ErrorResponse` on failure.
  */
+/**
+ * The write routes a caller may reach on update, or on publish or unpublish
+ * alone ({@link requireCollectionWriteAccess}): the service judges a write
+ * that changes only the status by that gate, and any other by update.
+ */
+const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "updateEntry",
+  "bulkUpdateEntries",
+  "bulkUpdateByQuery",
+  "updateSingleDocument",
+]);
+
+/**
+ * The routes that change only the status of every language, each admitted on
+ * its own action's grant rather than update; the service asks that action's
+ * rule in each language the change puts live.
+ */
+const LIFECYCLE_ROUTE_ACTIONS: Readonly<
+  Record<string, "publish" | "unpublish">
+> = {
+  publishAllLocales: "publish",
+  unpublishAllLocales: "unpublish",
+  publishAllSingleLocales: "publish",
+};
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -881,13 +905,25 @@ async function resolveAuthorization(
   if (service === "collections") {
     if (COLLECTION_ENTRY_METHODS.has(method)) {
       // Entry operations → {action}-{collectionSlug}
-      const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(req, slug, route);
+      }
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(
+        req,
+        getActionFromOperation(operation),
+        slug,
+        route
+      );
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
@@ -924,12 +960,20 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         // A Single is its one document, named by its slug.
         namesOne: true,
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(req, slug, route);
+      }
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(req, action, slug, route);
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
@@ -1086,13 +1130,13 @@ async function resolveAuthorization(
       );
     }
 
-    // listPermissions: allow users with read-roles (for role form's permission matrix)
+    // The permissions and roles lists: the gates the dashboard's counts of
+    // them read too.
     if (method === "listPermissions") {
-      return requireAnyPermission(
-        req,
-        [{ action: "read", resource: "roles" }],
-        READING_PERMISSIONS
-      );
+      return requireListRead(req, LIST_READ_GATES.permissions);
+    }
+    if (method === "listRoles") {
+      return requireListRead(req, LIST_READ_GATES.roles);
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1147,6 +1191,11 @@ async function resolveAuthorization(
     // (listRoles, getRoleById, createRole, updateRole, deleteRole, etc.)
     const action = getActionFromMethod(httpMethod);
     return requirePermission(req, action, "roles");
+  }
+
+  // The users list: the gate the dashboard's user count reads too.
+  if (service === "users" && method === "listUsers") {
+    return requireListRead(req, LIST_READ_GATES.users);
   }
 
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
@@ -1831,7 +1880,7 @@ const NO_WIDGETS: WidgetAudience = {
   heldActionGates: new Set(),
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
-  registeredCollections: undefined,
+  readableCollections: new Set(),
 };
 
 /**
@@ -1902,6 +1951,7 @@ function emptyForAudience<
 function widgetsForAudience(
   plugin: PluginAdminMeta,
   audience: WidgetAudience,
+  readable: ReadonlySet<string>,
   shipped: Set<string>
 ): PluginAdminMeta {
   if (plugin.widgets === undefined) return plugin;
@@ -1910,7 +1960,9 @@ function widgetsForAudience(
   for (const widget of widgets) {
     if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
     shipped.add(widget.id);
-    visible.push(actionsForAudience(widget, audience));
+    visible.push(
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   }
   return visible.length > 0 ? { ...rest, widgets: visible } : rest;
 }
@@ -2025,10 +2077,14 @@ async function buildAdminMeta(
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
   const shipped = new Set<string>();
+  // The collections this reader may read, as the layout judges them: a widget
+  // declaration below ships its Collection setting's default only when it
+  // names one of them (`collectionDefaultForReader`).
+  const readable = audience.readableCollections;
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience, shipped));
+  ).map(plugin => widgetsForAudience(plugin, audience, readable, shipped));
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -2081,7 +2137,12 @@ async function buildAdminMeta(
   const widgets = [
     ...publishableWidgets()
       .filter(widget => audience.declared.has(widget.id))
-      .map(widget => actionsForAudience(widget, audience)),
+      .map(widget =>
+        collectionDefaultForReader(
+          actionsForAudience(widget, audience),
+          readable
+        )
+      ),
     ...audience.generated,
   ];
   if (widgets.length > 0) {
@@ -2089,7 +2150,7 @@ async function buildAdminMeta(
   }
   // What a card's content settings may offer this reader, derived from the
   // cards above: a collection is offered exactly when its own card is.
-  const widgetSources = publishableContentSources(audience.visible);
+  const widgetSources = publishableContentSources(audience.readableCollections);
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }
@@ -2853,6 +2914,11 @@ async function requestCallerFor(
       : {}),
     actor: Object.freeze(actorFromAuthContext(authorizedUser)),
     ...(roles ? { roles: Object.freeze([...roles]) } : {}),
+    // The action a write route admitted the caller on, where it accepts
+    // several, so the dispatch attests only an update the route ran.
+    ...(admittedActionOf(authorizedUser)
+      ? { routeAction: admittedActionOf(authorizedUser) }
+      : {}),
   });
 }
 

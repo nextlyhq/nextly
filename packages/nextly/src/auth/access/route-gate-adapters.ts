@@ -57,7 +57,11 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
-import { withRuleLanguage, type RuleLanguage } from "./rule-language";
+import {
+  askEachLanguage,
+  withRuleLanguage,
+  type RuleLanguage,
+} from "./rule-language";
 
 /** Where a route gate reads the rules apps declare; absent without the service. */
 export type RouteRules = CollectionQuestion["rules"];
@@ -159,6 +163,22 @@ export function routeGateVerdict(
 }
 
 /**
+ * The verdict for one permission by the grant alone, no rule read: what a
+ * route asks of a publish or an unpublish of every language, whose rule the
+ * service asks once in each language the change puts live, which the route
+ * cannot know. Told every language here, a rule refusing a language that
+ * does not go live would refuse what the service allows.
+ */
+export function routeGrantVerdict(
+  auth: AuthContext,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<GateVerdict> {
+  return permissionVerdict(callerOf(auth), action, resource, rules);
+}
+
+/**
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.
  */
@@ -180,18 +200,55 @@ export const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
 );
 
 /**
- * The actions a REST request reaches through the entry's update route: a
- * publish is a status change sent as an update, so its route asks update and
- * the publish check comes on top of it.
+ * The requests the admin sends whose languages differ from their action's
+ * own cell, each answered as a cell of its own:
+ * - `readTranslations`: a read that also reads every language's translation
+ *   state (a localized list or a document with `translation-status`);
+ * - `readHistory`: the version history of every language, unfiltered;
+ * - `publishEveryLanguage`: publishing every language at once;
+ * - `createInDefaultLanguage`, `updateInDefaultLanguage`: a create or an
+ *   update sent with no language, which writes the default one;
+ * - `duplicate`: a copy of a published entry, written in the default
+ *   language from what a read of the source shows there, its fallbacks
+ *   included. The route reads a copy's source as published only, so a draft
+ *   never published cannot be copied by anyone, and the cell does not answer
+ *   for it: an editor offers a copy only of an entry with a published
+ *   version.
+ *
+ * A cell answers for every document of its collection, while two of these
+ * requests depend on the document: publishing every language asks the
+ * publish rule only for the languages going live, and a copy of a published
+ * entry is created published where the collection has a lifecycle. Both cells
+ * take the strict side, so the answer
+ * never offers what the route might refuse for some document:
+ * `publishEveryLanguage` asks every configured language, and `duplicate` asks
+ * publish as well wherever the collection has a Draft/Published lifecycle.
  */
-const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
+type CollectionOperationCell =
+  | "readTranslations"
+  | "readHistory"
+  | "publishEveryLanguage"
+  | "createInDefaultLanguage"
+  | "updateInDefaultLanguage"
+  | "duplicate";
+
+/** A Single is never created or copied, so it has neither cell. */
+type SingleOperationCell = Exclude<
+  CollectionOperationCell,
+  "createInDefaultLanguage" | "duplicate"
+>;
 
 /** What the caller may do with one collection or Single. */
 export type EntityCapabilities =
   | ({ readonly kind: "collection" } & Readonly<
-      Record<(typeof COLLECTION_ACTIONS)[number], boolean>
+      Record<
+        (typeof COLLECTION_ACTIONS)[number] | CollectionOperationCell,
+        boolean
+      >
     >)
-  | ({ readonly kind: "single" } & Readonly<Record<SingleAction, boolean>>);
+  | ({ readonly kind: "single" } & Readonly<
+      Record<SingleAction | SingleOperationCell, boolean>
+    >);
 
 /**
  * What the caller may do with each collection and Single. System resources
@@ -229,12 +286,105 @@ const OPERATION_OF: Record<"collection" | "single", Record<string, string>> = {
 };
 
 /**
+ * What a cell's request sends about its languages: the language the answer
+ * was asked in (`as-asked`), that language with every language's translation
+ * state (`with-states`), or no language at all (`none`).
+ */
+export type SentLanguage = "as-asked" | "with-states" | "none";
+
+/**
+ * The route parameters a request sending `sent` carries, for a caller asking
+ * in `locale`, so a cell is framed by exactly what its request sends.
+ */
+export function sentParams(
+  sent: SentLanguage,
+  locale: string
+): Record<string, string> {
+  if (sent === "none") return {};
+  if (sent === "with-states") return { locale, "translation-status": "1" };
+  return { locale };
+}
+
+/** A request answered as a cell of its own, by the action its route asks. */
+interface OperationCell {
+  readonly action: AccessOperation;
+  readonly operation: string;
+  readonly sent: SentLanguage;
+}
+
+/**
+ * Each request answered as a cell of its own, other than publishing every
+ * language, and the REST operation and parameters it is sent with. A list
+ * and a document read their translation states in the same languages, so one
+ * cell answers both.
+ */
+const OPERATION_CELLS: {
+  readonly collection: Readonly<
+    Record<
+      Exclude<CollectionOperationCell, "publishEveryLanguage" | "duplicate">,
+      OperationCell
+    >
+  >;
+  readonly single: Readonly<
+    Record<Exclude<SingleOperationCell, "publishEveryLanguage">, OperationCell>
+  >;
+} = {
+  collection: {
+    readTranslations: {
+      action: "read",
+      operation: "listEntries",
+      sent: "with-states",
+    },
+    readHistory: {
+      action: "read",
+      operation: "listEntryVersions",
+      sent: "none",
+    },
+    createInDefaultLanguage: {
+      action: "create",
+      operation: "createEntry",
+      sent: "none",
+    },
+    updateInDefaultLanguage: {
+      action: "update",
+      operation: "updateEntry",
+      sent: "none",
+    },
+  },
+  single: {
+    readTranslations: {
+      action: "read",
+      operation: "getSingleDocument",
+      sent: "with-states",
+    },
+    readHistory: {
+      action: "read",
+      operation: "listSingleVersions",
+      sent: "none",
+    },
+    updateInDefaultLanguage: {
+      action: "update",
+      operation: "updateSingleDocument",
+      sent: "none",
+    },
+  },
+};
+
+/** The REST operation that publishes every language of an entry or a Single. */
+const PUBLISH_EVERY_LANGUAGE: Record<"collection" | "single", string> = {
+  collection: "publishAllLocales",
+  single: "publishAllSingleLocales",
+};
+
+/**
  * What `caller` may do with each of `entities`: the route gate's answer for
  * every action, as a REST request asking it would get, so the admin offers
  * what the server allows and nothing else. A publish or an unpublish is
- * allowed only where the update its request goes through is allowed too.
+ * answered by its own permission and rule: it is what a request changing
+ * only the status needs, while one that also edits fields needs update too.
  * `languageOf` gives the languages the REST operation behind an action is
- * told, so a rule hears the languages that request would.
+ * told when its request sends what `sent` names, so a rule hears the
+ * languages that request would.
  *
  * The caller is read once for the whole answer: a key from its scope, and a
  * signed-in user's permissions held for every cell, so an added entity adds
@@ -246,9 +396,12 @@ export async function routeGateCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
-  languageOf: (operation: string) => RuleLanguage
+  languageOf: LanguageOf,
+  /** Whether a collection has a Draft/Published lifecycle. */
+  hasLifecycle: (slug: string) => boolean
 ): Promise<RouteCapabilities> {
-  const answer = () => entityCapabilities(caller, entities, rules, languageOf);
+  const answer = () =>
+    entityCapabilities(caller, entities, rules, languageOf, hasLifecycle);
   // A key never carries super-admin authority through the gates.
   if (caller.key) return { isSuperAdmin: false, entities: await answer() };
   return withHeldPermissions(caller.userId, async held => ({
@@ -257,32 +410,103 @@ export async function routeGateCapabilities(
   }));
 }
 
+/** The languages a REST operation is told when its request sends `sent`. */
+export type LanguageOf = (
+  operation: string,
+  sent: SentLanguage
+) => RuleLanguage;
+
 async function entityCapabilities(
   caller: GateCaller,
   entities: ReadonlyMap<string, "collection" | "single">,
   rules: RouteRules,
-  languageOf: (operation: string) => RuleLanguage
+  languageOf: LanguageOf,
+  hasLifecycle: (slug: string) => boolean
 ): Promise<RouteCapabilities["entities"]> {
   const byEntity: Record<string, EntityCapabilities> = {};
   for (const [slug, kind] of entities) {
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
-      // Update is answered before either lifecycle action in both lists. A
-      // refused update closes the door a publish is sent through, so its own
-      // check, and any rule it would run, is never asked.
-      if (THROUGH_UPDATE.has(action) && answered.update !== true) {
-        answered[action] = false;
-        continue;
-      }
       answered[action] = await withRuleLanguage(
-        languageOf(OPERATION_OF[kind][action] ?? action),
+        languageOf(OPERATION_OF[kind][action] ?? action, "as-asked"),
         () => capability(caller, action, slug, rules)
+      );
+    }
+    // Each request whose languages differ from its action's own cell is
+    // asked by the same gate, framed by what that request sends.
+    for (const [cell, asked] of Object.entries(OPERATION_CELLS[kind])) {
+      answered[cell] = await withRuleLanguage(
+        languageOf(asked.operation, asked.sent),
+        () => capability(caller, asked.action, slug, rules)
+      );
+    }
+    answered.publishEveryLanguage = await publishesEveryLanguage(
+      caller,
+      slug,
+      rules,
+      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none")
+    );
+    if (kind === "collection") {
+      answered.duplicate = await duplicates(
+        caller,
+        slug,
+        rules,
+        languageOf("duplicateEntry", "none"),
+        hasLifecycle(slug)
       );
     }
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
   return byEntity;
+}
+
+/**
+ * Whether `caller` may copy a published entry of `resource`, as that request
+ * is judged: a read of the source and a create, both in the default language
+ * and its fallbacks. Where the collection has a lifecycle the copy is created
+ * published, so the publish check is asked too.
+ */
+async function duplicates(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  language: RuleLanguage,
+  hasLifecycle: boolean
+): Promise<boolean> {
+  return withRuleLanguage(language, async () => {
+    for (const action of ["read", "create"] as const) {
+      if (!(await capability(caller, action, resource, rules))) return false;
+    }
+    return !hasLifecycle || capability(caller, "publish", resource, rules);
+  });
+}
+
+/**
+ * Whether `caller` may publish every language of `resource` at once, on the
+ * strict side of how that request is judged: update in every language, then
+ * the publish check once for each configured language, with its rules told
+ * that one and all of them. The route admits a caller holding the publish
+ * grant without update, but a target with no lifecycle asks update of them,
+ * and the request asks only the languages it puts live, which depend on the
+ * document; asking update and every configured language never allows what
+ * the request would refuse.
+ */
+async function publishesEveryLanguage(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  everyLanguage: RuleLanguage
+): Promise<boolean> {
+  return withRuleLanguage(everyLanguage, async () => {
+    if (!(await capability(caller, "update", resource, rules))) return false;
+    const refused = await askEachLanguage(everyLanguage.locales, async () =>
+      (await capability(caller, "publish", resource, rules))
+        ? undefined
+        : "refused"
+    );
+    return refused === undefined;
+  });
 }
 
 /** The route gate's answer for one action, decided as its own subject. */

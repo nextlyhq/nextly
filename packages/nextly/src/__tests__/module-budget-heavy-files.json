@@ -8,6 +8,7 @@
     "src/__tests__/routeHandler-direct-branches.test.ts",
     "src/__tests__/routeHandler-history-refusals-private.test.ts",
     "src/__tests__/routeHandler-languages-method.test.ts",
+    "src/__tests__/routeHandler-masked-refusal.test.ts",
     "src/__tests__/routeHandler-plugin-settings-permission.test.ts",
     "src/__tests__/routeHandler-plugin-settings-rate-limit.test.ts",
     "src/__tests__/routeHandler-rest-limit.test.ts",
@@ -42,11 +43,13 @@
     "src/di/__tests__/plugin-tables-before-init.test.ts",
     "src/di/__tests__/postgres-schema-at-boot.test.ts",
     "src/di/__tests__/preview-mount-validated-at-boot.test.ts",
+    "src/di/__tests__/provided-adapter-loads-dialect.test.ts",
     "src/di/__tests__/register-widgets-boot-wiring.test.ts",
     "src/di/__tests__/registration-latch.test.ts",
     "src/di/__tests__/shutdown-clears-hook-registry.test.ts",
     "src/di/__tests__/transformer-widgets-validated-at-boot.test.ts",
     "src/di/registrations/__tests__/every-registration-is-wired.test.ts",
+    "src/dispatcher/__tests__/returned-envelope.test.ts",
     "src/dispatcher/handlers/__tests__/collection-dispatcher-list-allowlist.test.ts",
     "src/dispatcher/handlers/__tests__/collection-dispatcher-read-access.test.ts",
     "src/dispatcher/handlers/__tests__/collection-dispatcher-request.test.ts",
@@ -65,6 +68,7 @@
     "src/route-handler/__tests__/auth-handler.localization-after-get-nextly.test.ts",
     "src/route-handler/__tests__/dispatcher-singleton.test.ts",
     "src/route-handler/__tests__/route-parser.email-send.test.ts",
-    "src/services/dashboard/__tests__/admin-counts.test.ts"
+    "src/services/dashboard/__tests__/admin-counts.test.ts",
+    "src/services/dashboard/__tests__/list-read-gates-readers.test.ts"
   ]
 }

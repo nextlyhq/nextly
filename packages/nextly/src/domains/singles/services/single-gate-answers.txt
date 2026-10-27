@@ -29,10 +29,10 @@ service none super-admin-inherited
   publish:A
   unpublish:A
 service none super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service none super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -109,10 +109,10 @@ service true super-admin-inherited
   publish:A
   unpublish:A
 service true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -189,10 +189,10 @@ service false super-admin-inherited
   publish:A
   unpublish:A
 service false super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service false super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -269,10 +269,10 @@ service returns-true super-admin-inherited
   publish:A
   unpublish:A
 service returns-true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -349,10 +349,10 @@ service returns-false super-admin-inherited
   publish:A
   unpublish:A
 service returns-false super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-false super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -429,10 +429,10 @@ service returns-null super-admin-inherited
   publish:A
   unpublish:A
 service returns-null super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-null super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -509,10 +509,10 @@ service returns-undefined super-admin-inherited
   publish:A
   unpublish:A
 service returns-undefined super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-undefined super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -589,10 +589,10 @@ service returns-truthy super-admin-inherited
   publish:A
   unpublish:A
 service returns-truthy super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service returns-truthy super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -669,10 +669,10 @@ service throws super-admin-inherited
   publish:A
   unpublish:A
 service throws super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service throws super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -749,10 +749,10 @@ service async-true super-admin-inherited
   publish:A
   unpublish:A
 service async-true super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service async-true super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -829,10 +829,10 @@ service role-name super-admin-inherited
   publish:A
   unpublish:A
 service role-name super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service role-name super-admin-claimed-key
   read:A
   update:403 You can't edit home.
@@ -909,10 +909,10 @@ service permission-spelling super-admin-inherited
   publish:A
   unpublish:A
 service permission-spelling super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service permission-spelling super-admin-claimed-key
   read:404 Single "home" not found
   update:404 Single "home" not found
@@ -989,10 +989,10 @@ service signed-in super-admin-inherited
   publish:A
   unpublish:A
 service signed-in super-admin-claimed
-  read:A
-  update:A
-  publish:A
-  unpublish:A
+  read:404 Single "home" not found
+  update:404 Single "home" not found
+  publish:404 Single "home" not found
+  unpublish:404 Single "home" not found
 service signed-in super-admin-claimed-key
   read:A
   update:403 You can't edit home.

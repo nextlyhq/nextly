@@ -1,5 +1,24 @@
 # playground
 
+## 0.1.2-alpha.16
+
+### Patch Changes
+
+- Updated dependencies [[`012c992`](https://github.com/nextlyhq/nextly/commit/012c9925120136f2aedc58aaa4b630f8ad50b355), [`bb1f8dd`](https://github.com/nextlyhq/nextly/commit/bb1f8dd3ff101c0209fff13ece785bde338043bd), [`5288bfd`](https://github.com/nextlyhq/nextly/commit/5288bfd5d65646c267f3c0b98cb6bb84219e33b2), [`8ead799`](https://github.com/nextlyhq/nextly/commit/8ead799267595329cf4bc7f0e68244950a3dead8), [`b1888dc`](https://github.com/nextlyhq/nextly/commit/b1888dc9c5e4c67cacadd21340b0940176bfc19b), [`fd69795`](https://github.com/nextlyhq/nextly/commit/fd69795b39d7e2fb959cca28b2f56bd78f2916b0), [`79a2a07`](https://github.com/nextlyhq/nextly/commit/79a2a0704ca7d7dda9afd6491bc15232f8058f23), [`1b681df`](https://github.com/nextlyhq/nextly/commit/1b681dfbddaacbacbc172ad428f5aff5ae5b58b2), [`d7b2251`](https://github.com/nextlyhq/nextly/commit/d7b2251bb3366e5614718bdd6ffcec027c7cebc2), [`15ba004`](https://github.com/nextlyhq/nextly/commit/15ba004d693c5c32c19ae30d480ecf4aa2bb4813), [`e8af47b`](https://github.com/nextlyhq/nextly/commit/e8af47bc65eb4e838443da79666333ea25f21411), [`312ca31`](https://github.com/nextlyhq/nextly/commit/312ca315753c9ea4e6957a76d29973e77ab72e1e), [`d5fff1d`](https://github.com/nextlyhq/nextly/commit/d5fff1d2e510b5fdec786d3e0981b3a8ab3a717a), [`5cc1065`](https://github.com/nextlyhq/nextly/commit/5cc10653b2a1015be09c70e38767f1c8fcdcb8ab), [`9886067`](https://github.com/nextlyhq/nextly/commit/98860672ea50beaa36404b45e85b6228726cff18), [`9322000`](https://github.com/nextlyhq/nextly/commit/9322000ba67b7f21e8627ad292c85c5aed04b010), [`1bf5f48`](https://github.com/nextlyhq/nextly/commit/1bf5f4827625c1793cafe28dd4a449ba23639e65), [`a6185f9`](https://github.com/nextlyhq/nextly/commit/a6185f9cea74e5ac6652ddd4f15d47baddf0d592), [`6dbec28`](https://github.com/nextlyhq/nextly/commit/6dbec28efc437ae6ff1a311dc3d2b8bce02d7fa6), [`0208272`](https://github.com/nextlyhq/nextly/commit/020827216f44f4d38a5831f3b7676b2abf3432bf), [`014a66f`](https://github.com/nextlyhq/nextly/commit/014a66f9fe42b2ca5774f629e2f4a440102896c1), [`10b3066`](https://github.com/nextlyhq/nextly/commit/10b306694a8b9e2331469ce4cb3f14fa192e5d98), [`cb25ebe`](https://github.com/nextlyhq/nextly/commit/cb25ebe597da13788b32aff8bffd46336c72ce37), [`9f5ebf7`](https://github.com/nextlyhq/nextly/commit/9f5ebf70ba8b14f6b6ea16c0d607e6c2ef9ed5cd), [`8192ba9`](https://github.com/nextlyhq/nextly/commit/8192ba9473e446ac31174de24a7b06d7b06ef464), [`fee1a3f`](https://github.com/nextlyhq/nextly/commit/fee1a3f7dcf0fd0e11ed495fac2196d1928511f6), [`3419aef`](https://github.com/nextlyhq/nextly/commit/3419aef09ec76e13dff4cde2e5e7937234581969), [`71bc1ed`](https://github.com/nextlyhq/nextly/commit/71bc1ed8a2b0b24506582e53693943d4da5b2ebc), [`83a8583`](https://github.com/nextlyhq/nextly/commit/83a8583a754f8317ca5a5412f2b09fa244a78fa0), [`c0147d0`](https://github.com/nextlyhq/nextly/commit/c0147d0e841b0e1db1137c9607043de5cebb050d), [`4b45393`](https://github.com/nextlyhq/nextly/commit/4b45393cb3a6db5fe16d512bf4870bedad0e7713), [`9609671`](https://github.com/nextlyhq/nextly/commit/96096711b0bff44ebd880549adcfb5cb3b2a2f1c), [`48d7c12`](https://github.com/nextlyhq/nextly/commit/48d7c12382a268bfc3d2218b6eda4d2fa2915af5), [`2a2b068`](https://github.com/nextlyhq/nextly/commit/2a2b068ec874d0c1081baf1534b9eb8b7c614beb), [`b142980`](https://github.com/nextlyhq/nextly/commit/b142980b0d06aeac05ef308fb3863f5cea01f91c), [`9c7f145`](https://github.com/nextlyhq/nextly/commit/9c7f14539503957b0b728f9741199ca2af7ff81d), [`b0017eb`](https://github.com/nextlyhq/nextly/commit/b0017ebc05f5bb9e55d3d6414877481b6771ef22)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.72
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.72
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.72
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.72
+  - @nextlyhq/admin@0.0.2-alpha.72
+  - @nextlyhq/blocks-engine@0.0.2-alpha.72
+  - @nextlyhq/blocks-react@0.0.2-alpha.72
+  - @nextlyhq/builder@0.0.2-alpha.72
+  - @nextlyhq/plugin-form-builder@0.0.2-alpha.72
+  - @nextlyhq/plugin-page-builder@0.0.2-alpha.72
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.72
+  - @nextlyhq/ui@0.0.2-alpha.72
+  - nextly@0.0.2-alpha.72
+
 ## 0.1.2-alpha.15
 
 ### Patch Changes

@@ -52,7 +52,9 @@ export function collectRoles(
         `NEXTLY_ROLE_COLLISION: role slug "${slug}" is declared by both "${prev}" and "${owner}". Role slugs must be unique.`
       );
     }
-    if (RESERVED_ROLE_SLUGS.has(slug)) {
+    // In any case: MySQL's collation reads `Public` as `public`, so a role
+    // declared so would meet the built-in role there and be skipped.
+    if (RESERVED_ROLE_SLUGS.has(slug.toLowerCase())) {
       throw new Error(
         `NEXTLY_ROLE_COLLISION: "${owner}" declares role slug "${slug}", which is reserved for a built-in system role.`
       );

@@ -11,7 +11,15 @@
  * - deleteEntry: 404, hooks, access control, success response.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from "vitest";
 
 // A field rule is handed the caller's roles and grants; with no database
 // behind this suite the real lookups refuse, so they answer here.
@@ -50,6 +58,13 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 

@@ -17,6 +17,8 @@ import { statsBody } from "../archetypes/stats";
 import * as geometry from "../frame/geometry";
 import { WidgetCard } from "../WidgetCard";
 
+import { gridBounds } from "./grid-bounds";
+
 type Tier = "small" | "medium" | "large";
 
 /** Each geometry constant by name, tried longest first so a class that contains another wins. */
@@ -47,7 +49,7 @@ function listCard(limit: number): DashboardWidget {
     id: "acme/recent",
     title: "Recent",
     archetype: "list",
-    defaultSize: "md",
+    size: gridBounds(4),
     query: { source: "collection:posts", op: "list", select: SELECT, limit },
   } as unknown as DashboardWidget;
 }
@@ -58,7 +60,7 @@ function skeletonAt(tier: Tier, limit: number): string[] {
     <WidgetCard
       title="Recent"
       tier={tier}
-      state="loading"
+      state={{ kind: "loading" }}
       skeleton="rows"
       skeletonItems={limit}
       skeletonFields={SELECT.length}
@@ -121,7 +123,11 @@ describe("a list card holds its rows' place in their own line boxes", () => {
 describe("a figure card holds its number's line", () => {
   it("draws one line of the figure's own type, as the loaded number is", () => {
     render(
-      <WidgetCard title="Unpublished" state="loading" skeleton="figure">
+      <WidgetCard
+        title="Unpublished"
+        state={{ kind: "loading" }}
+        skeleton="figure"
+      >
         body
       </WidgetCard>
     );
@@ -161,7 +167,7 @@ describe("a stats card holds each of its cells", () => {
     render(
       <WidgetCard
         title="Health"
-        state="loading"
+        state={{ kind: "loading" }}
         skeleton="stats"
         skeletonCells={cells.map(cell => cell.label)}
       >
@@ -192,47 +198,15 @@ describe("a stats card holds each of its cells", () => {
   });
 });
 
-describe("the footer's freshness line", () => {
-  it("is held, unseen, while the card loads", () => {
-    // 🔴 The footer appeared with the answer, so a card that had just closed up its body grew
-    // again by the footer's height.
+describe("the footer", () => {
+  it("holds no freshness line while the card loads, since the card never shows one", () => {
+    // The frame used to hold a freshness line's place while loading, so its arrival did not
+    // grow the card. The card says nothing about freshness now, so there is nothing to hold.
     render(
-      <WidgetCard title="Recent" state="loading" skeleton="rows">
+      <WidgetCard title="Recent" state={{ kind: "loading" }} skeleton="rows">
         body
       </WidgetCard>
     );
-    const held = screen.getByTestId("widget-card-freshness-held");
-    expect(held).toHaveClass("invisible", "text-xs");
-    expect(held).toHaveAttribute("aria-hidden", "true");
-  });
-
-  it("is still held by a card that has settled before its time is known", () => {
-    // 🔴 A card whose answer came in an early batch settled with no time yet; the held line
-    // went with the loading state, and the footer grew the card once the time arrived.
-    render(
-      <WidgetCard title="Recent" awaitsFreshness>
-        body
-      </WidgetCard>
-    );
-    expect(screen.getByTestId("widget-card-freshness-held")).toHaveClass(
-      "invisible"
-    );
-  });
-
-  it("gives way to the real line once the answer lands, and is never drawn beside it", () => {
-    render(
-      <WidgetCard title="Recent" updatedAt={new Date("2026-10-19T00:00:00Z")}>
-        body
-      </WidgetCard>
-    );
-    expect(screen.getByTestId("widget-card-freshness")).toHaveClass("text-xs");
-    expect(
-      screen.queryByTestId("widget-card-freshness-held")
-    ).not.toBeInTheDocument();
-  });
-
-  it("is not held by a card that is not loading", () => {
-    render(<WidgetCard title="Quick links">body</WidgetCard>);
     expect(screen.queryByTestId("widget-card-footer")).not.toBeInTheDocument();
   });
 });

@@ -11,7 +11,7 @@
  * work runs and given back afterwards, and that a run already holding it turns the schema change
  * away before it has touched a table.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
@@ -43,6 +43,13 @@ import { FieldGroupMetadataService } from "../../../field-groups/services/field-
 import type { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../singles/services/single-registry-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 const logger: Logger = {
   debug: vi.fn(),

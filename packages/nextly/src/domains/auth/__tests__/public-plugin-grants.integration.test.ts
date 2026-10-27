@@ -8,7 +8,9 @@
  * permission before the plugin declared it is granted it once. A host's rename
  * of the collection is followed. A grant on a collection the plugin does not
  * contribute, or of an action other than read or create, is refused and
- * logged, and nothing is granted for it.
+ * logged, and nothing is granted for it. Disabling the plugin takes back a
+ * grant it made, once and logged, and enabling it again grants it again,
+ * unless the owner had taken it away first.
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
@@ -126,6 +128,34 @@ async function takeAway(nextly: TestNextly, permission: string) {
   });
 }
 
+/** Gives `permission` to the Public role by hand, as an owner would. */
+async function giveByHand(nextly: TestNextly, permission: string) {
+  const id = await publicRoleId(nextly);
+  const held = await services(nextly).rolePermissions.listRolePermissions(id);
+  const [action, resource] = permission.split(/-(.*)/);
+  const {
+    data: [wanted],
+  } = await services(nextly).permissions.listPermissions({ action, resource });
+  await services(nextly).roles.updateRole(id, {
+    permissionIds: [...held.map(p => p.id), String(wanted.id)],
+  });
+}
+
+/**
+ * Whether the host enables the plugin, as the next boot finds it: seeding
+ * reads the configured plugins each time it runs, and a disabled plugin's
+ * collection stays registered either way.
+ */
+function setEnabled(nextly: TestNextly, enabled: boolean) {
+  for (const plugin of nextly.getService("config").plugins ?? []) {
+    plugin.enabled = enabled;
+  }
+}
+
+/** The removals logged for `permission`. */
+const removals = (permission: string) =>
+  logged.warn.filter(m => m.includes(`Removed "${permission}"`));
+
 describe.each(getConfiguredTestDialects())(
   "the Public role's grants a plugin declares (%s)",
   dialect => {
@@ -190,6 +220,72 @@ describe.each(getConfiguredTestDialects())(
       await seedPermissionsAndRolePresets();
 
       expect(await publicHolds(nextly)).not.toContain("create-tickets");
+    });
+
+    it("takes a grant back once the plugin is disabled, and grants it again when enabled", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).toContain("create-tickets");
+
+      setEnabled(nextly, false);
+      await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+      // Logged once, naming the plugin, and not again at the next start.
+      await seedPermissionsAndRolePresets();
+      expect(removals("create-tickets")).toHaveLength(1);
+      expect(removals("create-tickets")[0]).toContain("@test/tickets");
+
+      setEnabled(nextly, true);
+      await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).toContain("create-tickets");
+    });
+
+    it("does not grant back on enabling what an owner took away before disabling", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      await takeAway(nextly, "create-tickets");
+
+      setEnabled(nextly, false);
+      await seedPermissionsAndRolePresets();
+      expect(removals("create-tickets")).toHaveLength(0);
+      setEnabled(nextly, true);
+      await seedPermissionsAndRolePresets();
+
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+    });
+
+    it("keeps what an owner gave by hand while the plugin is disabled", async () => {
+      const nextly = await boot(dialect, undefined, false);
+      await seedPermissionsAndRolePresets();
+      await giveByHand(nextly, "create-tickets");
+
+      await seedPermissionsAndRolePresets();
+
+      expect(await publicHolds(nextly)).toContain("create-tickets");
+      expect(removals("create-tickets")).toHaveLength(0);
+    });
+
+    it("leaves on Public a permission that no longer grants what it was taken back for", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const {
+        data: [permission],
+      } = await services(nextly).permissions.listPermissions({
+        action: "create",
+        resource: "tickets",
+      });
+
+      // Named as `read-tickets`, which the row it names does not grant.
+      const removed = await services(
+        nextly
+      ).rolePermissions.withdrawRolePermissions(
+        await publicRoleId(nextly),
+        [{ id: String(permission.id), action: "read", resource: "tickets" }],
+        async ids => ids
+      );
+
+      expect(removed).toEqual([]);
+      expect(await publicHolds(nextly)).toContain("create-tickets");
     });
 
     it("follows a host's rename of the collection", async () => {

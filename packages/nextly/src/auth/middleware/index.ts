@@ -11,6 +11,7 @@ import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
 import {
   genericPublicMessage,
   NEXTLY_ERROR_STATUS,
@@ -21,7 +22,7 @@ import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
-import { answerForRefusal } from "../access/gate-adapters";
+import { answerForRefusal, type GateVerdict } from "../access/gate-adapters";
 import {
   refusalMessageFor,
   type RefusalScope,
@@ -29,6 +30,8 @@ import {
 import {
   anyPermissionVerdict,
   routeGateVerdict,
+  routeGrantVerdict,
+  type RouteRules,
 } from "../access/route-gate-adapters";
 import {
   everyLanguage,
@@ -461,7 +464,7 @@ export async function requirePermission(
  * before it can know which permission to ask for judges the caller it already
  * holds here, so the request is counted once.
  */
-export async function authorizeCaller(
+export function authorizeCaller(
   authResult: AuthContext,
   action: string,
   resource: string,
@@ -471,7 +474,38 @@ export async function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  const verdict = await routeGateVerdict(
+  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+}
+
+/**
+ * {@link authorizeCaller} by the grant alone, its rule not read
+ * ({@link routeGrantVerdict}): for a publish or an unpublish of every
+ * language, whose rule the service asks in each language the change puts
+ * live. Refused as `authorizeCaller` refuses, a caller who may not read the
+ * entry it names answered as if it were missing.
+ */
+function authorizeCallerOnGrant(
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  return authorizeBy(routeGrantVerdict, authResult, action, resource, scope);
+}
+
+async function authorizeBy(
+  verdictOf: (
+    auth: AuthContext,
+    action: string,
+    resource: string,
+    rules: RouteRules
+  ) => Promise<GateVerdict>,
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  const verdict = await verdictOf(
     authResult,
     action,
     resource,
@@ -830,6 +864,107 @@ export async function requireCollectionAccess(
       operation?.namesOne ? "one" : "all"
     )
   );
+}
+
+/**
+ * The access check for a route that publishes or unpublishes every language
+ * of an entry or a Single: by the grant alone, since the service asks the
+ * rule once in each language the change puts live, which the route cannot
+ * know. Told every language here, a rule refusing a language that does not go
+ * live would refuse what the service allows.
+ */
+export async function requireLifecycleAccess(
+  req: Request,
+  action: "publish" | "unpublish",
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    const scope = operation?.namesOne ? "one" : "all";
+    const onGrant = await authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(onGrant)) return onGrant;
+    // A target with no lifecycle has nothing to publish, and the service
+    // tells a caller who may update so; one with a lifecycle still asks the
+    // lifecycle gate whoever the route admitted. So update admits too, and a
+    // caller neither admits is refused as the lifecycle grant refuses them.
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    return isErrorResponse(asUpdate) ? onGrant : asUpdate;
+  });
+}
+
+/** The action a write route admitted each caller on, where it accepts several. */
+const admittedActions = new WeakMap<
+  AuthContext,
+  "update" | "publish" | "unpublish"
+>();
+
+/**
+ * The action {@link requireCollectionWriteAccess} admitted `caller` on, or
+ * `undefined` where the route asked one action.
+ */
+export function admittedActionOf(caller: AuthContext): string | undefined {
+  return admittedActions.get(caller);
+}
+
+/**
+ * The access check for a write route a caller may reach on update, or on
+ * publish or unpublish alone. A write that changes only an entry's status is
+ * a publish or an unpublish, which the service judges by that gate, and the
+ * service asks update of any other write, so admitting a caller here on
+ * publish lets them edit nothing. Each action is asked in turn, its rule
+ * included; the first that admits the caller is recorded for the dispatch
+ * ({@link admittedActionOf}), and a caller none admits is refused as update
+ * refuses them.
+ */
+export async function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    // A route naming one entry is refused about it, as in requireCollectionAccess.
+    const scope = operation?.namesOne ? "one" : "all";
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(asUpdate)) {
+      admittedActions.set(asUpdate, "update");
+      return asUpdate;
+    }
+    // A write to every language (`?locale=*`) changes only the status, and
+    // its publish rule is asked by the service in each language it puts live;
+    // here, by the grant alone. Any other write's rule is asked here too.
+    const authorize =
+      operation?.params.locale === EVERY_LOCALE
+        ? authorizeCallerOnGrant
+        : authorizeCaller;
+    for (const action of ["publish", "unpublish"] as const) {
+      const answer = await authorize(authResult, action, collectionSlug, scope);
+      if (!isErrorResponse(answer)) {
+        admittedActions.set(answer, action);
+        return answer;
+      }
+    }
+    return asUpdate;
+  });
 }
 
 /**

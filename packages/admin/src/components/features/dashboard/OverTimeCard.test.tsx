@@ -6,6 +6,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -28,17 +29,19 @@ const SLOT: WidgetSlot = {
 function drawAt(tier: SizeTier, chartStyle?: string, slot: WidgetSlot = SLOT) {
   render(
     <CardTierContext.Provider value={tier}>
-      <OverTimeCard
-        widgetId="core/over-time"
-        placementId="p1"
-        settings={{
-          collection: "posts",
-          dateRange: "30d",
-          ...(chartStyle ? { chartStyle } : {}),
-        }}
-        slot={slot}
-        isFetching={false}
-      />
+      {inFrame(
+        <OverTimeCard
+          widgetId="core/over-time"
+          placementId="p1"
+          settings={{
+            collection: "posts",
+            dateRange: "30d",
+            ...(chartStyle ? { chartStyle } : {}),
+          }}
+          slot={slot}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }

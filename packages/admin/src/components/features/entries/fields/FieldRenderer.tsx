@@ -363,6 +363,7 @@ export function FieldRenderer({
       error={error?.message}
       horizontal={useHorizontalLayout}
       editorIsOpaque={hasPluginEditor}
+      writesHeld={isReadOnly || isDisabled}
     >
       {renderField()}
     </FieldWrapper>

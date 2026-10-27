@@ -23,6 +23,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { VersionConflictError } from "../../versions/version-conflict";
@@ -643,6 +644,9 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      // A publish is asked of a write that names only the status, even where
+      // the Single is already published, so the clerk holds publish-home.
+      await userWhoMay(current, CLERK.id, "publish", ["home"]);
       const singles = current.getService("singleEntryService");
       await singles.update(
         "home",

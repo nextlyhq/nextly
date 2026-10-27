@@ -17,15 +17,7 @@ import type React from "react";
 
 import { pointLabel } from "../widgets/archetypes/timeseries";
 import { OverTimeChart } from "../widgets/charts/over-time-chart";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardSlotFailure,
-} from "../widgets/frame/states";
-
-/** The card's heading in its error state. */
-const TITLE = "Over time";
+import { FrameState, readSlot } from "../widgets/frame/card-state";
 
 export const OverTimeCard: React.FC<WidgetComponentProps> = ({
   slot,
@@ -33,28 +25,36 @@ export const OverTimeCard: React.FC<WidgetComponentProps> = ({
   settings,
   onRetry,
 }) => {
-  if (!slot) {
-    return isFetching ? <CardSkeleton shape="chart" /> : null;
-  }
-  if (!slot.ok) {
-    return <CardSlotFailure slot={slot} title={TITLE} onRetry={onRetry} />;
-  }
-  if (slot.result.op !== "timeseries") {
+  const read = readSlot(slot, {
+    isFetching,
+    skeleton: { shape: "chart" },
+    onRetry,
+  });
+  if ("state" in read) return <FrameState state={read.state} />;
+  if (read.result.op !== "timeseries") {
     return (
-      <CardError
-        title={TITLE}
-        message="This card was answered with something other than a chart over time."
+      <FrameState
+        state={{
+          kind: "error",
+          message:
+            "This card was answered with something other than a chart over time.",
+        }}
       />
     );
   }
-  const { points, interval } = slot.result;
+  const { points, interval } = read.result;
   // A range with no entries still draws its intervals, each at zero: an empty interval counts
   // as zero. Only an answer with no intervals at all has nothing to plot.
   if (points.length === 0) {
     return (
-      <CardEmpty
-        title="Nothing to plot yet"
-        detail="Entries created in this collection show here."
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: {
+            title: "Nothing to plot yet",
+            detail: "Entries created in this collection show here.",
+          },
+        }}
       />
     );
   }

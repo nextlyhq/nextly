@@ -131,11 +131,13 @@ export const fakeActorForVisitor = vi.fn(
 
 /**
  * Stands in for `userHoldsPermission`: whether the user holds the action, from
- * the same faked lookup. Mock it beside {@link fakeActorForUser}.
+ * the same faked lookup, super-admin authority included as the real check
+ * counts it. Mock it beside {@link fakeActorForUser}.
  */
 export const fakeUserHoldsPermission = vi.fn(
   async (_userId: string, action: string, resource: string) => {
     if (callerAccess.failure) throw callerAccess.failure;
+    if (callerAccess.superAdmin) return true;
     return (
       SUITE_TARGETS.includes(resource) &&
       callerAccess.actions.has(action as AccessOperation)

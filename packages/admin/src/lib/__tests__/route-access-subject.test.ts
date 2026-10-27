@@ -17,7 +17,7 @@ describe("the subject a guarded route names", () => {
     ["/admin/collections/posts", "read"],
     ["/admin/collections/posts/create", "create"],
     ["/admin/collections/posts/api", "read"],
-    ["/admin/collections/posts/entry-1", "update"],
+    ["/admin/collections/posts/entry-1", "read"],
     ["/admin/collections/posts/entry-1/versions", "read"],
   ])("names a collection for %s", (path, action) => {
     const resolved = resolveRoute(path, "");
@@ -30,7 +30,7 @@ describe("the subject a guarded route names", () => {
   });
 
   it.each([
-    ["/admin/singles/site-settings", "update"],
+    ["/admin/singles/site-settings", "read"],
     ["/admin/singles/site-settings/api", "read"],
     ["/admin/singles/site-settings/versions", "read"],
   ])("names a Single for %s", (path, action) => {

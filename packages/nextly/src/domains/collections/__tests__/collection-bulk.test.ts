@@ -17,7 +17,15 @@
 // imports carry the adapter transaction shape the caller-owned entry points
 // take, the result contracts the assertions pin, the write-integrity marker
 // whose failures force a rollback, and the typed error the abort paths throw.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from "vitest";
 import {
   poolWaitTimeoutError,
   type TransactionContext,
@@ -49,6 +57,13 @@ import {
   publicMay,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 

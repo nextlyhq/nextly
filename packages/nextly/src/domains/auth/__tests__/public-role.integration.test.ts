@@ -47,6 +47,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  definePlugin,
+  type PluginDefinition,
+} from "../../../plugins/plugin-context";
 import { ServiceContainer } from "../../../services/index";
 import {
   PUBLIC_ROLE_META_KEY,
@@ -62,8 +66,14 @@ afterEach(async () => {
 
 const PASSWORD = "Str0ng-P@ssw0rd!";
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
-  t = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+async function boot(
+  dialect: TestDialect,
+  plugins: PluginDefinition[] = []
+): Promise<TestNextly> {
+  t = await createTestNextly({
+    ...(dialect === "sqlite" ? {} : { dialect }),
+    ...(plugins.length > 0 ? { plugins } : {}),
+  });
   return t;
 }
 
@@ -461,6 +471,89 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
       isSystem: true,
     });
     expect(await meta.get(PUBLIC_ROLE_META_KEY)).toBe("created");
+  });
+
+  it("moves a role whose slug the database reads as `public` in any case", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const readMedia = await permissionId(nextly, "read-media");
+    const own = await services(nextly).roles.createRole({
+      name: "Capitalised",
+      slug: "capitalised",
+      permissionIds: [readMedia],
+    });
+    await asBeforePublic(nextly);
+    const { roles } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      update: (table: unknown) => {
+        set: (v: unknown) => { where: (c: unknown) => Promise<unknown> };
+      };
+    };
+    await db.update(roles).set({ slug: "Public" }).where(eq(roles.id, own.id));
+
+    await seedPermissionsAndRolePresets();
+
+    // MySQL's collation reads `Public` as `public`, so there the site's role
+    // holds the slug and moves; elsewhere the two are different slugs.
+    expect((await services(nextly).roles.getRoleById(own.id)).slug).toBe(
+      dialect === "mysql" ? "public-1" : "Public"
+    );
+    expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
+      isSystem: true,
+    });
+    expect(
+      await nextly.getService("metaService").get(PUBLIC_ROLE_META_KEY)
+    ).toBe("created");
+  });
+
+  it("drops an inheritance link to it made by an instance from before", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const readMedia = await permissionId(nextly, "read-media");
+    const other = await services(nextly).roles.createRole({
+      name: "Other",
+      slug: "other",
+      permissionIds: [readMedia],
+    });
+    // Written as code without the refusals would write it, both ways.
+    const { roleInherits } = getDialectTables();
+    const db = nextly.adapter.getDrizzle() as unknown as {
+      insert: (table: unknown) => { values: (v: unknown) => Promise<unknown> };
+      select: () => {
+        from: (table: unknown) => Promise<unknown[]>;
+      };
+    };
+    await db.insert(roleInherits).values([
+      { id: "link-1", parentRoleId: id, childRoleId: other.id },
+      { id: "link-2", parentRoleId: other.id, childRoleId: id },
+    ]);
+
+    await seedPermissionsAndRolePresets();
+
+    expect(await db.select().from(roleInherits)).toEqual([]);
+  });
+
+  it("leaves the name Public to a role the app's plugins declare", async () => {
+    const declares = definePlugin({
+      name: "@test/declares-public",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        roles: [
+          { slug: "visitors", name: "Public", permissionSlugs: ["read-media"] },
+        ],
+      },
+    });
+    const nextly = await boot(dialect, [declares]);
+    await seedPermissionsAndRolePresets();
+
+    expect(await roleBySlug(nextly, PUBLIC_ROLE_SLUG)).toMatchObject({
+      name: "Public built-in",
+    });
+    expect(await roleBySlug(nextly, "visitors")).toMatchObject({
+      name: "Public",
+    });
   });
 
   it("moves a site's own `public` role to the next free slug", async () => {

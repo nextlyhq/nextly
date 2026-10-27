@@ -55,7 +55,7 @@ The generator writes a `nextly-types.ts` (or whatever path you set in `typescrip
 
 ## Access control
 
-By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access control, field-level rules, and row-level filters to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` and supply a `user`:
+By default, Direct API calls run with `overrideAccess: true` — access control is bypassed because the Direct API runs in trusted server code. If you want collection access rules and field-level rules to apply (for example when forwarding a user request through a server action), pass `overrideAccess: false` with the `user` to judge:
 
 ```typescript
 const visiblePosts = await nextly.find({
@@ -64,6 +64,8 @@ const visiblePosts = await nextly.find({
   user: { id: "user-123", role: "editor" },
 });
 ```
+
+Without a `user`, the call is judged as a signed-out visitor: it can read where no rule names the read, and a create, update or delete needs a rule that allows it.
 
 `overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
 
@@ -110,7 +112,7 @@ result.meta.hasPrev;     // boolean
 | `status` | `"published" \| "draft" \| "all"` | — | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 | `context` | `Record<string, unknown>` | — | Custom data forwarded to hooks via `req.context`. |
 | `disableErrors` | `boolean` | `false` | Return an empty result instead of throwing. |
 
@@ -152,7 +154,7 @@ if (post) {
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `disableErrors` | `boolean` | `false` | Return `null` instead of throwing. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `T | null`.
 
@@ -182,7 +184,7 @@ created.item.id;
 | `draft` | `boolean` | `false` | Save as draft. |
 | `disableVerificationEmail` | `boolean` | `false` | Skip the verification email when creating users. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 | `context` | `Record<string, unknown>` | — | Forwarded to hooks. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`VALIDATION_ERROR`) when the payload fails validation; the thrown error carries field-level details on `error.publicData.errors`.
@@ -218,7 +220,7 @@ const archived = await nextly.update({
 | `data` | `Record<string, unknown>` | required | Update payload. |
 | `draft` | `boolean` | `false` | Autosave as draft. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
 
@@ -255,7 +257,7 @@ if ("ids" in archived) {
 | `id` | `string` | — | Document ID. Either `id` or `where` is required. |
 | `where` | `WhereFilter` | — | Where clause for the bulk-by-query path. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<{ id: string }> | DeleteResult`.
 
@@ -422,7 +424,7 @@ console.log(settings.siteName);
 | `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Rich text output format. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** the bare single document (`T`).
 

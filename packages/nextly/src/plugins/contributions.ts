@@ -69,7 +69,10 @@ export interface PluginPermission {
  * grant). Reference permissions by their `${action}-${resource}` slug.
  */
 export interface PluginRole {
-  /** Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` is reserved. */
+  /**
+   * Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` and
+   * `'public'` are reserved for the built-in roles.
+   */
   slug: string;
   /** Human-readable name (e.g. `'Content Reviewer'`). */
   name: string;

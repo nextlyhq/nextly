@@ -1,5 +1,4 @@
 import type {
-  WidgetChrome,
   DataWidgetArchetype,
   CellWidgetArchetype,
   WidgetStatCell,
@@ -8,7 +7,7 @@ import type {
   WidgetArchetype,
   WidgetQuerySpec,
   WidgetSetting,
-  WidgetSize,
+  WidgetSizeDeclaration,
 } from "../domains/widgets";
 import type {
   WidgetCondition,
@@ -201,8 +200,13 @@ export type DeclarativeWidgetArchetype =
 /** Everything a contributed widget may carry whichever way it is drawn. */
 interface PluginAdminWidgetBase {
   id: string;
-  /** Column span the current grid honours: `half` spans 6 of 12, `full` spans 12. */
-  size?: "full" | "half";
+  /**
+   * How big a card of this widget is, in grid units, as a registered widget
+   * states it. Unstated, the card is drawn at `UNSTATED_WIDGET_SIZE`.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  size?: WidgetSizeDeclaration;
   /**
    * Gates whether the CARD renders. An ARRAY means any-of.
    *
@@ -227,9 +231,6 @@ interface PluginAdminWidgetBase {
   description?: string;
   icon?: string;
   category?: string;
-  defaultSize?: WidgetSize;
-  minSize?: WidgetSize;
-  maxSize?: WidgetSize;
   link?: { label: string; href: string };
   /**
    * Where this widget sits by default, ascending; omitted means "after
@@ -265,6 +266,11 @@ interface PluginAdminWidgetBase {
    * the reasoning and the fact that dismissal is recorded as hiding.
    */
   dismissible?: boolean;
+  /**
+   * @experimental Whether the dashboard takes this card out of the grid while its answer is
+   * empty, rather than drawing the empty state; see `WidgetDefinition.hidesWhenEmpty`.
+   */
+  hidesWhenEmpty?: boolean;
   /**
    * What a reader may change about this card, drawn by the settings panel.
    *
@@ -318,20 +324,11 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
  * with no query is a real declaration, and core reports that card as undrawable
  * so the component is what renders.
  *
- * `chrome` is the part that cannot stay open. It is split across two
- * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
- * declines the frame must supply the surface itself, and for every archetype
- * core draws the card IS the surface the body is composed against -- it owns
- * the title, the footer and the busy state. Expressed as a constraint rather
- * than left to `validateChrome`, which still refuses the pair at boot: a type
- * that permits it makes the runtime refusal the FIRST time an author learns,
- * after the plugin ships.
  */
 export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
   (
     | {
         archetype?: "custom";
-        chrome?: WidgetChrome;
         /**
          * @experimental Whether the host sizes this widget's list query to the
          * card; see `WidgetDefinition.sizedQuery`.
@@ -346,7 +343,6 @@ export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
           WidgetArchetype,
           "custom" | QuerylessWidgetArchetype
         >;
-        chrome?: never;
         sizedQuery?: never;
       }
   );
@@ -505,13 +501,12 @@ export type PluginAdminDeclarativeWidget =
  * required a component has since been deleted. The consumer is behind the
  * change rather than ahead of it.
  *
- * Both arms allow `component`, so every existing `{ id, component, size }`
- * declaration keeps compiling untouched. What the union adds is the second
- * route, not a constraint on the first.
+ * Both arms allow `component`, so a `{ id, component }` declaration is a
+ * member of either. What the union adds is the second route, not a constraint
+ * on the first.
  *
- * `size` is the sizing the grid reads when a widget declares no `defaultSize`;
- * `defaultSize` is the enum and wins where both appear, because a plugin that
- * adopted the newer field meant it.
+ * `size` is in grid units, `{ default: { w, h }, min?, max? }`, as a
+ * registered widget states it; there is no named width.
  *
  * `requiredPermission` decides whether the CARD renders. It does NOT constrain
  * the rows a widget's query returns -- the query executor enforces that, and

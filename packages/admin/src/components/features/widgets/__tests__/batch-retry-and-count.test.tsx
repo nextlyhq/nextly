@@ -12,6 +12,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -38,7 +39,7 @@ function metric(placementId: string, source: string): BatchCard {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "metric",
-    size: "sm",
+    size: gridBounds(3),
     query,
   };
   return { placementId, widget };
@@ -216,5 +217,36 @@ describe("the announcement's count", () => {
     // not fail either.
     expect(result.current.counted).toBe(1);
     expect(result.current.failed).toBe(0);
+  });
+
+  it("counts a card whose own component failed to draw a fine answer as failed, not updated", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "data", data: 1 } }],
+    });
+    const cards: BatchCard[] = [
+      {
+        placementId: "d",
+        widget: {
+          id: "acme/revenue",
+          title: "Revenue",
+          archetype: "custom",
+          size: gridBounds(4),
+          component: "@acme/admin#Revenue",
+          serverData: true,
+        },
+      },
+    ];
+    const { result, rerender } = renderHook(
+      ({ drawFailed }: { drawFailed: ReadonlySet<string> }) =>
+        useWidgetBatch(cards, drawFailed),
+      { wrapper, initialProps: { drawFailed: new Set<string>() } }
+    );
+    await waitFor(() => expect(result.current.slots.d).toBeDefined());
+    // The control: drawn, it is one card updated.
+    expect(result.current.counted).toBe(1);
+    expect(result.current.failed).toBe(0);
+    // 🔴 Its answer was fine and its component threw: one card failed.
+    rerender({ drawFailed: new Set(["d"]) });
+    expect(result.current.failed).toBe(1);
   });
 });
