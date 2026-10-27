@@ -140,8 +140,11 @@ describe.each(LOCK_DIALECTS)("the schema lock on %s", dialect => {
     const until = Date.now() + 7_000;
     let attempts = 0;
     while (Date.now() < until) {
+      // Refused by the schema lock's own row, renewed by its holder: not merely by the earlier
+      // field-group lock held beside it, which renews on its own and would refuse this as well.
       await expect(myRun({ whenHeld: "refuse" })).rejects.toMatchObject({
         code: "NEXTLY_MIGRATE_LOCK_BUSY",
+        logContext: { holder: { kind: "schema", command: "nextly migrate" } },
       });
       attempts += 1;
       await sleep(500);
