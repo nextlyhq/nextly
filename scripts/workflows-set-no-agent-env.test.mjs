@@ -23,9 +23,13 @@ function readsOf(source) {
   return { names: [...new Set(names)], unnamed: reads.length - names.length };
 }
 
-/** The names among `names` a file mentions anywhere, as a whole word: an env key, a shell or PowerShell assignment, a string. */
+/**
+ * The names among `names` a file mentions anywhere, as a whole word: an env key,
+ * a shell or PowerShell assignment, a string. In any case, since Windows treats
+ * `$env:codex_ci` and `CODEX_CI` as one variable.
+ */
 function mentioned(text, names) {
-  return names.filter(name => new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(text));
+  return names.filter(name => new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`, "i").test(text));
 }
 
 const fromPlayground = createRequire(new URL("../apps/playground/package.json", import.meta.url));
@@ -52,6 +56,8 @@ describe("the variables that tell Next.js a coding agent is building", () => {
     const names = ["CODEX_CI", "CLAUDECODE"];
     expect(mentioned("    env:\n      CODEX_CI: 1", names)).toEqual(["CODEX_CI"]);
     expect(mentioned('run: $env:CODEX_CI = "1"', names)).toEqual(["CODEX_CI"]);
+    expect(mentioned('run: $env:codex_ci = "1"', names)).toEqual(["CODEX_CI"]);
+    expect(mentioned('run: $Env:ClaudeCode = "1"', names)).toEqual(["CLAUDECODE"]);
     expect(mentioned("run: export CLAUDECODE=1 && next build", names)).toEqual(["CLAUDECODE"]);
     expect(mentioned('run: echo "CLAUDECODE=1" >> "$GITHUB_ENV"', names)).toEqual(["CLAUDECODE"]);
     expect(mentioned("env:\n  MY_CODEX_CI_FLAG: 1", names)).toEqual([]);
