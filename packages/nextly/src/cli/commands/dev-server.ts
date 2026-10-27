@@ -282,6 +282,9 @@ export async function ensureCoreTables(
           adapter: drizzleAdapter,
           logger,
           label: "core table reconcile",
+          // A command-line run: a held schema lock is waited for, about a minute, and then
+          // the run stops naming its holder.
+          whenHeld: "wait",
           mayCreateLock: mayChangeSchema,
           // Idempotent table creation, and the documented way to stop a sync
           // is Ctrl+C — a claim stuck behind a dead process is the worse
@@ -343,6 +346,9 @@ export async function ensureCoreTables(
       adapter: drizzleAdapter,
       logger,
       label: "core table bootstrap",
+      // A command-line run: a held schema lock is waited for, about a minute, and then
+      // the run stops naming its holder.
+      whenHeld: "wait",
       mayCreateLock: options.autoSync !== false,
       releaseOnInterrupt: true,
     },

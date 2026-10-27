@@ -19,6 +19,9 @@ export { users } from "../users/mysql";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
 export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
 export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";

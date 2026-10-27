@@ -2,12 +2,25 @@
  * @module cli/commands/__tests__/upgrade
  * @since v0.0.3-alpha (Plan B)
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { runUpgrade, type UpgradeAdapter } from "../upgrade";
 import { schemaEventsStep } from "../upgrade-steps/schema-events";
+
+// The schema lock is exercised against real databases in its own suites. These drive the upgrade steps
+// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async <T>(
+    _adapter: unknown,
+    _dialect: unknown,
+    fn: () => Promise<T>
+  ) => ({ ran: true as const, value: await fn() }),
+}));
 
 /** The step these fixtures exercise: a fake adapter serves no content table. */
 const steps = [schemaEventsStep];
