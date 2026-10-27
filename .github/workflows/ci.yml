@@ -1249,14 +1249,30 @@ jobs:
       # These read what the build wrote, so after a failed build they would
       # report its missing output rather than failures of their own.
       - name: Lint
+        id: lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm lint
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Lint failed
+        if: ${{ !cancelled() && steps.lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Typecheck
+        id: typecheck
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Typecheck failed
+        if: ${{ !cancelled() && steps.typecheck.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       # Every workspace's suite but the two the jobs below run. Together the
       # three run what the hook runs when a push changes the workspace or task

@@ -36,8 +36,12 @@ runs:
         '== Application errors in the last hour'
         Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 1, 2; StartTime = (Get-Date).AddHours(-1) } -MaxEvents 20 -ErrorAction SilentlyContinue |
           Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 200
-        '== turbo crash reports (names only)'
-        Get-ChildItem -Path $env:TEMP -Filter '*turbo*' -Recurse -File -ErrorAction SilentlyContinue |
+        '== Crash reports from the last two hours (names only)'
+        # turbo's panic handler writes `report-<uuid>.toml` to the temporary
+        # directory, with nothing naming turbo in it.
+        $since = (Get-Date).AddHours(-2)
+        Get-ChildItem -Path $env:TEMP -Recurse -File -Include 'report-*.toml', '*turbo*' -ErrorAction SilentlyContinue |
+          Where-Object { $_.LastWriteTime -ge $since } |
           Select-Object -First 10 FullName, Length, LastWriteTime |
           Format-Table -AutoSize | Out-String -Width 200
         exit 0
