@@ -20,7 +20,6 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../config";
 import { seedAllPermissions } from "../../init/seed-permissions";
 import {
   createTestNextly,
@@ -29,6 +28,7 @@ import {
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
 import { ServiceContainer } from "../../services/index";
+import { getRBACService } from "../code-access";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 
@@ -164,25 +164,24 @@ for (const dialect of getConfiguredTestDialects()) {
     let providerId: string;
 
     beforeAll(async () => {
-      // A collection that happens to be named after the settings resource,
-      // whose rules refuse: a settings or schema gate never asks them.
-      t = await createTestNextly({
-        dialect,
-        collections: [
-          defineCollection({
-            slug: "settings",
-            access: {
-              read: refuseAndCount,
-              create: refuseAndCount,
-              update: refuseAndCount,
-              delete: refuseAndCount,
-            },
-            fields: [text({ name: "title" })],
-          }),
-        ],
-      });
+      t = await createTestNextly({ dialect });
       try {
         const services = new ServiceContainer(t.adapter);
+        // Access rules registered under the settings resource's name, as a
+        // plugin's code could register them: they refuse everything, and a
+        // settings or schema gate never asks them. (A collection or a Single
+        // cannot take the name; it is reserved for the resource.)
+        const rbac = getRBACService();
+        // Without the service there would be nothing to register on, and the
+        // case below would pass for the wrong reason.
+        if (!rbac)
+          throw new Error("the access-control service is not registered");
+        rbac.registerCollectionAccess("settings", {
+          read: refuseAndCount,
+          create: refuseAndCount,
+          update: refuseAndCount,
+          delete: refuseAndCount,
+        });
         await seedAllPermissions();
         // The first user an install makes is its super-admin, who passes
         // every check, so one is made before the users under test.
@@ -342,10 +341,10 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     }
 
-    it("asks a schema change no rule of a collection named settings", async () => {
+    it("asks a schema change no rule registered under the settings name", async () => {
       // The schema grants are settings permissions, not the operations of an
-      // entity that shares their name: that collection refuses everything,
-      // and is never asked.
+      // entity that shares their name: those rules refuse everything, and are
+      // never asked.
       settingsRuleAsks = 0;
       for (const [, path] of SCHEMA_CHANGES) {
         expect(REFUSED).not.toContain(
