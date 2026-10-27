@@ -388,6 +388,12 @@ export function measureBundle({
           minifiedBytes: firstScreenMinified + beyondMinified,
           gzippedBytes: firstScreenGzipped + beyondGzipped,
         },
+        // What this route adds to the shell: the part of its direct visit
+        // that is its own, which the budgets hold each route to.
+        beyondShell: {
+          minifiedBytes: beyondMinified,
+          gzippedBytes: beyondGzipped,
+        },
       };
     })
     .sort((a, b) => b.minifiedBytes - a.minifiedBytes);
@@ -579,8 +585,10 @@ export function formatReport(result, { json = false } = {}) {
     );
     lines.push("-".repeat(72));
     for (const route of result.routes) {
-      const min = `${formatKB(route.minifiedBytes)} KB`.padStart(11);
-      const gz = `${formatKB(route.gzippedBytes)} KB gzip`.padStart(16);
+      // The direct visit, shell included, as the heading says and as the
+      // budgets measure it; the route's own closure alone is smaller.
+      const min = `${formatKB(route.directVisit.minifiedBytes)} KB`.padStart(11);
+      const gz = `${formatKB(route.directVisit.gzippedBytes)} KB gzip`.padStart(16);
       const beyond = route.beyondFirstScreen.length;
       lines.push(
         `  ${route.root.padEnd(42)} ${min}  (${gz})` +
@@ -641,12 +649,12 @@ export function parseArgs(argv) {
 }
 
 /**
- * The committer date of `commit` as a millisecond timestamp, or Infinity
- * when it cannot be read — the staleness warning then stays silent rather
- * than firing on a guess.
+ * The committer date of `commit` as a millisecond timestamp, or -Infinity
+ * when it cannot be read: no build time is before it, so the staleness
+ * warning stays silent rather than firing on a guess.
  */
 function commitTimeMs(commit) {
-  if (commit === "unversioned") return Infinity;
+  if (commit === "unversioned") return -Infinity;
   try {
     const ms = Number(
       execFileSync("git", ["show", "-s", "--format=%ct", commit], {
@@ -655,10 +663,30 @@ function commitTimeMs(commit) {
         stdio: ["pipe", "pipe", "ignore"],
       }).trim()
     );
-    return Number.isFinite(ms) ? ms * 1000 : Infinity;
+    return Number.isFinite(ms) ? ms * 1000 : -Infinity;
   } catch {
-    return Infinity;
+    return -Infinity;
   }
+}
+
+/**
+ * Whether a measured dist predates the commit its report is labelled with:
+ * built before that commit, or stamped by a build of a different commit. The
+ * one answer the report's warning and the budget pins both use, so a stale
+ * dist can neither wear a fresh label nor become a pin.
+ */
+export function distStaleness(result) {
+  const builtMs = Date.parse(result.builtAt);
+  const timeStale =
+    Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
+  // The build's own stamp is the stronger half: a dist from a different
+  // commit is mismatched even when its build time is newer than the
+  // labelled commit — an older checkout keeps a gitignored dist.
+  const provenanceMismatch =
+    result.buildInfo !== undefined &&
+    result.buildInfo.commit !== "unversioned" &&
+    result.buildInfo.commit !== result.commit;
+  return { timeStale, provenanceMismatch, stale: timeStale || provenanceMismatch };
 }
 
 /**
@@ -691,17 +719,8 @@ if (invokedAsScript()) {
     // when the bytes predate it, so a stale dist cannot wear a fresh commit
     // unnoticed — in the text, in the JSON, and on stderr where automation
     // looks.
-    const builtMs = Date.parse(result.builtAt);
-    const timeStale =
-      Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
-    // The build's own stamp is the stronger half: a dist from a different
-    // commit is mismatched even when its build time is newer than the
-    // labelled commit — an older checkout keeps a gitignored dist.
-    const provenanceMismatch =
-      result.buildInfo !== undefined &&
-      result.buildInfo.commit !== "unversioned" &&
-      result.buildInfo.commit !== result.commit;
-    result.stale = timeStale || provenanceMismatch;
+    const { timeStale, provenanceMismatch, stale } = distStaleness(result);
+    result.stale = stale;
     if (provenanceMismatch) {
       console.error(
         `bundle-report warning: the dist was built from commit ${(result.buildInfo.commit || "").slice(0, 12)}, not the ${result.commit.slice(0, 12)} this report labels. Rebuild for a fresh attribution.`

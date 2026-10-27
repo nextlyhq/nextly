@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DECLARED_BROWSER_ENTRIES,
+  distStaleness,
   findJsFiles,
   formatKB,
   formatReport,
@@ -206,6 +207,45 @@ describe("bundle-report", () => {
       const parsed = JSON.parse(jsonStr);
       expect(parsed.commit).toBe(fixedCommit);
       expect(parsed.totals.browser.count).toBe(4);
+    });
+
+    it("states each route's direct visit and, apart, what it adds to the shell", () => {
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          const LazyRoute = () => import("./chunk-route.mjs");
+        `,
+        "chunk-shell.mjs": `export const shell = "${"s".repeat(4000)}";`,
+        "chunk-route.mjs": `export default "${"r".repeat(2000)}";`,
+      });
+
+      const report = measureBundle({ distDir: dist, commit: "abc1234" });
+      const [route] = report.routes;
+      const shell = report.totals.firstScreen;
+
+      expect(route.directVisit.minifiedBytes).toBe(
+        shell.minifiedBytes + route.beyondShell.minifiedBytes
+      );
+      // The printed line is the direct visit, shell included, as its
+      // heading says; not the route's own closure.
+      const text = formatReport(report);
+      const line = text
+        .slice(text.indexOf("Route first loads"))
+        .split("\n")
+        .find(l => l.includes("chunk-route.mjs"));
+      expect(line).toContain(`${formatKB(route.directVisit.minifiedBytes)} KB`);
+    });
+
+    it("calls a dist stamped by another commit stale", () => {
+      const result = {
+        commit: "unversioned",
+        builtAt: "2026-10-27T00:00:00.000Z",
+        buildInfo: { commit: "aaaaaaa" },
+      };
+      expect(distStaleness({ ...result, commit: "bbbbbbb" }).stale).toBe(true);
+      expect(
+        distStaleness({ ...result, buildInfo: { commit: "unversioned" } }).stale
+      ).toBe(false);
     });
 
     it("throws when dist directory does not exist", () => {

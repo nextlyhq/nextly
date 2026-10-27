@@ -18,7 +18,7 @@ import {
 
 const KB = 1024;
 
-/** A report: a small total, a 250 KB shell, and the given routes. */
+/** A report: a small total, a 250 KB shell, and routes with their own code. */
 function report(routes, { totalKB = 1000, shellKB = 250 } = {}) {
   return {
     totals: {
@@ -27,7 +27,7 @@ function report(routes, { totalKB = 1000, shellKB = 250 } = {}) {
     },
     routes: routes.map(([root, kb]) => ({
       root,
-      directVisit: { gzippedBytes: kb * KB },
+      beyondShell: { gzippedBytes: kb * KB },
     })),
   };
 }
@@ -52,7 +52,7 @@ describe("routeKey", () => {
 });
 
 describe("pinsFrom", () => {
-  it("pins every route's direct visit under its stable name", () => {
+  it("pins every route's own code under its stable name", () => {
     const r = report([
       ["page.b-AAAAAAAA.mjs", 300],
       ["page.a-BBBBBBBB.mjs", 280],
@@ -85,9 +85,18 @@ describe("budgetBreaches", () => {
     expect(rest).toEqual([]);
     expect(breach.kind).toBe("route");
     expect(breach.name).toContain("page.a");
-    expect(breach.measured).toContain("331.00 KB");
+    expect(breach.measured).toContain("331.00 KB gzipped of its own");
     expect(breach.budget).toContain("330.00 KB");
     expect(breach.budget).toContain("pinned 300.00 KB");
+  });
+
+  it("gives a route that adds almost nothing a 2 KB floor, not 10%", () => {
+    const p = pins([["page.tiny", 1]]);
+    expect(budgetBreaches(report([["page.tiny-AAAAAAAA.mjs", 3]]), p)).toEqual(
+      []
+    );
+    const [breach] = budgetBreaches(report([["page.tiny-AAAAAAAA.mjs", 3.5]]), p);
+    expect(breach.kind).toBe("route");
   });
 
   it("fails a route that has no pin, saying how to pin it", () => {
