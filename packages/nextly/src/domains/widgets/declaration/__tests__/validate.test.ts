@@ -78,7 +78,6 @@ function everyField(): Record<string, unknown> {
     preview: [
       { name: "Some paid", data: { buckets: [{ value: "paid", count: 3 }] } },
     ],
-    summary: { label: "Orders", count: async () => 3 },
   };
 }
 
@@ -236,10 +235,14 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
-  it("refuses a summary without its label or its count", () => {
+  it("refuses a summary until the dashboard's header reads it, and names a malformed one's faults", () => {
+    // 🔴 Typed already, but read by nothing yet: accepted, a summary would be
+    // started and never shown, so it is refused like `shows`.
     expect(
       problemsOf(valid({ summary: { label: "Orders", count: async () => 1 } }))
-    ).toEqual([]);
+    ).toEqual([
+      "summary is available in a later release: until then a widget that declares it is not started, so a summary it states is never accepted and left unshown",
+    ]);
     expect(problemsOf(valid({ summary: "Orders" }))).toEqual([
       "summary must be { label, count }",
     ]);

@@ -281,11 +281,15 @@ function previewProblems(preview: unknown, view: unknown): string[] {
   });
 }
 
-/** Every problem with a widget's summary: a label and a count, run as the person. */
+/**
+ * Every problem with a widget's summary: a label and a count, run as the
+ * person. A well-formed one is refused until the dashboard's header reads it:
+ * started, it would be accepted and never shown.
+ */
 function summaryProblems(summary: unknown): string[] {
   if (summary === undefined) return [];
   if (!isRecord(summary)) return ["summary must be { label, count }"];
-  return [
+  const problems = [
     ...optional(
       nonBlank.safeParse(summary.label).success
         ? undefined
@@ -297,6 +301,11 @@ function summaryProblems(summary: unknown): string[] {
         : "summary.count must be a function that counts, as the person asking"
     ),
   ];
+  return problems.length > 0
+    ? problems
+    : [
+        `summary is ${LATER_RELEASE}: until then a widget that declares it is not started, so a summary it states is never accepted and left unshown`,
+      ];
 }
 
 function idProblem(id: unknown, inCore: boolean): string | undefined {

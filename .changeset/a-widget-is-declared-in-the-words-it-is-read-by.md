@@ -53,7 +53,7 @@ names the field that replaced it.
 
 **New, all `@experimental`:**
 
-- `icon` and `summary` fields.
+- An `icon` field.
 - `category` is optional, and defaults to "Other".
 - The `CoreView`, `WidgetView`, `WidgetAccess`, `WidgetPreviewCase` and
   `WidgetSummary` types, exported from `nextly` and `@nextlyhq/plugin-sdk`.
@@ -61,7 +61,8 @@ names the field that replaced it.
 **Typed now, judged in a later release:**
 
 - `access` as the collections a widget reads, or as a predicate of the person;
-- `shows`.
+- `shows`;
+- `summary`, a label and a count for the dashboard's header.
 
 Until that release, a declaration using any of these is refused at startup
 rather than started with the rule ignored.

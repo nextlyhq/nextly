@@ -245,15 +245,26 @@ function sharedWithLegacy(
       // An entry that is not an object is a fault already; it has no id here.
       const id = isRecord(declaration) ? declaration.id : undefined;
       const oldOwner = typeof id === "string" ? oldOwners.get(id) : undefined;
-      return oldOwner === undefined
-        ? []
-        : [
-            {
-              owner,
-              widget: String(id),
-              problem: `id "${String(id)}" is already used by ${oldOwner}, which declares it in the old shape`,
-            },
-          ];
+      if (oldOwner === undefined) return [];
+      // 🔴 One id has one owner. An id core declares is core's, so the plugin
+      // using it in the old shape is the one to change, and the fault is filed
+      // under that plugin with what to do instead.
+      if (owner === CORE_OWNER) {
+        return [
+          {
+            owner: oldOwner,
+            widget: String(id),
+            problem: `${oldOwner} contributes ${String(id)} through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.`,
+          },
+        ];
+      }
+      return [
+        {
+          owner,
+          widget: String(id),
+          problem: `id "${String(id)}" is already used by ${oldOwner}, which declares it in the old shape`,
+        },
+      ];
     })
   );
 }

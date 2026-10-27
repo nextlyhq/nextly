@@ -303,7 +303,13 @@ export interface WidgetDeclarationInput<
    * (`PreviewFor`, `CheckedDeclaration`).
    */
   preview?: PreviewFor<DisplayOf<View>, Preview, SettingValues<S>>;
-  /** @experimental */
+  /**
+   * A label and a count for the dashboard's header. Typed for the release
+   * whose header reads it: until then a declaration using it is refused at
+   * startup, rather than started with a summary nothing shows.
+   *
+   * @experimental
+   */
   summary?: WidgetSummary;
 }
 
