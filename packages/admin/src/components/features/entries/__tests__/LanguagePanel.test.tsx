@@ -480,6 +480,22 @@ describe("LanguagePanel", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("claims no state or count where the translation states were not read", () => {
+    // A user who may not read every language's state gets the document with
+    // no `_translations`: the panel still lists the languages to switch to,
+    // but says nothing of their state rather than calling each one missing.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({ activeLocale: "de", onSelect: vi.fn() });
+
+    const [en, de, ar] = rows();
+    expect(en).toHaveTextContent("English");
+    expect(ar).toHaveTextContent("Arabic");
+    for (const row of [en, de, ar]) {
+      expect(row).not.toHaveTextContent("not translated");
+    }
+    expect(screen.queryByText(/languages translated/)).toBeNull();
+  });
+
   it("will not call an unknown target a start", () => {
     // With no `_translations` at all, every locale reads `missing` — which is a
     // supported state for this panel, not a claim that the document is empty.
@@ -633,6 +649,17 @@ describe("LanguagePanel", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
+  });
+
+  it("warns that any held change goes live where the languages' states were not read", async () => {
+    // Without the states, no count of held changes is known: the
+    // confirmation does not say every language merely goes live together.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({ hasStatus: true });
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "Any language holding unpublished changes goes live too."
+    );
   });
 
   it("hides publish-all when the action does not apply", () => {

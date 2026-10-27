@@ -34,21 +34,24 @@ import {
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { refreshCollectionWidgets } from "../collection-widgets";
 
-/** The agreed default, in order, each at its agreed width. */
+/**
+ * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
+ * five rows tall, the height whose body holds five rows, but four beside Team, whose row it shares.
+ */
 const AGREED = [
-  ["core/needs-attention", "twoThirds"],
-  ["core/quick-create", "third"],
-  ["core/recently-edited", "half"],
-  ["core/recent-activity", "half"],
-  ["core/content", "full"],
-  ["core/upcoming-releases", "third"],
-  ["core/team", "third"],
+  ["core/needs-attention", "8x4"],
+  ["core/quick-create", "4x4"],
+  ["core/recently-edited", "6x5"],
+  ["core/recent-activity", "6x5"],
+  ["core/content", "12x4"],
+  ["core/upcoming-releases", "4x4"],
+  ["core/team", "4x4"],
 ] as const;
 const AGREED_IDS: ReadonlySet<string> = new Set(AGREED.map(([id]) => id));
 
 /** The agreed cards, in the order given, without one of them. */
 const without = (...left: string[]) =>
-  AGREED.filter(([id]) => !left.includes(id)).map(([id, width]) => [id, width]);
+  AGREED.filter(([id]) => !left.includes(id)).map(([id, size]) => [id, size]);
 
 let current: TestNextly | undefined;
 /** Whose dashboard a read is. Read by a collection's rule, so it admits one person. */
@@ -75,7 +78,7 @@ async function account(t: TestNextly, email: string): Promise<string> {
   return created.item.id;
 }
 
-/** The R-11 cards of the default `userId` is handed, in order, with their widths. */
+/** The R-11 cards of the default `userId` is handed, in order, with their sizes. */
 async function defaultFor(userId: string): Promise<string[][]> {
   vi.mocked(requireAuthentication).mockResolvedValue({
     userId,
@@ -88,11 +91,16 @@ async function defaultFor(userId: string): Promise<string[][]> {
   );
   expect(res.status).toBe(200);
   const body = (await res.json()) as {
-    placements: Array<{ widgetId: string; width: string; removed: boolean }>;
+    placements: Array<{
+      widgetId: string;
+      w: number;
+      h: number;
+      removed: boolean;
+    }>;
   };
   return body.placements
     .filter(p => AGREED_IDS.has(p.widgetId) && !p.removed)
-    .map(p => [p.widgetId, p.width]);
+    .map(p => [p.widgetId, `${p.w}x${p.h}`]);
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -130,16 +138,16 @@ describe.each(getConfiguredTestDialects())(
 
       // No grants: nothing to create, count or list, and neither the team nor releases.
       expect(await defaultFor(editor)).toEqual([
-        ["core/recently-edited", "half"],
-        ["core/recent-activity", "half"],
+        ["core/recently-edited", "6x5"],
+        ["core/recent-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "twoThirds"],
-        ["core/recently-edited", "half"],
-        ["core/recent-activity", "half"],
-        ["core/content", "full"],
+        ["core/needs-attention", "8x4"],
+        ["core/recently-edited", "6x5"],
+        ["core/recent-activity", "6x5"],
+        ["core/content", "12x4"],
       ]);
     });
 

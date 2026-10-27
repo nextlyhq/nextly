@@ -11,16 +11,19 @@
  * @module components/features/widgets/resolve-widgets
  */
 
-import type {
-  WidgetAction,
-  WidgetArchetype,
-  WidgetHeight,
-  SourcelessWidgetQuery,
-  WidgetQuery,
-  WidgetQueryCell,
-  WidgetSize,
-  WidgetStatCell,
-  AnyWidgetSetting,
+import {
+  sizeBounds,
+  sizeDeclarationProblems,
+  UNSTATED_WIDGET_SIZE,
+  type WidgetAction,
+  type WidgetArchetype,
+  type SourcelessWidgetQuery,
+  type WidgetQuery,
+  type WidgetQueryCell,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+  type WidgetStatCell,
+  type AnyWidgetSetting,
 } from "nextly/config";
 import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
 
@@ -32,7 +35,6 @@ import type {
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { coreDraws } from "./outcome";
-import { legacySizeToWidgetSize } from "./sizes";
 
 /**
  * A widget's shortcuts, less the ones this reader may not use.
@@ -88,17 +90,14 @@ export interface ReadableWidgetDeclaration {
    */
   settings?: AnyWidgetSetting[];
   id: string;
-  size?: "full" | "half";
+  /** The sizes its cards may take, in grid units; a widget stating none takes core's `UNSTATED_WIDGET_SIZE`. */
+  size?: WidgetSizeDeclaration;
   requiredPermission?: WidgetPermissionGate;
   title?: string;
   description?: string;
   icon?: string;
   category?: string;
   archetype?: WidgetArchetype;
-  defaultSize?: WidgetSize;
-  defaultHeight?: WidgetHeight;
-  minSize?: WidgetSize;
-  maxSize?: WidgetSize;
   /**
    * Sourceless for a widget offered per collection. Such a query is never
    * asked as it stands: a card is asked only once its Collection setting has
@@ -212,6 +211,25 @@ function declaredWidgets(
 }
 
 /**
+ * A widget's size bounds, every end filled in, through core's own `sizeBounds`.
+ *
+ * Read permissively, as everything here is: a declaration arrives over the wire
+ * from a server that may be another version, and from plugins that may not be
+ * TypeScript. A contribution stating none, and one the grid could not use (no
+ * default, a minimum above the default), take core's `UNSTATED_WIDGET_SIZE`,
+ * the size the server gives a widget stating none, rather than sizes no check
+ * ever accepted; the boot check is what refuses a malformed one to its author.
+ */
+function boundsOf(
+  declared: WidgetSizeDeclaration | undefined
+): WidgetSizeBounds {
+  return declared !== undefined &&
+    sizeDeclarationProblems(declared).length === 0
+    ? sizeBounds(declared)
+    : sizeBounds(UNSTATED_WIDGET_SIZE);
+}
+
+/**
  * One declaration as the grid renders it, or `undefined` when it is not
  * renderable at all.
  *
@@ -237,11 +255,7 @@ function resolveOne(
     description: meta.description,
     icon: meta.icon,
     archetype,
-    // `defaultSize` is the enum; `size` is the deprecated two-value alias. The
-    // enum wins where both are declared, because a plugin that adopted the new
-    // field meant it.
-    size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
-    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
+    size: boundsOf(meta.size),
     query: meta.query,
     settings: meta.settings,
     component: meta.component,
@@ -294,8 +308,9 @@ function resolveRegistered(
     description: meta.description,
     icon: meta.icon,
     archetype: meta.archetype,
-    size: meta.defaultSize,
-    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
+    // Through the same reading as a contribution's, so a registration whose
+    // size arrived malformed over the wire is drawn the way a contributed one is.
+    size: boundsOf(meta.size),
     query: meta.query,
     ...(meta.serverData === true ? { serverData: true as const } : {}),
     ...declaredEmptyOf(meta.empty),
@@ -370,20 +385,10 @@ function mergeCollision(
     ),
     icon: preferRegistered(registration.icon, contribution.icon),
     archetype: registration.archetype,
-    defaultSize: registration.defaultSize,
     // The registry wins where it states one, exactly as `defaultOrder` and
-    // `hidesWhenEmpty` do below. Named in this list rather than left out because the
-    // list IS the contract: a field missing from it is dropped silently, and a
-    // merged widget would lose the height its contribution declared.
-    defaultHeight: preferRegistered(
-      registration.defaultHeight,
-      contribution.defaultHeight
-    ),
-    minSize: registration.minSize,
-    maxSize: registration.maxSize,
-    // The contributed size is the FALLBACK, read only when the registration
-    // declares no `defaultSize`. `resolveOne` prefers the enum over this alias.
-    size: contribution.size,
+    // `hidesWhenEmpty` do below, and a registration always states one; the
+    // contribution's is read only if a malformed registration arrived without.
+    size: preferRegistered(registration.size, contribution.size),
     requiredPermission: registration.requiredPermission,
     query: registration.query,
     // 🔴 `preferRegistered`, not the registration alone. Both channels can
@@ -414,7 +419,7 @@ function mergeCollision(
     content:
       registration.archetype === "text" ? registration.content : undefined,
     // Both channels can state these, and the registry wins where it does --
-    // the rule `defaultSize` already follows above. Rebuilt field by field
+    // the rule `size` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
     // silently: the merged widget loses its declared position.
     defaultOrder: preferRegistered(
@@ -472,8 +477,8 @@ function mergeCollision(
  *
  * ORDER stays with the contribution, so a card does not jump across the grid
  * the day someone registers an id that was already contributed. Its SIZE does
- * not: `defaultSize` is a statement the registration made, and the card is as
- * wide as the authoritative definition says.
+ * not: `size` is a statement the registration made, and the card takes the
+ * sizes the authoritative definition says.
  */
 export function resolveDashboardWidgets(
   plugins: PluginMetadata[] | undefined,

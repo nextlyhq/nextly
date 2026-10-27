@@ -688,13 +688,12 @@ const isLifecycle = (action: Action) =>
 
 /**
  * Whether the target's rules let the action through: its own rule, where the
- * target declares one, answers exactly `true`, and for a publish or an
- * unpublish the update rule does not refuse.
+ * target declares one, answers exactly `true`. A publish or an unpublish is
+ * judged by its own rule, as any action is, not the update rule as well.
  */
 function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
   const says = RULE_SAYS[rule](action, caller);
-  if (says !== null && says !== true) return false;
-  return !(isLifecycle(action) && RULE_SAYS[rule]("update", caller) === false);
+  return says === null || says === true;
 }
 
 /**
@@ -714,8 +713,7 @@ function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
  *   refused while no Public role exists;
  * - everyone else needs the permission AND, where the target declares a rule
  *   for the action, a rule that answers exactly `true`. A publish or an
- *   unpublish is judged on top of update (`shared/types/access.ts`), so where
- *   the target declares an update rule, it must allow the change as well.
+ *   unpublish is judged by its own permission and its own rule.
  *   A `list` and a `count` are reads, judged by the read permission and rule.
  *   A create sent as published is a create and a publish, allowed only where
  *   both are.

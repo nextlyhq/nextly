@@ -2,9 +2,8 @@
  * Whether a stored row was ARRANGED, and what a row that was not contributes.
  *
  * Pure, so both halves are asserted here rather than only through the
- * endpoint: the flag's round trip through serialisation, including the rows
- * written before it existed, and the one function that turns a dismissal-only
- * row into what the reader sees.
+ * endpoint: the flag's round trip through serialisation, and the one function
+ * that turns a dismissal-only row into what the reader sees.
  */
 import { describe, expect, it } from "vitest";
 
@@ -14,8 +13,16 @@ import {
   layoutIsArranged,
   readStoredLayout,
   serializeLayout,
+  type StoredLayout,
   type WidgetPlacement,
 } from "../layout";
+
+/** A current-format row, read: a test expecting one fails here if it is not. */
+function readRow(raw: string): StoredLayout {
+  const read = readStoredLayout(raw);
+  if (read === undefined) throw new Error("expected a current-format row");
+  return read;
+}
 
 function placement(
   widgetId: string,
@@ -24,7 +31,8 @@ function placement(
   return {
     id: widgetId,
     widgetId,
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
     ...patch,
   };
@@ -32,29 +40,25 @@ function placement(
 
 describe("whether a stored row was arranged", () => {
   it("reads a row written as an arrangement as arranged", () => {
-    const row = readStoredLayout(serializeLayout([placement("a")]));
+    const row = readRow(serializeLayout([placement("a")]));
     expect(layoutIsArranged(row)).toBe(true);
   });
 
   it("reads a row a dismissal wrote as not arranged", () => {
-    const row = readStoredLayout(
+    const row = readRow(
       serializeLayout([placement("a", { removed: true })], false)
     );
     expect(layoutIsArranged(row)).toBe(false);
   });
 
-  it("reads a row written before the field existed as arranged", () => {
-    // 🔴 Every row already stored was written by an edit-mode save. Reading
-    // their silence any other way would replace readers' own arrangements with
-    // the live defaults the moment this shipped.
-    const legacy = JSON.stringify({
-      schemaVersion: 2,
-      columnCount: 3,
-      placements: [
-        { id: "a", widgetId: "a", column: 0, order: 0, hidden: false },
-      ],
+  it("reads a row of an earlier format as no row, never as an arrangement", () => {
+    // An earlier row is no saved arrangement whatever it says about itself:
+    // its reader follows the default, as somebody with no row does.
+    const earlier = JSON.stringify({
+      schemaVersion: 3,
+      placements: [{ id: "a", widgetId: "a", width: "full", removed: false }],
     });
-    expect(layoutIsArranged(readStoredLayout(legacy))).toBe(true);
+    expect(readStoredLayout(earlier)).toBeUndefined();
   });
 
   it("stores nothing at all on an arranged row", () => {
@@ -74,19 +78,19 @@ describe("whether a stored row was arranged", () => {
       placements: [placement("a")],
       unarranged: "yes",
     });
-    expect(layoutIsArranged(readStoredLayout(odd))).toBe(true);
+    expect(layoutIsArranged(readRow(odd))).toBe(true);
   });
 });
 
 describe("a reader's dismissals over the live defaults", () => {
   const defaults = [
-    placement("a", { width: "half" }),
-    placement("b", { width: "third" }),
+    placement("a", { w: 6, h: 3 }),
+    placement("b", { w: 4, h: 2 }),
     placement("new"),
   ];
 
   it("hides the widgets the row hid, and nothing else", () => {
-    const row = readStoredLayout(
+    const row = readRow(
       serializeLayout(
         [placement("a", { removed: true }), placement("b")],
         false
@@ -103,29 +107,29 @@ describe("a reader's dismissals over the live defaults", () => {
     ]);
   });
 
-  it("takes positions and widths from the defaults, never from the row", () => {
+  it("takes positions and sizes from the defaults, never from the row", () => {
     // 🔴 The row was written against an EARLIER default. Reading its order or
-    // widths back would keep a reader who never arranged anything on a
+    // sizes back would keep a reader who never arranged anything on a
     // dashboard the default has since moved away from.
-    const row = readStoredLayout(
+    const row = readRow(
       serializeLayout(
-        [placement("new"), placement("b", { width: "quarter", removed: true })],
+        [placement("new"), placement("b", { w: 3, h: 6, removed: true })],
         false
       )
     );
 
     const applied = dismissalsApplied(defaults, row);
     expect(applied.map(p => p.widgetId)).toEqual(["a", "b", "new"]);
-    expect(applied[1]).toMatchObject({ width: "third", removed: true });
+    expect(applied[1]).toMatchObject({ w: 4, h: 2, removed: true });
   });
 
-  it("carries a reader's settings for a card, and keeps the default's position and width", () => {
+  it("carries a reader's settings for a card, and keeps the default's position and size", () => {
     // A setting changed outside customise mode is written to a row that still
     // follows the default. Reading only removals back dropped it every time.
-    const row = readStoredLayout(
+    const row = readRow(
       serializeLayout(
         [
-          placement("b", { width: "quarter", config: { items: 9 } }),
+          placement("b", { w: 3, h: 6, config: { items: 9 } }),
           placement("a", { removed: true, config: { range: "7d" } }),
         ],
         false
@@ -134,13 +138,13 @@ describe("a reader's dismissals over the live defaults", () => {
 
     const applied = dismissalsApplied(defaults, row);
     expect(
-      applied.map(p => [p.widgetId, p.width, p.removed, p.config])
+      applied.map(p => [p.widgetId, p.w, p.h, p.removed, p.config])
     ).toEqual([
       // A removed card keeps its settings, for the day it is put back.
-      ["a", defaults[0]!.width, true, { range: "7d" }],
-      ["b", "third", false, { items: 9 }],
+      ["a", 6, 3, true, { range: "7d" }],
+      ["b", 4, 2, false, { items: 9 }],
       // Never in the row: the default, with no settings of its own.
-      ["new", defaults[2]!.width, false, undefined],
+      ["new", 12, 3, false, undefined],
     ]);
   });
 

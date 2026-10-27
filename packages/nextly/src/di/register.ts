@@ -47,6 +47,7 @@ import type {
   SecurityConfig,
 } from "../collections/config/define-config";
 import type { FieldConfig } from "../collections/fields/types";
+import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
@@ -308,6 +309,7 @@ import {
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
+import { languageChangeContentCache } from "./registrations/language-change-content-cache";
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
 import { getService } from "./service-access";
@@ -1046,7 +1048,15 @@ async function registerServicesOnce(
   );
   container.registerSingleton<LanguageSettingsService>(
     "languageSettingsService",
-    () => new LanguageSettingsService(adapter, ctx.languages, ctx.logger)
+    // With the content cache, so a committed change also flushes the cached content reads that
+    // were resolved in the previous default language.
+    () =>
+      new LanguageSettingsService(
+        adapter,
+        ctx.languages,
+        ctx.logger,
+        languageChangeContentCache()
+      )
   );
 
   registerDomainServices(ctx);
@@ -2718,6 +2728,9 @@ async function resolveAdapter(
 ): Promise<DrizzleAdapter> {
   if (providedAdapter) {
     logger.info?.("Using provided database adapter");
+    // An adapter handed in was not made by `createAdapter`, which loads its
+    // dialect's tables, so they are loaded here before anything reads them.
+    await loadDialectTables(providedAdapter.getCapabilities().dialect);
     return providedAdapter;
   }
 
