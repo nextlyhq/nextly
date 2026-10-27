@@ -108,7 +108,10 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(body).toBeVisible();
     // Handed its size: a card at its default size at desktop width is medium.
     await expect(body).toHaveAttribute("data-size", "medium");
-    await expect(body.getByTestId("chart-group")).toHaveCount(2);
+    // One row per group, each a bar on its track, drawn by the chart engine.
+    await expect(
+      body.locator(".recharts-bar-background-rectangle")
+    ).toHaveCount(2);
     await expectNoAxeViolations(page, {
       include: `[data-testid="widget-cell-${KIT}"]`,
     });

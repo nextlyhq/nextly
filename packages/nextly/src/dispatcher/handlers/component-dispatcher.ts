@@ -25,38 +25,27 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
-  reconcileComponentCompanion,
   registerComponentRuntimeSchema,
   resolveComponentTypeColumn,
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { movedOnto } from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
-import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
   FIELD_GROUP_MIGRATION_STATUSES,
@@ -65,6 +54,11 @@ import {
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  builderSchemaPush,
+  leavingSettingsStep,
+  pushAndReconcileCompanion,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -72,7 +66,6 @@ import {
   getComponentRegistryFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
-  getMigrationJournalFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
@@ -370,7 +363,13 @@ export const COMPONENTS_METHODS: Record<
       desired.components[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredFieldGroup["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: component,
+          requestedLocalized: readRequestLocalized(body),
+        }) as DesiredFieldGroup["fields"],
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
@@ -563,11 +562,22 @@ export const COMPONENTS_METHODS: Record<
               ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
               : undefined;
 
+          // A Required or Unique field leaving translation is pushed without its setting first,
+          // and the setting is pushed once the companion reconcile has copied its values in,
+          // before its companion column is dropped.
+          const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+            oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            renamed: companionRename,
+          });
+
           const desired = await buildFullDesiredSchema();
           desired.components[slug] = {
             slug,
             tableName,
-            fields: fields as DesiredFieldGroup["fields"],
+            fields: (settingsDeferred ?? fields) as DesiredFieldGroup["fields"],
             // i18n: carry the localized flag so the push diff omits translatable columns
             // from the component's main table (they live in comp_<slug>_locales, reconciled
             // out-of-band below) — mirrors the collection/single apply path.
@@ -576,78 +586,59 @@ export const COMPONENTS_METHODS: Record<
             builderOwned: true,
           };
 
-          const promptDispatcher = new BrowserPromptDispatcher(
-            renameResolutions ?? [],
-            eventResolutions ?? [],
-            legacyBundle
-          );
-
-          const migrationJournal =
-            getMigrationJournalFromDI() ?? noopMigrationJournal;
-          const pipeline = new PushSchemaPipeline({
-            executor: new DrizzleStatementExecutor(dialect, db),
-            renameDetector: new RegexRenameDetector(),
-            classifier: new RealClassifier(),
-            promptDispatcher,
-            preRenameExecutor: noopPreRenameExecutor,
-            preCleanupExecutor: new RealPreCleanupExecutor(),
-            migrationJournal,
-            notifier: getProductionNotifier(),
-          });
-
-          const result = await pipeline.apply({
-            desired,
-            db,
+          const push = builderSchemaPush({
             dialect,
-            source: "ui",
-            promptChannel: "browser",
+            db,
             databaseName,
-            uiTargetSlug: slug,
-            // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
-            // that kind is invisible to every history query filtered by its own.
-            uiTargetKind: "component" as const,
-            // A field becoming translated keeps its value as this language's; the apply moves it
-            // after its prompts and refusals, before it drops the main column.
-            defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            slug,
+            kind: "component",
+            resolutions: [
+              renameResolutions ?? [],
+              eventResolutions ?? [],
+              legacyBundle,
+            ],
           });
-
-          if (!result.success) {
-            throw new Error(
-              result.error?.message ?? "Failed to apply schema changes"
-            );
-          }
-
-          // i18n: the push pipeline excludes companion tables, so reconcile the component's companion
-          // comp_<slug>_locales out-of-band — create on the first translatable field, then ADD/DROP
-          // columns as the field set changes. Uses the request's `isLocalized`.
-          try {
-            await reconcileComponentCompanion({
-              slug,
-              tableName,
-              oldFields: component.fields as unknown as FieldDefinition[],
-              newFields: fields as unknown as FieldDefinition[],
-              localized: isLocalized,
-              // Detect an enable/disable transition against the persisted state so this apply
-              // seeds/restores existing rows rather than only creating an empty companion.
-              wasLocalized:
-                (component as { localized?: boolean }).localized === true,
-              adapter,
-              // Added to the companion, with their values, by the apply before its drop.
-              joinedBefore: movedOnto(result, tableName),
-              // A translated field the admin renamed: the dialog's answer naming the companion.
-              renamed: companionRename ?? undefined,
-            });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            throw NextlyError.internal({
-              cause: err instanceof Error ? err : undefined,
-              logContext: {
-                op: "componentCompanionReconcile",
-                slug,
-                detail: msg,
-              },
-            });
-          }
+          // The push excludes companion tables, so comp_<slug>_locales is brought in step right
+          // after it: created on the first translatable field, then ADD/DROPped as the field set
+          // changes.
+          await pushAndReconcileCompanion(push, desired, "component", {
+            slug,
+            tableName,
+            oldFields: component.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: isLocalized,
+            wasLocalized:
+              (component as { localized?: boolean }).localized === true,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the
+            // pipeline keeps the last one it applied, by reference, to skip a push that changes
+            // nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      components: {
+                        ...desired.components,
+                        [slug]: {
+                          ...desired.components[slug],
+                          fields: fields as DesiredFieldGroup["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          });
 
           const newSchemaVersion = currentVersion + 1;
 

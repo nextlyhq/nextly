@@ -1535,8 +1535,10 @@ jobs:
 
       # A release builds with `NODE_ENV` unset, and the admin's build reads it,
       # so it is unset here whatever the runner carries.
+      # The plugin SDK too, which the admin builds before: its declarations are
+      # read by the bundle-boundary check below.
       - name: Build the admin as a release does
-        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/admin...
+        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/plugin-sdk...
         env:
           TURBO_CACHE_DIR: .turbo
 
@@ -1551,6 +1553,12 @@ jobs:
       # Packs the package as `pnpm publish` would, and reads the packed files.
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
+
+      # Before the step below rebuilds the admin in development mode: the chart
+      # engine stays out of what an entry loads before it renders, and out of the
+      # admin's and the plugin SDK's published types.
+      - name: Check each heavy dependency loads only where a view asks for it
+        run: node scripts/check-bundle-boundaries.mjs
 
       # `tsdown` alone, without the stylesheet step: the check is asked only for
       # the two kinds a development-mode build must be refused for.
