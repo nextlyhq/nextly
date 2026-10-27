@@ -10,6 +10,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
+import { isAssignableRole } from "../public-role";
 
 import { toDialectBool } from "./utils";
 
@@ -63,9 +64,12 @@ export class RoleQueryService extends BaseService {
     data: Array<{
       id: string;
       name: string;
+      slug: string;
       description: string | null;
       level: number;
       isSystem: boolean;
+      /** Whether it may be given to someone or inherited (`isAssignableRole`). */
+      assignable: boolean;
     }>;
     meta: {
       total: number;
@@ -218,6 +222,7 @@ export class RoleQueryService extends BaseService {
           description: row.description,
           level: row.level,
           isSystem: Boolean(row.isSystem),
+          assignable: isAssignableRole({ slug: String(row.slug) }),
           childRoleIds: childRolesMap.get(roleId) ?? [],
           ...(includePermissions && {
             permissionIds: permissionsMap.get(roleId) ?? [],
@@ -255,6 +260,8 @@ export class RoleQueryService extends BaseService {
     description: string | null;
     level: number;
     isSystem: boolean;
+    /** Whether it may be given to someone or inherited (`isAssignableRole`). */
+    assignable: boolean;
   }> {
     try {
       // Validate input. Per §13.8 the public message names the field but
@@ -309,6 +316,7 @@ export class RoleQueryService extends BaseService {
         description: role.description,
         level: role.level,
         isSystem: Boolean(role.isSystem),
+        assignable: isAssignableRole({ slug: String(role.slug) }),
       };
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Map raw DB errors via fromDatabaseError.
