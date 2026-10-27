@@ -165,10 +165,45 @@ function detailedErrorMessage(error: unknown): string {
  * generic message, because a bare error carries no public contract — its
  * message or cause may be raw driver text with hostnames or credentials,
  * which belongs in the operator log alone.
+ *
+ * A validation refusal appends its per-field issues: the batch result has no
+ * `publicData` to carry them, and an accounting that says only "Validation
+ * failed." would leave the caller no field to fix — the one thing a
+ * validation error exists to name.
  */
 function batchErrorMessage(error: unknown): string {
-  if (NextlyError.is(error)) return error.publicMessage;
+  if (NextlyError.is(error)) {
+    const issues = (
+      error.publicData as { errors?: Array<{ message: string }> } | undefined
+    )?.errors;
+    if (issues?.length) {
+      return [error.publicMessage, ...issues.map(issue => issue.message)].join(
+        " "
+      );
+    }
+    return error.publicMessage;
+  }
   return "An unexpected error occurred.";
+}
+
+/**
+ * The same accounting for a RETURNED failure: the workers hand back the
+ * mutation service's envelope, whose `message` alone says only "Validation
+ * failed." — the per-field issues ride the envelope's public data, and the
+ * batch result has nowhere else to put them, so they are appended here. A
+ * caller left without the field has nothing to fix.
+ */
+function batchVerdictMessage(result: {
+  message: string;
+  publicData?: unknown;
+}): string {
+  const issues = (
+    result.publicData as { errors?: Array<{ message: string }> } | undefined
+  )?.errors;
+  if (issues?.length) {
+    return [result.message, ...issues.map(issue => issue.message)].join(" ");
+  }
+  return result.message;
 }
 
 /**
@@ -2054,7 +2089,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: createResult.message,
+              message: batchVerdictMessage(createResult),
               eventRecorded: createResult.eventRecorded,
               revalidationIntent: createResult.revalidationIntent,
             };
@@ -2109,7 +2144,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: updateResult.message,
+              message: batchVerdictMessage(updateResult),
               eventRecorded: updateResult.eventRecorded,
               revalidationIntent: updateResult.revalidationIntent,
             };
@@ -2161,7 +2196,7 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: deleteResult.message,
+              message: batchVerdictMessage(deleteResult),
               eventRecorded: deleteResult.eventRecorded,
               revalidationIntent: deleteResult.revalidationIntent,
             };

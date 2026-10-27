@@ -72,7 +72,10 @@ describe("plugin field-type validation", () => {
   it("reports a string return against the field", async () => {
     registerRating(() => "Must be a whole number of stars");
 
-    const issues = await validateEntryData({ stars: 2.5 }, FIELDS, {
+    // A WHOLE value, so the primitive's whole-number floor has nothing to
+    // say and the string return is what the field is judged by — the floor
+    // has its own test below.
+    const issues = await validateEntryData({ stars: 3 }, FIELDS, {
       mode: "create",
     });
 
@@ -82,6 +85,27 @@ describe("plugin field-type validation", () => {
         code: "CUSTOM",
         // The period is supplied: the message is rendered as-is by clients.
         message: "Must be a whole number of stars.",
+      },
+    ]);
+  });
+
+  it("refuses a fraction for a number-backed type by the primitive's floor", async () => {
+    // A number-backed contributed type stores an integer column, so the
+    // primitive's whole-number rule is the floor under whatever the type's
+    // own validate says: the floor refuses a fraction, naming the field,
+    // and the type's validate — which judges only values the floor
+    // accepted — does not run.
+    registerRating(() => true);
+
+    const issues = await validateEntryData({ stars: 2.5 }, FIELDS, {
+      mode: "create",
+    });
+
+    expect(issues).toEqual([
+      {
+        path: "stars",
+        code: "INVALID_TYPE",
+        message: "stars must be a whole number.",
       },
     ]);
   });

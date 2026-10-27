@@ -690,6 +690,13 @@ interface EntryValidationArgs {
   collectionName: string;
   mode: "create" | "update";
   user: UserContext | undefined;
+  /**
+   * Whether the document merges stored values the request did not carry (a
+   * go-live merge, a promoted draft). The whole-number rule binds values a
+   * caller writes, so it skips such a document — see the option's comment on
+   * `ValidateEntryOptions` for the boundary.
+   */
+  assembledFromStorage?: boolean;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -1729,6 +1736,7 @@ export class CollectionMutationService extends BaseService {
       {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
+        ...(args.assembledFromStorage ? { assembledFromStorage: true } : {}),
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
@@ -3265,6 +3273,7 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.collectionName,
       mode: "update",
       user: args.user,
+      assembledFromStorage: true,
       localeCtx: await this.localizedRequiredContext(
         args.collectionName,
         args.locale,
@@ -3308,6 +3317,7 @@ export class CollectionMutationService extends BaseService {
         collectionName: args.collectionName,
         mode: "update",
         user: args.user,
+        assembledFromStorage: true,
         localeCtx: await this.localizedRequiredContext(
           args.collectionName,
           locale,
@@ -12550,6 +12560,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           mode: "update",
           user: params.user,
+          assembledFromStorage: true,
           id: entryId,
           tx,
         });

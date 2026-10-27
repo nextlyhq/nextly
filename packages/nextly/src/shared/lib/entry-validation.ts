@@ -123,6 +123,21 @@ export interface ValidateEntryOptions {
    */
   emptyIsAValue?: boolean;
   /**
+   * Whether the document was assembled from storage rather than carried by
+   * the caller — a publish merging the stored row with the caller's patch, a
+   * promoted working draft, a go-live document judged per language.
+   *
+   * Every rule still judges this document whole: that is what stops an
+   * untouched stored value from reading as missing. The whole-number rule is
+   * the one exception, because it alone binds values a CALLER writes — each
+   * value the caller carried was already judged, and refused, at its own
+   * patch gate on the way in. A stored fraction (SQLite holds 2.5 where a
+   * pre-fix write put it, MySQL's column already rounded it) rides through
+   * these views unchanged, and the column decides at the write, as it
+   * always has.
+   */
+  assembledFromStorage?: boolean;
+  /**
    * The entry write being validated, for the field types that judge a value
    * against stored rows. Absent where no entry write is behind the validation,
    * and then no type is handed one.
@@ -187,6 +202,30 @@ function rule(field: ValidatableField, key: string): unknown {
 function numberRule(field: ValidatableField, key: string): number | undefined {
   const v = rule(field, key);
   return typeof v === "number" ? v : undefined;
+}
+
+/**
+ * Whether the field's number values may carry a fraction.
+ *
+ * A `number` field stores an integer column unless it opts into decimals —
+ * `dbType: "decimal"` (code-first) or the UI's float format — the same
+ * opt-ins the storage descriptor reads, so validation and the column answer
+ * the field the same way. A hasMany number stores a JSON list, but the rule
+ * follows the field's whole-number semantics, not the physical column. A
+ * plugin-contributed type rerouted here by its storage primitive is not one
+ * of these cases: its primitive stores numbers as integers unconditionally,
+ * so it is never exempt.
+ */
+function numberFieldStoresFractions(field: ValidatableField): boolean {
+  if (field.type !== "number") return false;
+  const record = field as unknown as Record<string, unknown>;
+  if (record.dbType === "decimal") return true;
+  const options = field.options;
+  return (
+    typeof options === "object" &&
+    options !== null &&
+    (options as { format?: unknown }).format === "float"
+  );
 }
 
 /**
@@ -503,6 +542,24 @@ async function validateFieldValue(
             message: `${label} must be a number.`,
           });
           continue;
+        }
+        // A whole-number field says what it stores: a fraction is refused
+        // with the field named, before any write, on every dialect — not
+        // left to the column, where MySQL rounds it away silently,
+        // PostgreSQL answers a 500, and SQLite stores a value the schema
+        // never declared. On an assembled-from-storage document the caller's
+        // own values were already judged at their patch gate, and the stored
+        // ones were carried by nobody, so they ride unchanged.
+        if (
+          !numberFieldStoresFractions(field) &&
+          !options.assembledFromStorage &&
+          !Number.isInteger(v)
+        ) {
+          issues.push({
+            path: p,
+            code: "INVALID_TYPE",
+            message: `${label} must be a whole number.`,
+          });
         }
         const min = numberRule(field, "min");
         const max = numberRule(field, "max");
