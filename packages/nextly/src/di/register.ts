@@ -227,6 +227,7 @@ import {
   type CollectedWidgetSource,
 } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
+import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -731,6 +732,14 @@ export async function registerServices(
   // process does not open a connection on every request only to reach the
   // same refusal at the migration phase.
   assertBootMigrationsNotRefused();
+
+  // Next.js / React version gate, here because every way of starting nextly
+  // registers services through this function: `getNextly()`, a route
+  // handler's request-path boot and the CLI. nextly imports the supported
+  // releases' APIs directly and carries no code for older ones, so an app
+  // outside the ranges is refused before an adapter connects, naming each
+  // installed version, rather than failing later at whichever API it lacks.
+  ensureSupportedFrameworkVersions(process.cwd());
 
   // Nothing awaits between the loop above finding no attempt in flight and
   // this line publishing one, so no other caller can start an attempt in

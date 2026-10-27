@@ -38,7 +38,7 @@ import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
+ * Next.js passes route params as a Promise.
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;

@@ -58,6 +58,10 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // The app nextly runs in is set up so nextly cannot work: its config, or the
+  // Next.js and React it installs. 500: nothing about the request is wrong,
+  // and only the operator can change it.
+  CONFIGURATION_ERROR: 500,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
   // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
   EXTERNAL_URL_BLOCKED: 400,
