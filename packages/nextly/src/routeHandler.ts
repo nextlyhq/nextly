@@ -1017,6 +1017,17 @@ async function resolveAuthorization(
       ]);
     }
 
+    // A saved provider's check travels over POST, but it is an edit's first
+    // step and tries the provider's stored secrets, so it takes the grant an
+    // edit takes. Read from the verb, a person who may only add providers
+    // could point another provider's stored sign-in at a server of their own.
+    if (method === "checkSavedProvider") {
+      return requireAnyPermission(req, [
+        { action: "update", resource: "email-providers" },
+        { action: "manage", resource: "email-providers" },
+      ]);
+    }
+
     const action = getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "email-providers" },

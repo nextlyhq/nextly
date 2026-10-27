@@ -177,6 +177,7 @@ export {
   Sun,
   Table, // Rich text editor: table
   Tag, // Collection Settings: icon picker
+  Terminal, // Email: the Log provider, which writes to the server log
   Target, // Collection Settings: icon picker
   ToggleLeft, // useFields: boolean
   Trash,

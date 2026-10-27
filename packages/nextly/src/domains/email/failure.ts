@@ -44,7 +44,7 @@ export interface ClassifiedEmailError extends Error {
 export const UNCLASSIFIED_REASON = "The email provider failed.";
 
 /** The reason given when the provider could not be reached. */
-const UNREACHABLE_REASON = "The email provider could not be reached.";
+export const UNREACHABLE_REASON = "The email provider could not be reached.";
 
 /** The reason given when a request was sent and its answer was lost. */
 const LOST_ANSWER_REASON = "The email provider's answer was lost.";

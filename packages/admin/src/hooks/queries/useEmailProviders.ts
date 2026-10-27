@@ -35,12 +35,17 @@ import {
   deleteProvider,
   setDefaultProvider,
   testProvider,
+  checkProvider,
+  getSendingSettings,
   type EmailProviderRecord,
   type EmailProviderDescriptor,
   type EmailProviderListResponse,
   type CreateEmailProviderPayload,
   type UpdateEmailProviderPayload,
   type TestProviderResult,
+  type CheckProviderResult,
+  type EmailProviderType,
+  type SendingSettings,
 } from "@admin/services/emailProviderApi";
 
 // ============================================================
@@ -70,6 +75,8 @@ export const emailProviderKeys = {
     [...emailProviderKeys.all(), "detail"] as const,
   detail: (id: string): readonly ["emailProviders", "detail", string] =>
     [...emailProviderKeys.details(), id] as const,
+  settings: (): readonly ["emailProviders", "settings"] =>
+    [...emailProviderKeys.all(), "settings"] as const,
   // The registry catalog sits OUTSIDE the record keys on purpose: every
   // mutation invalidates `all()`, and the set of registered provider types
   // cannot change because someone saved a provider. Nesting it there would
@@ -312,4 +319,28 @@ export function useTestProvider(): UseMutationResult<
       mutationFn: ({ id, email }) => testProvider(id, email),
     }
   );
+}
+
+/** The default sender, the provider set in code, and the environment. */
+export function useSendingSettings() {
+  return useQuery<SendingSettings, Error>({
+    queryKey: emailProviderKeys.settings(),
+    queryFn: () => getSendingSettings(),
+    staleTime: 60_000,
+  });
+}
+
+/** Check settings with their provider before saving, sending nothing. */
+export function useCheckProvider() {
+  return useMutation<
+    CheckProviderResult,
+    Error,
+    {
+      type: EmailProviderType;
+      configuration: Record<string, unknown>;
+      providerId?: string;
+    }
+  >({
+    mutationFn: input => checkProvider(input),
+  });
 }

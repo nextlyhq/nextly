@@ -129,7 +129,38 @@ export interface EmailProviderRecord {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Whether the provider has verified the sending domain, where it reports
+   * one. Only a single provider's read carries it; null when not reported.
+   */
+  domainStatus?: EmailDomainStatus | null;
 }
+
+/** What a provider reports about the domain email is sent from. */
+export interface EmailDomainStatus {
+  domain: string;
+  status: "verified" | "pending" | "failed";
+  records: Array<{
+    type: string;
+    name: string;
+    value: string;
+    /** An MX record's priority. */
+    priority?: number;
+  }>;
+}
+
+/**
+ * What to check when a check or a test send fails: the key or password, the
+ * sender or its domain, the recipient, a rate limit, the connection, or
+ * something else.
+ */
+export type EmailSetupCategory =
+  | "credentials"
+  | "sender"
+  | "recipient"
+  | "rate-limited"
+  | "connect"
+  | "other";
 
 export interface CreateEmailProviderPayload {
   name: string;
@@ -176,6 +207,31 @@ export interface TestProviderResult {
   success: boolean;
   messageId?: string;
   error?: string;
+  /** What to check, when the test failed. */
+  setup?: EmailSetupCategory;
+  /** Whether sending again later can succeed, when the provider said. */
+  retryable?: boolean;
+}
+
+/**
+ * What checking settings before saving found. `checked` is false when the
+ * provider can't be asked without sending, so the test send is the check.
+ */
+export interface CheckProviderResult {
+  checked: boolean;
+  success: boolean;
+  error?: string;
+  setup?: EmailSetupCategory;
+}
+
+/** How email goes out when no provider is chosen. */
+export interface SendingSettings {
+  /** The default From address set in the site's code, if any. */
+  from: string | null;
+  /** The provider set in the site's code, by type and label only. */
+  codeProvider: { type: string; label: string } | null;
+  /** Whether the server runs in development, where Log is meant. */
+  development: boolean;
 }
 
 // ============================================================
@@ -337,6 +393,50 @@ export async function testProvider(
   return body.result;
 }
 
+/**
+ * Check settings with their provider before saving, sending nothing. For an
+ * existing provider, pass its id and the fields the edit clears: masked
+ * secrets then stand for the stored ones, and what is checked is what saving
+ * would store. A configuration the provider can't accept is refused with the
+ * fields to fix, as saving would refuse it.
+ */
+export async function checkProvider(input: {
+  type: EmailProviderType;
+  configuration: Record<string, unknown>;
+  unsetConfiguration?: string[];
+  providerId?: string;
+}): Promise<CheckProviderResult> {
+  // A saved provider is checked at its own address, as an edit; new settings
+  // as an addition, which carries no provider's stored secrets.
+  const { providerId, ...settings } = input;
+  const path = providerId
+    ? `/email-providers/${encodeURIComponent(providerId)}/check`
+    : "/email-providers/check";
+  const sent = providerId
+    ? settings
+    : { type: settings.type, configuration: settings.configuration };
+  const body = await fetcher<ActionResponse<{ result: CheckProviderResult }>>(
+    path,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sent),
+    },
+    true
+  );
+  return body.result;
+}
+
+/** The default sender, the provider set in code, and the environment. */
+export async function getSendingSettings(): Promise<SendingSettings> {
+  const body = await fetcher<{ settings: SendingSettings }>(
+    "/email-providers/settings",
+    {},
+    true
+  );
+  return body.settings;
+}
+
 /** The type of {@link emailProviderApi}. */
 type EmailProviderApiType = {
   readonly listProviders: typeof listProviders;
@@ -347,6 +447,8 @@ type EmailProviderApiType = {
   readonly deleteProvider: typeof deleteProvider;
   readonly setDefaultProvider: typeof setDefaultProvider;
   readonly testProvider: typeof testProvider;
+  readonly checkProvider: typeof checkProvider;
+  readonly getSendingSettings: typeof getSendingSettings;
 };
 
 export const emailProviderApi: EmailProviderApiType = {
@@ -358,4 +460,6 @@ export const emailProviderApi: EmailProviderApiType = {
   deleteProvider,
   setDefaultProvider,
   testProvider,
+  checkProvider,
+  getSendingSettings,
 } as const;
