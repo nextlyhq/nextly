@@ -284,14 +284,27 @@ export interface ReadyCardData {
     scope: WidgetScope;
     /** The batch's instant, the card's own copy. */
     now: Date;
-  }): Promise<{ result: WidgetResult; empty: boolean }>;
+  }): Promise<CardAnswer>;
 }
+
+/**
+ * What a declared card answers: its data and whether its empty test holds, or
+ * the slot it settles as without data, decided before its `load` ran (it asks
+ * for a setting, is not shown, or is not available to this person). None of
+ * those is a failure, so none is logged as one.
+ */
+export type CardAnswer =
+  | { result: WidgetResult; empty: boolean }
+  | { settled: Extract<QuerySlot, { ok: false }> };
 
 /** Anything a batch answers at its place: a ready query, or a declared card's own data. */
 export type ReadyEntry = ReadyQuery | ReadyCardData;
 
-/** What a failed or late slot names for the operator: the source asked, or the declared widget. */
-type SlotSubject = { source: string } | { widget: string };
+/**
+ * What a failed or late slot names for the operator: the source asked, or the
+ * declared widget and the owner that declared it.
+ */
+type SlotSubject = { source: string } | { widget: string; owner?: string };
 
 /** A slot's subject as the log names it. */
 function named(subject: SlotSubject): string {
@@ -387,7 +400,7 @@ async function answerCardData(
   const widget = card.widgetId;
   let slot: QuerySlot;
   try {
-    const { result, empty } = await withinSlotBudget(
+    const answer = await withinSlotBudget(
       signal =>
         card.answer({
           signal,
@@ -396,13 +409,17 @@ async function answerCardData(
           // would move every later card's.
           now: new Date(run.now),
         }),
-      () => slotTimedOut({ widget }),
+      () => slotTimedOut({ widget, owner: card.owner }),
       run.signal
     );
-    const sendable = serialisable(result, { widget });
-    slot = empty
-      ? { ok: true, result: sendable, empty: true }
-      : { ok: true, result: sendable };
+    if ("settled" in answer) {
+      slot = answer.settled;
+    } else {
+      const sendable = serialisable(answer.result, { widget });
+      slot = answer.empty
+        ? { ok: true, result: sendable, empty: true }
+        : { ok: true, result: sendable };
+    }
   } catch (error) {
     if (batchGivenUp(run)) return;
     slot = failedSlot(error);
