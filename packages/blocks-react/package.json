@@ -51,9 +51,9 @@
     "@nextlyhq/blocks-engine": "workspace:*"
   },
   "peerDependencies": {
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nextly": "workspace:*",
-    "react": "^19.0.0"
+    "react": "^19.3.0"
   },
   "peerDependenciesMeta": {
     "next": {
