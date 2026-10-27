@@ -1,5 +1,6 @@
 "use client";
 
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
@@ -15,7 +16,7 @@ interface VerifyEmailProps {
   searchParams?: Record<string, string | string[] | undefined>;
 }
 
-export function VerifyEmail({ searchParams }: VerifyEmailProps) {
+export function VerifyEmail({ searchParams }: VerifyEmailProps): JSX.Element {
   const token =
     typeof searchParams?.token === "string" ? searchParams.token : null;
 

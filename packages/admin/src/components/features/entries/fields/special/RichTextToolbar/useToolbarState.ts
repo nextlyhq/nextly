@@ -51,6 +51,7 @@ import {
   type TextFormatType,
   type ElementFormatType,
 } from "lexical";
+import type { RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { OPEN_BUTTON_GROUP_DIALOG_COMMAND } from "../RichTextButtonGroupPlugin";
@@ -66,7 +67,62 @@ import { OPEN_VIDEO_DIALOG_COMMAND } from "../RichTextVideoPlugin";
 // Hook
 // ============================================================
 
-export function useToolbarState(editor: LexicalEditor, features: string[]) {
+/** What the toolbar reads and calls: its format state, its handlers, and which features are on. */
+export interface ToolbarState {
+  // State
+  isBold: boolean;
+  isItalic: boolean;
+  isUnderline: boolean;
+  isStrikethrough: boolean;
+  isCode: boolean;
+  isHighlight: boolean;
+  isLink: boolean;
+  blockType: string;
+  elementFormat: string;
+  fontFamily: string;
+  fontSize: string;
+  fontColor: string;
+  bgColor: string;
+  fontColorRef: RefObject<HTMLInputElement | null>;
+  bgColorRef: RefObject<HTMLInputElement | null>;
+  canUndo: boolean;
+  canRedo: boolean;
+  // Handlers
+  hasFeature: (feature: string) => boolean;
+  formatText: (format: TextFormatType) => void;
+  formatHeading: (headingType: HeadingTagType) => void;
+  formatCodeBlock: () => void;
+  formatList: (type: "bullet" | "number" | "check") => void;
+  formatQuote: () => void;
+  formatParagraph: () => void;
+  formatAlignment: (alignment: ElementFormatType) => void;
+  insertHorizontalRule: () => void;
+  toggleLink: () => void;
+  insertImage: () => void;
+  insertVideo: () => void;
+  insertButtonLink: () => void;
+  insertTable: () => void;
+  insertCollapsible: () => void;
+  insertButtonGroup: () => void;
+  insertGallery: () => void;
+  applyFontFamily: (family: string) => void;
+  applyFontSize: (size: string) => void;
+  applyFontColor: (color: string) => void;
+  applyBgColor: (color: string) => void;
+  clearFormatting: () => void;
+  // Feature flags
+  hasBlockType: boolean;
+  hasFontSelects: boolean;
+  hasTextFormatting: boolean;
+  hasMoreFormatting: boolean;
+  hasAlignment: boolean;
+  hasMedia: boolean;
+}
+
+export function useToolbarState(
+  editor: LexicalEditor,
+  features: string[]
+): ToolbarState {
   // Active format state
   const [isBold, setIsBold] = useState(false);
   const [isItalic, setIsItalic] = useState(false);
@@ -96,7 +152,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
 
   // Check if a feature is enabled
   const hasFeature = useCallback(
-    (feature: string) => {
+    (feature: string): boolean => {
       if (features.length === 0) return true;
       return features.includes(feature);
     },
@@ -219,14 +275,14 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   // ============================================================
 
   const formatText = useCallback(
-    (format: TextFormatType) => {
+    (format: TextFormatType): void => {
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, format);
     },
     [editor]
   );
 
   const formatHeading = useCallback(
-    (headingType: HeadingTagType) => {
+    (headingType: HeadingTagType): void => {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -241,7 +297,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
     [editor, blockType]
   );
 
-  const formatCodeBlock = useCallback(() => {
+  const formatCodeBlock = useCallback((): void => {
     editor.update(() => {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
@@ -255,7 +311,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   }, [editor, blockType]);
 
   const formatList = useCallback(
-    (type: "bullet" | "number" | "check") => {
+    (type: "bullet" | "number" | "check"): void => {
       const currentType =
         blockType === "ul"
           ? "bullet"
@@ -280,7 +336,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
     [editor, blockType]
   );
 
-  const formatQuote = useCallback(() => {
+  const formatQuote = useCallback((): void => {
     editor.update(() => {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
@@ -293,7 +349,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
     });
   }, [editor, blockType]);
 
-  const formatParagraph = useCallback(() => {
+  const formatParagraph = useCallback((): void => {
     editor.update(() => {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {
@@ -305,50 +361,50 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   }, [editor, blockType]);
 
   const formatAlignment = useCallback(
-    (alignment: ElementFormatType) => {
+    (alignment: ElementFormatType): void => {
       editor.dispatchCommand(FORMAT_ELEMENT_COMMAND, alignment);
     },
     [editor]
   );
 
-  const insertHorizontalRule = useCallback(() => {
+  const insertHorizontalRule = useCallback((): void => {
     editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined);
   }, [editor]);
 
-  const toggleLink = useCallback(() => {
+  const toggleLink = useCallback((): void => {
     editor.dispatchCommand(OPEN_LINK_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertImage = useCallback(() => {
+  const insertImage = useCallback((): void => {
     editor.dispatchCommand(OPEN_IMAGE_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertVideo = useCallback(() => {
+  const insertVideo = useCallback((): void => {
     editor.dispatchCommand(OPEN_VIDEO_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertButtonLink = useCallback(() => {
+  const insertButtonLink = useCallback((): void => {
     editor.dispatchCommand(OPEN_BUTTON_LINK_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertTable = useCallback(() => {
+  const insertTable = useCallback((): void => {
     editor.dispatchCommand(OPEN_TABLE_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertCollapsible = useCallback(() => {
+  const insertCollapsible = useCallback((): void => {
     editor.dispatchCommand(INSERT_COLLAPSIBLE_COMMAND, undefined);
   }, [editor]);
 
-  const insertButtonGroup = useCallback(() => {
+  const insertButtonGroup = useCallback((): void => {
     editor.dispatchCommand(OPEN_BUTTON_GROUP_DIALOG_COMMAND, undefined);
   }, [editor]);
 
-  const insertGallery = useCallback(() => {
+  const insertGallery = useCallback((): void => {
     editor.dispatchCommand(OPEN_GALLERY_DIALOG_COMMAND, undefined);
   }, [editor]);
 
   const applyFontFamily = useCallback(
-    (family: string) => {
+    (family: string): void => {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -360,7 +416,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   );
 
   const applyFontSize = useCallback(
-    (size: string) => {
+    (size: string): void => {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -372,7 +428,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   );
 
   const applyFontColor = useCallback(
-    (color: string) => {
+    (color: string): void => {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -384,7 +440,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
   );
 
   const applyBgColor = useCallback(
-    (color: string) => {
+    (color: string): void => {
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -395,7 +451,7 @@ export function useToolbarState(editor: LexicalEditor, features: string[]) {
     [editor]
   );
 
-  const clearFormatting = useCallback(() => {
+  const clearFormatting = useCallback((): void => {
     editor.update(() => {
       const selection = $getSelection();
       if ($isRangeSelection(selection)) {

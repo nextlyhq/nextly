@@ -20,6 +20,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useCallback, useState } from "react";
 import {
   useFieldArray,
@@ -231,7 +232,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
   readOnly = false,
   className,
   renderField,
-}: RepeaterInputProps<TFieldValues>) {
+}: RepeaterInputProps<TFieldValues>): JSX.Element {
   const formContext = useFormContext<TFieldValues>();
   const control = controlProp ?? formContext?.control;
 

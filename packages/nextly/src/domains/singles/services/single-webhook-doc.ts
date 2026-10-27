@@ -19,6 +19,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
@@ -146,7 +147,12 @@ export async function buildSingleWebhookDoc(
   }
   // Redact and normalise: no password hash or system owner column reaches a
   // webhook payload, and JSON-backed fields arrive parsed.
-  applyReadShape(parentRow, fieldConfigs, parentTable);
+  applyReadShape(
+    parentRow,
+    fieldConfigs,
+    parentTable,
+    await passwordReachOf(fieldConfigs, fieldGroupDataService, tx.getDrizzle())
+  );
   // Read the component subtrees on the transaction so the assembly sees the
   // right generation (post-write: just saved; pre-write: prior).
   const subtrees =

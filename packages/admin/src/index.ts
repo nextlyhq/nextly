@@ -691,13 +691,8 @@ export {
 
 // Dashboard Components
 export { StatsCard } from "./components/features/dashboard/StatsCard";
-export {
-  RecentActivity,
-  type RecentActivityProps,
-} from "./components/features/dashboard/RecentActivity";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
-export { RecentEntriesWidget } from "./components/features/dashboard/RecentEntriesWidget";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
 export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
@@ -733,6 +728,39 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
+
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
+export { CardFigure } from "./components/features/widgets/frame/figure";
+export {
+  cardChange,
+  cardNumber,
+} from "./components/features/widgets/frame/format";
+export {
+  GroupsChart,
+  type GroupsChartGroup,
+  type GroupsChartProps,
+} from "./components/features/widgets/charts/groups-chart";
+export {
+  OverTimeChart,
+  type OverTimeChartProps,
+  type OverTimeInterval,
+  type OverTimePoint,
+  type OverTimeSeries,
+} from "./components/features/widgets/charts/over-time-chart";
+export type { WidgetRenderSize } from "nextly/widget-result";
 
 // Constants
 export {

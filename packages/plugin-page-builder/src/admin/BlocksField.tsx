@@ -33,7 +33,7 @@ import {
   useDocumentIdentity,
   useDocumentLocale,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 import {
   useController,
   type Control,
@@ -133,7 +133,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   // bound value below, and the two are different things: this is the schema's
   // declaration, that is the form's state.
   field: declaration,
-}: BlocksFieldProps<TFieldValues>) {
+}: BlocksFieldProps<TFieldValues>): JSX.Element {
   const { field } = useController({ name, control });
   /*
    * Where the builder opens for this field: the document view at the

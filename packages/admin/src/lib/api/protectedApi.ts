@@ -1,8 +1,9 @@
 import { fetcher } from "./fetcher";
 
 export const protectedApi = {
-  get: <T>(path: string, options = {}) => fetcher<T>(path, options, true),
-  post: <T>(path: string, body: unknown, options = {}) =>
+  get: <T>(path: string, options = {}): Promise<T> =>
+    fetcher<T>(path, options, true),
+  post: <T>(path: string, body: unknown, options = {}): Promise<T> =>
     fetcher<T>(
       path,
       {
@@ -15,7 +16,7 @@ export const protectedApi = {
   // PUT, for a write whose result depends only on the body and not on how many
   // times it is sent. The rolling autosave row is the case that needed it: the
   // same snapshot sent twice must leave one recovery point, not two.
-  put: <T>(path: string, body: unknown, options = {}) =>
+  put: <T>(path: string, body: unknown, options = {}): Promise<T> =>
     fetcher<T>(
       path,
       {
@@ -25,7 +26,7 @@ export const protectedApi = {
       },
       true
     ),
-  patch: <T>(path: string, body: unknown, options = {}) =>
+  patch: <T>(path: string, body: unknown, options = {}): Promise<T> =>
     fetcher<T>(
       path,
       {
@@ -35,7 +36,7 @@ export const protectedApi = {
       },
       true
     ),
-  delete: <T>(path: string, body?: unknown, options = {}) =>
+  delete: <T>(path: string, body?: unknown, options = {}): Promise<T> =>
     fetcher<T>(
       path,
       {

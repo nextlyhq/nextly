@@ -198,14 +198,14 @@ export const Posts = defineCollection({
   on a read, by each language a missing value falls back to (the site's fallback chain, or
   `?fallback-locale=`), since a value shown from a fallback is that language's content; and every
   configured language for a read of every translation (`locale=all`), a write to every language
-  (`locale=*`), and an operation on the whole entry, such as a delete or publishing every
-  language. There `locale` is absent. A duplicate copies what a read of the source shows in
-  the default language, so its `locales` also lists each language that falls back to. A read
-  that also reads each language's translation state (`?translation-status=1`, or a
-  `_translated` filter) keeps its `locale` and lists every configured language, and so does an
-  autosave that names a language the site doesn't configure. A collection or Single that isn't
-  localized, and has no localized field group, stores the same content in every language, so
-  an operation on it is told every language with no `locale`, whatever `?locale=` names.
+  (`locale=*`), and an operation on the whole entry, such as a delete. There `locale` is absent.
+  A duplicate copies what a read of the source shows in the default language, so its `locales`
+  also lists each language that falls back to. A read that also reads each language's
+  translation state (`?translation-status=1`, or a `_translated` filter) keeps its `locale` and
+  lists every configured language, and so does an autosave that names a language the site
+  doesn't configure. A collection or Single that isn't localized, and has no localized field
+  group, stores the same content in every language, so an operation on it is told every
+  language with no `locale`, whatever `?locale=` names.
 
 A rule that limits someone to some languages should check `locales`, not only `locale`, so it
 refuses an operation that reaches beyond them: a delete removes every language.
@@ -216,6 +216,13 @@ Write a language rule as a restriction, refusing when `locales` includes a langu
 such as an operation that names none or a collection built in the admin, the rule is told every
 configured language. A restriction then refuses, which is safe; an admission by inclusion would
 allow.
+
+Publishing several languages at once — publishing every language of an entry or a Single, or
+writing `status: "published"` with `locale: "*"` — asks the publish rule once for each language
+it puts live, each time with `locale` set to that language and `locales` to all of them. A rule
+such as `publish: ({ locale }) => locale !== "fr"` therefore refuses a publish that would put
+French live, and since the publish is one transaction, no language goes live. A publish that
+puts no French live is allowed.
 
 ## Related
 

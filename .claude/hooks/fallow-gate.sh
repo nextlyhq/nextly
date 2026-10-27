@@ -20,10 +20,14 @@ set -euo pipefail
 # Re-running `fallow hooks install --target agent` OVERWRITES this file and
 # silently reintroduces both. Re-apply this version if that happens.
 #
-# Version floor (FALLOW_GATE_MIN_VERSION, default 2.85.0). The gate passes
-# --gate-marker agent (added in v2.85.0) so Impact can record containment;
-# older binaries reject the flag entirely, which would make every audit fail
-# open. The floor also covers the older uncommitted-changes inclusion fix
+# Version floor (FALLOW_GATE_MIN_VERSION, default 3.31.0). .fallowrc.jsonc sets
+# circularDependencies.ignoreLazyImports, which fallow first reads in v3.31.0;
+# an older binary rejects the unknown key, the audit exits 2, and the status
+# check below reads that as a runtime error and SKIPS the gate. So a runner
+# below the floor is never used: an old fallow on PATH gives way to the
+# workspace's, and the gate refuses only when no runner meets it. The gate also passes
+# --gate-marker agent (added in v2.85.0), which older binaries reject the same
+# way. The floor also covers the older uncommitted-changes inclusion fix
 # (aabb8e1b, v2.46.0). Set the env var to the empty string to disable.
 # The floor is compared numerically on major.minor.patch by node, below. A
 # prerelease suffix is IGNORED rather than ordered: the floor exists to reject
@@ -118,29 +122,26 @@ if [ "$GIT_WRITE" -eq 0 ]; then
   exit 0
 fi
 
-if command -v fallow >/dev/null 2>&1; then
-  RUNNER=(fallow)
-  BIN_DESC="$(command -v fallow)"
-elif command -v npx >/dev/null 2>&1 && VER_PROBE="$(npx --no-install fallow --version 2>/dev/null || true)" && [[ "$VER_PROBE" == fallow* ]]; then
-  RUNNER=(npx --no-install fallow)
-  BIN_DESC="npx --no-install fallow"
-else
-  echo "fallow-gate: fallow binary not found (tried PATH and npx --no-install), skipping audit." >&2
-  exit 0
-fi
+MIN_VERSION="${FALLOW_GATE_MIN_VERSION-3.31.0}"
 
-VERSION_RAW="$("${RUNNER[@]}" --version 2>/dev/null || true)"
-# First line only. `fallow --version` prints a second `verified: ...` line, and
-# the trims below cut at a SPACE, not a newline, so without this the patch digit
-# arrives fused to that line and parses as 0 — reading 3.15.2 as 3.15.0.
-VERSION="${VERSION_RAW%%$'\n'*}"
-VERSION="${VERSION#fallow }"
-VERSION="${VERSION%% *}"
+# The version a runner reports, or nothing if it is not fallow. First line
+# only: `fallow --version` prints a second `verified: ...` line, and the trims
+# below cut at a SPACE, not a newline, so without this the patch digit arrives
+# fused to that line and parses as 0 — reading 3.15.2 as 3.15.0.
+runner_version() {
+  local raw
+  raw="$("$@" --version 2>/dev/null || true)"
+  raw="${raw%%$'\n'*}"
+  [[ "$raw" == fallow* ]] || return 0
+  raw="${raw#fallow }"
+  printf '%s' "${raw%% *}"
+}
 
-MIN_VERSION="${FALLOW_GATE_MIN_VERSION-2.85.0}"
-if [ -n "$MIN_VERSION" ] && [ -n "$VERSION" ]; then
-  # Numeric compare on major.minor.patch, so this works on macOS too.
-  if node -e '
+# Whether a version is below the floor. Numeric on major.minor.patch, by node,
+# so this works on macOS too. With the floor disabled nothing is below it.
+below_floor() {
+  [ -n "$MIN_VERSION" ] || return 1
+  node -e '
     const parse = v => v.split("-")[0].split(".").map(part => Number(part) || 0);
     const [min, cur] = [parse(process.argv[1]), parse(process.argv[2])];
     for (let i = 0; i < 3; i++) {
@@ -148,16 +149,57 @@ if [ -n "$MIN_VERSION" ] && [ -n "$VERSION" ]; then
       if (a !== b) process.exit(a < b ? 0 : 1);
     }
     process.exit(1);
-  ' "$MIN_VERSION" "$VERSION"; then
-    {
-      echo "fallow-gate: blocked: $BIN_DESC is fallow $VERSION, below required $MIN_VERSION."
-      echo "fallow-gate: older binaries reject the --gate-marker flag this gate passes"
-      echo "fallow-gate: (added in fallow v2.85.0), so the audit cannot run."
-      echo "fallow-gate: upgrade the fallow on PATH (e.g. npm install -g fallow@latest or"
-      echo "fallow-gate: cargo install fallow-cli), or set FALLOW_GATE_MIN_VERSION= to disable."
-    } >&2
-    exit 2
+  ' "$MIN_VERSION" "$1"
+}
+
+# The fallow on PATH first, then the workspace's own (`npx --no-install`), and
+# the first that meets the floor runs. A global install older than the floor
+# falls through to the workspace's, which is the version this repository pins
+# and CI runs, so an old global tool never blocks a commit the installed one
+# can audit. Only when every runner found is below the floor is it refused.
+RUNNER=()
+BIN_DESC=""
+VERSION=""
+REJECTED=()
+try_runner() {
+  local desc=$1
+  shift
+  local v
+  v="$(runner_version "$@")"
+  [ -n "$v" ] || return 1
+  if below_floor "$v"; then
+    REJECTED+=("$desc is fallow $v")
+    return 1
   fi
+  RUNNER=("$@")
+  BIN_DESC=$desc
+  VERSION=$v
+}
+if command -v fallow >/dev/null 2>&1; then
+  try_runner "$(command -v fallow)" fallow || true
+fi
+if [ ${#RUNNER[@]} -eq 0 ] && command -v npx >/dev/null 2>&1; then
+  try_runner "npx --no-install fallow" npx --no-install fallow || true
+fi
+
+if [ ${#RUNNER[@]} -eq 0 ]; then
+  if [ ${#REJECTED[@]} -eq 0 ]; then
+    echo "fallow-gate: fallow binary not found (tried PATH and npx --no-install), skipping audit." >&2
+    exit 0
+  fi
+  {
+    for found in "${REJECTED[@]}"; do
+      echo "fallow-gate: blocked: $found, below required $MIN_VERSION."
+    done
+    echo "fallow-gate: older binaries reject .fallowrc.jsonc (circularDependencies, read"
+    echo "fallow-gate: from fallow v3.31.0), so the audit cannot run."
+    echo "fallow-gate: run pnpm install for the workspace's fallow, or upgrade the one on PATH"
+    echo "fallow-gate: (npm install -g fallow@latest), or set FALLOW_GATE_MIN_VERSION= to disable."
+  } >&2
+  exit 2
+fi
+if [ ${#REJECTED[@]} -gt 0 ]; then
+  echo "fallow-gate: ${REJECTED[0]}, below required $MIN_VERSION; using $BIN_DESC (fallow $VERSION)." >&2
 fi
 
 TMP_JSON="$(mktemp)"

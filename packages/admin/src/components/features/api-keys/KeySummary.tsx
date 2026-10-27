@@ -10,6 +10,8 @@
  * resource, each with its actions.
  */
 
+import type { JSX } from "react";
+
 import { Loader2 } from "@admin/components/icons";
 import { useApiKeyAbilities } from "@admin/hooks/queries/useApiKeys";
 import type { ApiKeyAbility, ApiKeyTokenType } from "@admin/services/apiKeyApi";
@@ -80,7 +82,10 @@ function summaryMessage(state: {
   return null;
 }
 
-export function KeySummary({ tokenType, roleId }: KeySummaryProps) {
+export function KeySummary({
+  tokenType,
+  roleId,
+}: KeySummaryProps): JSX.Element {
   const { data, error, isLoading } = useApiKeyAbilities({
     tokenType,
     ...(roleId ? { roleId } : {}),

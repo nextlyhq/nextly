@@ -39,7 +39,7 @@ export function ChromeSuppressionProvider({
   children,
 }: {
   children: React.ReactNode;
-}) {
+}): React.JSX.Element {
   const { entries: requests, register } =
     useMountRegistry<ChromeSuppressionRequest>();
 

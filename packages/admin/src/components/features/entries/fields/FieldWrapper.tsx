@@ -13,7 +13,7 @@
 import { Label } from "@nextlyhq/ui";
 import { Globe } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 import { useId } from "react";
 
 import { fieldLabel } from "@admin/lib/field-label";
@@ -206,7 +206,7 @@ export function FieldWrapper({
   fieldPath,
   horizontal = false,
   editorIsOpaque = false,
-}: FieldWrapperProps) {
+}: FieldWrapperProps): JSX.Element {
   // Active content-language direction (RTL for Arabic/Hebrew/…).
   const entryLocale = useEntryLocale();
   // Generate unique IDs for accessibility

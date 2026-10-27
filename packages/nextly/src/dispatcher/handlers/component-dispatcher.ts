@@ -58,6 +58,7 @@ import {
   leavingSettingsNotApplied,
   pushAndReconcileCompanion,
 } from "../helpers/builder-schema-push";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -339,11 +340,7 @@ export const COMPONENTS_METHODS: Record<
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
       if (!component) throw new Error("Component not found");
-      if (component.locked) {
-        throw new Error(
-          "This component is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(component, "component", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -465,11 +462,7 @@ export const COMPONENTS_METHODS: Record<
         async () => {
           const component = await svc.registry.getComponent(slug);
           if (!component) throw new Error("Component not found");
-          if (component.locked) {
-            throw new Error(
-              "This component is managed via code and cannot be modified in the UI"
-            );
-          }
+          refuseChangeDefinedInCode(component, "component", slug);
 
           // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
           // This route moves storage exactly as `updateFieldGroup` does and reaches the registry by a
@@ -879,8 +872,10 @@ export const COMPONENTS_METHODS: Record<
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        // Same NextlyError pattern as updateComponent's locked branch.
-        throw NextlyError.forbidden({
+        // Defined in code, as updateComponent's locked branch answers.
+        throw NextlyError.definedInCode({
+          thing: "component",
+          change: "delete",
           logContext: {
             reason: "component-locked",
             slug,

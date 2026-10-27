@@ -9,7 +9,7 @@
  * @module fields/blocksHelper
  */
 
-import { pluginField } from "@nextlyhq/plugin-sdk";
+import { pluginField, type PluginDataFieldConfig } from "@nextlyhq/plugin-sdk";
 
 import type { BlocksFieldConfig } from "./blocks-options";
 import { BLOCKS_TYPE } from "./blocksField";
@@ -28,7 +28,10 @@ import { BLOCKS_TYPE } from "./blocksField";
  * blocks({ name: "content", blocks: { allow: ["core/*"] } })
  * ```
  */
-export const blocks = (config: Omit<BlocksFieldConfig, "type">) =>
+export const blocks = (
+  config: Omit<BlocksFieldConfig, "type">
+): Readonly<Omit<BlocksFieldConfig, "type"> & { type: typeof BLOCKS_TYPE }> &
+  PluginDataFieldConfig =>
   // Marked, so the declaration is admissible where a collection's fields are
   // typed. `FieldConfig` is a closed union of the built-in shapes — which is
   // what makes a malformed built-in a compile error — and a contributed type

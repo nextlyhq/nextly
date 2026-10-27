@@ -5,7 +5,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
-import { type LocalizationSource } from "../../i18n/localization-source";
+import type { LocalizationSource } from "../../i18n/localization-source";
 
 import {
   FieldGroupMutationService,
@@ -69,11 +69,25 @@ export class FieldGroupDataService {
     slug: string,
     executor?: unknown
   ): Promise<FieldConfig[] | null> {
+    return (await this.getComponentDefinition(slug, executor))?.fields ?? null;
+  }
+
+  /**
+   * The component's own definition, from one registry read: whether it is
+   * localized, and its fields. {@link getComponentFields} and
+   * {@link isComponentLocalized} are derived from it, so a caller needing
+   * both reads the registry once. Returns null when the component is unknown.
+   */
+  async getComponentDefinition(
+    slug: string,
+    executor?: unknown
+  ): Promise<{ localized: boolean; fields: FieldConfig[] } | null> {
     const record = await this.registryService.getComponentBySlug(
       slug,
       executor
     );
-    return record?.fields ?? null;
+    if (!record) return null;
+    return { localized: record.localized === true, fields: record.fields };
   }
 
   /**
@@ -89,11 +103,9 @@ export class FieldGroupDataService {
     slug: string,
     executor?: unknown
   ): Promise<boolean> {
-    const record = await this.registryService.getComponentBySlug(
-      slug,
-      executor
+    return (
+      (await this.getComponentDefinition(slug, executor))?.localized === true
     );
-    return record?.localized === true;
   }
 
   /**

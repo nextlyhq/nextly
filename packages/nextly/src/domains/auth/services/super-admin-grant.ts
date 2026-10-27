@@ -10,69 +10,26 @@
  * to remember it.
  *
  * Only a super-admin person may make such a change, never an API key,
- * whoever made it. Work with no request caller, which is trusted server code
- * such as the Direct API, a seed or the CLI, keeps being allowed. Plugin
- * callers are refused before they get here, by the user service.
- *
- * The caller is the one the transport resolved, pinned for the request by
- * {@link runAsRoleChangeCaller}. A request reaches the services carrying it
- * whether or not a route thought to pass it on, so a route that forgets
- * cannot be read as trusted.
+ * whoever made it, as `refuseUnlessSuperAdminCaller` judges the request's
+ * caller. Work with no request caller, which is trusted server code such as
+ * the Direct API, a seed or the CLI, keeps being allowed. Plugin callers are
+ * refused before they get here, by the user service.
  *
  * @module domains/auth/services/super-admin-grant
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
-
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
 
-import type { AuthContext } from "../../../auth/middleware";
 import { getDialectTables } from "../../../database";
-import { NextlyError } from "../../../errors";
 import { SUPER_ADMIN_SLUG } from "../../../services/access/super-admin";
-import { isSuperAdminOrThrow } from "../../../services/lib/permissions";
 import {
   lockSuperAdminRole,
   type LastSuperAdminTx,
 } from "../../users/services/last-super-admin";
 
+import { refuseUnlessSuperAdminCaller } from "./role-change-caller";
 import { walkDescendantRoleIds } from "./role-descendants";
-
-/**
- * Who is making a role change, as the transport resolved them. `visitor` is a
- * request that arrived with no credentials at all.
- */
-export type RoleChangeCaller =
-  | { kind: "person"; userId: string }
-  | { kind: "key" }
-  | { kind: "visitor" };
-
-const roleChangeCaller = new AsyncLocalStorage<RoleChangeCaller>();
-
-/**
- * The caller a request's authentication describes, for the role changes it
- * makes: a person for a session, a key for an API key, a visitor with none.
- * The one mapping, for every transport that resolved an `AuthContext`.
- */
-export function roleChangeCallerFor(
-  authorizedUser: Pick<AuthContext, "authMethod" | "userId"> | undefined
-): RoleChangeCaller {
-  if (!authorizedUser) return { kind: "visitor" };
-  if (authorizedUser.authMethod === "api-key") return { kind: "key" };
-  return { kind: "person", userId: authorizedUser.userId };
-}
-
-/**
- * Run `operation` with `caller` as the one every role change inside it is
- * judged for. The transport pins it once per request, around the dispatch.
- */
-export function runAsRoleChangeCaller<T>(
-  caller: RoleChangeCaller,
-  operation: () => T
-): T {
-  return roleChangeCaller.run(caller, operation);
-}
 
 /**
  * Whether holding or inheriting any of `roleIds` confers super-admin: one of
@@ -147,21 +104,8 @@ export async function refuseGrantingSuperAdmin(
   await lockSuperAdminRole(tx, getDialectTables(dialect), dialect);
   if (!(await rolesConferSuperAdmin(tx, dialect, roleIds))) return;
 
-  const caller = roleChangeCaller.getStore();
-  // No request caller: trusted server code, which decides for itself.
-  if (caller === undefined) return;
-  if (
-    caller.kind === "person" &&
-    (await isSuperAdminOrThrow(caller.userId, tx))
-  ) {
-    return;
-  }
-
-  throw NextlyError.forbidden({
-    logContext: {
-      ...logContext,
-      reason: "super-admin-grant-refused",
-      caller: caller.kind,
-    },
+  await refuseUnlessSuperAdminCaller(tx, {
+    ...logContext,
+    reason: "super-admin-grant-refused",
   });
 }

@@ -25,6 +25,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -39,6 +40,19 @@ const POSTGRES_URL = process.env.TEST_POSTGRES_URL ?? "";
 
 const SLUG = "toctouposts";
 const TABLE = `dc_${SLUG}`;
+// Writer A of each case. One per case, so neither inserts the other's user on
+// this shared database; `drop` removes both.
+const RACE_EDITOR = "toctou-editor-race";
+const VANISH_EDITOR = "toctou-editor-vanish";
+
+/**
+ * Stores writer A. A code rule only narrows the permission, so the editor
+ * holds update on the collection; the rules still refuse the lifecycle move
+ * each case is about.
+ */
+async function seatEditor(t: TestNextly, id: string): Promise<void> {
+  await userWhoMay(t, id, "update", [SLUG]);
+}
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
 type Dialect = "postgresql" | "mysql";
@@ -132,6 +146,11 @@ for (const leg of LEGS) {
       for (const stmt of [
         `DROP TABLE IF EXISTS ${TABLE}`,
         `DELETE FROM dynamic_collections WHERE slug = '${SLUG}'`,
+        // Writer A of each case and its roles; their grants go with them.
+        ...[RACE_EDITOR, VANISH_EDITOR].flatMap(editor => [
+          `DELETE FROM roles WHERE id IN (SELECT role_id FROM user_roles WHERE user_id = '${editor}')`,
+          `DELETE FROM users WHERE id = '${editor}'`,
+        ]),
       ]) {
         try {
           await boot.executeQuery(stmt);
@@ -163,6 +182,7 @@ for (const leg of LEGS) {
             }),
           ],
         });
+        await seatEditor(handle, RACE_EDITOR);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entryService = h.getEntryService() as CollectionEntryService;
 
@@ -190,7 +210,7 @@ for (const leg of LEGS) {
         // Writer A: a batch update that keeps the row draft. It reads the
         // committed `draft` (B is uncommitted), then blocks taking the row lock.
         const aResultP = entryService.updateEntries(
-          { collectionName: SLUG, user: { id: "editor" } },
+          { collectionName: SLUG, user: { id: RACE_EDITOR } },
           [{ id, data: { status: "draft" } }]
         );
 
@@ -239,6 +259,7 @@ for (const leg of LEGS) {
             }),
           ],
         });
+        await seatEditor(handle, VANISH_EDITOR);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entryService = h.getEntryService() as CollectionEntryService;
 
@@ -266,7 +287,7 @@ for (const leg of LEGS) {
         // Writer A: a batch update to `published`. Its plain existence read sees
         // the still-committed row, then it blocks taking the row lock behind B.
         const aResultP = entryService.updateEntries(
-          { collectionName: SLUG, user: { id: "editor" } },
+          { collectionName: SLUG, user: { id: VANISH_EDITOR } },
           [{ id, data: { status: "published" } }]
         );
 

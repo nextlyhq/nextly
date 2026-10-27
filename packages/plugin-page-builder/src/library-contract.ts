@@ -54,7 +54,7 @@ export const LIBRARY_ROUTE_PATH = "/library";
  * tier along with them would spend up to the whole byte ceiling to draw a
  * header.
  */
-export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}/components`;
+export const COMPONENT_LIBRARY_ROUTE_PATH: `${typeof LIBRARY_ROUTE_PATH}/components` = `${LIBRARY_ROUTE_PATH}/components`;
 
 /**
  * The query parameter naming the language the component tier is read in.

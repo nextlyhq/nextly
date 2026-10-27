@@ -11,7 +11,7 @@
  *
  * @module blocks/quote
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -187,7 +187,7 @@ const QUOTE_PARTS = {
   },
 } as const;
 
-export const quote = defineBlock<QuoteProps, PageContext>({
+export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
   name: QUOTE_BLOCK,
   version: 1,
   description:

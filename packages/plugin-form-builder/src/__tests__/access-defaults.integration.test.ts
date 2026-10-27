@@ -1,13 +1,12 @@
 /**
  * form-builder's default access rules, judged by the real access gate.
  *
- * A collection's code rule is the whole answer for a signed-in user, so a
- * default that admits "anyone signed in" lets every staff member read every
- * submission and edit every form, whatever the role screen says. The defaults
- * therefore check the caller's permission for the operation, and these tests
- * hold that through the gate on each configured dialect: a role without the
- * permission is refused, a role with it is admitted, and the two public axes —
- * reading a form, creating a submission — stay open to a visitor.
+ * The gate checks the caller's permission before a collection's code rule,
+ * and the rule only narrows it. The defaults check the permission for the
+ * operation too, and these tests hold the outcome through the gate on each
+ * configured dialect: a role without the permission is refused, a role with
+ * it is admitted, and the two public axes — reading a form, creating a
+ * submission — stay open to a visitor.
  *
  * The roles are named for what they hold, never `admin` or `editor`, so a
  * default that still decided by role name could not pass the admitted cases.

@@ -26,9 +26,9 @@ const toRgb = converter("rgb");
  *
  * The direction is deliberate. `lib/color` is the published surface and this
  * module is not, so importing from there consumes existing public API rather
- * than creating any. The reverse -- moving the WCAG maths out to `lib/color`
- * -- would publish which formula, which compositing rule and which gamut-edge
- * behaviour this harness uses, freezing decisions it may need to revise.
+ * than creating any. The WCAG formula itself lives in `lib/color/wcag.ts`,
+ * which `@nextlyhq/ui/color` does not export, so the runtime adjustment of a
+ * brand's colours and this check read one formula while neither publishes it.
  */
 export type Rgb = Rgba;
 
@@ -77,32 +77,12 @@ export function compositeOver(fg: Rgb, bg: Rgb): Rgb {
   };
 }
 
-/** Linearize one gamma-encoded sRGB channel (the WCAG 2.x transfer function). */
-function channelToLinear(c: number): number {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
-
-/** WCAG 2.x relative luminance of a gamma-encoded sRGB color (alpha ignored). */
-export function relativeLuminance(rgb: Rgb): number {
-  return (
-    0.2126 * channelToLinear(rgb.r) +
-    0.7152 * channelToLinear(rgb.g) +
-    0.0722 * channelToLinear(rgb.b)
-  );
-}
-
 /**
- * WCAG 2.x contrast ratio between two OPAQUE colors, from 1:1 to 21:1. Any
- * translucent color must be composited (see {@link compositeOver}) first — the
- * alpha channel is not consulted here.
+ * WCAG 2.x relative luminance and contrast ratio, the one implementation in
+ * this package. Any translucent color must be composited (see
+ * {@link compositeOver}) before its ratio is taken: the alpha is not consulted.
  */
-export function contrastRatio(a: Rgb, b: Rgb): number {
-  const la = relativeLuminance(a);
-  const lb = relativeLuminance(b);
-  const lighter = Math.max(la, lb);
-  const darker = Math.min(la, lb);
-  return (lighter + 0.05) / (darker + 0.05);
-}
+export { contrastRatio, relativeLuminance } from "../../lib/color/wcag";
 
 /**
  * Resolve a color token to an OPAQUE sRGB color, compositing over `base` when

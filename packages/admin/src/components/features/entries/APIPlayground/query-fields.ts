@@ -155,7 +155,7 @@ export interface WhereCondition {
 }
 
 /** Operators whose value is a list rather than a single term. */
-export const LIST_OPERATORS = new Set(["in", "not_in"]);
+export const LIST_OPERATORS: Set<string> = new Set(["in", "not_in"]);
 
 /**
  * Write the API's `where` format from the rows on screen.

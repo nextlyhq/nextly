@@ -89,7 +89,7 @@ const facts = [
   {
     id: "pr-scopes",
     what: "PR scopes accepted by the title check (the enforced list; commitlint checks format only, not scope membership)",
-    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml | sed '1d;$d' | grep -vE '^ *$' | awk '/^ *[a-z0-9-]+ *$/{gsub(/ +/,\"\");print;next}{exit 1}' | tr '\\n' ' '",
+    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/small-checks.yml | sed '1d;$d' | grep -vE '^ *$' | awk '/^ *[a-z0-9-]+ *$/{gsub(/ +/,\"\");print;next}{exit 1}' | tr '\\n' ' '",
   },
   {
     id: "engines",

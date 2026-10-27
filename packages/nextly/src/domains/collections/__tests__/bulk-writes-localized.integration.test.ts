@@ -13,6 +13,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, number, richText, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
@@ -688,6 +692,10 @@ describe("a bulk write that moves a localized collection's published state", () 
     await handle.adapter.executeQuery(
       `UPDATE "dc_posts_locales" SET "_status" = 'draft' WHERE "_parent" = '${row._parent}'`
     );
+    // A code rule only narrows the permission, so the editor holds update and
+    // publish on posts.
+    await userWhoMay(handle, "editor", "update", ["posts"]);
+    await grantTo(handle, "editor", "publish", ["posts"]);
 
     const result = await entries.updateEntries(
       { collectionName: "posts", user: { id: "editor" } },

@@ -1124,6 +1124,9 @@ describe("mintPreviewLink", () => {
     // 403 exactly, not merely >= 400: an unrecognised failure renders as 500,
     // and a range assertion cannot tell a refusal from a crash.
     expect(response.status).toBe(403);
+    expect(await response.clone().json()).toMatchObject({
+      error: { message: "Only a signed-in person can manage preview links." },
+    });
     // Refused BEFORE the authorization probe, so a rejected request performs no
     // reads on the caller's behalf — and before any token exists, since a token
     // that was signed and then discarded is still a token.

@@ -31,7 +31,11 @@ const FOLDER_TREE_STORAGE_KEY = "nextly:admin:media:folder-tree";
 const isStoredFlag = (value: string): value is "1" | "0" =>
   value === "1" || value === "0";
 
-export function MediaProvider({ children }: { children: React.ReactNode }) {
+export function MediaProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
   const [activeFolderId, setActiveFolderId] = React.useState<string | null>(
     null
   );
@@ -80,7 +84,7 @@ export function MediaProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useMediaContext() {
+export function useMediaContext(): MediaContextType {
   const context = React.useContext(MediaContext);
   if (context === undefined) {
     throw new Error("useMediaContext must be used within a MediaProvider");

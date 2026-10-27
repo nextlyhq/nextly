@@ -11,20 +11,20 @@
 export const USER_MESSAGES = {
   // Create User
   CREATE_SUCCESS_TITLE: "User created successfully",
-  CREATE_SUCCESS_DESC: (name: string) =>
+  CREATE_SUCCESS_DESC: (name: string): string =>
     `${name} has been added to the system.`,
   CREATE_ERROR_TITLE: "User creation failed",
   CREATE_ERROR_DESC: "Failed to create user. Please try again.",
 
   // Update User
   UPDATE_SUCCESS_TITLE: "User updated successfully",
-  UPDATE_SUCCESS_DESC: (name: string) => `${name} has been updated.`,
+  UPDATE_SUCCESS_DESC: (name: string): string => `${name} has been updated.`,
   UPDATE_ERROR_TITLE: "Update failed",
   UPDATE_ERROR_DESC: "Failed to update user. Please try again.",
 
   // Delete User
   DELETE_SUCCESS_TITLE: "User deleted successfully",
-  DELETE_SUCCESS_DESC: (name: string) =>
+  DELETE_SUCCESS_DESC: (name: string): string =>
     `${name} has been removed from the system.`,
   DELETE_ERROR_TITLE: "Delete failed",
   DELETE_ERROR_DESC: "Failed to delete user. Please try again.",
@@ -55,19 +55,21 @@ export const USER_MESSAGES = {
 export const ROLE_MESSAGES = {
   // Create Role
   CREATE_SUCCESS_TITLE: "Role created successfully",
-  CREATE_SUCCESS_DESC: (name: string) => `${name} role has been added.`,
+  CREATE_SUCCESS_DESC: (name: string): string => `${name} role has been added.`,
   CREATE_ERROR_TITLE: "Role creation failed",
   CREATE_ERROR_DESC: "Failed to create role. Please try again.",
 
   // Update Role
   UPDATE_SUCCESS_TITLE: "Role updated successfully",
-  UPDATE_SUCCESS_DESC: (name: string) => `${name} role has been updated.`,
+  UPDATE_SUCCESS_DESC: (name: string): string =>
+    `${name} role has been updated.`,
   UPDATE_ERROR_TITLE: "Update failed",
   UPDATE_ERROR_DESC: "Failed to update role. Please try again.",
 
   // Delete Role
   DELETE_SUCCESS_TITLE: "Role deleted successfully",
-  DELETE_SUCCESS_DESC: (name: string) => `${name} role has been removed.`,
+  DELETE_SUCCESS_DESC: (name: string): string =>
+    `${name} role has been removed.`,
   DELETE_ERROR_TITLE: "Delete failed",
   DELETE_ERROR_DESC: "Failed to delete role. Please try again.",
 } as const;

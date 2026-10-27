@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import type { ElementFormatType } from "lexical";
+import type { JSX } from "react";
 
 import {
   AlignCenter,
@@ -60,7 +61,7 @@ export function AlignmentDropdown({
   elementFormat,
   disabled,
   formatAlignment,
-}: AlignmentDropdownProps) {
+}: AlignmentDropdownProps): JSX.Element {
   const currentAlignment =
     ALIGNMENT_OPTIONS.find(
       opt =>

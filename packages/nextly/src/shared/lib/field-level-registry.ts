@@ -45,6 +45,7 @@ import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
+import { immutableSystemColumnNames } from "../../lib/system-columns";
 import {
   listEffectiveGrants,
   listRoleSlugsForUser,
@@ -593,7 +594,6 @@ async function runFieldRule(
     const userId = ctx.user?.id;
     const email = ctx.user?.email;
     const args = buildRuleContext(
-      fn,
       {
         user:
           typeof userId === "string"
@@ -684,16 +684,18 @@ async function applyWriteAccessRec(
   data: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update",
-  ctx: FieldRuleCaller
+  ctx: FieldRuleCaller,
+  asStored?: (snapshot: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
   // Taken BEFORE the recursion below, which rewrites nested containers in
   // place as it redacts them: a rule at this level that reads into a nested
   // value must see what the level held when it was entered, not what an
   // earlier-registered field's recursion left behind. Skipped entirely when no
   // rule at this level will run.
-  const snapshot = levelHasAccessCallback(fns, operation)
+  const detached = levelHasAccessCallback(fns, operation)
     ? detachData(data)
     : undefined;
+  const snapshot = detached && asStored ? asStored(detached) : detached;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -725,6 +727,11 @@ export async function applyFieldWriteAccess(opts: {
   /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
   authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
+  /**
+   * The id the entry is stored under, which a rule is told as `id` and finds
+   * as `data.id`: the stored row's on an update, never the one the request
+   * named, which a database matching ids loosely may have found it by.
+   */
   id?: string;
   /**
    * A resolver shared with another pass over the same write, so the caller's
@@ -752,21 +759,49 @@ export async function applyFieldWriteAccess(opts: {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  await applyWriteAccessRec(opts.data, fns, opts.operation, {
-    user: opts.user,
-    id: opts.id,
-    target: fieldRuleTarget(opts.kind, opts.slug),
-    // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
-    // answers `{ permissions: [], roles: [] }` — so a rule written as
-    // `({ permissions }) => permissions.includes(...)` refuses it, which is
-    // the correct answer rather than an accident of the shape.
-    grants:
-      opts.grants ??
-      grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined,
-        opts.authenticatedScope
-      ),
-  });
+  await applyWriteAccessRec(
+    opts.data,
+    fns,
+    opts.operation,
+    {
+      user: opts.user,
+      id: opts.id,
+      target: fieldRuleTarget(opts.kind, opts.slug),
+      // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
+      // answers `{ permissions: [], roles: [] }` — so a rule written as
+      // `({ permissions }) => permissions.includes(...)` refuses it, which is
+      // the correct answer rather than an accident of the shape.
+      grants:
+        opts.grants ??
+        grantsResolver(
+          typeof opts.user?.id === "string" ? opts.user.id : undefined,
+          opts.authenticatedScope
+        ),
+    },
+    asStoredFor(opts.kind, opts.id)
+  );
+}
+
+/**
+ * The entry a write rule reads as `data`, made the stored one's where the
+ * caller could make it differ: the system columns only the service decides
+ * are not there, and `id` is the id the entry is stored under. A body may
+ * carry any of them, and none of them is what is stored. A field group's
+ * instances are told their own stored id by the write that saves them.
+ */
+function asStoredFor(
+  kind: EntityKind,
+  id: string | undefined
+):
+  | ((snapshot: Record<string, unknown>) => Record<string, unknown>)
+  | undefined {
+  if (kind === "fieldGroup") return undefined;
+  const closed = immutableSystemColumnNames(kind);
+  return snapshot => {
+    for (const name of closed) delete snapshot[name];
+    if (id !== undefined) snapshot.id = id;
+    return snapshot;
+  };
 }
 
 /**

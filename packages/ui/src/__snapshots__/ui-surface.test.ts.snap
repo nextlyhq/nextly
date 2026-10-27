@@ -316,6 +316,7 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
   "oklchToRgb (value)",
   "parseHex (value)",
   "pointOnSurface (value)",
+  "readableOn (value)",
   "rgbToHsv (value)",
   "rgbToOklch (value)",
   "saturationValueAt (value)",

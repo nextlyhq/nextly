@@ -43,7 +43,7 @@ import {
   Settings,
   Trash2,
 } from "lucide-react";
-import { useRef, type ComponentType } from "react";
+import { useRef, type ComponentType, type JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
@@ -91,7 +91,7 @@ const MOVES: ReadonlyArray<{
  * The card's width as a short fraction, with its full name for a screen
  * reader. Shown beside the menu button while customising.
  */
-export function CardWidthLabel({ width }: { width: WidgetWidth }) {
+export function CardWidthLabel({ width }: { width: WidgetWidth }): JSX.Element {
   const { name, fraction } = WIDTH_NAMES[width];
   return (
     <span
@@ -186,7 +186,7 @@ export function CardActionsMenu({
   triggerRef,
   widthsInPlace = false,
   on,
-}: CardActionsMenuProps) {
+}: CardActionsMenuProps): JSX.Element {
   // 🔴 Set by the actions that send focus somewhere themselves -- a move back
   // to this button once it has moved, a removal to the next card, Settings to
   // its panel. The menu's own close returns focus to its trigger a tick later,

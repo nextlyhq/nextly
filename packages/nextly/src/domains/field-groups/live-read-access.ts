@@ -24,7 +24,11 @@ import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 /** Where a field group's current fields are read from. */
 export interface FieldGroupFieldsSource {
-  getComponentFields(slug: string): Promise<FieldConfig[] | null>;
+  /** `executor`: a transaction's connection, for a lookup made inside one. */
+  getComponentFields(
+    slug: string,
+    executor?: unknown
+  ): Promise<FieldConfig[] | null>;
 }
 
 /** Withholds, from one row, the field-group fields the caller may not read. */
@@ -51,7 +55,10 @@ export async function liveFieldGroupReadPass(
 ): Promise<LiveFieldGroupReadPass | undefined> {
   if (!anyFieldGroupHasAccessRule("read")) return undefined;
   const fieldGroupFields = source
-    ? await resolveComponentFieldMap([...fields], onceEach(source))
+    ? await resolveComponentFieldMap(
+        [...fields],
+        lookupOncePerFieldGroup(source)
+      )
     : new Map<string, FieldConfig[]>();
   // A live document: a single field group's value is judged by the field group
   // the field declares, whatever type a hook may have given it.
@@ -76,7 +83,7 @@ export async function liveFieldGroupReadPass(
  * it: the resolver batches the slugs it finds, and a schema that places one
  * field group in several fields would otherwise ask for it once for each.
  */
-function onceEach(
+export function lookupOncePerFieldGroup(
   source: FieldGroupFieldsSource
 ): (slug: string) => Promise<FieldConfig[] | null> {
   const asked = new Map<string, Promise<FieldConfig[] | null>>();

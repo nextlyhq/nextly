@@ -24,6 +24,7 @@
  * @module components/features/entries/EntryForm/EntryTitleInput
  */
 
+import type { JSX } from "react";
 import { useController, type Control } from "react-hook-form";
 
 import { cn } from "@admin/lib/utils";
@@ -83,7 +84,7 @@ export function EntryTitleInput({
   rtl,
   inputRef,
   className,
-}: EntryTitleInputProps) {
+}: EntryTitleInputProps): JSX.Element {
   const { field } = useController({
     control,
     name,

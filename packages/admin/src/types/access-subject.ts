@@ -8,3 +8,13 @@
  * from the router would close a cycle through the pages they guard.
  */
 export type AccessSubject = "collection" | "single";
+
+/**
+ * What a collection or Single route asks of the entity it opens, so the guard
+ * can ask the server's answer about that entity rather than a permission
+ * slug, which cannot see the entity's code rules.
+ */
+export interface EntityAccess {
+  slug: string;
+  action: "read" | "create" | "update";
+}

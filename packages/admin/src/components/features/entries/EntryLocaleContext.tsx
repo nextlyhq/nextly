@@ -9,6 +9,7 @@
  * @module components/features/entries/EntryLocaleContext
  */
 
+import type { Provider } from "react";
 import { createContext, useContext } from "react";
 
 export interface EntryLocaleContextValue {
@@ -117,7 +118,8 @@ const NO_LOCALE_CONTEXT: EntryLocaleContextValue = {
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue | null>(null);
 
-export const EntryLocaleProvider = EntryLocaleContext.Provider;
+export const EntryLocaleProvider: Provider<EntryLocaleContextValue | null> =
+  EntryLocaleContext.Provider;
 
 /** Read the active content-locale context (defaults to LTR / no locale / non-localized). */
 export function useEntryLocale(): EntryLocaleContextValue {

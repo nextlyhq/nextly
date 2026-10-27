@@ -20,6 +20,7 @@ import { StreamLanguage } from "@codemirror/language";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
+import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useTheme } from "@admin/context/providers/ThemeProvider";
@@ -56,7 +57,7 @@ export function CodeBlock({
   value,
   language,
   showGutter = false,
-}: CodeBlockProps) {
+}: CodeBlockProps): JSX.Element {
   // Not a colour: every colour here is a token. This is the boolean the
   // CodeMirror packages read to choose between their OWN light and dark rules,
   // which nothing sets under `theme="none"`.

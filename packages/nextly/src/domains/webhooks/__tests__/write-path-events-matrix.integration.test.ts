@@ -244,10 +244,13 @@ const CASES: PathCase[] = [
     run: async (t, e) => {
       const id1 = await seed(t, { title: "a", status: "draft" });
       const id2 = await seed(t, { title: "b", status: "draft" });
-      await e.updateEntries({ collectionName: COLLECTION }, [
-        { id: id1, data: { title: "a2" } },
-        { id: id2, data: { title: "b2" } },
-      ]);
+      await e.updateEntries(
+        { collectionName: COLLECTION, overrideAccess: true },
+        [
+          { id: id1, data: { title: "a2" } },
+          { id: id2, data: { title: "b2" } },
+        ]
+      );
       return [id1, id2];
     },
     atLeast: { "entry.updated": 2 },

@@ -1,23 +1,7 @@
-// `unstable_rethrow` is loaded lazily on first use via `createRequire`
-// (CommonJS-style resolution). Why not a regular static or dynamic
-// `import "next/navigation"`?
-//
-//   - Static `import { x } from "next/navigation"` chokes Node's strict
-//     ESM resolver when this package is loaded as an external via
-//     `serverExternalPackages` (Next.js 16 doesn't list `./navigation`
-//     in its package.json `exports` field).
-//   - The `.js`-suffix variant fixes Node ESM but makes Turbopack's
-//     bundler descend into Next.js internals that aren't on disk.
-//   - Plain `await import("next/navigation")` shifts the same Node ESM
-//     resolution failure from load time to call time — still crashes.
-//
-// `createRequire(import.meta.url)` falls back to Node's CommonJS
-// resolver, which finds `node_modules/next/navigation.js` directly.
-// Turbopack treats `createRequire` as opaque (it doesn't follow the
-// require path at build time), so neither side complains. References
-// cached at module scope so the resolution cost is paid once.
-import { createRequire } from "node:module";
-
+// `unstable_rethrow` comes from `../actions/next-runtime`, the one place
+// that loads it: lazily, through `createRequire`, with a digest check to
+// fall back on when `next/navigation` cannot be loaded.
+import { getUnstableRethrow } from "../actions/next-runtime";
 import { runWithAccessMemo } from "../auth/access/request-memo";
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
@@ -32,18 +16,6 @@ import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
 import { buildErrorResponse } from "./error-response";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./request-id";
-
-type UnstableRethrow = (err: unknown) => void;
-let cachedUnstableRethrow: UnstableRethrow | null = null;
-function getUnstableRethrow(): UnstableRethrow {
-  if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  const require = createRequire(import.meta.url);
-  const mod = require("next/navigation") as {
-    unstable_rethrow: UnstableRethrow;
-  };
-  cachedUnstableRethrow = mod.unstable_rethrow;
-  return cachedUnstableRethrow;
-}
 
 type WithErrorHandlerOptions = {
   /** Per-call observability hook. Fired before the global hook. */
@@ -130,8 +102,8 @@ export function withErrorHandler<TArgs extends unknown[]>(
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.
-      // `getUnstableRethrow` resolves via `createRequire` (see top of
-      // file for the dual-resolution rationale). Synchronous now.
+      // `getUnstableRethrow` never throws for any other error, even where
+      // `next/navigation` cannot be loaded (see `../actions/next-runtime`).
       getUnstableRethrow()(err);
 
       // (2) Classify.

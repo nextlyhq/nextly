@@ -1,25 +1,22 @@
 # @nextlyhq/eslint-config
 
-Shared ESLint configuration for the Nextly monorepo.
+> Internal package. Not published to npm. Empty on purpose.
 
-> Internal package. Not published to npm.
+This held the repository's shared ESLint configuration. Nothing uses it any
+more: the repository lints with oxlint (`oxlint.config.mjs`), and a scaffolded
+plugin's lint config ships in its template (`templates/plugin/eslint.config.mjs`).
 
-## What this is
+## Why it is still here
 
-Three named exports for different consumer types:
+Every pending changeset in `.changeset/` names `@nextlyhq/eslint-config`, the
+consumed pre-release ones included, and Changesets refuses to plan a release
+while a changeset names a package the workspace does not have. Removing the
+package would mean rewriting each of those changesets, so it stays as a
+`package.json` with no code and no dependencies, and stays in the `fixed` group.
 
-- `./base` – the base config used by every package
-- `./next-js` – extension for Next.js apps and templates (extends `./base` with Next.js rules)
-- `./react-internal` – extension for internal React libraries like `@nextlyhq/admin` and `@nextlyhq/ui`
+## When it goes
 
-## Used by
-
-Every workspace package. To enumerate the current consumers:
-
-```bash
-grep -lE '"@nextlyhq/eslint-config":\s*"workspace:\*"' packages/*/package.json apps/*/package.json
-```
-
-## Development
-
-See the [root README](../../README.md) and [CONTRIBUTING.md](../../CONTRIBUTING.md).
+In the first pull request after the alpha pre-release ends, once
+`changeset version` has consumed the backlog of changesets. That pull request
+deletes this directory and its entry in `.changeset/config.json`, and touches no
+changeset.

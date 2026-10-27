@@ -6,13 +6,16 @@
  */
 
 /**
- * Per-collection CRUD capabilities.
+ * What the current user may do with one collection or Single, as the server
+ * decides it. A Single has no create or delete, so those are false for one.
  */
 export interface CollectionCapabilities {
   canRead: boolean;
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
+  canPublish: boolean;
+  canUnpublish: boolean;
 }
 
 /**
@@ -49,7 +52,8 @@ export interface AdminCapabilities {
    */
   canViewReleases: boolean;
 
-  // Per-collection visibility (keyed by collection slug)
+  // Per-collection and per-Single capabilities, keyed by slug, as the server
+  // answers them
   collections: Record<string, CollectionCapabilities>;
 
   // Action permissions
@@ -67,6 +71,43 @@ export interface AdminCapabilities {
   canManageEmailTemplates: boolean;
 }
 
+/** What the server says the user may do with one collection or Single. */
+export interface EntityCapabilitiesAnswer {
+  kind: "collection" | "single";
+  read: boolean;
+  update: boolean;
+  publish: boolean;
+  unpublish: boolean;
+  /** Collections only. */
+  create?: boolean;
+  /** Collections only. */
+  delete?: boolean;
+  /**
+   * The requests judged in languages other than the one asked about, each as
+   * the server judges it. Absent from a server that predates them, where the
+   * action's own cell stands in.
+   */
+  readTranslations?: boolean;
+  readHistory?: boolean;
+  publishEveryLanguage?: boolean;
+  /** Collections only. */
+  createInDefaultLanguage?: boolean;
+  updateInDefaultLanguage?: boolean;
+  /** Collections only. */
+  duplicate?: boolean;
+}
+
+/**
+ * Response shape from GET /api/me/capabilities: what the signed-in user may
+ * do with each collection and Single, decided by the server's own route gates.
+ */
+export interface CapabilitiesResponse {
+  isSuperAdmin: boolean;
+  /** When the answer stops holding (epoch ms), or null when nothing expires. */
+  validUntil: number | null;
+  entities: Record<string, EntityCapabilitiesAnswer>;
+}
+
 /**
  * Response shape from GET /api/me/permissions.
  */
@@ -77,4 +118,9 @@ export interface UserPermissionsResponse {
   isSuperAdmin: boolean;
   /** User's role slugs (e.g., ['super-admin', 'editor']) */
   roles: string[];
+  /**
+   * When this list stops holding, in epoch ms, or null: the soonest end of a
+   * role assignment it was read under. Absent from a server that predates it.
+   */
+  validUntil?: number | null;
 }

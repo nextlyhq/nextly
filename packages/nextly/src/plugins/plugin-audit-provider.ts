@@ -4,7 +4,7 @@
  * @module plugins/plugin-audit-provider
  * @since 1.0.0
  */
-import { getService } from "../di/register";
+import { getService } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import {
   collectPluginAuditKinds,

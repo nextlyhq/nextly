@@ -1,8 +1,7 @@
 /**
  * RBAC tables — MySQL.
  *
- * Tables: roles, permissions, rolePermissions, userRoles, roleInherits,
- * userPermissionCache.
+ * Tables: roles, permissions, rolePermissions, userRoles, roleInherits.
  * Moved verbatim from packages/nextly/src/database/schema/mysql.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -21,7 +20,6 @@ import {
   int,
   varchar,
   datetime,
-  json,
   index,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
@@ -164,53 +162,5 @@ export const roleInherits = mysqlTable(
     ),
     index("role_inherits_child_idx").on(t.childRoleId),
     index("role_inherits_parent_idx").on(t.parentRoleId), // For bidirectional hierarchy queries
-  ]
-);
-
-/**
- * Permission cache table for denormalized permission storage.
- *
- * This table stores pre-computed permission check results to reduce
- * database queries and improve performance for permission checking.
- *
- * Cache Strategy:
- * - Tier 1: In-memory LRU cache (10k entries, 60s TTL)
- * - Tier 2: Database cache (this table, 24h TTL default)
- * - Tier 3: Fresh computation from RBAC tables
- *
- * Invalidation:
- * - By userId: When user's roles change
- * - By roleId: When role's permissions change (JSON contains query)
- * - TTL expiration: Background cleanup job
- *
- * Performance:
- * - Cache hit: <5ms (indexed lookup)
- * - Target: 60%+ query reduction
- * - Target: 90%+ cache hit rate
- */
-export const userPermissionCache = mysqlTable(
-  "user_permission_cache",
-  {
-    // Composite key: userId|action|resource
-    id: varchar("id", { length: 255 }).primaryKey(),
-    userId: varchar("user_id", { length: 191 }).notNull(),
-    action: varchar("action", { length: 50 }).notNull(),
-    resource: varchar("resource", { length: 100 }).notNull(),
-    hasPermission: int("has_permission").notNull(), // MySQL: 0 or 1 for boolean
-    // Store role IDs for invalidation (JSON array of strings)
-    roleIds: json("role_ids").$type<string[]>().notNull(),
-    expiresAt: datetime("expires_at").notNull(),
-    createdAt: datetime("created_at")
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-  },
-  t => [
-    // Primary invalidation path: by user
-    index("upc_user_id_idx").on(t.userId),
-    // Cleanup expired entries efficiently
-    index("upc_expires_at_idx").on(t.expiresAt),
-    // Composite index for fast cache lookups
-    index("upc_user_action_resource_idx").on(t.userId, t.action, t.resource),
-    // Note: createdAt has no index - it's only for audit/display purposes
   ]
 );

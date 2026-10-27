@@ -481,7 +481,8 @@ async function authorizeKeyOperation(
 ): Promise<void> {
   await authorizeChecked(caller, { anyOf: apiKeyPermissionsFor(operation) });
   if (operation !== "read" && caller.authMethod !== "session") {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "manage API keys",
       logContext: { reason: "session-only", action: operation },
     });
   }

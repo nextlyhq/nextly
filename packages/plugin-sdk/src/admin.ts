@@ -360,6 +360,47 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * @experimental The widget kit: the parts core's own dashboard cards are drawn
+ * from, for a widget's own component (`defineWidget` with
+ * `display: { component }`). The host always draws the card's frame and every
+ * state; these are the body-level parts, reading the card's size tier and the
+ * admin's theme tokens, so a plugin card matches core's beside it in light and
+ * dark.
+ *
+ * - `FrameState`: what a component returns when its own data says the card is
+ *   not ready (empty, not available, an error, or still loading), which the
+ *   frame then draws in its place, as on every other card.
+ * - A figure and the number formatter behind it: `CardFigure`, `cardNumber`,
+ *   `cardChange`, in the site's locale.
+ * - Charts that take plain series: `GroupsChart`, `OverTimeChart`, drawn in the
+ *   shared chart colours.
+ *
+ * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
+ * host's single copy, and a plugin that bundled its own would draw its parts
+ * outside the card it sits in.
+ */
+export {
+  CardFigure,
+  FrameState,
+  cardChange,
+  cardNumber,
+  GroupsChart,
+  OverTimeChart,
+} from "@nextlyhq/admin";
+export type {
+  CardEmptyContent,
+  CardState,
+  GroupsChartGroup,
+  GroupsChartProps,
+  OverTimeChartProps,
+  OverTimeInterval,
+  OverTimePoint,
+  OverTimeSeries,
+  SkeletonShape,
+  WidgetRenderSize,
+} from "@nextlyhq/admin";
+
+/**
  * The controls a form is built from (@experimental).
  *
  * Layout primitives alone left an author with a `Card` and a `Grid` and nothing

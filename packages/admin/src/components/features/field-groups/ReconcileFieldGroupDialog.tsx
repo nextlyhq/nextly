@@ -38,6 +38,7 @@ import {
   AlertDialogTitle,
 } from "@nextlyhq/ui";
 import type { ReconcileFieldGroupPreview } from "nextly/field-group-reconcile";
+import type { JSX } from "react";
 
 import {
   AlertTriangle,
@@ -131,7 +132,7 @@ export function ReconcileFieldGroupDialog({
   onOpenChange,
   fieldGroupSlug,
   fieldGroupLabel,
-}: ReconcileFieldGroupDialogProps) {
+}: ReconcileFieldGroupDialogProps): JSX.Element {
   const preview = useFieldGroupReconcilePreview(fieldGroupSlug, open);
   const repair = useFieldGroupReconcile();
 

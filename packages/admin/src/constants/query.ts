@@ -21,7 +21,7 @@
  *
  * @default 300000 (5 minutes)
  */
-export const QUERY_STALE_TIME = 5 * 60 * 1000; // 5 minutes
+export const QUERY_STALE_TIME: number = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Time in milliseconds before unused query data is garbage collected from memory.
@@ -31,7 +31,7 @@ export const QUERY_STALE_TIME = 5 * 60 * 1000; // 5 minutes
  *
  * @default 600000 (10 minutes)
  */
-export const QUERY_GC_TIME = 10 * 60 * 1000; // 10 minutes
+export const QUERY_GC_TIME: number = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Number of retry attempts for failed query requests.

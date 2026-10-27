@@ -172,6 +172,31 @@ describe("a chart of groups, by pointer", () => {
     await user.keyboard("{Escape}");
     expect(tooltip()).toBeNull();
   });
+
+  it("keeps a dismissed tooltip hidden until the pointer actually moves", async () => {
+    // Hiding a tooltip changes what is under a pointer that has not moved, and the browser then
+    // reports the bar beneath it as entered, and may send a move to the same point. Neither is
+    // the reader moving, so neither brings a tooltip back (WCAG 1.4.13): the dismissal ends on a
+    // move to somewhere else.
+    drawGroups();
+    const user = userEvent.setup();
+    const [first, second] = screen.getAllByTestId(
+      "chart-group"
+    ) as HTMLElement[];
+    const area = chart(/Use the arrow keys to read each bar/);
+    await user.hover(first as HTMLElement);
+    fireEvent.pointerMove(area, { clientX: 40, clientY: 20 });
+    expect(tooltip()).not.toBeNull();
+    await user.keyboard("{Escape}");
+    expect(tooltip()).toBeNull();
+
+    fireEvent.pointerEnter(second as HTMLElement);
+    fireEvent.pointerMove(area, { clientX: 40, clientY: 20 });
+    expect(tooltip()).toBeNull();
+
+    fireEvent.pointerMove(area, { clientX: 40, clientY: 44 });
+    expect(tooltip()).toHaveTextContent(/Draft/);
+  });
 });
 
 describe("a chart over time, by pointer", () => {

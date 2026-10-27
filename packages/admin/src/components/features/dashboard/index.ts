@@ -17,8 +17,6 @@ export {
 export { DynamicCollectionNav } from "./DynamicCollectionNav";
 export { DynamicSingleNav } from "./DynamicSingleNav";
 export { MobileSidebarDrawer } from "./MobileSidebarDrawer";
-export { RecentActivity } from "./RecentActivity";
-export { RecentEntriesWidget } from "./RecentEntriesWidget";
 export { ResponsiveHeader } from "./ResponsiveHeader";
 export { SidebarNavigation } from "./SidebarNavigation";
 export { SidebarUserFooter } from "./SidebarUserFooter";
@@ -26,4 +24,3 @@ export { StatsCard } from "./StatsCard";
 export { WelcomeHeader } from "./WelcomeHeader";
 
 // Types
-export type { RecentActivityProps } from "./RecentActivity";
