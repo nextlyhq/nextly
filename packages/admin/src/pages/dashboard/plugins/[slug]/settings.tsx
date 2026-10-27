@@ -14,6 +14,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { UPDATE_SETTINGS } from "@admin/lib/permissions/system-policy";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
@@ -62,14 +63,15 @@ function pluginAt(
  * settings needs, as the server publishes it in the plugin's metadata.
  *
  * Decided here rather than in the route table, which can only name one
- * permission for every plugin: `manage-settings` there shut out the role a
- * plugin keeps its settings to, and showed a `manage-settings` holder an
- * editor whose saves the server refuses. It never gates on a default it
+ * permission for every plugin: a settings permission there shut out the role
+ * a plugin keeps its settings to, and showed a settings holder an editor
+ * whose saves the server refuses. It never gates on a default it
  * merely assumed: while the plugin list is loading it waits, and when the list
  * never arrived it says so, since either way the page cannot know what to ask
  * for, and the default would send away the plugin's own role and admit the one
  * it replaced. A plugin missing from a list that did arrive, or a server that
- * does not name the permission, keeps `manage-settings`.
+ * does not name the permission, keeps core's default, a settings change
+ * (`update-settings`; `manage-settings` still counts as it).
  */
 function PluginSettingsGate({
   activeSlug,
@@ -118,7 +120,7 @@ export function settingsPermissionAt(
   activeSlug: string | undefined
 ): string {
   return (
-    pluginAt(plugins, activeSlug)?.settings?.permission ?? "manage-settings"
+    pluginAt(plugins, activeSlug)?.settings?.permission ?? UPDATE_SETTINGS
   );
 }
 

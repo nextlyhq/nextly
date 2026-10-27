@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "../components/icons";
 import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
+import { READ_SETTINGS } from "../lib/permissions/system-policy";
 
 import { EMAIL_HUB_PERMISSIONS } from "./email-hub";
 import { ROUTES } from "./routes";
@@ -217,7 +218,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     href: ROUTES.USERS_FIELDS,
     icon: SlidersHorizontal,
     category: "settings",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
   },
 
   // === SETTINGS (IS with sub-groups) ===
@@ -227,7 +228,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Settings,
     category: "settings",
     subGroup: "system",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
   },
   {
     title: "API Keys",

@@ -92,6 +92,22 @@ export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
   "email-templates",
 ]);
 
+/** The actions a bridge resource's `manage` permission stands for. */
+const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
+  "read",
+  "create",
+  "update",
+  "delete",
+]);
+
+/**
+ * Whether `manage-<resource>` counts as `action` on `resource`: core's
+ * `manageCounts`, client-safe. The parity test holds the two together.
+ */
+export function manageCountsFor(action: string, resource: string): boolean {
+  return MANAGE_COUNTS_AS.has(action) && MANAGE_BRIDGE_RESOURCES.has(resource);
+}
+
 /** Whether `manage` on this row is the legacy bridge rather than its own action. */
 function bridgesManage(kind: LevelKind, resource: string | undefined): boolean {
   return (

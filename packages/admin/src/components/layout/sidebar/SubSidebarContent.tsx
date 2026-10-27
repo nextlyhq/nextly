@@ -8,6 +8,7 @@ import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { CHANGE_SETTINGS } from "@admin/lib/permissions/system-policy";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { visibleSettingsNav } from "./lib/settings-nav";
@@ -127,7 +128,7 @@ export function SubSidebarContent({
                 the occasional trip. Not filtered by `pluginSearch` either —
                 that box searches installed plugins, and an entry that ignores
                 it while sitting among entries that obey it reads as a bug. */}
-            {hasPermission("manage-settings") && (
+            {CHANGE_SETTINGS.some(hasPermission) && (
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild

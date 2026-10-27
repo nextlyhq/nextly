@@ -37,7 +37,10 @@ export interface AdminCapabilities {
   canViewRoles: boolean;
   /** Has 'read-media' */
   canViewMedia: boolean;
-  /** Has 'manage-settings' */
+  /**
+   * Holds a permission that reaches a settings destination, 'read-settings'
+   * among them
+   */
   canViewSettings: boolean;
   /** Has 'read-webhooks' or the 'update-webhooks' management umbrella */
   canViewWebhooks: boolean;
@@ -61,13 +64,16 @@ export interface AdminCapabilities {
   canManageUsers: boolean;
   /** Has 'create-roles' or 'update-roles' */
   canManageRoles: boolean;
-  /** Has 'manage-media' */
+  /**
+   * Holds create, update or delete on media. On media, settings and the Email
+   * hub, a `manage-` permission counts as each of the plain ones.
+   */
   canManageMedia: boolean;
-  /** Has 'manage-settings' */
+  /** Holds create, update or delete on settings */
   canManageSettings: boolean;
-  /** Has 'manage-email-providers' */
+  /** Holds create, update or delete on email providers */
   canManageEmailProviders: boolean;
-  /** Has 'manage-email-templates' */
+  /** Holds create, update or delete on email templates */
   canManageEmailTemplates: boolean;
 }
 
