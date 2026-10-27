@@ -451,8 +451,9 @@ export async function resolveContent(
         // published-only from here, which is what makes the fall-through safe
         // to take without a second identity check downstream: a named grant
         // authorizes exactly one entry, and the widened lifecycle scope exists
-        // solely to reach it.
-        return publishedOnly();
+        // solely to reach it. Awaited, so a refusal of that read reaches the
+        // catch below and answers as absent rather than escaping as an error.
+        return await publishedOnly();
       }
 
       const result = await nextly.find({
