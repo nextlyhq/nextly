@@ -247,3 +247,13 @@ async function moveAndSay(
     `A role of this site's own had the slug "${PUBLIC_ROLE_SLUG}", which the built-in Public role now holds, so it was moved to "${moved}". Its name, holders, permissions and inheritance are unchanged. Code access rules that check the role slug \`${PUBLIC_ROLE_SLUG}\` must now check \`${moved}\`.`
   );
 }
+
+/**
+ * Whether boot seeding has made the Public role and recorded it. Until then
+ * the role on the slug may still be a site's own, waiting to be moved off it.
+ */
+export async function publicRoleMade(meta: {
+  get<T>(key: string): Promise<T | null>;
+}): Promise<boolean> {
+  return (await meta.get<unknown>(PUBLIC_ROLE_META_KEY)) === MADE;
+}
