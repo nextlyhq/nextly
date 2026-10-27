@@ -370,34 +370,49 @@ export type {
  * - `FrameState`: what a component returns when its own data says the card is
  *   not ready (empty, not available, an error, or still loading), which the
  *   frame then draws in its place, as on every other card.
- * - A figure and the number formatter behind it: `CardFigure`, `cardNumber`,
- *   `cardChange`, in the site's locale.
- * - Charts that take plain series: `GroupsChart`, `OverTimeChart`, drawn in the
- *   shared chart colours.
+ * - `Widget`: the parts of a card's body core's own cards are drawn with.
+ *   `Widget.Figure` (one number, written for the card's tier), `Widget.List`
+ *   (rows with one action each), `Widget.Table` (rows across named columns, a
+ *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
+ *   that take plain data, drawn in the shared chart colours, with an optional
+ *   `unit` for their tooltips).
+ * - `formatWidgetNumber`, `formatWidgetChange`: the number and change
+ *   formatters behind them, in the site's locale. Named exports, not on
+ *   `Widget`, so a view carries only what it uses and they run on the server
+ *   too.
+ * - `widgetChartColour`: a chart slot's colour token, for a mark of the
+ *   widget's own.
  *
  * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
  * host's single copy, and a plugin that bundled its own would draw its parts
  * outside the card it sits in.
  */
 export {
-  CardFigure,
   FrameState,
-  cardChange,
-  cardNumber,
-  GroupsChart,
-  OverTimeChart,
+  Widget,
+  formatWidgetChange,
+  formatWidgetNumber,
+  widgetChartColour,
 } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,
-  GroupsChartGroup,
-  GroupsChartProps,
-  OverTimeChartProps,
-  OverTimeInterval,
-  OverTimePoint,
-  OverTimeSeries,
   SkeletonShape,
+  WidgetBarChartGroup,
+  WidgetBarChartProps,
+  WidgetChartSlot,
+  WidgetChartUnit,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetListTotal,
   WidgetRenderSize,
+  WidgetRowAction,
+  WidgetSeries,
+  WidgetSeriesChartProps,
+  WidgetSeriesInterval,
+  WidgetSeriesPoint,
+  WidgetTableColumn,
+  WidgetTableProps,
 } from "@nextlyhq/admin";
 
 /**

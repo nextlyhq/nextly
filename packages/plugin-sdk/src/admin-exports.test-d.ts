@@ -1,6 +1,15 @@
 import { expectTypeOf } from "vitest";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
+import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
+import type {
+  WidgetBarChartProps,
+  WidgetChartSlot,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetSeriesChartProps,
+  WidgetTableProps,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Checkbox,
@@ -165,3 +174,34 @@ expectTypeOf(drawsAnyValidationRule).toBeFunction();
 expectTypeOf(EDITABLE_VALIDATION_RULES).toMatchTypeOf<readonly string[]>();
 expectTypeOf<ValidationRulesEditorProps>().not.toBeNever();
 expectTypeOf<ValidationRuleValues>().not.toBeNever();
+
+// The widget kit: `Widget.*` holds the parts core's own cards are drawn with, and the formatters
+// and the colour accessor are named exports beside it. Each part's props are the published
+// `Widget*Props` types, so a view written against them type-checks against the part itself.
+
+const { Widget, formatWidgetNumber, formatWidgetChange, widgetChartColour } =
+  adminEntry;
+expectTypeOf(Widget.Figure).parameter(0).toEqualTypeOf<WidgetFigureProps>();
+expectTypeOf(Widget.BarChart).parameter(0).toEqualTypeOf<WidgetBarChartProps>();
+expectTypeOf(Widget.SeriesChart)
+  .parameter(0)
+  .toEqualTypeOf<WidgetSeriesChartProps>();
+expectTypeOf(Widget.List<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetListProps<{ id: string }>>();
+expectTypeOf(Widget.Table<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetTableProps<{ id: string }>>();
+// A chart's unit is part of both charts' props, as core's cards pass it.
+expectTypeOf<WidgetBarChartProps>().toHaveProperty("unit");
+expectTypeOf<WidgetSeriesChartProps>().toHaveProperty("unit");
+expectTypeOf(formatWidgetNumber).returns.toHaveProperty("text");
+expectTypeOf(formatWidgetChange).returns.toHaveProperty("text");
+expectTypeOf(widgetChartColour).parameter(0).toEqualTypeOf<WidgetChartSlot>();
+expectTypeOf<WidgetChartSlot>().toEqualTypeOf<1 | 2 | 3 | 4 | 5>();
+// The names the kit replaced are gone, with no alias.
+expectTypeOf(adminEntry).not.toHaveProperty("CardFigure");
+expectTypeOf(adminEntry).not.toHaveProperty("cardNumber");
+expectTypeOf(adminEntry).not.toHaveProperty("cardChange");
+expectTypeOf(adminEntry).not.toHaveProperty("GroupsChart");
+expectTypeOf(adminEntry).not.toHaveProperty("OverTimeChart");
