@@ -4,7 +4,7 @@
  * `defineWidget()` takes everything a widget is: who it is, the sizes it
  * allows, its settings, where its data comes from and how it is drawn. The
  * compiler reads the settings once and hands their types to every reader --
- * the data function, the query core runs, and the widget's own component --
+ * its `load` function and the widget's own component --
  * with no cast and no generated file. The component gets them through a
  * type-only import of the declaration (`WidgetProps<typeof myWidget>`), which
  * the bundler erases, so no server code follows it into the browser.
@@ -16,17 +16,13 @@
 
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
-import type { WidgetQuerySpec } from "../query";
 import type { DeclaredComponentProps } from "../result";
-import type { WidgetOp } from "../sources";
 import type { WidgetScope } from "../widget-scope";
 
 import type {
   CoreDisplay,
   DisplayData,
   DisplayOf,
-  DisplayOp,
-  QueryAnswer,
   WidgetView,
 } from "./displays";
 import type {
@@ -95,64 +91,6 @@ export type WidgetDataFunction<Values, Data> = (
   input: WidgetDataInput<Values>
 ) => Promise<Data>;
 
-/**
- * A query core runs over content, as the widget's settings write it.
- *
- * Today's query with `collection` in place of `source`: a widget reads a
- * collection by its slug, and the `collection:` prefix is core's business.
- */
-export type ContentQuery = WidgetQuerySpec extends infer Spec
-  ? Spec extends WidgetQuerySpec
-    ? Omit<Spec, "source"> & { collection: string }
-    : never
-  : never;
-
-/**
- * A query core runs over content, written from the card's settings.
- *
- * 🔴 A function under a `query` key, not a call to a `query()` helper. A helper
- * call nested in the declaration is checked before the declaration's settings
- * type is known, so its `settings` came out as `unknown`; a function in an
- * object is read after them, like a data function is. The answer's type
- * follows from the `op` the function returns.
- */
-export interface WidgetQuerySource<
-  Values,
-  Op extends WidgetOp,
-  Requires = unknown,
-> {
-  query: (input: { settings: Values }) => ContentQuery & { op: Op } & Requires;
-}
-
-/**
- * The core displays that draw rows: those whose query answers a list.
- *
- * Derived from the display-to-op table (`DisplayOp`), so a display core adds
- * that draws rows is one without a second edit here.
- */
-type RowDisplay = {
-  [D in CoreDisplay]: DisplayOp<D> extends "list" ? D : never;
-}[CoreDisplay];
-
-/**
- * What a query must hold beyond its op, for the display that draws it.
- *
- * 🔴 A row display needs at least one selected field. Its rows are drawn from
- * the fields `select` names, in that order, and a list or table whose query
- * selects nothing is refused when it is drawn: there is no field to show in
- * a row. Required here, that is a compile error in the declaration rather
- * than an error card on every load.
- *
- * Required, not typed non-empty: the query function's answer is read while
- * its op is still being inferred, and an array literal there widens to
- * `string[]`, so a `[string, ...string[]]` refused `select: ["title"]` too.
- * An EMPTY selection is refused at startup instead, by
- * `displaySelectProblem`, before any card is drawn.
- */
-type QueryRequires<Display> = Display extends RowDisplay
-  ? { select: string[] }
-  : unknown;
-
 /** Carries a declaration's data type without a runtime property. */
 declare const widgetData: unique symbol;
 
@@ -166,12 +104,17 @@ declare const widgetData: unique symbol;
 declare const declared: unique symbol;
 
 /**
- * Who may be offered a widget: a permission they hold, such as
- * `"read-orders"`.
+ * Who may see a widget's cards, in one of three forms:
  *
- * The collections it reads, and a predicate of the person, are typed for the
- * release that judges them. Until then a declaration using either is refused
- * at startup, naming it, rather than started with its access unjudged.
+ * - a permission they hold, such as `"read-orders"`, which also decides
+ *   whether the widget is offered to them at all;
+ * - `{ collections }`, the collections it reads, each of which they must be
+ *   able to read;
+ * - a predicate of the person.
+ *
+ * The last two are judged per card, with the person, before `load` runs; a
+ * person refused sees the card as not available to them. A predicate runs
+ * within the card's time budget, and one that throws refuses.
  *
  * @experimental
  */
@@ -207,24 +150,15 @@ export interface WidgetPreviewCase<Data, Values> {
  * What a widget declares.
  *
  * - `View` is the view as written: a core view's name, or a component's path.
- * - `Data` is a data function's answer, inferred from what it returns.
- * - `Op` is a query's op, inferred from the query it writes; its answer is
- *   what core sends for that op.
+ * - `Data` is `load`'s answer, inferred from what it returns.
  * - `Preview` is the preview cases as written, checked against the data in
  *   the return type for a component view (`CheckedDeclaration`).
- *
- * 🔴 Two parameters for the two sources, rather than one, because only a data
- * function's answer is the author's to keep transportable: a query's answer is
- * core's, already sent as JSON. One parameter would hold either, and the bound
- * that refuses a `Date` in a data function's answer would then have to be
- * waived for queries as well.
  */
 export interface WidgetDeclarationInput<
   Id extends string,
   S,
   View extends WidgetView,
   Data,
-  Op extends WidgetOp,
   Preview,
 > {
   /** `namespace/name`, unique across core, every plugin and the site. */
@@ -249,10 +183,10 @@ export interface WidgetDeclarationInput<
   /** Who may be offered this widget at all; everyone who can open the dashboard when absent. */
   access?: WidgetAccess;
   /**
-   * Whether the card shows at all for the person asking, judged before its
-   * data is loaded. Typed for the release that judges it: until then a
-   * declaration using it is refused at startup, so it is never shown to
-   * someone it should not be.
+   * Whether the card shows at all for the person asking, judged on the server
+   * for each card before its `load` runs, with what `load` is handed. No
+   * leaves the card out of their dashboard, neither drawn nor counted;
+   * customise mode still shows it, marked, so it can be removed.
    *
    * @experimental
    */
@@ -269,17 +203,15 @@ export interface WidgetDeclarationInput<
    */
   hidesWhenEmpty?: boolean;
   settings?: S;
-  /** Where the card's data comes from: a function of its own, run on the server, or a query core runs. */
-  load:
-    | WidgetDataFunction<
-        SettingValues<S>,
-        FunctionAnswer<DisplayOf<View>, Data>
-      >
-    | WidgetQuerySource<
-        SettingValues<S>,
-        OpFor<DisplayOf<View>, Op>,
-        QueryRequires<DisplayOf<View>>
-      >;
+  /**
+   * Where the card's data comes from: a function of the widget's own, run on
+   * the server for each card, as the person asking. Its reads go through the
+   * services it is handed, already bound to that person.
+   */
+  load: WidgetDataFunction<
+    SettingValues<S>,
+    FunctionAnswer<DisplayOf<View>, Data>
+  >;
   /** How the card is drawn: one of core's views, or the widget's own component. */
   view: View & OneView<View> & LiteralPath<View>;
   /**
@@ -293,7 +225,7 @@ export interface WidgetDeclarationInput<
    * is the one of those only the widget can judge from its data, so it says so
    * here, typed by its own data.
    */
-  isEmpty?: (data: DataFor<DisplayOf<View>, Data | QueryAnswer<Op>>) => boolean;
+  isEmpty?: (data: DataFor<DisplayOf<View>, Data>) => boolean;
   /** What the empty state says and offers, in place of the frame's own. */
   empty?: WidgetEmpty;
   /**
@@ -409,11 +341,6 @@ type FunctionAnswer<Display, Data> = Display extends CoreDisplay
   ? DisplayData<Display> & Data
   : Data;
 
-/** The op a widget's query may have: its display's, or any for a component. */
-type OpFor<Display, Own extends WidgetOp> = Display extends CoreDisplay
-  ? DisplayOp<Display>
-  : Own;
-
 /**
  * What a widget's `preview` is typed as where it is written.
  *
@@ -455,17 +382,14 @@ type CheckedDeclaration<
   S,
   View extends WidgetView,
   Data,
-  Op extends WidgetOp,
   Preview,
 > =
   DisplayOf<View> extends CoreDisplay
-    ? WidgetDeclaration<Id, S, View, Data, Op, Preview>
+    ? WidgetDeclaration<Id, S, View, Data, Preview>
     : [Preview] extends [
-          readonly ReadonlyDeep<
-            WidgetPreviewCase<Data | QueryAnswer<Op>, SettingValues<S>>
-          >[],
+          readonly ReadonlyDeep<WidgetPreviewCase<Data, SettingValues<S>>>[],
         ]
-      ? WidgetDeclaration<Id, S, View, Data, Op, Preview>
+      ? WidgetDeclaration<Id, S, View, Data, Preview>
       : {
           // Stands in for the declaration, so the widget cannot be contributed,
           // put in the site config or given a component. Written inline, with
@@ -475,10 +399,7 @@ type CheckedDeclaration<
           // print as its name and type arguments, to be looked up.
           readonly "This widget's preview cases are not of the type its data and settings have": {
             preview: Preview;
-            expected: readonly WidgetPreviewCase<
-              Data | QueryAnswer<Op>,
-              SettingValues<S>
-            >[];
+            expected: readonly WidgetPreviewCase<Data, SettingValues<S>>[];
           };
         };
 
@@ -488,10 +409,9 @@ export type WidgetDeclaration<
   S,
   View extends WidgetView,
   Data,
-  Op extends WidgetOp,
   Preview = never,
-> = WidgetDeclarationInput<Id, S, View, Data, Op, Preview> & {
-  readonly [widgetData]?: DataFor<DisplayOf<View>, Data | QueryAnswer<Op>>;
+> = WidgetDeclarationInput<Id, S, View, Data, Preview> & {
+  readonly [widgetData]?: DataFor<DisplayOf<View>, Data>;
   readonly [declared]: true;
 };
 
@@ -513,12 +433,11 @@ export function defineWidget<
   const View extends WidgetView,
   S extends WidgetSettings & DependentSettings<S> = Record<never, never>,
   Data extends TransportableFields<Data> = never,
-  Op extends WidgetOp = never,
   const Preview = never,
 >(
-  declaration: WidgetDeclarationInput<Id, S, View, Data, Op, Preview> &
+  declaration: WidgetDeclarationInput<Id, S, View, Data, Preview> &
     ViewRequires<View>
-): CheckedDeclaration<Id, S, View, Data, Op, Preview>;
+): CheckedDeclaration<Id, S, View, Data, Preview>;
 // The implementation hands the declaration back as it came: every type above
 // is the compiler's reading of it, and nothing at run time changes. `object`,
 // because the declaration as written does not carry the `declared` mark the

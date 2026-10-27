@@ -101,16 +101,6 @@ const SHAPES: Record<CoreDisplayName, string> = {
   timeseries: `{ points: [{ start: "2026-10-01", count: 3 }], interval: "day" }`,
 };
 
-/** The query each core display draws, as a widget writes it. */
-const QUERIES: Record<CoreDisplayName, string> = {
-  metric: `op: "count"`,
-  // A row display's query names the fields its rows are drawn from.
-  list: `op: "list", select: ["title"]`,
-  table: `op: "list", select: ["title"]`,
-  bars: `op: "groupBy", groupBy: "state"`,
-  timeseries: `op: "timeseries", dateField: "createdAt", interval: "day"`,
-};
-
 /** A shape no display draws in the form its neighbour does. */
 const WRONG_SHAPE: Record<CoreDisplayName, string> = {
   metric: SHAPES.bars,
@@ -128,15 +118,6 @@ const DRAWN_FIELD: Record<CoreDisplayName, string> = {
   table: "items",
   bars: "buckets",
   timeseries: "points",
-};
-
-/** A query whose op answers what the display does not draw. */
-const WRONG_QUERY: Record<CoreDisplayName, string> = {
-  metric: `op: "list"`,
-  list: `op: "count"`,
-  table: `op: "count"`,
-  bars: `op: "count"`,
-  timeseries: `op: "list"`,
 };
 
 /** A site whose one typed plugin contributes the example widgets. */
@@ -173,23 +154,33 @@ const CASES: Case[] = [
     code: 2322,
     message: "Type 'number' is not assignable to type 'string'",
   },
+  // ---- A widget's data comes from a function: the `{ query }` form is gone.
   {
-    name: "a query core runs reads a setting as the wrong type",
+    name: "a widget's load is a function, not a query for core to run",
     ...pair(
-      t =>
+      load =>
         widget(`  settings: { collection: settings.collection() },
-  load: {
-    query: ({ settings }) => {
-      const slug: ${t} = settings.collection; ${MARK}
-      return { collection: String(slug), op: "count" };
-    },
-  },
+  load: ${load}, ${MARK}
   view: "figure",`),
-      "number",
-      "string"
+      // No parameter: one the form no longer types would add an implicit-any error of its own.
+      `{ query: () => ({ collection: "orders", op: "count" }) }`,
+      `async ({ services, settings }) => ({ total: await services.count(settings.collection) })`
     ),
     code: 2322,
-    message: "Type 'string' is not assignable to type 'number'",
+    message: "is not assignable to type",
+  },
+  {
+    name: "the package root no longer publishes the query a widget handed core",
+    ...pair(
+      name => `import type { ${name} } from "../../../../index"; ${MARK}
+
+export type Published = ${name};
+`,
+      "ContentQuery",
+      "WidgetAccess"
+    ),
+    code: 2305,
+    message: "has no exported member 'ContentQuery'",
   },
   {
     name: "a component reads a setting as the wrong type, through import type",
@@ -255,21 +246,6 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
       ),
       code: 2322,
       message: `Property '${DRAWN_FIELD[display]}' is missing`,
-    })
-  ),
-  ...VIEWS.map(
-    ([view, display]): Case => ({
-      name: `the ${view} view refuses a query whose answer it does not draw`,
-      ...pair(
-        query =>
-          widget(`  settings: { collection: settings.collection() },
-  load: { query: ({ settings }) => ({ collection: settings.collection, ${query} }) }, ${MARK}
-  view: "${view}",`),
-        WRONG_QUERY[display],
-        QUERIES[display]
-      ),
-      code: 2322,
-      message: "is not assignable to type",
     })
   ),
 
@@ -563,21 +539,6 @@ export const w = defineWidget({
     code: 2322,
     message: "a component view's path must be written as a literal string",
   },
-  ...(["list", "table"] as const).map(
-    (view): Case => ({
-      name: `the ${view} view refuses a query that selects no fields`,
-      ...pair(
-        select =>
-          widget(`  settings: { collection: settings.collection() },
-  load: { query: ({ settings }) => ({ collection: settings.collection, op: "list"${select} }) }, ${MARK}
-  view: "${view}",`),
-        "",
-        `, select: ["title"]`
-      ),
-      code: 2322,
-      message: "Property 'select' is missing",
-    })
-  ),
   {
     name: "a data function's answer may not hold a symbol-keyed property",
     ...pair(

@@ -1,9 +1,9 @@
 /**
  * A plugin's widgets, written as an author would write them: the server half.
  *
- * One widget of each kind -- a data function behind a core view, a query
- * behind a core view, and a data function and a query each behind a
- * component of the plugin's own -- plus the plugin's dashboard contribution.
+ * A load function behind each kind of view -- core's `bars` and `list`, and
+ * two components of the plugin's own -- plus the plugin's dashboard
+ * contribution.
  * `admin.ts` beside it is the browser half, and reaches these only through
  * `import type`.
  *
@@ -40,7 +40,7 @@ export const ordersByState = defineWidget({
   ],
 });
 
-/** A query core runs, behind core's `list` view, written from settings. */
+/** A load function reading rows, behind core's `list` view, from its settings. */
 export const recentOrders = defineWidget({
   id: "acme/recent-orders",
   title: "Recent orders",
@@ -53,14 +53,15 @@ export const recentOrders = defineWidget({
     sort: settings.sort({ of: "collection", default: "-createdAt" }),
     items: settings.items({ default: 5 }),
   },
-  load: {
-    query: ({ settings }) => ({
-      collection: settings.collection,
-      op: "list",
+  load: async ({ settings, services, signal }) => {
+    const { items } = await services.find(settings.collection, {
       select: ["title"],
       sort: settings.sort,
       limit: settings.items,
-    }),
+      signal,
+    });
+    // Each row as the list draws it: its title, read from the one field selected.
+    return { items: items.map(row => ({ title: String(row.title ?? "") })) };
   },
   view: "list",
 });
@@ -100,7 +101,7 @@ export const revenue = defineWidget({
   ],
 });
 
-/** A query core runs, behind a component of the plugin's own. */
+/** A load function counting, behind a component of the plugin's own. */
 export const unpaidCount = defineWidget({
   id: "acme/unpaid-count",
   title: "Unpaid",
@@ -108,9 +109,9 @@ export const unpaidCount = defineWidget({
   category: "Shop",
   size: { default: { w: 3, h: 2 }, max: { w: 4, h: 2 } },
   settings: { collection: settings.collection() },
-  load: {
-    query: ({ settings }) => ({ collection: settings.collection, op: "count" }),
-  },
+  load: async ({ settings, services, signal }) => ({
+    total: await services.count(settings.collection, { signal }),
+  }),
   view: { component: "@acme/nextly-plugin-shop/admin#UnpaidCard" },
   isEmpty: data => data.total === 0,
 });

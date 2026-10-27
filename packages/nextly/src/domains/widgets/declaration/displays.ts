@@ -13,15 +13,10 @@
 import { z } from "zod";
 
 import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
-import {
-  ARCHETYPE_OPS,
-  DATA_ARCHETYPES,
-  type DataWidgetArchetype,
-} from "../definition";
+import type { ARCHETYPE_OPS } from "../definition";
+import { DATA_ARCHETYPES, type DataWidgetArchetype } from "../definition";
 import type { WidgetResult } from "../result";
 import { WIDGET_SOURCE_FIELD_TYPES, type WidgetOp } from "../sources";
-
-import { quote } from "./quote";
 
 /**
  * Core's displays that draw data: today's data archetypes, so a display is a
@@ -36,63 +31,6 @@ export type CoreDisplay = DataWidgetArchetype;
 export const isCoreDisplay = (value: unknown): value is CoreDisplay =>
   typeof value === "string" &&
   (CORE_DISPLAYS as readonly string[]).includes(value);
-
-/**
- * Why a core display cannot draw what a query with this op answers, or
- * `undefined` when it can: the run-time half of {@link DisplayOp}, read from
- * the same table, for a declaration no type checked.
- */
-export function displayOpProblem(
-  display: CoreDisplay,
-  op: unknown
-): string | undefined {
-  const ops: readonly string[] = ARCHETYPE_OPS[display];
-  return typeof op === "string" && ops.includes(op)
-    ? undefined
-    : `its query's operation ${quote(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
-}
-
-/**
- * Why a core display that draws rows has nothing to draw in each, or
- * `undefined` when it does: the run-time half of the type requiring a row
- * display's query to select a field (`QueryRequires` in `define-widget.ts`).
- *
- * A row display is one whose query answers a list, read from the same table
- * as {@link displayOpProblem}, so the two checks cannot disagree about which
- * displays draw rows. A list or table whose query selects nothing is refused
- * where it is drawn; for a plain JavaScript declaration no type saw, startup
- * says so first, to the author.
- */
-export function displaySelectProblem(
-  display: CoreDisplay,
-  select: unknown
-): string | undefined {
-  const ops: readonly string[] = ARCHETYPE_OPS[display];
-  if (!ops.includes("list")) return undefined;
-  return Array.isArray(select) && select.length > 0
-    ? undefined
-    : `its query selects no fields, so the "${display}" display has nothing to show in each row`;
-}
-
-/**
- * Why a declared widget's display cannot draw its query, or `undefined` when
- * it can: the operation and the selection, judged together.
- *
- * One check for both places a declared query is built, at startup from the
- * starting settings and for each card from its own, so a query is never
- * accepted by one and refused by the other. A component display draws
- * whatever its component does, so only a core display is judged.
- */
-export function declaredQueryProblem(
-  display: unknown,
-  query: { readonly op?: unknown; readonly select?: unknown }
-): string | undefined {
-  if (!isCoreDisplay(display)) return undefined;
-  return (
-    displayOpProblem(display, query.op) ??
-    displaySelectProblem(display, query.select)
-  );
-}
 
 /**
  * Which query answer each display draws, read from the table registration
