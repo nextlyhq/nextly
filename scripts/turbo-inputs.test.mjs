@@ -26,7 +26,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, globSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { literalText, parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -167,8 +167,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       const tracked = trackedTypeScript(task.directory);
 
       // A package may legitimately ship no TypeScript at all — `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and all four still declare `check-types`. So emptiness is a
+      // `prettier-config` and `admin-css` are configuration and CSS, and all
+      // three still declare `check-types`. So emptiness is a
       // valid answer HERE, and the population is asserted once above instead,
       // where an empty read cannot be mistaken for a clean one.
       // A task appears in the dry run whether or not the package defines the
@@ -179,8 +179,8 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       // assertion here green while its gate quietly stopped existing.
       //
       // Only required of packages that SHIP TypeScript. `tsconfig`,
-      // `eslint-config`, `prettier-config` and `admin-css` are configuration
-      // and CSS, and are legitimately `<NONEXISTENT>`.
+      // `prettier-config` and `admin-css` are configuration and CSS, and are
+      // legitimately `<NONEXISTENT>`.
       if (tracked.length > 0) {
         expect(
           String(task.command),
@@ -708,16 +708,16 @@ describe("a root script in the global inputs brings its imports with it", () => 
     });
   }
 
-  const isStringLiteral = node => ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
-
-  /** The text of every string literal in the file, from its syntax tree. */
+  /**
+   * The text of every string literal in the file, from its syntax tree: quoted strings and
+   * templates with no substitutions, which are as statically known.
+   */
   function stringLiterals(file) {
     const texts = [];
-    const visit = node => {
-      if (isStringLiteral(node)) texts.push(node.text);
-      ts.forEachChild(node, visit);
-    };
-    visit(ts.createSourceFile(file, readFileSync(join(REPO_ROOT, file), "utf8"), ts.ScriptTarget.Latest, true));
+    walk(parseSource(readFileSync(join(REPO_ROOT, file), "utf8"), file).program, node => {
+      const text = literalText(node);
+      if (text !== null) texts.push(text);
+    });
     return texts;
   }
 

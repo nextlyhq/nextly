@@ -154,11 +154,20 @@ function send(
   return method === "GET" ? handlers.GET(req, ctx) : handlers.POST(req, ctx);
 }
 
-/** Whether a response is the REST limit's refusal, not any other 429. */
+/**
+ * Whether a response is the REST limit's refusal, not any other 429. Every
+ * limit answers `RATE_LIMITED` in the one error body; the REST limit is the
+ * one whose message names no particular budget.
+ */
 async function refusedByRestLimit(response: Response): Promise<boolean> {
   if (response.status !== 429) return false;
-  const body = (await response.clone().json()) as { error?: { code?: string } };
-  return body.error?.code === "RATE_LIMIT_EXCEEDED";
+  const body = (await response.clone().json()) as {
+    error?: { code?: string; message?: string };
+  };
+  return (
+    body.error?.code === "RATE_LIMITED" &&
+    body.error.message === "Too many requests. Please try again later."
+  );
 }
 
 async function refusals(

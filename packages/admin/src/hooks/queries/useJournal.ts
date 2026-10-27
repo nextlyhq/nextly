@@ -10,6 +10,7 @@
  * @module hooks/queries/useJournal
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -25,7 +26,9 @@ export const JOURNAL_QUERY_KEY = ["schema", "journal"] as const;
 // (load-more cursor) so they can never diverge on page size.
 export const JOURNAL_PAGE_SIZE = 20;
 
-export function useJournal(params: ListJournalParams = {}) {
+export function useJournal(
+  params: ListJournalParams = {}
+): UseQueryResult<JournalListResponse, Error> {
   return useQuery<JournalListResponse, Error>({
     queryKey: [
       ...JOURNAL_QUERY_KEY,

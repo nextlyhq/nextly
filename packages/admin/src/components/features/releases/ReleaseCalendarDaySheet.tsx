@@ -15,6 +15,7 @@
  *
  * @module components/features/releases/ReleaseCalendarDaySheet
  */
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
 import { CalendarClock, Globe, X } from "@admin/components/icons";
@@ -78,7 +79,7 @@ export function ReleaseCalendarDaySheet({
    * nothing and a keyboard reader would start again from the top of the page.
    */
   onReturnFocus: () => void;
-}) {
+}): JSX.Element {
   return (
     <Sheet open={day !== null} onOpenChange={next => (next ? null : onClose())}>
       <SheetContent

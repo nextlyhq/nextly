@@ -22,6 +22,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useWatch, type Control, type FieldValues } from "react-hook-form";
 
 import { CompletenessMeter } from "../CompletenessMeter";
@@ -44,7 +45,7 @@ export interface TranslationProgressProps {
 export function TranslationProgress({
   control,
   fields,
-}: TranslationProgressProps) {
+}: TranslationProgressProps): JSX.Element | null {
   const fieldNames = fields
     .map(f => ("name" in f ? f.name : undefined))
     .filter((n): n is string => !!n);

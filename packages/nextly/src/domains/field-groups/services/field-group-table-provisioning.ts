@@ -8,13 +8,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import {
-  getConfigFromDI,
-  getSchemaRegistryFromDI,
-} from "../../../dispatcher/helpers/di";
+import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { consoleLogger } from "../../../shared/types";
+import { appLocalization } from "../../i18n/configured-locales";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   buildCompanionTransitionStatements,
@@ -169,7 +167,7 @@ export async function reconcileComponentCompanion(args: {
   if (!wasLocalized && !localized) return false;
 
   const dialect = adapter.dialect;
-  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
+  const defaultLocale = appLocalization()?.defaultLocale ?? "en";
 
   const companionExists = await adapter.tableExists(`${tableName}_locales`);
   const plan = buildCompanionTransitionStatements({

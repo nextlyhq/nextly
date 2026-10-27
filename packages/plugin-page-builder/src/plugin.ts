@@ -8,6 +8,7 @@ import {
   definePlugin,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
+  type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -731,7 +732,9 @@ function installContext(
   };
 }
 
-export const pageBuilder = (opts: PageBuilderOptions = {}) => {
+export const pageBuilder = (
+  opts: PageBuilderOptions = {}
+): PluginDefinition => {
   /**
    * The installed context, published by `init` for the backfill job to read.
    *

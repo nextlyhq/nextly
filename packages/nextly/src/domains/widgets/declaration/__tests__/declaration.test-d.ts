@@ -19,6 +19,7 @@ import type { WidgetScope } from "../../resolved-sources";
 import type { QueryAnswer } from "../displays";
 import {
   defineWidget,
+  type WidgetReadServices,
   type WidgetData,
   type WidgetProps,
   type WidgetSettingValues,
@@ -151,10 +152,13 @@ expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
 // A widget drawn by a core display has that display's data, whatever its own
 // function's literal answer was.
 // `field` describes the grouped field (its label and value labels) when the source declares it;
-// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound.
+// `atLeast` says the bucket counts are floors, from a source that grouped under a work bound,
+// and a bucket's own `atLeast` says that one bucket's count is. `asOf` is the
+// instant the answer was computed at, for a source whose buckets depend on it.
 expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
-  buckets: { value: string | null; count: number }[];
+  buckets: { value: string | null; count: number; atLeast?: boolean }[];
   truncated?: boolean;
+  asOf?: string;
   field?: WidgetResultField;
   atLeast?: boolean;
 }>();
@@ -194,3 +198,13 @@ defineWidget({
   },
   display: "metric",
 });
+
+// A data function's reads take no person, user or access option: who reads is bound by core, so
+// the only options are the ones a read carries. Pinned exactly, so an option added to either is
+// a decision made here, not an accident.
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
+>().toEqualTypeOf<"where" | "signal">();
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
+>().toEqualTypeOf<"where" | "sort" | "limit" | "select" | "signal">();

@@ -14,6 +14,7 @@
  */
 
 import { ArrowLeft } from "lucide-react";
+import type { JSX } from "react";
 import { useCallback, useMemo } from "react";
 
 import { Alert, AlertDescription, Button } from "@admin/components/ui";
@@ -149,7 +150,7 @@ export function VersionComparePage({
   from,
   to,
   locale,
-}: VersionComparePageProps) {
+}: VersionComparePageProps): JSX.Element {
   const list = useVersions({ scope, locale });
   // `useCan` answers false while permissions load, which is the right default
   // here: the read-only destination is reachable by everyone who can reach this

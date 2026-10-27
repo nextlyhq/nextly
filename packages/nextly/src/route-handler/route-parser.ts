@@ -128,6 +128,7 @@ export function getActionFromOperation(operation: string): string {
 function parseMeRoutes(
   httpMethod: string,
   subresource: string | undefined,
+  hasMoreSegments: boolean,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   // GET /api/me/permissions → get current user's resolved permissions
@@ -136,6 +137,22 @@ function parseMeRoutes(
       service: "users",
       operation: "list",
       method: "getCurrentUserPermissions",
+      routeParams,
+    };
+  }
+
+  // GET /api/me/capabilities → what the current caller may do with each
+  // collection and Single, as the route gates decide it. Nothing may follow:
+  // a longer path is another route, not this one with its tail ignored.
+  if (
+    subresource === "capabilities" &&
+    !hasMoreSegments &&
+    httpMethod === "GET"
+  ) {
+    return {
+      service: "users",
+      operation: "list",
+      method: "getCurrentUserCapabilities",
       routeParams,
     };
   }
@@ -300,6 +317,18 @@ function parseRoleRoutes(
       service: "rbac",
       operation: "list",
       method: "listRoles",
+      routeParams,
+    };
+  }
+
+  if (id === "screen" && !subresource && httpMethod === "GET") {
+    // GET /api/roles/screen → what the roles screen shows for each collection
+    // and Single. Ahead of the role-by-id branch, which would otherwise read
+    // "screen" as a role id.
+    return {
+      service: "rolesScreen",
+      operation: "list",
+      method: "getRolesScreen",
       routeParams,
     };
   }
@@ -2920,7 +2949,12 @@ export function parseRestRoute(
   // Handle /api/me endpoint for current user
   // For /api/me/permissions, id = "permissions" (sub-resource)
   if (resource === "me") {
-    const result = parseMeRoutes(httpMethod, id, routeParams);
+    const result = parseMeRoutes(
+      httpMethod,
+      id,
+      params.length > 2,
+      routeParams
+    );
     if (result) return result;
   }
 
@@ -3205,6 +3239,13 @@ export function parseRestRoute(
   if (resource === "schema") {
     const result = parseSchemaRoutes(id, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // The site's content languages, for Settings.
+  if (resource === "languages") {
+    const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
+    const operation = httpMethod === "GET" ? "list" : "update";
+    return { service: "languages", operation, method, routeParams };
   }
 
   // Handle General Settings endpoint

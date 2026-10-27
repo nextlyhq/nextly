@@ -44,6 +44,7 @@ import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-hre
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
+import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
@@ -52,7 +53,9 @@ interface DualSidebarProps {
   isMobile?: boolean;
 }
 
-export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
+export function DualSidebar({
+  isMobile,
+}: DualSidebarProps = {}): React.JSX.Element {
   const { pathname, route, isHydrated } = useRouter();
   const { isFolderTreeVisible } = useMediaContext();
   const {
@@ -61,6 +64,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission,
     isLoading: isPermissionsLoading,
     error: permissionsError,
+    content,
   } = useCurrentUserPermissions();
   const branding = useBranding();
   const showBuilder = branding?.showBuilder ?? true;
@@ -77,24 +81,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     [branding?.plugins]
   );
 
-  const readableResources = useMemo(() => {
-    const readable = permissions
-      .filter(permission => permission.startsWith("read-"))
-      .map(permission => permission.slice("read-".length));
-    return new Set(readable);
-  }, [permissions]);
-
-  const visibleStandalonePlugins = useMemo(() => {
-    return standalonePlugins.filter(plugin => {
-      const pluginCollections = plugin.collections ?? [];
-      if (pluginCollections.length === 0) {
-        return capabilities.canViewSettings;
-      }
-      return pluginCollections.some(collection =>
-        readableResources.has(collection)
-      );
-    });
-  }, [standalonePlugins, readableResources, capabilities.canViewSettings]);
+  const visibleStandalonePlugins = useMemo(
+    () => standalonePluginsVisibleTo(standalonePlugins, capabilities),
+    [standalonePlugins, capabilities]
+  );
 
   // Standalone plugins take their place in the rail by the anchor they declare.
   // The placement rule lives in `lib/` with the other rail decisions; what stays
@@ -162,9 +152,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     !isHydrated ||
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
+  // The content sections are decided by the server's answer about collections
+  // and Singles alone, so they wait on that answer and not on the permission
+  // list: a list that failed would otherwise keep them pending for good.
+  const contentAnswerPending = !isHydrated || content.isLoading;
 
   const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     isError: isCollectionsError,
     permittedCollections,
     placementOf: getCollectionPlacement,
@@ -172,7 +166,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   const hasSinglesSection =
     capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
+    (contentAnswerPending ||
       isSinglesLoading ||
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
@@ -182,7 +176,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     // resolve into visible collections, and for a user without
     // `canManageSettings` the panel then has no destination at all, so keeping
     // the rail item would open an empty panel rather than defer a decision.
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     hasVisiblePluginCollection: hasVisiblePluginCollection(
       permittedCollections,
       getCollectionPlacement

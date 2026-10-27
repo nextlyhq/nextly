@@ -13,7 +13,12 @@ interface RouterState {
   pathname: string;
 }
 
-export function useRouter() {
+export function useRouter(): {
+  isHydrated: boolean;
+  route: RouteResult | null;
+  outside: boolean;
+  pathname: string;
+} {
   const [routerState, setRouterState] = useState<RouterState>({
     route: null,
     outside: false,

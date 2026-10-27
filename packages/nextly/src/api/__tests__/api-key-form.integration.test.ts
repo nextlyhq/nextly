@@ -63,7 +63,7 @@ interface Refusal {
   message: string;
 }
 
-/** The sentence every refusal for want of permission reads, whatever its code. */
+/** The sentence a role above its creator is refused with, naming no permission. */
 const CANONICAL_FORBIDDEN = "You don't have permission to perform this action.";
 
 interface Grant {
@@ -324,8 +324,8 @@ describe.each(getConfiguredTestDialects())(
       it("refuses a role above its creator with a code of its own, as creating the key would", async () => {
         const headers = await session(editorId, [editorRoleId]);
         // The code says which refusal this is, so the form can tell it from
-        // a person who may not create keys at all; the sentence stays the one
-        // every refusal for want of permission reads, naming no permission.
+        // a person who may not create keys at all; the sentence names no
+        // permission.
         const aboveCreator: Refusal = {
           status: 403,
           code: "API_KEY_ROLE_ABOVE_CREATOR",
@@ -384,10 +384,11 @@ describe.each(getConfiguredTestDialects())(
             .map(p => p.id),
         });
 
+        // Told in words what they may not do, naming no permission.
         const lost: Refusal = {
           status: 403,
           code: "FORBIDDEN",
-          message: CANONICAL_FORBIDDEN,
+          message: "You can't create API keys.",
         };
         expect(
           await refusal(

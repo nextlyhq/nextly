@@ -128,9 +128,9 @@ export type SidebarNavigation = NavigationItem[];
  * it. `create-api-keys` is deliberately absent — it opens the create form, not
  * the list this entry links to.
  */
-export const API_KEYS_LIST_PERMISSIONS = apiKeyGrantsFor("read");
+export const API_KEYS_LIST_PERMISSIONS: string[] = apiKeyGrantsFor("read");
 
-export const RELEASE_SECTION_PERMISSIONS = [
+export const RELEASE_SECTION_PERMISSIONS: string[] = [
   "read-content-releases",
   "create-content-releases",
   "publish-content-releases",

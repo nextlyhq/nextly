@@ -1,4 +1,8 @@
-import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 import { version as PLUGIN_VERSION } from "../package.json";
@@ -136,7 +140,7 @@ const MINUTE = 60_000;
  *   `COMMERCE_UNKNOWN_CURRENCY` for a currency a store cannot sell in, and
  *   `COMMERCE_PROVIDER_CONTRACT` for a malformed catalogue source
  */
-export function commerce(options: CommerceOptions) {
+export function commerce(options: CommerceOptions): PluginDefinition {
   const parsed = parseRequest(optionsSchema, options, { plugin: PLUGIN_NAME });
   assertCurrency(parsed.currency);
   const own = options.catalogue;

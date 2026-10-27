@@ -41,7 +41,10 @@ export interface BreadcrumbsProps {
  *   ]}
  * />
  */
-export function Breadcrumbs({ items, className }: BreadcrumbsProps) {
+export function Breadcrumbs({
+  items,
+  className,
+}: BreadcrumbsProps): React.JSX.Element {
   return (
     <nav aria-label="Breadcrumb" className={cn("mb-2", className)}>
       <ol className="flex items-center gap-2 text-sm text-muted-foreground">

@@ -10,6 +10,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 import type { useForm } from "react-hook-form";
 import { useFieldArray } from "react-hook-form";
@@ -23,7 +24,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import { type Media } from "@admin/types/media";
+import type { Media } from "@admin/types/media";
 
 import {
   USE_DEFAULT_LAYOUT,
@@ -151,7 +152,7 @@ export function SettingsRail({
   isLayoutRow,
   providers,
   layouts,
-}: TemplateSettingsProps) {
+}: TemplateSettingsProps): JSX.Element {
   return (
     <div className="space-y-5">
       {isLayoutRow && (

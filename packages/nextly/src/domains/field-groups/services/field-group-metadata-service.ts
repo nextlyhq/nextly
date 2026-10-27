@@ -336,7 +336,9 @@ export class FieldGroupMetadataService {
       assertNotDiverged(input.slug, existing);
     }
     if (existing.locked && input.source !== "code") {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "component",
+        change: "change",
         logContext: {
           reason: "component-locked",
           slug: input.slug,
@@ -789,17 +791,18 @@ export class FieldGroupMetadataService {
     const adapter = this.adapter;
     if (!adapter) return;
     // Imported when needed, as this service does for its other collaborators. The same default
-    // locale the companion reconcile reads.
-    const [{ archiveFieldsLeavingTranslation }, { getConfigFromDI }] =
+    // locale the companion reconcile reads (`reconcileComponentCompanion`): the site's languages as
+    // the language registry serves them, so a default stored in Settings counts in both steps.
+    const [{ archiveFieldsLeavingTranslation }, { appLocalization }] =
       await Promise.all([
         import("../../i18n/migration/archive-preflight"),
-        import("../../../dispatcher/helpers/di"),
+        import("../../i18n/configured-locales"),
       ]);
     await archiveFieldsLeavingTranslation({
       // A field group's own table, which decides the column bounds compared.
       builtBy: "fieldGroup",
       tableName: args.existing.tableName,
-      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
       adapter,
       entity: args.existing.slug,
       kind: "fieldGroup",

@@ -32,6 +32,13 @@ export const NEXTLY_ERROR_STATUS = {
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
   NOT_FOUND: 404,
+  // The path exists and this verb is not one it serves. Distinct from NOT_FOUND, which would
+  // tell the caller the address is wrong when only the method is; the response carries `Allow`.
+  METHOD_NOT_ALLOWED: 405,
+  // A `Range` naming bytes past the end of the file asked for. Distinct from
+  // NOT_FOUND: the file is there, and the response's `Content-Range` gives its
+  // size so the client can ask again for a span that exists.
+  RANGE_NOT_SATISFIABLE: 416,
   CONFLICT: 409,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
@@ -297,6 +304,8 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   AUTH_REQUIRED: "Authentication required.",
   FORBIDDEN: "You don't have permission to perform this action.",
   NOT_FOUND: "Not found.",
+  METHOD_NOT_ALLOWED: "That method is not allowed on this address.",
+  RANGE_NOT_SATISFIABLE: "The requested range is outside the file.",
   CONFLICT:
     "The resource has changed since you last loaded it. Please refresh and try again.",
   DUPLICATE: "Resource already exists.",

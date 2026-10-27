@@ -12,6 +12,7 @@ import {
   SelectValue,
   Textarea,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useId, useMemo, useState } from "react";
 
 import type { BuilderField } from "../types";
@@ -54,7 +55,7 @@ export function DefaultValueField({
   field,
   readOnly = false,
   onChange,
-}: Props) {
+}: Props): JSX.Element | null {
   const inputId = useId();
 
   if (!SUPPORTED_TYPES.has(field.type)) {

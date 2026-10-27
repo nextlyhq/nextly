@@ -28,22 +28,24 @@ import {
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
-import { transactionOpenInFlow } from "../transaction-flow";
+import {
+  SNAPSHOT_MAX_AGE_MS,
+  transactionOpenInFlow,
+} from "../transaction-flow";
 
 type EmailBrandTable = ReturnType<typeof emailBrandTables>["nextlyEmailBrand"];
 
 export class EmailBrandStore extends BaseService {
   private readonly table: EmailBrandTable;
   /**
-   * The settings as this instance last read or wrote them. A render made
-   * inside a caller's open transaction reads them here, because the email
-   * service is never handed that transaction and a read of the table would run
-   * on another connection, outside it. Read at the end of each boot and kept
-   * current by this instance's own reads and writes; outside a transaction
-   * every read goes to the table, so a change another instance made is seen
-   * there.
+   * The settings as this instance last read or wrote them, which every render
+   * answers from: a send makes no read of the table, and none on another
+   * connection inside a caller's open transaction. Read at the end of each
+   * boot, replaced by this instance's own saves, and read again outside a
+   * transaction once older than SNAPSHOT_MAX_AGE_MS, which is how long a save
+   * another instance made can go unseen here.
    */
-  private snapshot: BrandSettings | null = null;
+  private snapshot: { settings: BrandSettings; readAt: number } | null = null;
   /**
    * Moved by every save, when it starts and when its read-back lands. A read
    * keeps what it read only if no save moved this while it ran, so a read that
@@ -51,6 +53,18 @@ export class EmailBrandStore extends BaseService {
    * and a save keeps its read-back only if no later save has started.
    */
   private generation = 0;
+  /** The read of the table in flight, which every caller arriving meanwhile joins. */
+  private refreshing: {
+    read: Promise<BrandSettings>;
+    /** The save generation it began under (see generation). */
+    generation: number;
+  } | null = null;
+  /**
+   * The end of the last save queued. Saves on one instance run one after
+   * another, so the order they write in is the order they started in, and the
+   * copy always holds what the table last received from this instance.
+   */
+  private saving: Promise<unknown> = Promise.resolve();
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -59,8 +73,13 @@ export class EmailBrandStore extends BaseService {
 
   /** The settings as a render reads them, each resolved to its starting value where unset. */
   async read(): Promise<BrandSettings> {
-    if (this.snapshot && transactionOpenInFlow(this.adapter)) {
-      return this.snapshot;
+    const copy = this.snapshot;
+    if (
+      copy &&
+      (transactionOpenInFlow(this.adapter) ||
+        Date.now() - copy.readAt <= SNAPSHOT_MAX_AGE_MS)
+    ) {
+      return copy.settings;
     }
     return this.refresh();
   }
@@ -70,12 +89,37 @@ export class EmailBrandStore extends BaseService {
     await this.refresh();
   }
 
-  /** Read the table, keeping the result as the snapshot unless a save overtook the read. */
-  private async refresh(): Promise<BrandSettings> {
+  /**
+   * The settings as the table holds them now, for an editor: never answered
+   * from the copy, so a save another instance made is seen at once.
+   */
+  async readCurrent(): Promise<BrandSettings> {
+    return this.refresh();
+  }
+
+  /**
+   * Read the table, keeping the result as the snapshot unless a save overtook
+   * the read. Callers arriving while a read is in flight share it, so a burst
+   * of sends after the copy expires makes one read, not one each.
+   */
+  private refresh(): Promise<BrandSettings> {
+    // Joined only while no save has started or landed since it began: a read
+    // from before a save could carry the settings the save replaced.
+    if (this.refreshing && this.refreshing.generation === this.generation) {
+      return this.refreshing.read;
+    }
     const started = this.generation;
-    const settings = await this.readTable();
-    if (this.generation === started) this.snapshot = settings;
-    return settings;
+    const readAt = Date.now();
+    const read = this.readTable()
+      .then(settings => {
+        if (this.generation === started) this.snapshot = { settings, readAt };
+        return settings;
+      })
+      .finally(() => {
+        if (this.refreshing?.read === read) this.refreshing = null;
+      });
+    this.refreshing = { read, generation: started };
+    return read;
   }
 
   private async readTable(): Promise<BrandSettings> {
@@ -104,6 +148,13 @@ export class EmailBrandStore extends BaseService {
    * returns to its starting value.
    */
   async update(change: BrandSettingsUpdate): Promise<BrandSettings> {
+    const run = this.saving.then(() => this.write(change));
+    // The queue moves on whether this save succeeds or fails.
+    this.saving = run.catch(() => undefined);
+    return run;
+  }
+
+  private async write(change: BrandSettingsUpdate): Promise<BrandSettings> {
     const mine = ++this.generation;
     const set: Record<string, unknown> = { updatedAt: new Date() };
     for (const [key, value] of Object.entries(change)) {
@@ -127,11 +178,12 @@ export class EmailBrandStore extends BaseService {
     }
     // Read back from the table whatever the flow, so what is returned, and
     // what this instance renders with from now on, is what was written.
+    const readAt = Date.now();
     const saved = await this.readTable();
     // Kept only if no later save started meanwhile: of two saves at once,
     // the later one's read-back is the one that stays.
     if (this.generation === mine) {
-      this.snapshot = saved;
+      this.snapshot = { settings: saved, readAt };
       this.generation++;
     }
     return saved;

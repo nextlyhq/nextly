@@ -19,7 +19,13 @@
  * ```
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   fetchApiKeyAbilities,
@@ -34,6 +40,7 @@ import {
   type CreateApiKeyPayload,
   type UpdateApiKeyPayload,
   type CreateApiKeyResult,
+  type ApiKeyTokenType,
 } from "@admin/services/apiKeyApi";
 
 // ============================================================
@@ -42,8 +49,11 @@ import {
 
 export const apiKeyKeys = {
   all: () => ["apiKeys"] as const,
-  lists: () => [...apiKeyKeys.all(), "list"] as const,
-  abilities: (query: ApiKeyAbilitiesQuery) =>
+  lists: (): readonly ["apiKeys", "list"] =>
+    [...apiKeyKeys.all(), "list"] as const,
+  abilities: (
+    query: ApiKeyAbilitiesQuery
+  ): readonly ["apiKeys", "abilities", ApiKeyTokenType, string | null] =>
     [
       ...apiKeyKeys.all(),
       "abilities",
@@ -63,7 +73,7 @@ export const apiKeyKeys = {
  * Uses a 30-second stale time so the list stays fresh during a settings session
  * without hammering the server on every navigation.
  */
-export function useApiKeys() {
+export function useApiKeys(): UseQueryResult<ApiKeyListResponse, Error> {
   return useQuery<ApiKeyListResponse, Error>({
     queryKey: apiKeyKeys.lists(),
     queryFn: () => fetchApiKeys(),
@@ -84,7 +94,9 @@ export function useApiKeys() {
  * on this screen invalidates the summary, so without this the form would go
  * on showing the old answer while the key it creates gets the new one.
  */
-export function useApiKeyAbilities(query: ApiKeyAbilitiesQuery) {
+export function useApiKeyAbilities(
+  query: ApiKeyAbilitiesQuery
+): UseQueryResult<ApiKeyAbility[], Error> {
   return useQuery<ApiKeyAbility[], Error>({
     queryKey: apiKeyKeys.abilities(query),
     queryFn: () => fetchApiKeyAbilities(query),
@@ -119,7 +131,12 @@ export function useApiKeyAbilities(query: ApiKeyAbilitiesQuery) {
  * });
  * ```
  */
-export function useCreateApiKey() {
+export function useCreateApiKey(): UseMutationResult<
+  CreateApiKeyResult,
+  Error,
+  CreateApiKeyPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<CreateApiKeyResult, Error, CreateApiKeyPayload>({
@@ -136,7 +153,15 @@ export function useCreateApiKey() {
  * Token type, role, and duration are immutable — revoke and recreate to change
  * them. Invalidates the keys list on success.
  */
-export function useUpdateApiKey() {
+export function useUpdateApiKey(): UseMutationResult<
+  ApiKeyMeta,
+  Error,
+  {
+    id: string;
+    data: UpdateApiKeyPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -157,7 +182,12 @@ export function useUpdateApiKey() {
  * Sets `isActive = false` on the key. The row is preserved for audit purposes.
  * Invalidates the keys list on success so the revoked key is removed from view.
  */
-export function useRevokeApiKey() {
+export function useRevokeApiKey(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({

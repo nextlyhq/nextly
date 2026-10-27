@@ -118,10 +118,13 @@ describe("draft/published split on every write path (integration)", () => {
     const second = await publish(entries);
 
     // More than one entry, so the batch shape is real rather than a batch of one.
-    await entries.updateEntries({ collectionName: COLLECTION }, [
-      { id: first, data: { body: "edited body" } },
-      { id: second, data: { body: "edited body" } },
-    ]);
+    await entries.updateEntries(
+      { collectionName: COLLECTION, overrideAccess: true },
+      [
+        { id: first, data: { body: "edited body" } },
+        { id: second, data: { body: "edited body" } },
+      ]
+    );
 
     for (const id of [first, second]) {
       expect(await workingDrafts(id)).toHaveLength(1);

@@ -18,7 +18,17 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, text } from "../../../config";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  group,
+  text,
+} from "../../../config";
 import type { HookContext } from "../../../hooks/types";
 import { createAdapter } from "../../../database/factory";
 import {
@@ -68,6 +78,19 @@ async function boot(
   } as Parameters<typeof createAdapter>[0]);
   current = await createTestNextly({
     adapter,
+    // A field group stored in its own table, with a child only BOSS may write.
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "scard",
+        fields: [
+          text({ name: "note" }),
+          text({
+            name: "runbook",
+            access: { update: ({ req }) => req.user?.email === BOSS.email },
+          }),
+        ],
+      }),
+    ],
     singles: [
       defineSingle({
         slug: SLUG,
@@ -110,6 +133,7 @@ async function boot(
             name: "guarded",
             access: { update: ({ req }) => req.user?.email === BOSS.email },
           }),
+          fieldGroup({ name: "card", component: "scard" }),
           text({
             name: "checked",
             ...(strict
@@ -385,6 +409,86 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
   });
 
+  it("refuses, and keeps the draft, when the publisher's field group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        card: { note: "live-note", runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { card: { note: "live-note", runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      {
+        status: "published",
+        card: { note: "clerk-note", runbook: "live-runbook" },
+      },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["card.runbook"]);
+  });
+
+  it("refuses, and keeps the draft, when the publisher's group echoes a protected child the draft edited", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        ops: { runbook: "live-runbook" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { ops: { runbook: "boss-runbook" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    // The publisher sends the whole group, the child at its live value. Kept
+    // at the stored value, the child would read as their own input, and the
+    // publish would consume the draft and lose the author's edit.
+    const published = await singles.update(
+      SLUG,
+      { status: "published", ops: { runbook: "live-runbook" } },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+    const drafts = await current!.adapter.select<{ snapshot: unknown }>(
+      "nextly_versions",
+      {
+        where: {
+          and: [
+            { column: "scopeKind", op: "=", value: "single" },
+            { column: "scopeSlug", op: "=", value: SLUG },
+            { column: "versionNo", op: "IS NULL" },
+            { column: "status", op: "=", value: "draft" },
+          ],
+        },
+      }
+    );
+    expect(drafts).toHaveLength(1);
+  });
+
   it("gates a publish a beforeChange hook decides on", async () => {
     // The caller sends no status; the hook turns the write into a publish. A
     // gate placed before the hooks would never see this one.
@@ -634,6 +738,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         }),
       ],
     });
+    // Both publishers. A publish needs `publish-prefs` and `update-prefs`, and
+    // a rule only narrows a permission, so each holds both and the field rule
+    // on `guarded` is what tells them apart.
+    for (const publisher of [BOSS, CLERK]) {
+      await userWhoMay(current, publisher.id, "publish", [SLUG]);
+      await grantTo(current, publisher.id, "update", [SLUG]);
+    }
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;

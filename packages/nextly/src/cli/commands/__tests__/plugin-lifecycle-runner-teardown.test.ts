@@ -99,7 +99,6 @@ vi.mock(
 vi.mock("../../../di/register", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   registerServices: state.registerServices,
-  isServicesRegistered: () => state.alreadyRegistered,
   getInitializedPluginContext: () => ({}),
   destroyRegisteredPlugins: async () => {
     state.calls.push("destroy");
@@ -107,6 +106,9 @@ vi.mock("../../../di/register", async importOriginal => ({
   clearServices: () => {
     state.calls.push("clear");
   },
+}));
+vi.mock("../../../di/service-access", () => ({
+  isServicesRegistered: () => state.alreadyRegistered,
 }));
 
 vi.mock("../../../init/build-service-config", () => ({

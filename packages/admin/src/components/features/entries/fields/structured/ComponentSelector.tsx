@@ -21,6 +21,7 @@ import {
   DialogTitle,
   Input,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import type { LucideIcon } from "@admin/components/icons";
@@ -258,7 +259,7 @@ export function ComponentSelector({
   // stored `component` spelling.
   title = "Add Field Group",
   description = "Choose a field group to add.",
-}: ComponentSelectorProps) {
+}: ComponentSelectorProps): JSX.Element {
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
 

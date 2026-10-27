@@ -44,6 +44,12 @@ export {
 export { parseHex, toHex } from "./hex";
 
 /**
+ * @experimental A colour made readable on the surfaces it is drawn on, by its
+ * OKLCH lightness alone: returned as given when it already reads, never refused.
+ */
+export { readableOn } from "./readable-on";
+
+/**
  * @experimental The mapping between a pointer on a picker surface and a colour.
  *
  * Server-safe because it is arithmetic on numbers, and separate from the

@@ -45,7 +45,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type JSX, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ConditionalLogicCondition } from "../../../types";
 import {
@@ -1262,7 +1262,9 @@ function NotificationEditor({
  * Each rule references an existing email provider and template rather than
  * duplicating provider credentials or embedding a second template editor.
  */
-export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
+export function FormNotificationsTab({
+  defaults,
+}: FormNotificationsTabProps): JSX.Element {
   const {
     notifications,
     fields,

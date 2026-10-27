@@ -18,7 +18,8 @@
  */
 
 import { createAdapterFromEnv } from "../database/factory";
-import { getService, type NextlyServiceConfig } from "../di/register";
+import type { NextlyServiceConfig } from "../di/register";
+import { getService } from "../di/service-access";
 import { NextlyError } from "../errors/nextly-error";
 import { runWithRequestScope } from "../hooks/request-scope";
 import { ServiceContainer } from "../services";

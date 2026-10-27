@@ -12,6 +12,10 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, group, number, text } from "../../../config";
 import {
   createTestNextly,
@@ -104,6 +108,10 @@ async function boot(
     ],
     localization: { locales: ["en", "es", "fr"], defaultLocale: "en" },
   });
+  // The signed-in caller `u1` the field rules apply to. A rule only narrows a
+  // permission, so `u1` holds read and update on the Single.
+  await userWhoMay(current, "u1", "read", [SLUG]);
+  await grantTo(current, "u1", "update", [SLUG]);
   return current.getService("singleEntryService");
 }
 

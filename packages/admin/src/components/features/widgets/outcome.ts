@@ -45,7 +45,7 @@ import type {
   CellSlotLookup,
   DeclaredWidget,
 } from "./archetypes/types";
-import type { CardEmptyContent } from "./frame/states";
+import { EMPTY_DEFAULT, type CardEmptyContent } from "./frame/states";
 
 /**
  * The archetypes core draws from a query result.
@@ -123,7 +123,29 @@ export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
     return `The "${archetype}" widget archetype is not rendered yet.`;
   }
 
+  // What an archetype accepts is judged from the declaration's query, and a
+  // card core answers on the server has none: its answer was held to the
+  // display's shape before it was sent, so there is nothing left to refuse.
+  if (definition.serverData === true) return undefined;
   return renderer.accepts?.(definition);
+}
+
+/**
+ * A card's empty state with its widget's declared one in place of the frame's:
+ * the declared message as its title, with no detail of the frame's beneath it,
+ * and the declared action as its one action. The frame's or the body's own,
+ * as it is, for a widget that declares none.
+ */
+function emptyFor(
+  definition: DashboardWidget,
+  own: CardEmptyContent = EMPTY_DEFAULT
+): CardEmptyContent {
+  const declared = definition.declaredEmpty;
+  if (declared === undefined) return own;
+  const words = declared.title === undefined ? own : { title: declared.title };
+  return declared.action === undefined
+    ? words
+    : { ...words, action: declared.action };
 }
 
 /** Whether core can draw this declaration at all. */
@@ -136,11 +158,15 @@ export function coreDraws(definition: DeclaredWidget): boolean {
  * renderer can draw.
  *
  * `self-drawn` is neither success nor failure and must not be counted as
- * either: the plugin's component decides what it shows, and core has no way to
- * know whether it worked.
+ * either: the component draws the answer, and reports to the frame anything its
+ * data says beyond it (`FrameState`), which the grid does not see. A failed
+ * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
  */
 export type WidgetOutcome =
   | { state: "self-drawn" }
+  // A widget declared with `defineWidget` and drawn by its own component, with
+  // its data: the frame draws every other state, and the component this one.
+  | { state: "answered"; data: unknown }
   | { state: "loading" }
   | { state: "failed"; message: string }
   // The source is forbidden, gone, or kept off the dashboard: one state for all three.
@@ -186,6 +212,60 @@ function slotlessOutcome(
   return undefined;
 }
 
+/**
+ * Whether a card is a widget declared with `defineWidget` and drawn by its own
+ * component: a custom card whose data core builds on the server. Core's own
+ * custom cards ask their own queries and draw their own states.
+ */
+function drawsDeclaredComponent(definition: DashboardWidget): boolean {
+  return definition.archetype === "custom" && definition.serverData === true;
+}
+
+/** A failed slot as the grid's outcome: one code marks every "not available". */
+function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
+  return slot.code === "unavailable"
+    ? { state: "unavailable" }
+    : { state: "failed", message: slot.error };
+}
+
+/**
+ * A declared widget drawn by its own component: core builds its data, so the
+ * frame draws loading, no permission and error as for any card core answers,
+ * and the component is called only once there is data (`WidgetProps`).
+ *
+ * Its data is what the declaration types it as: a data function's answer,
+ * carried as an `op: "data"` result and unwrapped here, or, for a widget
+ * whose data is `{ query }`, the query's own answer as it is, a count, a list
+ * or a grouped result (`QueryAnswer`).
+ */
+function declaredComponentOutcome(slot: WidgetSlot | undefined): WidgetOutcome {
+  if (!slot) return { state: "loading" };
+  if (!slot.ok) return slotFailure(slot);
+  return {
+    state: "answered",
+    data: slot.result.op === "data" ? slot.result.data : slot.result,
+  };
+}
+
+/**
+ * The outcome of a card drawn by a component, or `undefined` for one core draws.
+ *
+ * A declared widget's component is handed its data once there is some, the frame drawing every
+ * other state. A custom card's own component is reached with an answer or while one is on the
+ * way: a failed answer is the frame's to draw and the grid's to count, like any other card's, and
+ * what its answer says beyond that, the component reports to the frame (`FrameState`).
+ */
+function componentOutcome(
+  definition: DashboardWidget,
+  slot: WidgetSlot | undefined
+): WidgetOutcome | undefined {
+  if (drawsDeclaredComponent(definition)) {
+    return declaredComponentOutcome(slot);
+  }
+  if (definition.archetype !== "custom") return undefined;
+  return slot?.ok === false ? slotFailure(slot) : { state: "self-drawn" };
+}
+
 export function resolveWidgetOutcome(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined,
@@ -199,8 +279,15 @@ export function resolveWidgetOutcome(
    */
   slotFor?: CellSlotLookup
 ): WidgetOutcome {
-  // The escape hatch. A plugin component owns its own body and its own states.
-  if (definition.archetype === "custom") return { state: "self-drawn" };
+  // A declared widget's empty test held: the frame draws its empty state, the
+  // widget's own words in place of its own, whatever draws the card when it
+  // has something to show -- its own component included.
+  if (slot?.ok === true && slot.empty === true) {
+    return { state: "empty", empty: emptyFor(definition) };
+  }
+
+  const component = componentOutcome(definition, slot);
+  if (component !== undefined) return component;
 
   // Everything knowable WITHOUT a payload, decided first: an archetype with no
   // renderer, and a declaration the renderer refuses. Both are settled before
@@ -245,7 +332,7 @@ export function resolveWidgetOutcome(
     // the page -- with nothing on screen, in the live region or in the console
     // saying why. `resolve-widgets` prefers a contributed component over this,
     // so reaching here means there was none to prefer.
-    if (!definition.query) {
+    if (!definition.query && definition.serverData !== true) {
       return {
         state: "failed",
         message: `The "${definition.archetype}" archetype is drawn from a query, and this widget declares none.`,
@@ -254,12 +341,12 @@ export function resolveWidgetOutcome(
     return { state: "loading" };
   }
 
-  if (!slot.ok) {
-    // The server marks every "not available" answer with one code; anything else failed.
-    return slot.code === "unavailable"
-      ? { state: "unavailable" }
-      : { state: "failed", message: slot.error };
-  }
+  if (!slot.ok) return slotFailure(slot);
 
-  return asOutcome(renderer.body(slot.result, definition));
+  const drawn = asOutcome(renderer.body(slot.result, definition));
+  // A display that finds nothing in its answer draws its empty state with the
+  // widget's declared one in place of its own, as the server's verdict does.
+  return drawn.state === "empty"
+    ? { state: "empty", empty: emptyFor(definition, drawn.empty) }
+    : drawn;
 }

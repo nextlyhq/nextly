@@ -15,6 +15,7 @@ import { randomUUID } from "crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -106,6 +107,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   // identity already erased.
   for (const person of [ANA, BEN, BOSS]) {
     await t.adapter.insert("users", { ...person, is_active: true });
+    // A code rule only narrows the permission, so each reader holds read on
+    // every collection and the Single here and the rules decide what they see.
+    await grantTo(t, person.id, "read", [NOTES, HIDDEN, SECRET, HOME]);
   }
   return t;
 }

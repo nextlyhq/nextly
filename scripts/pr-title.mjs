@@ -13,7 +13,7 @@
  * named for, and it judges the message that will land even if a title was
  * edited after it was queued.
  *
- * The rules are inputs of `.github/workflows/pr-title.yml`, passed through
+ * The rules are inputs of `.github/workflows/small-checks.yml`, passed through
  * `.github/actions/pr-title`, so the scope list stays in the one place AGENTS.md
  * and the measured facts are held to.
  *

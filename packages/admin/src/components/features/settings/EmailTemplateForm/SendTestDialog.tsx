@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2, Send } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -33,7 +34,7 @@ export function SendTestDialog({
   /** The template's slug; kept for callers, the test is sent by id. */
   slug?: string;
   sampleData: Record<string, unknown>;
-}) {
+}): JSX.Element {
   const { mutate: doSend, isPending } = useSendTestEmailTemplate();
   // A test goes to the signed-in user's own address, and only there: the
   // server picks it, so the dialog only says where it will arrive.

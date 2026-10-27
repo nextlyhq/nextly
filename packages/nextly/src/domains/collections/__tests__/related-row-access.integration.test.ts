@@ -84,7 +84,12 @@ interface Fixture {
   noteId: string;
   /** The rule on `blobs`, which throws: called only if a caller reaches it. */
   blobRule: ReturnType<typeof vi.fn>;
-  /** Users by what they hold. */
+  /**
+   * Users by what they hold. Every person but `nobody` holds read on `memos`
+   * and `chains`, whose rules admit everyone: a rule only narrows the
+   * permission. `nobody` holds no role at all.
+   */
+  nobody: string;
   stranger: string;
   pageReader: string;
   noteReader: string;
@@ -253,15 +258,55 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     return userId;
   };
 
+  // Read on the collections whose rules admit everyone, held by every person
+  // but `nobody`, since a rule only narrows the permission.
+  const admittedRole = await t.nextly.roles.create({
+    data: {
+      name: "Admitted reader",
+      slug: "admitted-reader",
+      permissionIds: await Promise.all(
+        ["memos", "chains"].map(async resource => {
+          const permission = await t.nextly.permissions.create({
+            data: {
+              action: "read",
+              resource,
+              name: `Read ${resource}`,
+              slug: `read-${resource}`,
+            },
+          });
+          return permission.item.id;
+        })
+      ),
+    },
+  });
+  const admitted = async (userId: string): Promise<string> => {
+    await db.insert(tables.userRoles).values({
+      id: `user-role-admitted-${userId}`,
+      userId,
+      roleId: String(admittedRole.item.id),
+      createdAt: new Date(),
+    });
+    return userId;
+  };
+
   const fx = {
     t,
     handler: t.getService("collectionsHandler") as CollectionsHandler,
     blobRule,
-    stranger: await createUser("stranger@example.com"),
-    pageReader: await createUser("pages@example.com", await roleFor("pages")),
-    noteReader: await createUser("notes@example.com", await roleFor("notes")),
-    mediaReader: await createUser("media@example.com", await roleFor("media")),
-    userReader: await createUser("users@example.com", await roleFor("users")),
+    nobody: await createUser("nobody@example.com"),
+    stranger: await admitted(await createUser("stranger@example.com")),
+    pageReader: await admitted(
+      await createUser("pages@example.com", await roleFor("pages"))
+    ),
+    noteReader: await admitted(
+      await createUser("notes@example.com", await roleFor("notes"))
+    ),
+    mediaReader: await admitted(
+      await createUser("media@example.com", await roleFor("media"))
+    ),
+    userReader: await admitted(
+      await createUser("users@example.com", await roleFor("users"))
+    ),
     superAdmin: await createUser("admin@example.com", "role-super-admin"),
   };
   const author = await createUser(TITLE.user);
@@ -707,12 +752,16 @@ describe.each(getConfiguredTestDialects())(
         ).toBe(true);
       });
 
-      it("lets a declared rule decide for people, and lets a super-admin past one that refuses", async () => {
+      it("needs the read permission and a rule that admits, and lets a super-admin past one that refuses", async () => {
         const fx = await boot(dialect);
-        // A rule that admits populates without any grant.
+        // A rule that admits populates for a person holding the grant.
         expect(
           shows((await readRef(fx, as(fx.stranger))).memo, TITLE.memo)
         ).toBe(true);
+        // Not for one without it: the rule only narrows the permission.
+        expect(shows((await readRef(fx, as(fx.nobody))).memo, TITLE.memo)).toBe(
+          false
+        );
         // A rule that refuses withholds from a person holding read-notes.
         expect(
           await readsDirectly(fx, as(fx.noteReader), "notes", fx.noteId)

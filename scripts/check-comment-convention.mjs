@@ -30,7 +30,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import ts from "typescript";
+
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 
 /**
  * The forbidden shapes, deliberately narrow.
@@ -443,127 +444,21 @@ export function sourceFiles(root) {
  * catches is one nothing else in the repository can see.
  */
 export function commentText(source, { lineComments = true, jsx = false, hashComments = false, shell = false } = {}) {
-  // YAML and shell are not JavaScript. Their comments start at `#`, which TypeScript cannot lex.
+  // YAML and shell are not JavaScript. Their comments start at `#`, which no JavaScript parser reads.
   if (hashComments) return hashLineComments(source, { shell });
 
-  // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
+  // CSS is not JavaScript either. It has block comments and nothing else.
   if (!lineComments) return cssBlockComments(source);
 
-  // Rendered JSX text is data, not code, and `scanner.scan()` does not enter JSX child text
-  // mode - the parser transitions with `scanJsxToken`. So `<span>https://x</span>` reaches the
-  // scanner as a slash pair and reads as a comment. The parser knows exactly which spans are
-  // JsxText, so its answer is used to reject them rather than reimplementing the transition.
-  // Only for files that ARE JSX. Parsing a plain .ts file as TSX turns ordinary generic syntax
-  // into phantom JsxText spans, and comments falling inside them would be dropped - a false
-  // NEGATIVE, which is the worse direction for a gate.
-  const facts = parserFacts(source, jsx);
-  const jsxText = facts.jsxText;
-
-  const comments = [];
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    // Keep trivia: comments ARE trivia, and skipping it would discard the only tokens wanted.
-    false,
-    // JSX so `{/* ... */}` inside markup is lexed rather than read as an operator soup.
-    // JSX only where the file is JSX. `scan()` never enters JSX child-text mode by itself, so the
-    // variant buys nothing on a plain `.ts` file and would only change how `<` is treated.
-    jsx ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
-    source
-  );
-
-  // Depth of `{` since each open template interpolation, so a `}` closes the interpolation only
-  // when it is the matching one. A template can open inside an interpolation, hence a stack.
-  const interpolations = [];
-  // Whether each open paren belongs to an if/while/for HEADER. A slash after such a paren opens a
-  // regular expression - `if (ready) /x/.test(v)` is a statement, not a division - while a slash
-  // after a call or grouping paren divides.
-  let token = scanner.scan();
-
-  while (token !== ts.SyntaxKind.EndOfFileToken) {
-    // The one decision a lexer cannot make alone: `/` opens a regular expression in some
-    // positions and divides in others, and only what precedes it separates them. TypeScript
-    // exposes the re-scan for exactly this, so the DECISION is made here and the SCANNING stays
-    // TypeScript's - which is what keeps character classes and escapes correct.
-    if (
-      (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
-      facts.regexStarts.has(scanner.getTokenStart())
-    ) {
-      token = scanner.reScanSlashToken();
-    }
-
-    if (
-      token === ts.SyntaxKind.SingleLineCommentTrivia ||
-      token === ts.SyntaxKind.MultiLineCommentTrivia
-    ) {
-      const start = scanner.getTokenStart();
-      const jsxSpan = jsxText.find(r => start >= r.pos && start < r.end);
-      if (jsxSpan) {
-        // Rendered text, not a comment. Resume at the END of that text rather than at the end of
-        // the line the scanner just consumed: `<div>https://x</div>; // Codex asked` has a real
-        // comment after the URL, and discarding the line would take it too.
-        scanner.resetTokenState(jsxSpan.end);
-        token = scanner.scan();
-        continue;
-      }
-      comments.push(scanner.getTokenText());
-    } else if (token === ts.SyntaxKind.TemplateHead) {
-      interpolations.push(0);
-    } else if (token === ts.SyntaxKind.OpenBraceToken && interpolations.length > 0) {
-      interpolations[interpolations.length - 1] += 1;
-    } else if (token === ts.SyntaxKind.CloseBraceToken && interpolations.length > 0) {
-      if (interpolations[interpolations.length - 1] === 0) {
-        // Back into template TEXT. Without this the scanner keeps lexing the rest of the
-        // template as code, and a `//` in that text reads as a comment.
-        const resumed = scanner.reScanTemplateToken(false);
-        if (resumed === ts.SyntaxKind.TemplateTail) interpolations.pop();
-        token = scanner.scan();
-        continue;
-      }
-      interpolations[interpolations.length - 1] -= 1;
-    }
-
-    token = scanner.scan();
-  }
-
-  return comments;
-}
-
-/**
- * The two things the SCANNER cannot decide for itself, taken from the parser in one pass.
- *
- * `regexStarts` holds the offset of every regular-expression literal. Whether a `/` opens one or
- * divides is a grammar question, not a lexical one - `value as number / 2` divides while
- * `if (ready) /x/.test(v)` does not - and a set of "token kinds that end a value" is a
- * reimplementation of the parser's state that is wrong wherever it is incomplete. Each gap is a
- * SILENT one: the slash re-scans as a regular expression and swallows the comment behind it. So
- * the answer is read from the parser, which already computed it.
- *
- * `jsxText` holds rendered JSX text, which no comment can begin inside: `<span>https://x</span>`
- * reaches the scanner as a slash pair. Populated only for files that ARE JSX, because parsing a
- * plain `.ts` file as TSX turns ordinary generic syntax into phantom JsxText spans and comments
- * falling inside them would be dropped.
- */
-function parserFacts(source, jsx) {
-  const sourceFile = ts.createSourceFile(
-    jsx ? "f.tsx" : "f.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
-  const regexStarts = new Set();
-  const jsxText = [];
-  const visit = node => {
-    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
-      regexStarts.add(node.getStart(sourceFile));
-    }
-    if (jsx && node.kind === ts.SyntaxKind.JsxText) {
-      jsxText.push({ pos: node.pos, end: node.end });
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return { regexStarts, jsxText };
+  // Comments as the PARSER finds them, which is what makes the hard cases a non-question: a `/`
+  // that opens a regular expression rather than a comment, `//` in the text of a template between
+  // its interpolations, and rendered JSX text such as `<span>https://x</span>` are all decided by
+  // the grammar, where a lexer alone has to guess and each wrong guess either swallows a real
+  // comment or reports data as one. JSX only where the file IS JSX: parsing a plain `.ts` file as
+  // TSX turns ordinary generic syntax into markup. A file the parser cannot read is refused rather
+  // than read as having no comments.
+  const { comments } = parseSource(source, jsx ? "f.tsx" : "f.ts");
+  return comments.map(comment => source.slice(comment.start, comment.end));
 }
 
 /**

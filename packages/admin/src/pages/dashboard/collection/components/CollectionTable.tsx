@@ -20,7 +20,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import * as Icons from "@admin/components/icons";
@@ -118,7 +118,7 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * selected, or deleted from the UI. Data + mutations run through TanStack Query;
  * rendering is delegated to the unified DataTableView.
  */
-export default function CollectionTable() {
+export default function CollectionTable(): JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);

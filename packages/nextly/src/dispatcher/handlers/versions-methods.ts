@@ -366,7 +366,8 @@ export async function markVersionSeenForDocument(
   }
   const userId = readingPersonId(args.user, args.authenticatedScope);
   if (userId === null) {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "mark a version as seen",
       logContext: {
         reason: "mark-seen-not-a-person",
         actorType: args.authenticatedScope?.actorType,
@@ -950,7 +951,8 @@ export async function autosaveForDocument(
   if (args.scopeKind === "collection" || args.scopeKind === "single") {
     const policy = await resolveVersionsPolicy(args.scopeKind, args.slug);
     if (!policy?.drafts?.autosave?.enabled) {
-      throw NextlyError.forbidden({
+      throw NextlyError.autosaveOff({
+        scopeKind: args.scopeKind,
         logContext: {
           reason: "autosave-not-enabled",
           scopeKind: args.scopeKind,

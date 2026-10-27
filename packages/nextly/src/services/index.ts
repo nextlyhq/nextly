@@ -82,7 +82,10 @@ export * from "./shared";
 
 export * from "./base-service";
 export * from "./users";
-export * from "./dispatcher";
+// `./dispatcher` is not re-exported here: the dispatcher reaches the route
+// handler and the HTTP layer, and through this barrel every module that wants
+// a service would load them. Import `ServiceDispatcher` from
+// `./dispatcher`, as the root entry does.
 export * from "../domains/dynamic-collections";
 export * from "./collection-file-manager";
 export * from "./collections-handler";

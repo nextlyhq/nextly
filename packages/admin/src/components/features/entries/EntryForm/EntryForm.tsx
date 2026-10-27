@@ -15,6 +15,7 @@
  * @since 1.0.0
  */
 
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
@@ -36,6 +37,7 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
+import { useCan } from "@admin/hooks/useCan";
 import {
   autosaveScopeFor,
   useDocumentAutosave,
@@ -297,7 +299,7 @@ export function EntryForm({
   onViewApi,
   documentActions,
   documentView,
-}: EntryFormProps) {
+}: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
    *
@@ -600,6 +602,14 @@ export function EntryForm({
   // context — this body renders ABOVE the provider this component creates, so
   // a context read here would report no version on screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  // Delete is offered only to a caller who may delete in this collection.
+  // The quick-edit and quick-create modals save only with the update or
+  // create permission their mode needs: those modals open from a related
+  // field, not through the route guard the full editor sits behind.
+  const canDelete = useCan(`delete-${collectionSlug}`);
+  const canSave = useCan(
+    `${mode === "create" ? "create" : "update"}-${collectionSlug}`
+  );
 
   /*
    * The one gate every write passes through.
@@ -777,7 +787,8 @@ export function EntryForm({
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
-    onDelete: handleDelete,
+    // No handler, no Delete: the action bar draws no action it cannot run.
+    ...(canDelete ? { onDelete: handleDelete } : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
 
@@ -795,8 +806,14 @@ export function EntryForm({
         <EntryFormProvider
           form={form}
           // The quick-edit form submits natively and reports through its own
-          // toasts, so what the save came to is not read here.
+          // toasts, so what the save came to is not read here. A caller who
+          // may not save sends nothing: Enter in a field submits even with
+          // no Save on screen.
           onSubmit={async event => {
+            if (!canSave) {
+              event?.preventDefault();
+              return;
+            }
             await handleSubmit(event);
           }}
           className={className}
@@ -832,13 +849,16 @@ export function EntryForm({
             <EntryFormContent
               fields={getCollectionFields(collection)}
               disabled={isSubmitting}
-              readOnly={lock.readOnly}
+              // Without the permission to save, the entry is shown as it is
+              // rather than as a form whose changes go nowhere.
+              readOnly={lock.readOnly || !canSave}
               mode={mode}
             />
             <EntryFormActions
               mode={mode}
               isSubmitting={isSubmitting}
               onCancel={handleCancel}
+              canSave={canSave}
             />
           </div>
         </EntryFormProvider>

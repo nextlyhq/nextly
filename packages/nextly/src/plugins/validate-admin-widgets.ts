@@ -19,26 +19,34 @@
 
 import {
   actionGatesOf,
+  collectionSettingField,
+  knobQueriesField,
+  textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
 import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
   archetypeResultProblem,
-  chromeProblem,
+  chromeFieldProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
   legacySizeToWidgetSize,
   querylessQueryProblem,
   CELL_ARCHETYPES,
   cellsProblem,
+  customAsksTwiceProblem,
   QUERYLESS_ARCHETYPES,
+  rangedLimitSettingProblem,
   textContentProblem,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import type { WidgetQuerySpec } from "../domains/widgets/query";
-import { widgetSettingsProblem } from "../domains/widgets/settings";
+import {
+  settingsSourceOf,
+  widgetSettingsProblem,
+} from "../domains/widgets/settings";
 import { getNextlyLogger } from "../observability/logger";
 
 import type { PluginAdminWidget } from "./admin-contributions";
@@ -333,26 +341,34 @@ const FIELD_RULES: ReadonlyArray<
   // it quietly stopped holding.
   widget => defaultOrderProblem(widget.defaultOrder),
 
+  // Through the SAME rule the registry applies: a custom card asking through
+  // both a query and cells would have its query ignored by the admin, which
+  // takes the cells, while the identical registered definition is refused.
+  customAsksTwiceProblem,
+
+  // Through the SAME rule the registry applies: a "limit" setting beside a
+  // ranged query would fail every request it changed.
+  rangedLimitSettingProblem,
+
   // Through the SAME rule the registry applies, and it is the rule ITSELF
   // rather than a second spelling of it. This channel had no settings check at
   // all, so `settings: {}` from an untyped declaration passed the JSON gate,
   // travelled to the admin, and threw out of `applyWidgetSettings` while the
   // grid was rendering -- taking the whole dashboard down rather than the one
   // install that declared it.
-  widget => widgetSettingsProblem(widget.settings),
+  // Judged on the widget's own source, as registration judges it.
+  widget =>
+    widgetSettingsProblem(widget.settings, false, settingsSourceOf(widget)),
 
-  // Through the SAME rule the registry applies. Without it a contributed
-  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
-  // refused the identical declaration, and the admin then ignored the value --
-  // so the documented refusal was true of one channel only.
-  widget => chromeProblem(widget.chrome, widget.archetype),
+  // Through the SAME rule the registry applies: no widget declines the frame.
+  widget => chromeFieldProblem(widget),
 
   // The rules that hold whatever core version a plugin was built against: a
   // title that is a string, a query that is an object, orderings between sizes
   // this core can rank, and `actions` on an archetype it recognises.
   //
   // Vocabulary checks are deliberately NOT among them. A contribution crosses a
-  // version boundary, so refusing a size, height or chrome value this core has
+  // version boundary, so refusing a size or height value this core has
   // not learned yet would abort a whole plugin install over a card the admin
   // renders anyway -- those belong to `validateWidgetDefinition`, which judges
   // the resolved widget rather than a declaration from an unknown vintage.
@@ -393,6 +409,12 @@ const FIELD_RULES: ReadonlyArray<
   },
 ];
 
+/**
+ * The source a contributed widget's settings knobs see, as registration reads
+ * a definition's: its query's own; none yet (`undefined`) for a query or cells
+ * a Collection setting supplies; `null` for a widget that asks nothing a knob
+ * could drive.
+ */
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
   for (const rule of FIELD_RULES) {
     const problem = rule(widget);
@@ -587,6 +609,7 @@ function lifecycleOf(
     // is a declaration mistake, and publishing it as `true` would honour a
     // value the author never wrote.
     ...(declaration.dismissible === true ? { dismissible: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
   };
 }
 
@@ -642,6 +665,16 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
       ? { defaultOrder }
       : {}),
     ...lifecycleOf(declaration),
+    // The bounds its textarea settings state, which the layout write holds
+    // a placement's text to: a contribution's settings passed the registry's
+    // own check above, so they are read as declared.
+    ...textBoundsField(widget.settings),
+    // Its Collection setting, so a card is judged by the collection it reads
+    // whichever channel declared the widget.
+    ...collectionSettingField(widget.settings),
+    // What its settings may drive, so a Collection setting no knob reaches
+    // on its query decides nothing about which of its cards are withheld.
+    ...knobQueriesField(widget),
   };
 }
 

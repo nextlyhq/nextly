@@ -90,6 +90,21 @@ function trimmedReferenceList(value: unknown): string[] {
  * present the current spelling wins over the future one, and the future one
  * over the retired one.
  */
+/**
+ * The fields of every field group `field` references, each looked up by
+ * `fieldsOf`; none for a field that references no field group, or one whose
+ * schema `fieldsOf` does not hold.
+ */
+export function referencedFieldGroupFields(
+  field: unknown,
+  fieldsOf: (slug: string) => readonly unknown[] | undefined
+): unknown[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return [...(single === undefined ? [] : [single]), ...(many ?? [])].flatMap(
+    slug => [...(fieldsOf(slug) ?? [])]
+  );
+}
+
 export function extractFieldGroupReferences(
   field: unknown
 ): ResolvedFieldGroupReferences {
