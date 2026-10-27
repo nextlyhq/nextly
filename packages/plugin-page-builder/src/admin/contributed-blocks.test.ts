@@ -13,6 +13,7 @@ import {
   getBlock,
   getBlockSource,
   getSupport,
+  registerBlocks,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +132,33 @@ describe("registering contributed blocks in the editor", () => {
     expect(getBlock("core/text")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain(ENTRY);
+  });
+});
+
+describe("an entry replaced while the editor is open", () => {
+  it("registers the replacement definitions, as a hot reload hands them over", () => {
+    const first = block("acme/hero");
+    const dropped = block("acme/old");
+    contributed.registerBlockEditorModules({
+      entries: { [ENTRY]: { blocks: [first, dropped] } },
+    });
+    contributed.ensureEditorBlocksRegistered();
+    // A block another source put in the browser's registry, which a refresh
+    // of this entry must not take away.
+    const hosted = block("host/banner");
+    registerBlocks([hosted], { source: "host" });
+
+    // The reloaded module: the same path, new objects, one block gone.
+    const second = { ...block("acme/hero"), description: "The new hero." };
+    contributed.registerBlockEditorModules({
+      entries: { [ENTRY]: { blocks: [second] } },
+    });
+    contributed.ensureEditorBlocksRegistered();
+
+    expect(getBlock("acme/hero")).toBe(second);
+    expect(getBlock("acme/old")).toBeUndefined();
+    expect(getBlock("host/banner")).toBe(hosted);
+    expect(getBlock("core/text")).toBeDefined();
   });
 });
 

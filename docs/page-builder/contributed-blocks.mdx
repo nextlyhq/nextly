@@ -121,10 +121,12 @@ The component receives:
 | `node`     | The selected block as the document stores it.                                            |
 | `props`    | Its props.                                                                               |
 | `commit`   | `commit(name, value)` sets one prop, through the same path the generated controls write. |
-| `readOnly` | `true` while the block is locked in Layers, or inside an area locked `"contentOnly"`.    |
+| `readOnly` | `true` while the block is locked in Layers.                                              |
 
 While `readOnly` is true the editor refuses every `commit`, whatever your component does,
-so draw your controls disabled. If your component is not in the component map, or throws
+so draw your controls disabled. Inside an area locked `"contentOnly"`, the editor accepts a
+`commit` only for a prop declared `role: "content"`, as it does for the generated
+controls. If your component is not in the component map, or throws
 while it draws, the block gets its generated controls instead.
 
 ## Block code inside the editor's canvas

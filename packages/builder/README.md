@@ -280,8 +280,8 @@ definition names `editor.component` and resolves gets that component in place
 of its generated content controls, given `BlockInspectorProps`
 (`{ node, props, commit, readOnly }`). Its identity fields, the Advanced tab
 and the Style tab stay generated. `commit` is the generated controls' own write
-path, refused while the block is locked or inside a `contentOnly` area,
-whatever the component does. A path the host cannot resolve, or a component
+path, refused while the block is locked, and inside a `contentOnly` area for
+any prop not declared `role: "content"`, whatever the component does. A path the host cannot resolve, or a component
 that throws, leaves the block on its generated controls.
 
 ### The op store

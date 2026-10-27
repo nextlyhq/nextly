@@ -24,6 +24,9 @@
  * @module @nextlyhq/plugin-page-builder/admin/contributed-blocks
  */
 import {
+  allBlocks,
+  allSupports,
+  clearBlocks,
   getBlock,
   getBlockSource,
   getSupport,
@@ -186,7 +189,9 @@ function isSupport(value: unknown): value is SupportDefinition {
  * therefore allowed everywhere.
  *
  * Idempotent, because it runs on every mount and every hot reload: a name or
- * support already registered by the same source is skipped. A contributed
+ * support already registered by the same source, as the same object, is
+ * skipped. An entry a hot reload replaced is registered again from its new
+ * definitions, so an edited block shows without reloading the page. A contributed
  * block taking a core block's name is refused, with a warning naming both, and
  * the core block keeps the name: the core namespace is this package's, and a
  * collision must not replace what every stored page means by that name.
@@ -194,16 +199,79 @@ function isSupport(value: unknown): value is SupportDefinition {
  * the editor.
  */
 export function ensureEditorBlocksRegistered(): void {
+  const read = readEntries();
+  const replaced = replacedEntries(read);
+  if (replaced.size > 0) rebuildWithout(replaced, read);
   const missingCore = coreBlocks.filter(
     block => getBlock(block.name) === undefined
   );
   if (missingCore.length > 0) {
     registerBlocks(missingCore, { source: PLUGIN_SOURCE });
   }
-  const read = readEntries();
   for (const { path, support } of read.supports)
     registerSupportOnce(path, support);
   for (const { path, blocks } of read.blocks) registerEntryBlocks(path, blocks);
+}
+
+/**
+ * The entries whose registered blocks are no longer the ones they export: a
+ * hot reload handed over a new module for the same path, with new
+ * definitions, or with a block taken out.
+ *
+ * Compared by identity, which is what separates a remount (the same objects,
+ * nothing to do) from a replacement.
+ */
+function replacedEntries(read: ReadEntries): Set<string> {
+  const replaced = new Set<string>();
+  for (const { path, blocks } of read.blocks) {
+    const exported = new Set<unknown>(blocks);
+    for (const registered of allBlocks()) {
+      if (getBlockSource(registered.name) !== path) continue;
+      if (!exported.has(registered)) replaced.add(path);
+    }
+  }
+  return replaced;
+}
+
+/**
+ * Empty the registry and put back everything except the replaced entries'
+ * blocks, which the caller then registers from their new definitions.
+ *
+ * Rebuilt rather than patched because the engine's registry refuses a second
+ * definition for a name and offers no removal: clearing is its one way to let
+ * a name go. Everything else is kept, with its own source, including blocks a
+ * host registered in the browser itself. The supports go back first, the
+ * entries' own included, since a kept block may use one.
+ */
+function rebuildWithout(
+  replaced: ReadonlySet<string>,
+  read: ReadEntries
+): void {
+  const keptSupports = allSupports();
+  const keptBlocks = new Map<string, AnyBlockDefinition[]>();
+  for (const definition of allBlocks()) {
+    const source = getBlockSource(definition.name);
+    if (source === undefined || replaced.has(source)) continue;
+    keptBlocks.set(source, [...(keptBlocks.get(source) ?? []), definition]);
+  }
+  clearBlocks();
+  const declared = new Set(read.supports.map(({ support }) => support.key));
+  for (const support of keptSupports) {
+    if (getSupport(support.key) !== undefined || declared.has(support.key)) {
+      continue;
+    }
+    registerSupport(support);
+  }
+  for (const { path, support } of read.supports) {
+    registerSupportOnce(path, support);
+  }
+  for (const [source, definitions] of keptBlocks) {
+    try {
+      registerBlocks(definitions, { source });
+    } catch (error) {
+      warnOnce(`rebuild:${source}`, refusal(source, error));
+    }
+  }
 }
 
 /** One contributed support, unless it is already known. */

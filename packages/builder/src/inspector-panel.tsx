@@ -61,6 +61,7 @@ import {
   fieldLabel,
   inspectSelection,
   lockStateOf,
+  propIsWritable,
   propPatch,
   selectedNode,
   type BlockInspection,
@@ -708,11 +709,12 @@ function ContentSurface({
  *
  * `commit` is the generated controls' own write path, addressed to THIS node
  * rather than to whatever is selected when it is called, with one guard in
- * front: the block's read-only state, asked of the editor's document at the
- * moment of the call. `readOnly` tells the component to draw itself disabled,
- * but the component is plugin code, and a lock that held only while the
- * plugin honoured a flag would not be a lock. So the refusal is here,
- * whatever the component does with the flag.
+ * front, asked of the document at the moment of the call: nothing is written
+ * to a locked block, and inside a `"contentOnly"` area only its content props
+ * are. `readOnly` tells the component to draw itself disabled, but the
+ * component is plugin code, and a lock that held only while the plugin
+ * honoured a flag would not be a lock. So the refusal is here, whatever the
+ * component does with the flag.
  */
 function CustomInspector({
   Inspector,
@@ -735,7 +737,7 @@ function CustomInspector({
   const commit = React.useMemo(() => {
     let live = editor.document;
     return (name: string, value: unknown): void => {
-      if (blockIsReadOnly(live, nodeId)) return;
+      if (!propIsWritable(live, nodeId, name)) return;
       const next = commitProp(editor, live, nodeId, name, value);
       if (next !== null) live = next;
     };

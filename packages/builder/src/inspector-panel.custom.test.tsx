@@ -228,7 +228,12 @@ describe("a block's own inspector", () => {
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
-  it("refuses every write inside a contentOnly area", () => {
+  it("inside a contentOnly area, writes content props and refuses the rest", () => {
+    /*
+     * The lock fixes the block's design, not what it says: `title` is declared
+     * `role: "content"` and stays editable, as it is through the generated
+     * controls, while `tone` is design and may not change.
+     */
     const frame = {
       id: "frame",
       type: "acme/frame",
@@ -239,10 +244,17 @@ describe("a block's own inspector", () => {
     const editor = editorFor(documentOf([frame]));
     render(<InspectorPanel editor={editor} inspectors={resolving} />);
 
-    expect(given?.readOnly).toBe(true);
+    expect(given?.readOnly).toBe(false);
     given?.commit("tone", "cool");
-
     expect(editor.apply).not.toHaveBeenCalled();
+
+    given?.commit("title", "Welcome");
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "hero",
+      patch: { props: { title: "Welcome", tone: "warm" } },
+    });
   });
 
   it("shows the generated controls when the component throws", () => {

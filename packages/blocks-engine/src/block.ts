@@ -282,14 +282,17 @@ export interface BlockInspectorProps<
    * Set one prop. The same path the generated controls write through, so the
    * change is one step in the editor's history and is validated as theirs is.
    *
-   * Refused, with nothing written, while the block is read-only, whatever the
-   * component does: the flag below is for drawing, and the refusal is the
-   * host's.
+   * Refused, with nothing written, while the block is read-only, and inside
+   * an area locked `"contentOnly"` for any prop not declared
+   * `role: "content"`, whatever the component does: the flag below is for
+   * drawing, and the refusal is the host's.
    */
   readonly commit: (name: Extract<keyof P, string>, value: unknown) => void;
   /**
-   * Whether the block may not be changed: locked in Layers, or inside an area
-   * locked `"contentOnly"`. Draw the controls disabled while it is true.
+   * Whether the block may not be changed at all: locked in Layers. Draw the
+   * controls disabled while it is true. Inside an area locked
+   * `"contentOnly"` it stays false, because the block's content props may
+   * still change there; only those commits are accepted.
    */
   readonly readOnly: boolean;
 }

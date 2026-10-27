@@ -16,6 +16,7 @@
  */
 
 import {
+  contentPropsOf,
   getBlock,
   findNode,
   nodeLocks,
@@ -347,23 +348,37 @@ function inspectorOf(
 }
 
 /**
- * Whether the block may not be changed from the inspector: locked in Layers,
- * or inside an area locked `"contentOnly"`.
+ * Whether the block may not be changed from the inspector at all: locked in
+ * Layers, or no longer in the document.
  *
  * Asked of the LIVE document at the moment a change is attempted, not of the
  * one a panel rendered with: a lock set in Layers after the panel drew must
- * still stop the next write. The area is the one validation enforces, read
- * through `nodeLocks` and the registry's slot declarations, so the inspector
- * and a save cannot disagree about which blocks it covers.
+ * still stop the next write.
  */
 export function blockIsReadOnly(document: BlockDocument, id: string): boolean {
   const node = findNode(document.nodes, id);
-  if (node === undefined) return true;
-  if (isLocked(node)) return true;
-  return (
-    nodeLocks(document.nodes, registryBlockSource()).get(id)?.lock ===
-    "contentOnly"
-  );
+  return node === undefined || isLocked(node);
+}
+
+/**
+ * Whether one prop of the block may be set from the inspector.
+ *
+ * Nothing may change on a read-only block. Inside an area locked
+ * `"contentOnly"`, only the props its definition declares `role: "content"`
+ * may: the lock fixes the block's design and leaves what it says editable,
+ * which is the rule validation applies on save. The area and the content
+ * props are read through the engine's own `nodeLocks` and `contentPropsOf`,
+ * so the inspector and a save cannot disagree about either.
+ */
+export function propIsWritable(
+  document: BlockDocument,
+  id: string,
+  name: string
+): boolean {
+  if (blockIsReadOnly(document, id)) return false;
+  const area = nodeLocks(document.nodes, registryBlockSource()).get(id);
+  if (area?.lock !== "contentOnly") return true;
+  return contentPropsOf(getBlock(area.type)?.props).has(name);
 }
 
 /**

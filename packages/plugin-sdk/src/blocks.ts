@@ -335,7 +335,8 @@ export type BlockRenderResult = ReactNode | Promise<ReactNode>;
  * What a block's own inspector (`editor.component`) is given: the selected
  * node, its props, `commit(name, value)` through the editor's own write path,
  * and whether the block is read-only. The editor refuses a commit while it is,
- * whatever the component does.
+ * and one to a non-content prop inside a `contentOnly` area, whatever the
+ * component does.
  *
  * @experimental The contract will grow with the editor's controls registry.
  */
