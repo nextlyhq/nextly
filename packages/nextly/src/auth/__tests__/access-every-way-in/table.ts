@@ -769,8 +769,9 @@ export function hasOutsideTwin(row: Row): boolean {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A delete rule may answer one too: the entry inside it is deleted and its
- *   twin outside it refused. A filter from any other rule refuses.
+ *   An update, delete, publish or unpublish rule may answer one too: the
+ *   entry inside it is changed and its twin outside it refused. A filter from
+ *   any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
@@ -795,6 +796,23 @@ export function oneAnswer(row: Row): Verdict {
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
   return answerFor(row, rulesLet(rule, action, caller, target));
+}
+
+/**
+ * The doors that answer yes or no about a collection, not about one entry.
+ * Where the one answer lets the caller act on the entries a filter matches,
+ * theirs is yes: the caller may act on the collection, on those entries.
+ */
+const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
+  "can",
+  "capabilities",
+  "widget",
+]);
+
+/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+export function oneAnswerAt(row: Row, door: Door): Verdict {
+  const answer = oneAnswer(row);
+  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
 }
 
 // ---------------------------------------------------------------------------
