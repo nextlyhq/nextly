@@ -10,6 +10,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { appLocalization } from "../../domains/i18n/configured-locales";
+import { fieldsLeavingTranslationUnder } from "../../domains/i18n/migration/archive-preflight";
+import {
+  companionUniqueIndexChanges,
+  companionUniqueIndexName,
+  uniqueTranslatedColumns,
+} from "../../domains/i18n/migration/companion-unique-indexes";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -25,6 +31,7 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -111,6 +118,7 @@ export async function pushAndReconcileCompanion(
   kind: "single" | "component",
   companion: BuilderCompanionReconcile
 ): Promise<PipelineResult> {
+  await dropLeavingFieldUniqueIndexes(kind, companion);
   const result = await push(desired);
   if (!result.success) {
     // The push's own words, under the code its status already was: what the dialog tells the
@@ -154,6 +162,56 @@ export async function pushAndReconcileCompanion(
     });
   }
   return result;
+}
+
+/**
+ * Drops the per-language unique index of each field leaving translation, before the push.
+ *
+ * The companion reconcile drops it too, but only after the push, and on SQLite the push may read
+ * every table in the database, where an expression index on the companion cannot be read. The
+ * index goes with the field's translation in any case; the reconcile reads the live indexes, so it
+ * finds it gone rather than dropping it a second time.
+ */
+async function dropLeavingFieldUniqueIndexes(
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile
+): Promise<void> {
+  if (!companion.wasLocalized || !companion.localized) return;
+  const leaving = new Set(
+    fieldsLeavingTranslationUnder(
+      companion.oldFields,
+      companion.newFields,
+      companion.renamed
+    )
+  );
+  if (leaving.size === 0) return;
+  const dialect = companion.adapter.getCapabilities().dialect;
+  const companionTable = `${companion.tableName}_locales`;
+  // Each leaving field's index as it is now: keyed on the column the field had before the change,
+  // which for a field this change renames is still its old one.
+  const renamed = companion.renamed;
+  const indexed = uniqueTranslatedColumns({
+    fields: companion.oldFields,
+    entityLocalized: true,
+    dialect,
+    builtBy: kind === "component" ? "fieldGroup" : "collection",
+  }).filter(c =>
+    leaving.has(renamed && c.field === renamed.from ? renamed.to : c.field)
+  );
+  if (indexed.length === 0) return;
+  const { drops } = companionUniqueIndexChanges({
+    dialect,
+    companionTable,
+    wanted: [],
+    translatedColumns: indexed.map(c => c.column),
+    liveIndexNames: new Set(
+      indexed.map(c => companionUniqueIndexName(companionTable, c.column))
+    ),
+  });
+  await applyMigrationStatements(
+    companion.adapter,
+    drops.join("\n--> statement-breakpoint\n")
+  );
 }
 
 /**

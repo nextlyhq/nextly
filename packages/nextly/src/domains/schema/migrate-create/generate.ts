@@ -32,7 +32,10 @@ import {
   readCompanionHistory,
 } from "../../i18n/migration/companion-history";
 import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-indexes";
-import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import {
+  companionSpecShell,
+  deriveCompanionSpec,
+} from "../../i18n/migration/derive-companion-spec";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
@@ -691,7 +694,7 @@ function planTranslatedUniqueMigrations(
 }[] {
   return entities.flatMap(({ entity: c, kind }) => {
     if (c.localized !== true) return [];
-    const spec = deriveCompanionSpec({
+    const derive = {
       builtBy: "codeFirst" as const,
       slug: c.slug,
       kind,
@@ -701,12 +704,25 @@ function planTranslatedUniqueMigrations(
       defaultLocale,
       collectionLocalized: true,
       status: c.status === true,
-    });
+    };
+    // With no field translated now, the companion is still addressed when the previous snapshot
+    // recorded per-language unique indexes on it: the last such field to leave translation takes
+    // its index with it, ahead of the file that drops its column.
+    const shell = companionSpecShell(derive);
+    const previous = previousSnapshot.tables.find(
+      t => t.name === shell.mainTable
+    );
+    const spec =
+      deriveCompanionSpec(derive) ??
+      (previous?.localized === true &&
+      (previous.uniqueLocalizedColumns ?? []).length > 0
+        ? shell
+        : null);
     if (!spec) return [];
     const plan = planTranslatedUniqueMigration({
       spec,
       fields: c.fields,
-      previous: previousSnapshot.tables.find(t => t.name === spec.mainTable),
+      previous,
     });
     return plan === null ? [] : [{ entity: kind, spec, plan }];
   });
