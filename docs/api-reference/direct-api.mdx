@@ -112,7 +112,7 @@ result.meta.hasPrev;     // boolean
 | `status` | `"published" \| "draft" \| "all"` | — | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 | `context` | `Record<string, unknown>` | — | Custom data forwarded to hooks via `req.context`. |
 | `disableErrors` | `boolean` | `false` | Return an empty result instead of throwing. |
 
@@ -154,7 +154,7 @@ if (post) {
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `disableErrors` | `boolean` | `false` | Return `null` instead of throwing. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `T | null`.
 
@@ -184,7 +184,7 @@ created.item.id;
 | `draft` | `boolean` | `false` | Save as draft. |
 | `disableVerificationEmail` | `boolean` | `false` | Skip the verification email when creating users. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 | `context` | `Record<string, unknown>` | — | Forwarded to hooks. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`VALIDATION_ERROR`) when the payload fails validation; the thrown error carries field-level details on `error.publicData.errors`.
@@ -220,7 +220,7 @@ const archived = await nextly.update({
 | `data` | `Record<string, unknown>` | required | Update payload. |
 | `draft` | `boolean` | `false` | Autosave as draft. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
 
@@ -257,7 +257,7 @@ if ("ids" in archived) {
 | `id` | `string` | — | Document ID. Either `id` or `where` is required. |
 | `where` | `WhereFilter` | — | Where clause for the bulk-by-query path. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** `MutationResult<{ id: string }> | DeleteResult`.
 
@@ -424,7 +424,7 @@ console.log(settings.siteName);
 | `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Rich text output format. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
-| `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
+| `user` | `{ id, role? }` | — | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor. |
 
 **Returns:** the bare single document (`T`).
 
