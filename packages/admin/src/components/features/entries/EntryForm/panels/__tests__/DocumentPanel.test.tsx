@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { DocumentPanel, formatId, pillStateFromForm } from "../DocumentPanel";
+import { formatId } from "../../DocumentIdCopy";
+import { DocumentPanel, pillStateFromForm } from "../DocumentPanel";
 
 describe("formatId", () => {
   it("returns em-dash for null/undefined/empty", () => {
