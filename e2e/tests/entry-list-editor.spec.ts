@@ -104,6 +104,11 @@ for (const [width, height, screenName] of [
     await page.setViewportSize({ width, height });
     try {
       await gotoAdmin(page, `/collections/posts/${postId}`);
+      // The page is shared by these cases, so the clipboard is set to
+      // something else first: each width's own click must put the id there.
+      await page.evaluate(() =>
+        navigator.clipboard.writeText("nothing copied yet")
+      );
       await page.getByRole("button", { name: "Copy ID to clipboard" }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
