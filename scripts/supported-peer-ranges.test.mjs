@@ -11,13 +11,19 @@ import { describe, expect, it } from "vitest";
 
 // The ranges have one home, which `create-nextly-app` also holds an existing app to.
 import { SUPPORTED_RANGES as SUPPORTED } from "../packages/create-nextly-app/src/supported-versions.ts";
+import { SUPPORTED_FRAMEWORK_RANGES as FRAMEWORK } from "../packages/nextly/src/runtime/framework-versions.ts";
 
 const manifests = ["packages", "templates"].flatMap(root =>
   readdirSync(new URL(`../${root}/`, import.meta.url), { withFileTypes: true })
     .filter(entry => entry.isDirectory())
     .map(entry => `${root}/${entry.name}/package.json`)
     .filter(path => existsSync(new URL(`../${path}`, import.meta.url)))
-    .map(path => ({ path, manifest: JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8")) }))
+    .map(path => ({
+      path,
+      manifest: JSON.parse(
+        readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
+      ),
+    }))
 );
 // Each peer naming one of these packages, as `path name range`.
 const peers = manifests.flatMap(({ path, manifest }) =>
@@ -29,12 +35,18 @@ const peers = manifests.flatMap(({ path, manifest }) =>
 describe("the Next.js and React versions nextly accepts", () => {
   it("are read from the packages that name them", () => {
     expect(manifests.length).toBeGreaterThan(20);
-    expect(new Set(peers.map(peer => peer.path)).size).toBeGreaterThanOrEqual(9);
-    expect(new Set(peers.map(peer => peer.name))).toEqual(new Set(Object.keys(SUPPORTED)));
+    expect(new Set(peers.map(peer => peer.path)).size).toBeGreaterThanOrEqual(
+      9
+    );
+    expect(new Set(peers.map(peer => peer.name))).toEqual(
+      new Set(Object.keys(SUPPORTED))
+    );
   });
 
   it("are exactly the supported range in every peer: no lower floor, no missing cap, no other alternative", () => {
-    const off = peers.filter(peer => peer.range !== SUPPORTED[peer.name]).map(peer => `${peer.path} ${peer.name} ${peer.range}`);
+    const off = peers
+      .filter(peer => peer.range !== SUPPORTED[peer.name])
+      .map(peer => `${peer.path} ${peer.name} ${peer.range}`);
     expect(off).toEqual([]);
   });
 
@@ -42,10 +54,19 @@ describe("the Next.js and React versions nextly accepts", () => {
     const installed = manifests
       .filter(({ manifest }) => manifest.private !== true)
       .flatMap(({ path, manifest }) =>
-        Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies })
+        Object.keys({
+          ...manifest.dependencies,
+          ...manifest.optionalDependencies,
+        })
           .filter(name => name in SUPPORTED)
           .map(name => `${path} ${name}`)
       );
     expect(installed).toEqual([]);
+  });
+
+  it("are the ranges nextly checks at start", () => {
+    // nextly cannot import create-nextly-app, so it keeps its own copy for the
+    // start-time check; this holds the two equal.
+    expect(FRAMEWORK).toEqual(SUPPORTED);
   });
 });

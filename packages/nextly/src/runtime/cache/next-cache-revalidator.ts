@@ -3,38 +3,33 @@
  * port. Maps a write's revalidation intents to `revalidateTag` / `revalidatePath`
  * from `next/cache`.
  *
- * `next/cache` is resolved lazily through `createRequire` (Node's CommonJS
- * resolver, opaque to bundlers — the same pattern as `actions/upload-media.ts`
- * and `domains/webhooks/after-drain.ts`) so the package root stays Node-safe and
- * importing this module never forces `next` onto a consumer. The adapter no-ops
- * when `next/cache` is unavailable (a non-Next runtime, the CLI) and never
- * throws — a revalidation failure must not turn a committed write into an error.
+ * `next/cache` is loaded through {@link loadNextModule}, so the package root
+ * stays Node-safe and importing this module never forces `next` onto a
+ * consumer. The adapter no-ops where Next.js is not installed (the CLI, a
+ * script; a context, not a version), and a revalidation call that fails is
+ * swallowed: a revalidation failure must not turn a committed write into an
+ * error.
  *
  * `revalidateTag` is called with an explicit `{ expire: 0 }` cache-life profile:
  * a content write must invalidate the cached read immediately — an unpublished
  * or deleted document has to stop being served on the very next request, not
  * after a stale-while-revalidate pass. `{ expire: 0 }` is the immediate-expiry
- * form, and passing it also silences the Next 16 deprecation warning the bare
- * single-argument call now logs on every tag. On Next 14/15 `revalidateTag`
- * reads only the tag, so the extra argument is ignored — the same call is safe
- * across the whole `next` peer range (`^14 || ^15 || ^16`).
+ * form, and the bare single-argument call is deprecated.
  *
  * @module runtime/cache/next-cache-revalidator
  */
-import { createRequire } from "node:module";
-
 import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import { loadNextModule, requireNextApi } from "../next-api";
 
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
 type CacheLifeProfile = string | { expire?: number };
 
 /**
  * The profile passed to `revalidateTag`: expire the tag immediately so the next
- * request after a write gets fresh (or 404) content, not a stale copy. Ignored
- * on Next 14/15, where `revalidateTag` reads only the tag.
+ * request after a write gets fresh (or 404) content, not a stale copy.
  */
 const REVALIDATE_PROFILE: CacheLifeProfile = { expire: 0 };
 
@@ -44,24 +39,20 @@ export interface NextCacheModule {
   revalidatePath: (path: string, type?: "page" | "layout") => void;
 }
 
-// Resolution is attempted once and memoised (including the null "unavailable"
-// result) so a non-Next runtime does not pay the failed require on every write.
+// Resolution is attempted once and memoised (including the null "not
+// installed" result) so a non-Next runtime does not pay the failed require on
+// every write.
 let cached: NextCacheModule | null | undefined;
 
 function loadNextCache(): NextCacheModule | null {
   if (cached !== undefined) return cached;
-  try {
-    const require = createRequire(import.meta.url);
-    const mod = require("next/cache") as Partial<NextCacheModule>;
-    cached =
-      typeof mod.revalidateTag === "function" &&
-      typeof mod.revalidatePath === "function"
-        ? (mod as NextCacheModule)
-        : null;
-  } catch {
-    // `next` not installed, or not resolvable in this runtime.
-    cached = null;
-  }
+  const mod = loadNextModule("next/cache");
+  cached = mod
+    ? {
+        revalidateTag: requireNextApi(mod, "next/cache", "revalidateTag"),
+        revalidatePath: requireNextApi(mod, "next/cache", "revalidatePath"),
+      }
+    : null;
   return cached;
 }
 
@@ -73,7 +64,7 @@ function loadNextCache(): NextCacheModule | null {
 export class NextCacheRevalidator implements CacheRevalidator {
   /**
    * @param loader Resolves the `next/cache` module. Defaults to the lazy
-   *   `createRequire` loader; injectable so a test can supply a fake module
+   *   `next/cache` loader; injectable so a test can supply a fake module
    *   without a real Next runtime.
    */
   constructor(

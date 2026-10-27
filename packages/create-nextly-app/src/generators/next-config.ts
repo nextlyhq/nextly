@@ -128,18 +128,6 @@ export type NextConfigPatch =
       file: string;
       reason: string;
       packages: string[];
-      /**
-       * Which spelling of the option to print: Next.js 14 reads
-       * `experimental.serverComponentsExternalPackages`, and "either" gives
-       * both when the app's version could not be read. Absent, the
-       * top-level `serverExternalPackages` of Next.js 15 and later.
-       */
-      spelling?: "legacy" | "either";
-      /**
-       * The app has no Next config yet, so `file` is the one to create and
-       * the advice is a whole file rather than a key to add.
-       */
-      create?: true;
     };
 
 /**
@@ -153,9 +141,6 @@ const CONFIG_FILES = [
   "next.config.ts",
   "next.config.mts",
 ];
-
-/** The first Next.js major whose option is the top-level `serverExternalPackages`. */
-const FIRST_TOP_LEVEL_MAJOR = 15;
 
 const PROPERTY = "serverExternalPackages";
 
@@ -457,10 +442,7 @@ function mayHide(property: Node, names: readonly string[]): boolean {
  * `experimental`: the list itself, and the lists Next.js checks it against.
  */
 const TOP_LEVEL_SETTINGS = [PROPERTY, "transpilePackages", "experimental"];
-const EXPERIMENTAL_SETTINGS = [
-  "optimizePackageImports",
-  "serverComponentsExternalPackages",
-];
+const EXPERIMENTAL_SETTINGS = ["optimizePackageImports"];
 
 /** Why an object might set one of `names` where this cannot read it, or null. */
 function hiddenSettings(
@@ -706,9 +688,6 @@ function experimentalConflict(
   experimental: ObjectExpression,
   required: string[]
 ): string | null {
-  if (propertyValue(experimental, "serverComponentsExternalPackages")) {
-    return `it lists packages under experimental.serverComponentsExternalPackages, which Next.js moves to ${PROPERTY}; keep a single list there`;
-  }
   return (
     clashReason("transpilePackages", object, "transpilePackages", required) ??
     clashReason(
@@ -810,76 +789,6 @@ function editConfig(
   return { text, added: plan.added };
 }
 
-/** The string at `keys` inside a parsed JSON file, or null. */
-function stringAt(json: unknown, keys: readonly string[]): string | null {
-  let value = json;
-  for (const key of keys) {
-    if (typeof value !== "object" || value === null || !(key in value))
-      return null;
-    value = (value as Record<string, unknown>)[key];
-  }
-  return typeof value === "string" ? value : null;
-}
-
-/** A JSON file of the app's, or null when it is missing or does not parse. */
-async function readJsonOrNull(file: string): Promise<unknown> {
-  try {
-    return (await fs.readJson(file)) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A version range that admits one major only, such as `^15.1.0`, `~16.0`,
- * `15.x` or `16.0.0-canary.3`, with the major it admits. A range such as
- * `>=14`, `14 || 15` or `latest` admits several, or names none.
- */
-const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
-
-/**
- * The major version of the app's Next.js: the installed one, read from its
- * own `node_modules`, or else the one its package.json range admits when
- * that range admits a single major. Null when neither tells, as when
- * dependencies are not installed yet and the range is `latest`.
- */
-export async function nextMajor(cwd: string): Promise<number | null> {
-  const installed = stringAt(
-    await readJsonOrNull(
-      path.join(cwd, "node_modules", "next", "package.json")
-    ),
-    ["version"]
-  );
-  const manifest = await readJsonOrNull(path.join(cwd, "package.json"));
-  const range =
-    stringAt(manifest, ["dependencies", "next"]) ??
-    stringAt(manifest, ["devDependencies", "next"]);
-  const match = SINGLE_MAJOR.exec((installed ?? range ?? "").trim());
-  return match ? Number(match[1]) : null;
-}
-
-/**
- * Why the option cannot be written for the app's Next.js, and which spelling
- * to print instead, or null when it can. Next.js 14 reads the list under
- * another name, and an unknown version may be 14: writing the top-level list
- * there would report success and externalise nothing.
- */
-function versionBlock(
-  major: number | null
-): { reason: string; spelling: "legacy" | "either" } | null {
-  if (major === null)
-    return {
-      reason: "the version of Next.js the app uses could not be read",
-      spelling: "either",
-    };
-  return major < FIRST_TOP_LEVEL_MAJOR
-    ? {
-        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages and runs instrumentation.ts only with experimental.instrumentationHook`,
-        spelling: "legacy",
-      }
-    : null;
-}
-
 /**
  * The Next config file any advice about the app's config names: the one it
  * has, or, when it has none, the one to create. `.mjs` is ESM whatever the
@@ -940,19 +849,6 @@ export async function patchNextConfig(
 ): Promise<NextConfigPatch> {
   const file = await findConfigFile(cwd);
   const required = getServerExternalPackages(database);
-  // A version that reads the list under another name, or one that cannot be
-  // told, gets the exact option to add rather than a config that may do
-  // nothing.
-  const blocked = versionBlock(await nextMajor(cwd));
-  if (blocked) {
-    return {
-      kind: "manual",
-      file: file ?? (await nextConfigFileToChange(cwd)),
-      packages: required,
-      ...blocked,
-      ...(file ? {} : { create: true as const }),
-    };
-  }
   if (!file) return createNextConfig(cwd, database);
   const source = await fs.readFile(path.join(cwd, file), "utf-8");
   const edited = editConfig(source, file, required);
@@ -1135,38 +1031,10 @@ export function cacheComponentsFiles(
   return files;
 }
 
-/**
- * What to add by hand, in the spelling the app's Next.js reads.
- *
- * On Next.js 14 the package list and the instrumentation opt-in are keys of
- * one `experimental` object, so they are given as one: two `experimental`
- * properties, pasted as given, leave only the second. The instrumentation
- * hook Nextly starts from needs the opt-in there, and no other step says so.
- * `wrap` turns each spelling into what to paste: the key itself, or a whole
- * config file when the app has none.
- */
-function optionText(
-  packages: string[],
-  spelling: "legacy" | "either" | undefined,
-  wrap: (option: string) => string = option => option
-): string {
+/** What to add by hand: the list, as the config's top-level option. */
+function optionText(packages: string[]): string {
   const list = packages.map(name => JSON.stringify(name)).join(", ");
-  const current = wrap(`  ${PROPERTY}: [${list}],`);
-  const legacy = wrap(
-    `  experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${list}] },`
-  );
-  if (spelling === "legacy") return legacy;
-  return spelling === "either"
-    ? `On Next.js 15 or later:\n\n${current}\n\nOn Next.js 14:\n\n${legacy}`
-    : current;
-}
-
-/**
- * A whole config holding `option`, for an app that has none. ESM in `.mjs`,
- * which loads whatever the package's own "type" says.
- */
-function wholeConfig(option: string): string {
-  return `/** @type {import('next').NextConfig} */\nexport default {\n${option}\n};\n`;
+  return `  ${PROPERTY}: [${list}],`;
 }
 
 /**
@@ -1189,19 +1057,11 @@ export function nextConfigFiles(patch: NextConfigPatch): GeneratedFiles {
     case "unchanged":
       break;
     case "manual":
-      files.skipped.push(
-        patch.create
-          ? {
-              path: patch.file,
-              why: `Nextly's packages were not added: ${patch.reason}, and the app has no Next.js config. Create ${patch.file} with:`,
-              toAdd: optionText(patch.packages, patch.spelling, wholeConfig),
-            }
-          : {
-              path: patch.file,
-              why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
-              toAdd: optionText(patch.packages, patch.spelling),
-            }
-      );
+      files.skipped.push({
+        path: patch.file,
+        why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
+        toAdd: optionText(patch.packages),
+      });
   }
   return files;
 }

@@ -130,10 +130,9 @@ void flaglessObject;
 const nestedTypo: BlockSupports = { spacing: { paddding: true } };
 void nestedTypo;
 
-// What a block places into its own JSX. A promise is not a legal child under
-// either supported peer, so this stays exactly `ReactNode`: React 19 already
-// counts a settled-node promise as one, and React 18 refuses async blocks
-// outright, so widening it would only break every block that draws a slot.
+// What a block places into its own JSX. A promise of a promise is not a legal
+// child, so this stays exactly `ReactNode`, which already counts a settled-node
+// promise as one: widening it would only break every block that draws a slot.
 expectTypeOf<
   BlockRenderArgs<{ text: string }>["renderSlot"]
 >().returns.toEqualTypeOf<ReactNode>();

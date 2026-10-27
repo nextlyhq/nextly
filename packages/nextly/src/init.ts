@@ -60,6 +60,7 @@ import {
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
 // returns the cached instance with refreshed schema state.
+import { assertSupportedFrameworkVersions } from "./runtime/framework-versions";
 import {
   ensureHmrListener,
   consumeHmrReloadFlag,
@@ -100,6 +101,7 @@ export type { NextlyServiceConfig } from "./di/register";
 const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
+  __nextly_frameworkVersionsChecked?: boolean;
   __nextly_initPromise?: Promise<Nextly> | null;
 };
 
@@ -279,6 +281,15 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
     globalForInit.__nextly_drizzleVersionChecked = true;
     const mismatch = checkConsumerDrizzleVersion(process.cwd());
     if (mismatch) consoleLogger.warn(`[nextly] ${mismatch}`);
+  }
+  // Boot-time Next.js / React version gate: nextly imports the APIs of the
+  // supported releases directly and carries no code for older ones, so an app
+  // outside the ranges is refused here, once, naming each installed version,
+  // rather than failing later at whichever API it lacks. Marked as checked
+  // only once it passes, so a refused start is refused again on every call.
+  if (!globalForInit.__nextly_frameworkVersionsChecked) {
+    assertSupportedFrameworkVersions(process.cwd());
+    globalForInit.__nextly_frameworkVersionsChecked = true;
   }
 
   // Fast path: return already-initialised instance immediately.
