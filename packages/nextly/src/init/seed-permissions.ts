@@ -15,6 +15,8 @@
 
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
+import { seedPublicRole } from "../domains/auth/services/public-role";
+import { RoleMutationService } from "../domains/auth/services/role/role-mutation-service";
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
@@ -87,6 +89,9 @@ export async function seedAllPermissions(): Promise<void> {
   }
 }
 
+/** How long after a failure to make the Public role it is tried again. */
+const RETRY_AFTER_FAILURE_MS = 60_000;
+
 /** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
 const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 
@@ -99,6 +104,7 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 const globalForSeeding = globalThis as unknown as {
   __nextly_seeding?: Promise<void>;
   __nextly_seedingHolds?: Set<Promise<void>>;
+  __nextly_publicRoleRetry?: ReturnType<typeof setTimeout>;
 };
 
 /**
@@ -202,6 +208,45 @@ async function seedEverything(): Promise<void> {
   await seedingStep("role presets", () =>
     seedRolePresets(getService("adapter"), getService("logger"))
   );
+  // The role visitors are judged by. Made once and then left to the owner,
+  // unlike a preset: only its permissions change after it exists.
+  await seedingStep("public role", async () => {
+    const roles = new RoleMutationService(
+      getService("adapter"),
+      getService("logger")
+    );
+    const config = getService("config");
+    // The names roles the app and its plugins declare go by, which the
+    // built-in role leaves to them though they are made after it.
+    const declaredNames = [
+      ...(config.roles ?? []),
+      ...(config.plugins ?? []).flatMap(
+        plugin => plugin.contributes?.roles ?? []
+      ),
+    ].map(role => role.name);
+    try {
+      const seeded = await seedPublicRole({
+        publicSlugHolder: () => roles.publicSlugHolder(),
+        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+        unlinkPublicRole: async () => {
+          const holder = await roles.publicSlugHolder();
+          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+        },
+        meta: getService("metaService"),
+        logger: getService("logger"),
+      });
+      if (!seeded.made) retrySeedingAt(seeded.retryAt);
+    } catch (error) {
+      // Not left unmade until the next start: tried again in a while, as
+      // when another boot holds the claim. A table not created yet is the
+      // migrations' to make, not this retry's.
+      if (!isMissingTableOnThisDatabase(error)) {
+        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+      }
+      throw error;
+    }
+  });
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
   // after a permission step that failed part-way, it would lack the grants that
@@ -217,6 +262,38 @@ async function seedEverything(): Promise<void> {
       getService("logger")
     );
   });
+}
+
+/**
+ * Seeds again at `at`, once: where another boot held the claim to make the
+ * Public role, that boot may have stopped, and its claim lapses then. Not
+ * holding the process open for it, and replacing any retry already waiting.
+ * Only against the services it was scheduled under: after they are shut
+ * down, or replaced by another registration, there is nothing of this boot's
+ * left to seed.
+ */
+function retrySeedingAt(at: number): void {
+  clearTimeout(globalForSeeding.__nextly_publicRoleRetry);
+  const adapter = getService("adapter");
+  const timer = setTimeout(
+    () => {
+      globalForSeeding.__nextly_publicRoleRetry = undefined;
+      if (stillRegistered(adapter)) void seedPermissionsAndRolePresets();
+    },
+    Math.max(0, at - Date.now())
+  );
+  timer.unref?.();
+  globalForSeeding.__nextly_publicRoleRetry = timer;
+}
+
+/** Whether `adapter` is still the registered services' adapter. */
+function stillRegistered(adapter: unknown): boolean {
+  try {
+    return getService("adapter") === adapter;
+  } catch {
+    // No services registered.
+    return false;
+  }
 }
 
 /**

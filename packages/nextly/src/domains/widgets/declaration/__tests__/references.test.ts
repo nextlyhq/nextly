@@ -38,8 +38,7 @@ function listing(id: string, collection: string | undefined, sort: string) {
     title: "Listing",
     description: "Entries of one collection",
     category: "Test",
-    widths: ["full"],
-    width: "full",
+    size: { default: { w: 12, h: 4 } },
     settings: {
       collection: {
         ...settings.collection(),

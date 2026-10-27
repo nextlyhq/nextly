@@ -371,6 +371,7 @@ export function FieldRenderer({
       fieldPath={fieldPath}
       horizontal={useHorizontalLayout}
       editorIsOpaque={hasPluginEditor}
+      writesHeld={isReadOnly || isDisabled}
     >
       {renderField()}
     </FieldWrapper>

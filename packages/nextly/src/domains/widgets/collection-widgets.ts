@@ -118,7 +118,8 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: source.label,
     description: `How many entries ${source.label} holds`,
     archetype: "metric",
-    defaultSize: "sm",
+    // One figure: a quarter of the row, two rows tall, and any wider.
+    size: { default: { w: 3, h: 2 } },
     query: { source: source.id, op: "count", status: "all" },
   };
 }
@@ -189,7 +190,8 @@ function statsWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} health`,
     description: `How ${source.label} splits across its lifecycle states`,
     archetype: "stats",
-    defaultSize: "md",
+    // A row of figures: a third by default, from a quarter to the full width.
+    size: { default: { w: 4, h: 2 }, min: { w: 3, h: 2 } },
     cells: [
       {
         key: "total",
@@ -292,7 +294,13 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `Recent ${source.label}`,
     description: `The ${source.label} entries changed most recently`,
     archetype: "list",
-    defaultSize: "md",
+    // A list: a third by default, from a quarter to the full width, and taller
+    // for more rows.
+    size: {
+      default: { w: 4, h: 4 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     query: {
       source: source.id,
       op: "list",
@@ -331,9 +339,10 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
  * declared, on a card the reader did not misconfigure.
  *
  * The result is three columns for a collection with a status and two without,
- * rather than a fixed shape padded with blanks. `defaultSize` is `lg` for the
- * same reason the renderer caps its rows: a table narrower than its content
- * scrolls inside a card, and a table that scrolls is one nobody reads.
+ * rather than a fixed shape padded with blanks. Its size starts and stays at
+ * half the row or wider for the same reason the renderer caps its rows: a
+ * table narrower than its content scrolls inside a card, and a table that
+ * scrolls is one nobody reads.
  */
 function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
   const recent = recentEntries(source);
@@ -347,7 +356,11 @@ function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} table`,
     description: `Recent ${source.label} entries across their columns`,
     archetype: "table",
-    defaultSize: "lg",
+    size: {
+      default: { w: 6, h: 4 },
+      min: { w: 6, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     query: {
       source: source.id,
       op: "list",
@@ -408,7 +421,12 @@ function timelineWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} over time`,
     description: `How many ${source.label} entries there are per day`,
     archetype: "timeseries",
-    defaultSize: "md",
+    // A chart: a third by default, from a quarter to the full width.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 4 },
+    },
     query: {
       source: source.id,
       op: "timeseries",
@@ -457,7 +475,12 @@ function breakdownWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} by status`,
     description: `How ${source.label} entries divide between draft and published`,
     archetype: "bars",
-    defaultSize: "md",
+    // A chart: a third by default, from a quarter to the full width.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 4 },
+    },
     query: {
       source: source.id,
       op: "groupBy",
@@ -559,8 +582,7 @@ export async function refreshContentSources(): Promise<boolean> {
 export async function refreshCollectionWidgets(): Promise<void> {
   // Both kinds of content source, since a single's source is still read by the
   // Content card and by queries naming it. Cards are derived for collections
-  // only: a single is listed on the Content card, and its own card is retired
-  // (its saved cards become Content, `RETIRED_WIDGETS`).
+  // only: a single is listed on the Content card, and has no card of its own.
   await refreshContentSources();
   setGeneratedWidgets(collectionWidgets(listSources()));
 }

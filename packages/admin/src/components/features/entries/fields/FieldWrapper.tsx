@@ -60,6 +60,13 @@ export interface FieldWrapperProps {
   fieldPath?: string;
 
   /**
+   * Whether the field may not be written: read-only or disabled. Such a field
+   * offers no action that writes it, filling it from the source language
+   * included.
+   */
+  writesHeld?: boolean;
+
+  /**
    * Whether the field is in a horizontal layout (e.g., checkbox).
    * When true, label and input are side-by-side.
    * @default false
@@ -207,6 +214,7 @@ export function FieldWrapper({
   fieldPath,
   horizontal = false,
   editorIsOpaque = false,
+  writesHeld = false,
 }: FieldWrapperProps): JSX.Element {
   // Active content-language direction (RTL for Arabic/Hebrew/…).
   const entryLocale = useEntryLocale();
@@ -344,7 +352,7 @@ export function FieldWrapper({
   // from the source. Renders nothing outside the mode, and nothing on the source
   // pane's own fields — that pane sits outside the context this reads.
   const useSourceAction =
-    isLocalizedField && fieldName != null ? (
+    isLocalizedField && fieldName != null && !writesHeld ? (
       <UseSourceButton fieldName={fieldName} fieldLabel={label} />
     ) : null;
 

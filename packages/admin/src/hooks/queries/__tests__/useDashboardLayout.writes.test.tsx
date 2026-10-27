@@ -23,9 +23,7 @@ import { useDashboardLayout } from "../useDashboardLayout";
 
 function read(patch: Partial<DashboardLayoutResponse> = {}) {
   return {
-    placements: [
-      { id: "p1", widgetId: "core/a", width: "half", removed: false },
-    ],
+    placements: [{ id: "p1", widgetId: "core/a", w: 6, h: 3, removed: false }],
     widgets: {},
     available: [],
     defaultPlacements: [],
@@ -84,8 +82,8 @@ describe("a save", () => {
 
     const input = {
       placements: [
-        { id: "p2", widgetId: "core/b", width: "full", removed: false },
-        { id: "p1", widgetId: "core/a", width: "half", removed: true },
+        { id: "p2", widgetId: "core/b", w: 12, h: 3, removed: false },
+        { id: "p1", widgetId: "core/a", w: 6, h: 3, removed: true },
       ],
       version: 4,
       scope: "s",

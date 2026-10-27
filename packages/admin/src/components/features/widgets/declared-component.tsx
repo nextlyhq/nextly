@@ -12,11 +12,8 @@
  * @module components/features/widgets/declared-component
  */
 
-import type {
-  DeclaredComponentProps,
-  WidgetRenderSize,
-  WidgetSlot,
-} from "nextly/widget-result";
+import type { GridSize } from "nextly/config";
+import type { DeclaredComponentProps, WidgetSlot } from "nextly/widget-result";
 import { useCallback, useContext, useEffect, useState, type JSX } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
@@ -128,7 +125,8 @@ export function DeclaredComponent({
     | {
         id: string;
         settings: Record<string, unknown>;
-        width?: WidgetRenderSize["width"];
+        /** The size the card is drawn at, held to its widget's bounds. */
+        size?: GridSize;
       }
     | undefined;
   data: unknown;
@@ -140,12 +138,15 @@ export function DeclaredComponent({
   // The tier the frame measured; medium for the one frame before it has, so
   // the component draws and then follows the card's real size as it changes.
   const tier = useCardTier() ?? "medium";
+  const drawn = placement?.size ?? definition.size.default;
   const props: DeclaredComponentProps = {
     widgetId: definition.id,
     placementId: placement?.id ?? definition.id,
     settings: placement?.settings ?? {},
-    // Half where nothing says, as a card drawn outside an arrangement is.
-    size: { width: placement?.width ?? "half", class: tier },
+    // The card's drawn size in grid units, or its widget's default where
+    // nothing says, as a card drawn outside an arrangement is; and the tier of
+    // its own rendered width, never the window's.
+    size: { w: drawn.w, h: drawn.h, tier },
     data,
     refreshing,
     // The component's own way to ask again: a refetch, as the frame's is.

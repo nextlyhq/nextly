@@ -18,6 +18,8 @@ import { resolveWidgetOutcome } from "../outcome";
 import { resolveDashboardWidgets } from "../resolve-widgets";
 import { questionOf } from "../widget-as-asked";
 
+import { gridBounds } from "./grid-bounds";
+
 const allow = () => true;
 
 function registered(fields: Record<string, unknown>): DashboardWidget {
@@ -28,7 +30,7 @@ function registered(fields: Record<string, unknown>): DashboardWidget {
         id: "acme/orders",
         title: "Open orders",
         archetype: "list",
-        defaultSize: "full",
+        size: { default: { w: 12, h: 4 } },
         ...fields,
       } as unknown as RegisteredWidgetMeta,
     ],
@@ -46,7 +48,7 @@ const declared: DashboardWidget = {
   id: "acme/orders",
   title: "Open orders",
   archetype: "list",
-  size: "full",
+  size: gridBounds(12, 4),
   serverData: true,
   declaredEmpty: { title: "No open orders", action: createOrder },
 };

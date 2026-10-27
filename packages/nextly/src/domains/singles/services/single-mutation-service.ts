@@ -76,7 +76,10 @@ import {
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
 import {
+  carryStoredPasswords,
+  type FieldGroupReach,
   hashPasswordFieldValues,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -102,6 +105,7 @@ import { extractFieldGroupReferences } from "../../field-groups/storage/field-gr
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
+  COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
   COMPANION_STATUS_COLUMN,
 } from "../../i18n/companion-columns";
@@ -375,6 +379,72 @@ export class SingleMutationService extends BaseService {
    * The schema of a translated Single's translations table; null for a Single
    * without languages, which has no shared values apart from its languages'.
    */
+  /**
+   * Put back in an update's `data` the stored hash of each password it leaves
+   * out of a container written whole (`carryStoredPasswords`), and return
+   * those hashes for the hashing pass to keep. `stored` is the document as
+   * stored, hashes included; a translated container's stored value is the
+   * write language's row of the translations table.
+   */
+  private async storedPasswordsCarried(args: {
+    data: Record<string, unknown>;
+    stored: Record<string, unknown>;
+    fields: Parameters<typeof carryStoredPasswords>[2];
+    reach: FieldGroupReach;
+    companion: CompanionSchema | null;
+    writeLocale: string | undefined;
+    documentId: string;
+    mainTableName: string;
+  }): Promise<Set<string>> {
+    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+    // Read only once the translations table is there: before its migration,
+    // a translated value is still on the Single's own row, in `stored`.
+    const companion =
+      args.companion &&
+      args.writeLocale !== undefined &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: args.companion.companionTableName,
+        mainTableName: args.mainTableName,
+        localizedColumns: args.companion.localizedFields.map(f => f.column),
+      })) === "ready"
+        ? args.companion
+        : null;
+    const [row] =
+      companion && args.writeLocale !== undefined
+        ? await this.adapter.select<Record<string, unknown>>(
+            companion.companionTableName,
+            {
+              where: {
+                and: [
+                  {
+                    column: COMPANION_PARENT_COLUMN,
+                    op: "=",
+                    value: args.documentId,
+                  },
+                  {
+                    column: COMPANION_LOCALE_COLUMN,
+                    op: "=",
+                    value: args.writeLocale,
+                  },
+                ],
+              },
+            }
+          )
+        : [];
+    // Each translated value, by its field's name rather than its column's.
+    const translated: Record<string, unknown> = {};
+    for (const field of companion?.localizedFields ?? []) {
+      const value = row?.[field.name] ?? row?.[field.column];
+      if (value !== undefined) translated[field.name] = value;
+    }
+    return carryStoredPasswords(
+      args.data,
+      { ...args.stored, ...translated },
+      args.fields,
+      args.reach
+    );
+  }
+
   private translationsOf(
     singleMeta: DynamicSingleRecord
   ): CompanionSchema | null {
@@ -389,21 +459,77 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * The id of the Single's one row, locked, or undefined when it has none.
+   *
+   * A Single is one row, so a call that names no document acts on the one the
+   * Single holds when it begins: its id is read first, and from then on the
+   * call is bound to that document exactly as one that names it. The row is
+   * then read and locked in one statement, by that id, and a row that is no
+   * longer it, replaced since or while this waited for the lock, is refused
+   * as not found.
+   *
+   * Bound by id, the answer is the same on every dialect. An unqualified
+   * locking read is not: under a concurrent replacement MySQL's returns the
+   * row put in place, so the call would act on a document it never read,
+   * while PostgreSQL's finds no row at all. Locking in the read itself
+   * matters too: a plain read followed by a separate lock leaves a window in
+   * which a row replaced in between is gone, so the lock holds nothing. On
+   * SQLite writers are serialized, so the read is current anyway.
+   *
+   * @param expectedEntryId The document the caller was checked against, when
+   *   it was.
+   * @param reason Names the operation in the refusal's log context.
+   */
+  private async lockedSingleRowId(
+    tx: TransactionContext,
+    tableName: string,
+    slug: string,
+    expectedEntryId: string | undefined,
+    reason: string
+  ): Promise<string | undefined> {
+    const bound =
+      expectedEntryId ??
+      (await tx.selectOne<{ id?: string }>(tableName, { columns: ["id"] }))?.id;
+    if (bound === undefined) return undefined;
+    const row = await tx.selectOne<{ id?: string }>(tableName, {
+      columns: ["id"],
+      where: this.whereEq("id", bound),
+      forUpdate: true,
+    });
+    if (row?.id !== bound) {
+      throw NextlyError.notFound({
+        message: "This document no longer exists.",
+        logContext: { reason, scopeSlug: slug },
+      });
+    }
+    return bound;
+  }
+
+  /**
    * A language's pending change on this Single, under the row lock every save
    * and publish takes, so the live values read beside it are the ones the
    * next publish compares. Null when the Single has no row or the language no
    * pending change.
+   *
+   * @param expectedEntryId The document the caller was checked against, when
+   *   it was. A Single deleted and made again since is a different document,
+   *   so it is refused, under the lock, rather than written for that caller.
    */
   private async lockedPendingChange(
     tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
     slug: string,
-    requestLocale: string | null
+    requestLocale: string | null,
+    expectedEntryId?: string
   ) {
-    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
-    const entryId = row?.id;
+    const entryId = await this.lockedSingleRowId(
+      tx,
+      singleMeta.tableName,
+      slug,
+      expectedEntryId,
+      "take-live-shared-values-single-replaced"
+    );
     if (entryId === undefined) return null;
-    await tx.lockRow(singleMeta.tableName, entryId);
     const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
     const locale = workingDraftLocale({
       documentLocalized: true,
@@ -437,7 +563,8 @@ export class SingleMutationService extends BaseService {
       tx,
       singleMeta,
       params.slug,
-      params.locale ?? null
+      params.locale ?? null,
+      params.entryId
     );
     if (!found) return null;
     const { ref, locale, pending } = found;
@@ -461,10 +588,11 @@ export class SingleMutationService extends BaseService {
       // them a value, at any depth, refuses them taking its live one too.
       // Nor a translated component's shared sub-fields, which are left to the
       // editor to copy by hand.
-      mayTake: stale =>
+      mayTake: (stale, change) =>
         wholeWritableFields(
           stale.filter(name => !byHand.has(name)),
           live,
+          change,
           data =>
             applyFieldWriteAccess({
               kind: "single",
@@ -503,6 +631,11 @@ export class SingleMutationService extends BaseService {
    */
   async takeLiveSharedValues(params: {
     slug: string;
+    /**
+     * The document the caller was checked against, when it was: the values
+     * are taken into that document or none.
+     */
+    entryId?: string;
     /** Which language's pending change; the default when none is named. */
     locale?: string | null;
     /** Who took them, for the change's history. */
@@ -627,24 +760,18 @@ export class SingleMutationService extends BaseService {
 
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter.transaction(async tx => {
-      // A Single is one row, so its identity comes from reading that row rather
-      // than from the request. No row means the document has never been written,
-      // which cannot have a pending change against it.
-      const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
-      const entryId = row?.id;
-      if (params.entryId !== undefined && entryId !== params.entryId) {
-        throw NextlyError.notFound({
-          logContext: {
-            reason: "discard-working-draft-single-replaced",
-            scopeSlug: params.slug,
-          },
-        });
-      }
+      // No row means the document has never been written, which cannot have a
+      // pending change against it. The lock serializes this with the
+      // draft-save upserts that lock this row before writing the sidecar.
+      const entryId = await this.lockedSingleRowId(
+        tx,
+        singleMeta.tableName,
+        params.slug,
+        params.entryId,
+        "discard-working-draft-single-replaced"
+      );
       if (entryId === undefined) return 0;
 
-      // Serialize with concurrent draft-save upserts, which lock this same row
-      // before writing the sidecar.
-      await tx.lockRow(singleMeta.tableName, entryId);
       const draftLocale = workingDraftLocale({
         documentLocalized: singleMeta.localized === true,
         requestLocale: params.locale ?? null,
@@ -1630,10 +1757,25 @@ export class SingleMutationService extends BaseService {
       // value — same guarantee as the collection write paths.
       // At every depth, through the field groups held inline in a container:
       // their passwords are stored in that container's value.
+      // A password the update leaves out of a container keeps its stored hash.
+      const passwordReach = await passwordReachOf(
+        fieldConfigs,
+        this.fieldGroupDataService
+      );
       await hashPasswordFieldValues(
         currentData,
         fieldConfigs,
-        await passwordReachOf(fieldConfigs, this.fieldGroupDataService)
+        passwordReach,
+        await this.storedPasswordsCarried({
+          data: currentData,
+          stored: existingDeserialized,
+          fields: fieldConfigs,
+          reach: passwordReach,
+          companion,
+          writeLocale,
+          documentId: String(documentId),
+          mainTableName: singleMeta.tableName,
+        })
       );
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)

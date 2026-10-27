@@ -3,6 +3,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { sizeFacts } from "../../domains/widgets/canonical";
+import { sizeBounds } from "../../domains/widgets/grid-size";
+import { UNSTATED_WIDGET_SIZE } from "../../domains/widgets/unstated-size";
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../plugin-context";
 import { contributedWidgetSummaries } from "../validate-admin-widgets";
 
@@ -122,54 +126,45 @@ describe("the size a contributed summary carries", () => {
     } as unknown as PluginDefinition;
   }
 
-  it("translates the DEPRECATED `size` alias, as the admin resolver does", () => {
-    // 🔴 Reading `defaultSize` alone emitted a summary with no size for a
-    // declaration that legally states only `size`. The default placement then
-    // stored no geometry while the grid drew the card at half width, and a
-    // later change to the plugin's declaration silently resized what the reader
-    // had been told was their saved arrangement.
-    expect(
-      sizedSummary(
-        sized({ id: "acme/w", title: "W", component: "acme#W", size: "half" })
-      )
-    ).toBe("lg");
+  it("carries a stated size in grid units, as declared", () => {
+    const size = { default: { w: 6, h: 4 }, min: { w: 4, h: 3 } };
+    const [summary] = contributedWidgetSummaries([
+      sized({ id: "acme/w", title: "W", component: "acme#W", size }),
+    ]);
+    expect(summary?.size).toEqual(size);
+    // Read with every end filled in, through the one reading of a size.
+    expect(sizeFacts(summary!).size).toEqual({
+      default: { w: 6, h: 4 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 4 },
+    });
   });
 
-  it("translates the alias's other value too", () => {
-    expect(
-      sizedSummary(
-        sized({ id: "acme/w", title: "W", component: "acme#W", size: "full" })
-      )
-    ).toBe("full");
-  });
-
-  it("prefers `defaultSize` where a plugin states both", () => {
-    // A plugin that adopted the enum meant it, which is `resolveOne`'s rule.
-    expect(
-      sizedSummary(
-        sized({
-          id: "acme/w",
-          title: "W",
-          component: "acme#W",
-          size: "half",
-          defaultSize: "sm",
-        })
-      )
-    ).toBe("sm");
-  });
-
-  it("states no size when the declaration states neither", () => {
-    expect(
-      sizedSummary(sized({ id: "acme/w", title: "W", component: "acme#W" }))
-    ).toBeUndefined();
-  });
-
-  /** The one summary a single-widget plugin produces, reduced to its size. */
-  function sizedSummary(plugin: PluginDefinition): string | undefined {
-    const [summary] = contributedWidgetSummaries([plugin]);
+  it("states no size when the declaration states none, read as the unstated size", () => {
+    const [summary] = contributedWidgetSummaries([
+      sized({ id: "acme/w", title: "W", component: "acme#W" }),
+    ]);
     expect(summary).toBeDefined();
-    return summary.defaultSize;
-  }
+    expect(summary).not.toHaveProperty("size");
+    expect(sizeFacts(summary!).size).toEqual(sizeBounds(UNSTATED_WIDGET_SIZE));
+  });
+
+  it("admits no named width: a contribution sized `half` is refused", () => {
+    // 🔴 `half` and `full` were this channel's own size words. Refused at the
+    // door rather than read, so no named width reaches a summary or a layout.
+    let thrown: unknown;
+    try {
+      contributedWidgetSummaries([
+        sized({ id: "acme/w", title: "W", component: "acme#W", size: "half" }),
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(NextlyError);
+    expect((thrown as NextlyError).logMessage).toContain(
+      "size must be { default: { w, h }, min?, max? }"
+    );
+  });
 });
 
 /**
