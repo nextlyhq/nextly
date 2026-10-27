@@ -34,6 +34,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 
 /**
  * The Builder's many-to-many shape: the target lives on `options.target`, not
@@ -504,11 +505,16 @@ describe("related-row collection access — anonymous readers (integration)", ()
    * exposes, through a relationship, rows the same visitor is refused when
    * asking for them by name — so the direct read is asserted first, and the
    * relationship must agree with it.
+   *
+   * The visitor holds what the Public role grants, so the harness runs the
+   * boot's seeding that makes it, and `refs` admits everyone so that boot
+   * grants its read: the parent is not what is being judged.
    */
   async function bootAnonymous(pagesAccess: {
     read?: (ctx: { user?: { id?: string } | null }) => boolean;
   }): Promise<{ handler: CollectionsHandler; refId: string; pageId: string }> {
     current = await createTestNextly({
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
@@ -517,6 +523,7 @@ describe("related-row collection access — anonymous readers (integration)", ()
         }),
         defineCollection({
           slug: "refs",
+          access: { read: () => true },
           fields: [
             text({ name: "name" }),
             relationship({ name: "plain", relationTo: "pages" }),
@@ -591,19 +598,35 @@ describe("related-row collection access — anonymous readers (integration)", ()
     expect(loads.mock.calls.map(call => call[0])).toContain("pages");
   });
 
-  it("still populates a target that names no read rule", async () => {
-    // The control: no rule is no opinion, and the visitor falls through to
-    // the public default on both doors.
-    const { handler, refId } = await bootAnonymous({});
+  it("judges a target that names no read rule by the Public role's grant", async () => {
+    // No rule is no opinion, so the visitor holds the read only where the
+    // Public role grants it, which boot does not where no rule says anyone
+    // may read. Both doors refuse until an owner grants it, and then both
+    // admit: the second half fails an expansion withholding every target
+    // from a visitor, the first one still reading a rule-less target as
+    // public.
+    const { handler, refId, pageId } = await bootAnonymous({});
+    const read = async () => {
+      const direct = await handler.getEntry({
+        collectionName: "pages",
+        entryId: pageId,
+      });
+      const result = await handler.getEntry({
+        collectionName: "refs",
+        entryId: refId,
+        depth: 1,
+      });
+      expect(result.success).toBe(true);
+      const data = result.data as Record<string, unknown>;
+      return {
+        direct: direct.success,
+        related: JSON.stringify(data.plain).includes("Members page"),
+      };
+    };
 
-    const result = await handler.getEntry({
-      collectionName: "refs",
-      entryId: refId,
-      depth: 1,
-    });
-    expect(result.success).toBe(true);
-    const data = result.data as Record<string, unknown>;
-    expect(JSON.stringify(data.plain)).toContain("Members page");
+    expect(await read()).toEqual({ direct: false, related: false });
+    await grantPublic(current!, ["read-pages"]);
+    expect(await read()).toEqual({ direct: true, related: true });
   });
 });
 

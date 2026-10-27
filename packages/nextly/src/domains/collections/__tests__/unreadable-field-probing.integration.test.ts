@@ -53,6 +53,9 @@ const AGENT = { id: "agent", email: "agent@example.com" };
 async function boot(dialect: TestDialect): Promise<Handler> {
   current = await createTestNextly({
     dialect,
+    // The anonymous caller is a visitor, judged by the Public role a real
+    // boot makes, which reads `vaults` by its `true` read rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: VAULTS,

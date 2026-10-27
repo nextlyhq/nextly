@@ -85,6 +85,9 @@ const OPEN = { ...SINGLE_OPEN, delete: () => true };
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // Each case reads as a visitor, judged by the Public role a real boot
+    // makes, which reads every collection and the Single here by its rule.
+    seedPublic: true,
     collections: [
       // Pending work in another language stops a document-wide write.
       defineCollection({

@@ -29,6 +29,7 @@ import {
   grantTo,
   userWhoMay,
 } from "../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../__tests__/helpers/public-role";
 import { assertEntryPreviewable } from "../../api/preview-access";
 import {
   registeredWriteAsNamedLanguagesFor,
@@ -92,6 +93,9 @@ const PREVIEW_EDIT_CLOSED = "previeweditclosed";
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The boot's seeding, which makes the Public role the visitor below is
+    // judged by.
+    seedPublic: true,
     localization: { locales: ["en", "fr", "de"], defaultLocale: "en" },
     fieldGroups: [
       defineFieldGroup({
@@ -260,6 +264,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   await grantTo(current, "user-1", "update", [...collections, SETTINGS]);
   await grantTo(current, "user-1", "create", collections);
   await grantTo(current, "user-1", "delete", collections);
+  // The visitor, judged by the Public role, holds the same, as a site admin
+  // would grant it, so for it too the rules alone decide what it is refused.
+  // Boot grants Public none of the writes, and no read whose rule answers
+  // `true` in no language, which would refuse the visitor before any rule
+  // was told a language.
+  await grantPublic(current, [
+    ...[...collections, SETTINGS].flatMap(slug => [
+      `read-${slug}`,
+      `update-${slug}`,
+    ]),
+    ...collections.flatMap(slug => [`create-${slug}`, `delete-${slug}`]),
+  ]);
   return current;
 }
 

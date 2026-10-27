@@ -3,15 +3,17 @@
  * configured dialect.
  *
  * The person reaches a collection only through a code rule that names them
- * (or one set to `true`): no rule refuses them where an anonymous caller would
- * fall through to the public default, and a rule written for any signed-in
- * staff user refuses them too. Field rules and hooks see the person, and a
- * write made as one never stores their id where a staff user's goes.
+ * (or one set to `true`): no rule refuses them where a visitor reads by what
+ * the Public role grants, which a person never holds, and a rule written for
+ * any signed-in staff user refuses them too. Field rules and hooks see the
+ * person, and a write made as one never stores their id where a staff user's
+ * goes.
  *
  * @module domains/collections/__tests__/principal-access.integration.test
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
@@ -96,9 +98,17 @@ const accounts = {
   },
 } as unknown as PluginDefinition;
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * `seedPublic` runs the boot's seeding, for a test whose visitor needs the
+ * Public role a real boot makes.
+ */
+async function boot(
+  dialect: TestDialect,
+  options: { seedPublic?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    seedPublic: options.seedPublic === true,
     plugins: [accounts],
     collections: [
       defineCollection({
@@ -214,9 +224,13 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("is refused by a collection with no rule, where a visitor is not", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, { seedPublic: true });
       await seed(t, "no_rule");
-      // The control: an anonymous read falls through to the public default.
+      // A visitor holds what the Public role grants, and boot grants no read
+      // where no rule says anyone may read, so an owner grants it here: the
+      // person must still be refused, holding no grant of Public's.
+      await grantPublic(t, ["read-no_rule"]);
+      // The control: the visitor reads by Public's grant.
       const anonymous = await t.nextly.find({
         collection: "no_rule",
         overrideAccess: false,
