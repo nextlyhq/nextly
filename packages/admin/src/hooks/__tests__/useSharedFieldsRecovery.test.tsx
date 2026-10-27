@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const toast = vi.hoisted(() => ({
   success: vi.fn(),
+  warning: vi.fn(),
   error: vi.fn(),
   dismiss: vi.fn(),
 }));
@@ -31,6 +32,8 @@ vi.mock("@admin/hooks/useLocalization", () => ({
       ({ en: { label: "English" }, es: { label: "Spanish" } })[code],
   }),
 }));
+
+import type { HookWarning } from "@admin/lib/mutation-warnings";
 
 import {
   type RefusedForm,
@@ -59,7 +62,11 @@ function renderRecovery(
       scope: { kind: "collection", slug: "authors", entryId: "e1" },
       locale: "es",
       fields: [{ name: "articleCount", label: "Article Count" }],
-      save: async values => args.save?.(values),
+      // Whatever the stand-in answers, read as a save's result is.
+      save: async values =>
+        (await args.save?.(values)) as
+          | { warnings?: readonly HookWarning[] }
+          | undefined,
       onTaken: args.onTaken ?? vi.fn(),
     })
   );
@@ -176,6 +183,43 @@ describe("useSharedFieldsRecovery", () => {
     );
     expect(toast.success).toHaveBeenCalledWith(
       "Spanish now uses the live Article Count. Its earlier value is in History."
+    );
+  });
+
+  it("says on the success toast when a hook after the recovery's save failed", async () => {
+    take.mockResolvedValue({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    const onTaken = vi.fn();
+    const failed: HookWarning = {
+      severity: "failure",
+      phase: "afterUpdate",
+      collection: "authors",
+      code: "INTERNAL_ERROR",
+      message: "The search index wasn't updated.",
+    };
+    const { recover } = renderRecovery({
+      onTaken,
+      save: () => ({ item: { id: "e1" }, warnings: [failed] }),
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 })
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
+
+    // The take is reported, and so is what failed after the save, on the
+    // one toast rather than as a plain success.
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(
+      "Spanish now uses the live Article Count. Its earlier value is in History, but 1 follow-up action failed",
+      expect.objectContaining({ duration: 10_000 })
     );
   });
 

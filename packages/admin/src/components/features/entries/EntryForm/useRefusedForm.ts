@@ -26,6 +26,19 @@ const HELD = submitHeld.ok ? "" : submitHeld.message;
 /** What a save says while another is in flight, as a save does. */
 const BUSY = submitBusy.ok ? "" : submitBusy.message;
 
+/**
+ * Answers once a document a settled reload brought has reached the editor.
+ * React Query tells a query's observers of new data on a zero-delay timeout,
+ * queued when the refetch settled, and React renders a store change at once,
+ * running its effects as it commits; a timeout queued after the reload has
+ * settled runs after both.
+ */
+function reloadedDocumentRendered(): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
+}
+
 export function useRefusedForm(
   form: UseFormReturn<Record<string, unknown>>,
   /** The payload a validated form becomes for a save of the pending change. */
@@ -66,10 +79,6 @@ export function useRefusedForm(
   gateNow.current = gate;
   // The fields taken, until the document that carries them arrives.
   const awaiting = useRef<readonly string[] | null>(null);
-  // Where a recovery's write is: running, then returning once the recovery
-  // has finished, until the next document arrives, which is that write. The
-  // own-save marker stays in flight through both.
-  const recoveryWrite = useRef<"none" | "running" | "returning">("none");
 
   const refusedForm = useMemo<RefusedForm>(
     () => ({
@@ -109,18 +118,15 @@ export function useRefusedForm(
         // one that now carries the first working draft, keeps the edits made
         // while it ran rather than resetting over them.
         ownSave.current.inFlight = true;
-        recoveryWrite.current = "running";
         try {
           const done = await work();
-          // The reload it awaited may reach the form only after this.
-          recoveryWrite.current = "returning";
+          // The reload it awaited has settled, but the editor is handed the
+          // reloaded document a task later; the marker and the gate hold until
+          // then, and clear whether or not it differs from the one on screen.
+          await reloadedDocumentRendered();
           return done;
-        } catch (error) {
-          // Nothing comes back for it: the next document isn't its write.
-          recoveryWrite.current = "none";
-          ownSave.current.inFlight = false;
-          throw error;
         } finally {
+          ownSave.current.inFlight = false;
           latch.current = false;
         }
       },
@@ -130,13 +136,6 @@ export function useRefusedForm(
 
   const adoptArrived = useCallback(
     (arrived: Record<string, unknown>) => {
-      // The recovery's write has come back, and the editor's reset has
-      // already judged it as its own: the marker is clear for what follows.
-      // A document arriving while it still runs is not yet that write.
-      if (recoveryWrite.current === "returning") {
-        recoveryWrite.current = "none";
-        gateNow.current.ownSave.current.inFlight = false;
-      }
       const fields = awaiting.current;
       if (!fields) return;
       awaiting.current = null;

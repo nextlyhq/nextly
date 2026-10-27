@@ -33,6 +33,10 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import { fieldLabel, humanizeFieldName } from "@admin/lib/field-label";
 import {
+  type HookWarning,
+  toastMutationResult,
+} from "@admin/lib/mutation-warnings";
+import {
   type TakenLiveValues,
   versionApi,
   type VersionScope,
@@ -128,8 +132,14 @@ export function useSharedFieldsRecovery(args: {
   locale?: string;
   /** The document's fields, for their labels. */
   fields: readonly LabelledFieldConfig[];
-  /** Save values as the pending change, without publishing. */
-  save: (values: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Save values as the pending change, without publishing. Answers with the
+   * warnings of anything that failed after the write, which the success toast
+   * carries, as a save's does.
+   */
+  save: (
+    values: Record<string, unknown>
+  ) => Promise<{ warnings?: readonly HookWarning[] } | undefined>;
   /**
    * Reload the editor once the live values are taken, answering when the
    * reloaded document has arrived.
@@ -180,7 +190,7 @@ export function useSharedFieldsRecovery(args: {
           // would still send the value the take replaced.
           await form.run(async () => {
             // Read now, not when refused: edits made since are part of it.
-            await save(await form.pendingChangeNow());
+            const saved = await save(await form.pendingChangeNow());
             const { item } = await versionApi.takeLiveSharedValues(
               scope,
               locale
@@ -194,7 +204,12 @@ export function useSharedFieldsRecovery(args: {
             // it stands either way, and the reload below brings it to
             // whatever is on screen.
             if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
-            toast.success(takenMessage(item, language, labelOf));
+            // The save committed even when a hook after it failed: the
+            // author hears about both, on the one toast.
+            toastMutationResult(
+              takenMessage(item, language, labelOf),
+              saved?.warnings
+            );
             await onTaken();
           });
         } catch (failure) {

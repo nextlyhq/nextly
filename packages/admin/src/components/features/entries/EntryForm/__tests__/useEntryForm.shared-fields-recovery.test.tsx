@@ -80,6 +80,23 @@ function render(options: { writesHeld?: () => boolean } = {}) {
   );
 }
 
+/**
+ * Hands the editor a reloaded entry the way React Query does once a refetch
+ * settles: on a zero-delay timeout queued at that moment. Answers once the
+ * editor has it, for an assertion to wait on.
+ */
+function reloadBrings(
+  rerender: (props: { entry: Record<string, unknown> }) => void,
+  entry: Record<string, unknown>
+): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      rerender({ entry });
+      resolve();
+    }, 0);
+  });
+}
+
 describe("the entry form, for a publish refused over shared values", () => {
   it("gives the recovery its values as they are when the action is taken", async () => {
     const { result } = render();
@@ -218,19 +235,23 @@ describe("the entry form, for a publish refused over shared values", () => {
   it("keeps an edit made during a recovery that creates the entry's first working draft", async () => {
     // Published, with no pending change of its own yet.
     const { result, rerender } = render();
-    await act(async () => {
-      await updateOptions.current?.refusedForm?.run(async () => {
-        // Typed while the recovery saves and takes.
+    // Not inside an outer `act`: one would hold back the reload's render
+    // until the recovery had finished, which a browser doesn't.
+    let reloaded: Promise<void> | undefined;
+    await updateOptions.current?.refusedForm?.run(async () => {
+      // Typed while the recovery saves and takes.
+      act(() => {
         result.current.form.setValue("bio", "Typed during the recovery", {
           shouldDirty: true,
         });
       });
+      // The reload settles. As React Query does, the editor is handed the
+      // reloaded entry on a zero-delay timeout queued as it settles: the
+      // same entry and version, now carrying the working draft the
+      // recovery's save created.
+      reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
     });
-    // The reloaded entry now carries the working draft the recovery created:
-    // the same entry and the same version, with the overlay flag turned on.
-    act(() => {
-      rerender({ entry: { ...stored, _isWorkingDraft: true } });
-    });
+    await reloaded;
 
     expect(result.current.form.getValues("bio")).toBe(
       "Typed during the recovery"
@@ -239,12 +260,11 @@ describe("the entry form, for a publish refused over shared values", () => {
 
   it("goes back to judging the overlay once the recovery's reload has arrived", async () => {
     const { result, rerender } = render();
-    await act(async () => {
-      await updateOptions.current?.refusedForm?.run(async () => {});
+    let reloaded: Promise<void> | undefined;
+    await updateOptions.current?.refusedForm?.run(async () => {
+      reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
     });
-    act(() => {
-      rerender({ entry: { ...stored, _isWorkingDraft: true } });
-    });
+    await reloaded;
     // An edit made afterwards, then the working draft goes away from under
     // it, as someone else's discard takes it: that is no write of this
     // editor's, and the form starts again from what is stored.
@@ -258,5 +278,32 @@ describe("the entry form, for a publish refused over shared values", () => {
     });
 
     expect(result.current.form.getValues("bio")).toBe(stored.bio);
+  });
+
+  it("resets for a later update after a recovery whose reload changed nothing on screen", async () => {
+    const { result, rerender } = render();
+    // The take changed only fields this author can't view, so the reload is
+    // the entry already on screen and the editor is handed nothing new.
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.run(async () => {});
+    });
+    act(() => {
+      result.current.form.setValue("bio", "Typed after the recovery", {
+        shouldDirty: true,
+      });
+    });
+    // Someone else restores an earlier version: a new version that is no
+    // write of this editor's, so the form starts again from it.
+    act(() => {
+      rerender({
+        entry: {
+          ...stored,
+          bio: "Restored",
+          updatedAt: "2026-10-22T10:00:00.000Z",
+        },
+      });
+    });
+
+    expect(result.current.form.getValues("bio")).toBe("Restored");
   });
 });

@@ -478,10 +478,13 @@ function useSingleSaveFailure(args: {
     scope: slug && documentId ? { kind: "single", slug, documentId } : null,
     locale,
     fields: args.schema?.fields ?? NO_FIELDS,
-    // A save without a status keeps the values as the pending change.
+    // A save without a status keeps the values as the pending change. The
+    // Single's update answers with the document alone, no hook warnings.
     save: useCallback(
-      (values: Record<string, unknown>) =>
-        singleApi.updateDocument(slug, values, { locale }),
+      async (values: Record<string, unknown>) => {
+        await singleApi.updateDocument(slug, values, { locale });
+        return undefined;
+      },
       [slug, locale]
     ),
     // Answers once the reloaded document is back, which the recovery waits
