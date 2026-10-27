@@ -627,9 +627,10 @@ describe("useCurrentUserPermissions", () => {
     server.capabilities = answering({ read: false });
     onScreen.locale = "de";
     rerender();
-    await waitFor(() =>
-      expect(result.current.canAccessCollection("posts", "read")).toBe(false)
-    );
+    // German's answer itself: before it arrives nothing is allowed either, and
+    // a French request landing then has no newer answer to be older than.
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+    expect(result.current.canAccessCollection("posts", "read")).toBe(false);
     // The held French request now lands, with what it saw before the change.
     await act(async () => {
       release();
