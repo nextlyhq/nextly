@@ -39,7 +39,7 @@ import {
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
-  ruleLanguageKey,
+  currentRuleLanguage,
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
@@ -537,7 +537,7 @@ async function authorizeBy(
     userId: authResult.userId,
     slug: resource,
     action,
-    language: ruleLanguageKey(),
+    language: currentRuleLanguage(),
   };
   if (answered.allowed) rememberRouteVerdict(question, { all: true });
   if (!answered.allowed && answered.refusal === "only-matching-entries") {

@@ -58,7 +58,11 @@ import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "./rule-answer-log";
-import { askReadAsPlainRead, ruleLanguageKey } from "./rule-language";
+import {
+  askReadAsPlainRead,
+  currentRuleLanguage,
+  ruleLanguageKey,
+} from "./rule-language";
 
 /**
  * Allowed, refused with the kind of refusal the gate words, or allowed only
@@ -345,7 +349,7 @@ async function routeAuthorizedVerdict(
       userId: q.user.id,
       slug: q.slug,
       action: q.action,
-      language: ruleLanguageKey(),
+      language: currentRuleLanguage(),
     });
     // A route that judged this read only in another language said nothing
     // of this one.
