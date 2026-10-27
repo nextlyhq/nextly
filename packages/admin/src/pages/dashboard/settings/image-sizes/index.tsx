@@ -26,8 +26,10 @@ import {
   useTableColumns,
 } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
+import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import {
   deleteImageSize,
   fetchImageProcessingAvailability,
@@ -69,6 +71,10 @@ function ImageSizesContent({
   search: string;
   setSearch: (val: string) => void;
 }) {
+  // Each change is offered only to a reader holding the permission it asks;
+  // a read-only reader sees the sizes and nothing to change them with.
+  const { hasPermission } = useCurrentUserPermissions();
+  const changes = settingsChangesAllowed(hasPermission);
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   // Starts as available so the page never accuses the server of a missing
@@ -212,15 +218,16 @@ function ImageSizesContent({
 
   const rowActions = React.useCallback(
     (size: ImageSize): RowAction<ImageSize>[] => {
-      const actions: RowAction<ImageSize>[] = [
-        {
+      const actions: RowAction<ImageSize>[] = [];
+      if (changes.update) {
+        actions.push({
           id: "edit",
           label: "Edit",
           icon: <Edit className="h-4 w-4" />,
           onSelect: () => handleEdit(size),
-        },
-      ];
-      if (!size.isDefault) {
+        });
+      }
+      if (changes.delete && !size.isDefault) {
         actions.push({
           id: "delete",
           label: "Delete",
@@ -231,7 +238,7 @@ function ImageSizesContent({
       }
       return actions;
     },
-    [handleEdit, handleDelete]
+    [handleEdit, handleDelete, changes.update, changes.delete]
   );
 
   return (
@@ -277,8 +284,11 @@ function ImageSizesContent({
       columns={columns}
       rows={paginatedSizes}
       loading={isLoading}
-      rowHref={size =>
-        buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
+      rowHref={
+        changes.update
+          ? size =>
+              buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
+          : undefined
       }
       primaryColumn="name"
       rowActions={rowActions}
@@ -319,6 +329,8 @@ function ImageSizesContent({
 
 export default function ImageSizesSettingsPage(): React.JSX.Element {
   const [search, setSearch] = React.useState("");
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayCreate = settingsChangesAllowed(hasPermission).create;
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
@@ -328,12 +340,14 @@ export default function ImageSizesSettingsPage(): React.JSX.Element {
           description="Configure image sizes generated for uploaded images"
           crumb="Image Sizes"
           actions={
-            <Link href={ROUTES.SETTINGS_IMAGE_SIZES_CREATE}>
-              <Button size="md" className="flex items-center gap-1.5">
-                <Plus className="h-4 w-4" />
-                <span>Add Size</span>
-              </Button>
-            </Link>
+            mayCreate ? (
+              <Link href={ROUTES.SETTINGS_IMAGE_SIZES_CREATE}>
+                <Button size="md" className="flex items-center gap-1.5">
+                  <Plus className="h-4 w-4" />
+                  <span>Add Size</span>
+                </Button>
+              </Link>
+            ) : undefined
           }
         >
           <ImageSizesContent search={search} setSearch={setSearch} />

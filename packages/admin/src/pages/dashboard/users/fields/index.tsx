@@ -83,8 +83,13 @@ import {
   useUserFields,
 } from "@admin/hooks/queries/useUserFields";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
+import {
+  settingsChangesAllowed,
+  type SettingsChanges,
+} from "@admin/lib/permissions/settings-changes";
 import { cn } from "@admin/lib/utils";
 import type {
   UserFieldDefinitionRecord,
@@ -321,12 +326,18 @@ function SortableFieldRow({
   onEdit,
   onView,
   onDelete,
+  changes,
 }: {
   field: UserFieldDefinitionRecord;
   onEdit: (field: UserFieldDefinitionRecord) => void;
   onView: (field: UserFieldDefinitionRecord) => void;
   onDelete: (field: UserFieldDefinitionRecord) => void;
+  /** The settings changes the reader may make; without one, its control is not offered. */
+  changes: SettingsChanges;
 }) {
+  // Reordering, opening a field and its menu each change or lead to changing
+  // the field, so each is offered only to a reader holding update (or delete,
+  // for Delete). A read-only reader sees the row and nothing to act on.
   const {
     attributes,
     listeners,
@@ -334,7 +345,7 @@ function SortableFieldRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: field.id });
+  } = useSortable({ id: field.id, disabled: !changes.update });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -344,55 +355,58 @@ function SortableFieldRow({
   const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
   const isCode = field.source === "code";
+  const open = changes.update
+    ? () => (isCode ? onView(field) : onEdit(field))
+    : undefined;
 
   return (
     <TableRow
       ref={setNodeRef}
       style={style}
       className={cn(
-        "hover-unified-table-row cursor-pointer",
+        open && "hover-unified-table-row cursor-pointer",
         isDragging && "bg-muted opacity-80"
       )}
-      onClick={() => (isCode ? onView(field) : onEdit(field))}
+      onClick={open}
     >
       {/* Drag handle + Name */}
       <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
-          <span
-            className="shrink-0 cursor-grab touch-none text-muted-foreground hover:text-foreground"
-            {...attributes}
-            {...listeners}
-            tabIndex={0}
-            aria-label={`Drag to reorder ${field.label}`}
-            onClick={e => e.stopPropagation()}
-          >
-            <GripVertical className="h-4 w-4" />
-          </span>
-          <code
-            className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
-            onClick={e => {
-              e.stopPropagation();
-              if (isCode) {
-                onView(field);
-              } else {
-                onEdit(field);
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            onKeyDown={e => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                if (isCode) {
-                  onView(field);
-                } else {
-                  onEdit(field);
+          {changes.update && (
+            <span
+              className="shrink-0 cursor-grab touch-none text-muted-foreground hover:text-foreground"
+              {...attributes}
+              {...listeners}
+              tabIndex={0}
+              aria-label={`Drag to reorder ${field.label}`}
+              onClick={e => e.stopPropagation()}
+            >
+              <GripVertical className="h-4 w-4" />
+            </span>
+          )}
+          {open ? (
+            <code
+              className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
+              onClick={e => {
+                e.stopPropagation();
+                open();
+              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  open();
                 }
-              }
-            }}
-          >
-            {field.name}
-          </code>
+              }}
+            >
+              {field.name}
+            </code>
+          ) : (
+            <code className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono">
+              {field.name}
+            </code>
+          )}
         </div>
       </TableCell>
 
@@ -448,37 +462,45 @@ function SortableFieldRow({
         className="whitespace-nowrap text-sm"
         onClick={e => e.stopPropagation()}
       >
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm">
-              <MoreHorizontal className="h-4 w-4" />
-              <span className="sr-only">Open menu</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            {isCode ? (
-              <DropdownMenuItem onClick={() => onView(field)}>
-                <Eye className="h-4 w-4" />
-                View
-              </DropdownMenuItem>
-            ) : (
-              <>
-                <DropdownMenuItem onClick={() => onEdit(field)}>
-                  <Edit className="h-4 w-4" />
-                  Edit
+        {(changes.update || (!isCode && changes.delete)) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm">
+                <MoreHorizontal className="h-4 w-4" />
+                <span className="sr-only">Open menu</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              {isCode ? (
+                <DropdownMenuItem onClick={() => onView(field)}>
+                  <Eye className="h-4 w-4" />
+                  View
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => onDelete(field)}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              ) : (
+                <>
+                  {changes.update && (
+                    <DropdownMenuItem onClick={() => onEdit(field)}>
+                      <Edit className="h-4 w-4" />
+                      Edit
+                    </DropdownMenuItem>
+                  )}
+                  {changes.update && changes.delete && (
+                    <DropdownMenuSeparator />
+                  )}
+                  {changes.delete && (
+                    <DropdownMenuItem
+                      onClick={() => onDelete(field)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  )}
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </TableCell>
     </TableRow>
   );
@@ -489,6 +511,11 @@ function SortableFieldRow({
 // ============================================================
 
 function UserFieldsTable() {
+  // The settings changes this reader may make, each offered only to a reader
+  // holding the permission it asks.
+  const { hasPermission } = useCurrentUserPermissions();
+  const changes = settingsChangesAllowed(hasPermission);
+
   // Pagination state
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
@@ -796,6 +823,7 @@ function UserFieldsTable() {
                       onEdit={handleEdit}
                       onView={handleView}
                       onDelete={handleDelete}
+                      changes={changes}
                     />
                   ))}
                 </SortableContext>
@@ -842,6 +870,8 @@ function UserFieldsTable() {
 // ============================================================
 
 const UserFieldsPage: React.FC = () => {
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayCreate = settingsChangesAllowed(hasPermission).create;
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
@@ -860,14 +890,19 @@ const UserFieldsPage: React.FC = () => {
                 Manage custom attributes for user accounts
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Link href={ROUTES.USERS_FIELDS_CREATE}>
-                <Button size="md" className="flex items-center gap-1 shrink-0">
-                  <Plus className="h-4 w-4" />
-                  <span>Add Field</span>
-                </Button>
-              </Link>
-            </div>
+            {mayCreate && (
+              <div className="flex items-center gap-2">
+                <Link href={ROUTES.USERS_FIELDS_CREATE}>
+                  <Button
+                    size="md"
+                    className="flex items-center gap-1 shrink-0"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Add Field</span>
+                  </Button>
+                </Link>
+              </div>
+            )}
           </div>
 
           <UserFieldsTable />
