@@ -25,6 +25,7 @@
  *   node scripts/check-bundle-budgets.mjs --pin   re-measure and rewrite the pins
  */
 
+import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +45,7 @@ export const BUDGETS = {
 };
 
 const PINS_FILE = fileURLToPath(new URL("./route-budgets.json", import.meta.url));
+const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
  * A route's stable name: its chunk's file name without the content hash,
@@ -87,7 +89,9 @@ export function pinsFrom(report) {
       `Cannot pin: several routes are named ${[...shared].join(", ")}. Give each a path-based chunk name in tsdown.config.ts.`
     );
   }
-  const routes = {};
+  // No prototype, so a route named like a built-in key (`__proto__`) is an
+  // entry of its own.
+  const routes = Object.create(null);
   for (const route of [...report.routes].sort((a, b) =>
     routeKey(a.root).localeCompare(routeKey(b.root))
   )) {
@@ -101,7 +105,12 @@ export function pinsFrom(report) {
  * with this commit must be this commit's bytes: pinning other bytes would
  * loosen the gate for every later build.
  */
-export function pinRefusal(report) {
+export function pinRefusal(report, uncommittedInputs = []) {
+  // The dist is built from the working tree, so with a build input changed
+  // and not committed its bytes are not this commit's either way round.
+  if (uncommittedInputs.length > 0) {
+    return `build inputs have uncommitted changes (${uncommittedInputs.join(", ")})`;
+  }
   // Every build writes the stamp, so a dist without one was built some other
   // way and nothing says which commit its bytes are.
   if (report.buildInfo === undefined) {
@@ -111,6 +120,26 @@ export function pinRefusal(report) {
     return "the dist predates this commit, or another commit's build stamped it";
   }
   return null;
+}
+
+/**
+ * The admin's build inputs with changes git has not committed, as paths from
+ * the package. A status git cannot give refuses too, since nothing then says
+ * the tree is clean.
+ */
+function uncommittedBuildInputs() {
+  try {
+    return execFileSync(
+      "git",
+      ["status", "--porcelain", "--", "src", "tsdown.config.ts", "package.json"],
+      { cwd: PACKAGE_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    )
+      .split("\n")
+      .filter(Boolean)
+      .map(line => line.slice(3));
+  } catch {
+    return ["(git status could not be read)"];
+  }
 }
 
 /**
@@ -153,7 +182,8 @@ export function budgetBreaches(report, pins, budgets = BUDGETS) {
   for (const route of report.routes) {
     const key = routeKey(route.root);
     if (shared.has(key)) continue;
-    const pinned = pins.routes[key];
+    // Own entries only: a key inherited from Object.prototype is no pin.
+    const pinned = Object.hasOwn(pins.routes, key) ? pins.routes[key] : undefined;
     const measured = `${formatKB(route.beyondShell.gzippedBytes)} KB gzipped of its own`;
     if (pinned === undefined) {
       breaches.push({
@@ -196,10 +226,10 @@ async function main() {
   const report = measureBundle();
 
   if (process.argv.includes("--pin")) {
-    const refusal = pinRefusal(report);
+    const refusal = pinRefusal(report, uncommittedBuildInputs());
     if (refusal !== null) {
       console.error(
-        `Refusing to pin: ${refusal}. Rebuild (pnpm --filter @nextlyhq/admin build) and pin again.`
+        `Refusing to pin: ${refusal}. Commit any change, rebuild (pnpm --filter @nextlyhq/admin build) and pin again.`
       );
       process.exitCode = 1;
       return;

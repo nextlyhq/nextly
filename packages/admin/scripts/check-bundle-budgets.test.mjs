@@ -64,6 +64,14 @@ describe("pinsFrom", () => {
     });
   });
 
+  it("pins a route named like a built-in object key as its own entry", () => {
+    const routes = pinsFrom(report([["__proto__-AAAAAAAA.mjs", 3]])).routes;
+    expect(Object.hasOwn(routes, "__proto__")).toBe(true);
+    expect(JSON.parse(JSON.stringify(routes))).toEqual(
+      JSON.parse('{"__proto__": 3072}')
+    );
+  });
+
   it("refuses two routes that share a stable name rather than keep one", () => {
     const r = report([
       ["index-AAAAAAAA.mjs", 300],
@@ -92,6 +100,12 @@ describe("pinRefusal", () => {
     expect(
       pinRefusal({ ...fresh, commit: "bbbbbbb", buildInfo: { commit: "aaaaaaa" } })
     ).toMatch(/predates|another commit/);
+  });
+
+  it("refuses while a build input has uncommitted changes: the bytes are not the commit's", () => {
+    expect(pinRefusal(fresh, ["packages/admin/src/pages/dashboard/index.tsx"])).toMatch(
+      /uncommitted.*pages\/dashboard\/index\.tsx/
+    );
   });
 });
 
@@ -146,6 +160,17 @@ describe("budgetBreaches", () => {
     expect(breach.kind).toBe("unpinned");
     expect(breach.name).toContain("page.new");
     expect(breach.budget).toContain("--pin");
+  });
+
+  it("fails a new route named like a built-in object key, which no pin holds", () => {
+    const r = report([
+      ["toString-AAAAAAAA.mjs", 3],
+      ["constructor-BBBBBBBB.mjs", 3],
+    ]);
+    expect(budgetBreaches(r, pins([])).map(b => b.kind)).toEqual([
+      "unpinned",
+      "unpinned",
+    ]);
   });
 
   it("fails a shell over its cap", () => {
