@@ -65,8 +65,13 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * pin by more than its margin fails, naming the pin to set; the list is
  * refreshed with them. The pins are edited by hand so that a change to one is
  * a line a reviewer reads; only the list has a command.
+ *
+ * `p90Modules` was raised from 1,070 to 1,106 (1,071 measured plus the margin)
+ * when log masking gained `observability/log-copy.ts`, the one walk the email
+ * masker and the credential redactor share: one new module, loaded wherever
+ * the masker is, with no new import chain.
  */
-export const BUDGET = { heavyFiles: 69, p90Modules: 1_070 };
+export const BUDGET = { heavyFiles: 69, p90Modules: 1_106 };
 const MARGIN = { heavyFiles: 3, p90Modules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
