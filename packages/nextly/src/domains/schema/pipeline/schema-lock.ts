@@ -74,6 +74,7 @@ import { schemaLockColumnTypes } from "../../../schemas/field-group-lock";
 import type { Logger } from "../../../shared/types";
 import {
   isMissingTable,
+  lockTableUnderstandsExpiry,
   observeMigrationLock,
   releaseMigrationClaim,
   withMigrationSession,
@@ -85,6 +86,9 @@ export const SCHEMA_LOCK_TABLE = "nextly_schema_lock";
 
 /** The earlier migrate lock's table, PostgreSQL only. */
 export const EARLIER_MIGRATE_LOCK_TABLE = "nextly_migrate_lock";
+
+/** The earlier field-group lock's table, held beside this lock through the field-group session. */
+const FIELD_GROUP_LOCK_TABLE = "nextly_field_group_lock";
 
 /** The lock is a single row; its key never varies. */
 const ROW_ID = 1;
@@ -406,33 +410,99 @@ async function claimRow(
   });
 }
 
-/** Extend this claim, and report whether it is still ours. */
-async function renewRow(
-  adapter: DrizzleAdapter,
+/** Where a renewal's statements run: a transaction on the adapter, or a connection of its own. */
+interface StatementRunner {
+  run(statement: SQL): Promise<void>;
+  query<T>(statement: SQL): Promise<T[]>;
+}
+
+/** What a renewal extends: this lock's row, and each earlier lock held beside it. */
+interface RenewalTargets {
+  readonly row: boolean;
+  readonly earlierRow: boolean;
+  /** The field-group claim, when the table it lives in has an expiry to extend. */
+  readonly fieldGroupClaim: string | undefined;
+}
+
+/**
+ * Extend every lease this run holds, and report whether any of them was taken from it.
+ *
+ * The answer is ownership, not timeliness: a renewal held up — behind a long migration
+ * transaction on a pool of two, or behind SQLite's one connection — and then run still finds the
+ * row naming this run unless another run took it. The earlier locks are extended in the same
+ * sequence, so an earlier process keeps finding them held for as long as this run holds the lock.
+ */
+async function renewAll(
+  runner: StatementRunner,
   dialect: SupportedDialect,
   claim: string,
   timings: LeaseTimings,
-  earlierRow: boolean
-): Promise<boolean> {
-  return adapter.transaction(async ctx => {
-    await ctx.lockRow(SCHEMA_LOCK_TABLE, ROW_ID);
-    await ctx.runStatement(
+  targets: RenewalTargets
+): Promise<{ disproved: boolean }> {
+  const expiry = futureExpression(dialect, timings.ttlSeconds);
+  if (targets.row) {
+    await runner.run(
       sql`UPDATE ${id(SCHEMA_LOCK_TABLE)}
-          SET ${id("expires_at")} = ${futureExpression(dialect, timings.ttlSeconds)}
+          SET ${id("expires_at")} = ${expiry}
           WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${claim}`
     );
-    // The earlier migrate lock's row is renewed with this one, so an earlier process keeps
-    // finding it held for as long as this run holds the lock.
-    if (earlierRow) {
-      await ctx.runStatement(
-        sql`UPDATE ${id(EARLIER_MIGRATE_LOCK_TABLE)}
-            SET ${id("expires_at")} = ${futureExpression(dialect, timings.ttlSeconds)}
-            WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${claim}`
-      );
-    }
-    const after = await readState(ctx, dialect, timings);
-    return after?.owner === claim && after.usable;
-  });
+  }
+  if (targets.earlierRow) {
+    await runner.run(
+      sql`UPDATE ${id(EARLIER_MIGRATE_LOCK_TABLE)}
+          SET ${id("expires_at")} = ${expiry}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${claim}`
+    );
+  }
+  if (targets.fieldGroupClaim !== undefined) {
+    await runner.run(
+      sql`UPDATE ${id(FIELD_GROUP_LOCK_TABLE)}
+          SET ${id("expires_at")} = ${expiry}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${targets.fieldGroupClaim}`
+    );
+  }
+  return { disproved: !(await ownsAll(runner, claim, targets)) };
+}
+
+/** Whether this lock's row, and the earlier migrate lock's row it holds, still name this run. */
+async function ownsAll(
+  runner: Pick<StatementRunner, "query">,
+  claim: string,
+  targets: Pick<RenewalTargets, "row" | "earlierRow">
+): Promise<boolean> {
+  const ownerOf = async (table: string): Promise<string | null> => {
+    const rows = await runner.query<{ owner: string | null }>(
+      sql`SELECT ${id("owner")} FROM ${id(table)} WHERE ${id("id")} = ${ROW_ID}`
+    );
+    return rows[0]?.owner ?? null;
+  };
+  if (targets.row && (await ownerOf(SCHEMA_LOCK_TABLE)) !== claim) return false;
+  if (
+    targets.earlierRow &&
+    (await ownerOf(EARLIER_MIGRATE_LOCK_TABLE)) !== claim
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** A runner over one adapter transaction. */
+function transactionRunner(ctx: TransactionContext): StatementRunner {
+  return {
+    run: statement => ctx.runStatement(statement),
+    query: <T>(statement: SQL) => ctx.queryStatement<T>(statement),
+  };
+}
+
+/** A runner over a MySQL connection this run holds for itself. */
+function connectionRunner(executor: Executor): StatementRunner {
+  return {
+    run: async statement => {
+      await executor.execute(statement);
+    },
+    query: async <T>(statement: SQL) =>
+      toRows(await executor.execute(statement)) as T[],
+  };
 }
 
 async function releaseRow(
@@ -455,6 +525,11 @@ interface EarlierMigrateLock {
   readonly row: boolean;
   /** Releases it: the row deleted, or MySQL's named lock given back. */
   readonly release: () => Promise<void>;
+  /**
+   * MySQL: the connection the named lock is held on, when it is one of its own. Renewals run on
+   * it, so they never wait for a connection a migration's transaction holds.
+   */
+  readonly connection?: Executor;
 }
 
 type EarlierAttempt =
@@ -567,6 +642,8 @@ type Executor = { execute: (query: SQL) => Promise<unknown> };
 /** A MySQL connection a named lock is held on, and how it is given back. */
 interface PinnedMysql {
   db: Executor;
+  /** Whether `db` is a connection of its own, rather than the shared handle. */
+  own: boolean;
   release: () => void;
   destroy: () => void;
 }
@@ -589,7 +666,12 @@ async function pinMysqlConnection(db: unknown): Promise<PinnedMysql> {
     typeof client.promise !== "function" ||
     limit < 2
   ) {
-    return { db: db as Executor, release: () => {}, destroy: () => {} };
+    return {
+      db: db as Executor,
+      own: false,
+      release: () => {},
+      destroy: () => {},
+    };
   }
   // Loaded here rather than at the top: the MySQL driver is a dependency of the MySQL adapter
   // only, so a PostgreSQL or SQLite install must not need it.
@@ -599,6 +681,7 @@ async function pinMysqlConnection(db: unknown): Promise<PinnedMysql> {
     .connection;
   return {
     db: drizzle({ client: callback }) as unknown as Executor,
+    own: true,
     release: () => connection.release(),
     destroy: () => connection.destroy(),
   };
@@ -652,7 +735,14 @@ async function takeEarlierMysqlLock(
         },
       };
     }
-    return { ok: true, held: { row: false, release: giveBack } };
+    return {
+      ok: true,
+      held: {
+        row: false,
+        release: giveBack,
+        ...(pinned.own ? { connection: pinned.db } : {}),
+      },
+    };
   } catch (error) {
     pinned.destroy();
     throw error;
@@ -695,10 +785,10 @@ class SchemaLockHold {
   /** The acquisition in flight, which an interrupt waits for before releasing. */
   pending: Promise<unknown> = Promise.resolve();
   interrupted = false;
-  /** The holder could not confirm its lease in time, or another run took it. */
+  /** Another run took a lock this run held. */
   lost = false;
-  /** When the lease was last confirmed, on this process's monotonic clock. */
-  confirmedAt = 0;
+  /** Whether the field-group claim's table has an expiry for the renewal to extend. */
+  fieldGroupRenewable = false;
   private renewal: ReturnType<typeof setInterval> | undefined;
   private outstandingRenewal: Promise<unknown> = Promise.resolve();
 
@@ -720,7 +810,6 @@ class SchemaLockHold {
 
   /** Every lock at once, all or nothing. */
   async acquireOnce(): Promise<Attempt> {
-    this.confirmedAt = performance.now();
     if (this.rowReady) {
       const row = await claimRow(
         this.adapter,
@@ -783,26 +872,20 @@ class SchemaLockHold {
    * left is only ever understated.
    */
   startRenewal(): void {
-    if (!this.rowHeld && this.earlier?.row !== true) return;
     let renewing = false;
     this.renewal = setInterval(() => {
-      if (
-        this.timings.lossAfterMs - (performance.now() - this.confirmedAt) <=
-        0
-      ) {
-        this.lost = true;
-      }
+      // Only one attempt in flight: a renewal held up behind a long transaction must not have a
+      // second queued beneath it.
       if (renewing) return;
       renewing = true;
-      const startedAt = performance.now();
       this.outstandingRenewal = this.renewOnce().then(
-        ours => {
+        ({ disproved }) => {
           renewing = false;
-          if (ours) this.confirmedAt = startedAt;
-          else this.lost = true;
+          if (disproved) this.lost = true;
         },
         () => {
-          // A failed attempt proves nothing either way; the elapsed check above decides.
+          // A failed attempt proves nothing either way; the next one asks again, and the end of
+          // the run asks once more whether the lock is still this run's.
           renewing = false;
         }
       );
@@ -810,16 +893,58 @@ class SchemaLockHold {
     this.renewal.unref?.();
   }
 
-  private renewOnce(): Promise<boolean> {
-    return this.rowHeld
-      ? renewRow(
-          this.adapter,
-          this.dialect,
-          this.claim,
-          this.timings,
-          this.earlier?.row === true
-        )
-      : renewEarlierRow(this.adapter, this.claim, this.timings);
+  /** What a renewal extends right now. */
+  private targets(): RenewalTargets {
+    return {
+      row: this.rowHeld,
+      earlierRow: this.earlier?.row === true,
+      fieldGroupClaim: this.fieldGroupRenewable
+        ? this.fieldGroupClaim
+        : undefined,
+    };
+  }
+
+  /**
+   * One renewal, on MySQL's held connection where there is one, so it never waits for a
+   * connection the work's own transaction holds; otherwise in an adapter transaction.
+   */
+  private renewOnce(): Promise<{ disproved: boolean }> {
+    const targets = this.targets();
+    const connection = this.earlier?.connection;
+    if (connection !== undefined) {
+      return renewAll(
+        connectionRunner(connection),
+        this.dialect,
+        this.claim,
+        this.timings,
+        targets
+      );
+    }
+    return this.adapter.transaction(ctx =>
+      renewAll(
+        transactionRunner(ctx),
+        this.dialect,
+        this.claim,
+        this.timings,
+        targets
+      )
+    );
+  }
+
+  /**
+   * Whether this run still holds its lock now that its work has ended. The question that decides
+   * whether it was excluded throughout: a row that still names this run was taken by no other.
+   */
+  async stillOwned(): Promise<boolean> {
+    const targets = this.targets();
+    const connection = this.earlier?.connection;
+    if (connection !== undefined) {
+      return ownsAll(connectionRunner(connection), this.claim, targets);
+    }
+    // Read as every other read of the lock rows is, inside a transaction.
+    return this.adapter.transaction(ctx =>
+      ownsAll(transactionRunner(ctx), this.claim, targets)
+    );
   }
 
   /** Stop renewing, and let an attempt already in flight land before anything is released. */
@@ -1004,16 +1129,25 @@ async function runHeld<T>(
         // The interrupt is handled by the hold, for every lock at once.
         releaseOnInterrupt: false,
         leaseSeconds: hold.leaseSeconds,
+        // Renewed with this lock's own row, on this lock's connection; see `renewAll`.
+        renewal: "caller",
         // Where the session says it fell back to an owner-only claim on a table that predates
         // its expiry column, which an operator should hear about.
         logger: sessionLogger(hold.options.logger),
       },
-      session => {
-        if (session.lock.kind === "held")
+      async session => {
+        if (session.lock.kind === "held") {
           hold.fieldGroupClaim = session.lock.owner;
+          // A table that predates the expiry column has nothing to extend: its claim is
+          // owner-only, and holds until it is released.
+          hold.fieldGroupRenewable = await lockTableUnderstandsExpiry(
+            hold.adapter,
+            hold.dialect
+          );
+        }
         decided();
         if (hold.interrupted) {
-          return Promise.reject(interruptedBeforeStart(hold.options.command));
+          throw interruptedBeforeStart(hold.options.command);
         }
         const held: HeldHere = {
           adapter: hold.adapter,
@@ -1031,7 +1165,7 @@ async function runHeld<T>(
             held.released = true;
           });
         running = result;
-        return result;
+        return await result;
       }
     );
     return { kind: "ran", value };
@@ -1102,42 +1236,10 @@ export async function withSchemaLock<T>(
       hold.dialect,
       hold.mayCreateTables
     );
-    let value: T;
-    for (;;) {
-      const acquired = await acquire(hold, wait);
-      if (acquired.kind === "settled") return { ran: false, reason: "settled" };
-      if (acquired.kind === "reentrant") {
-        return { ran: true, value: await work(acquired.held.session) };
-      }
-      hold.startRenewal();
-      const ran = await runHeld(hold, work);
-      if (ran.kind === "ran") {
-        value = ran.value;
-        break;
-      }
-      // The field-group lock was held after all: give back what this attempt took, and wait.
-      await hold.stopRenewal();
-      await hold.releaseAll();
-      const holder: SchemaLockHolder = {
-        kind: "earlier-field-group-lock",
-        owner: ran.owner,
-      };
-      if ((await wait.after(holder)) === "settled") {
-        return { ran: false, reason: "settled" };
-      }
-    }
-    if (hold.lost && !hold.interrupted) {
-      throw NextlyError.serviceUnavailable({
-        publicMessage:
-          `${options.command} finished, but could not keep the schema lock to the end: its ` +
-          "lease lapsed or another run took it. Check the database before running it again.",
-        logContext: {
-          reason: "schema lock lost while held",
-          command: options.command,
-        },
-      });
-    }
-    return { ran: true, value };
+    const outcome = await runWhenHeld(hold, wait, work);
+    if (!outcome.ran) return outcome;
+    await assertHeldToTheEnd(hold);
+    return outcome;
   } finally {
     await hold.stopRenewal();
     // An interrupt releases on its own path, and then stops the process.
@@ -1146,6 +1248,55 @@ export async function withSchemaLock<T>(
       await hold.releaseAll();
     }
   }
+}
+
+/**
+ * Take every lock and run `work` in them, as many attempts as the wait allows: an attempt whose
+ * field-group session finds that lock held after all gives back what it took and waits again.
+ */
+async function runWhenHeld<T>(
+  hold: SchemaLockHold,
+  wait: LockWait,
+  work: (session: SchemaLockSession) => Promise<T>
+): Promise<SchemaLockOutcome<T>> {
+  for (;;) {
+    const acquired = await acquire(hold, wait);
+    if (acquired.kind === "settled") return { ran: false, reason: "settled" };
+    if (acquired.kind === "reentrant") {
+      return { ran: true, value: await work(acquired.held.session) };
+    }
+    hold.startRenewal();
+    const ran = await runHeld(hold, work);
+    if (ran.kind === "ran") return { ran: true, value: ran.value };
+    await hold.stopRenewal();
+    await hold.releaseAll();
+    const holder: SchemaLockHolder = {
+      kind: "earlier-field-group-lock",
+      owner: ran.owner,
+    };
+    if ((await wait.after(holder)) === "settled") {
+      return { ran: false, reason: "settled" };
+    }
+  }
+}
+
+/**
+ * Refuse a run that finished without holding its lock to the end: another run took it while the
+ * work ran. Asked once the work has stopped and the last renewal has landed, because a row that
+ * still names this run was taken by no other.
+ */
+async function assertHeldToTheEnd(hold: SchemaLockHold): Promise<void> {
+  if (hold.interrupted) return;
+  await hold.stopRenewal();
+  if (!(await hold.stillOwned().catch(() => false))) hold.lost = true;
+  if (!hold.lost) return;
+  const { command } = hold.options;
+  throw NextlyError.serviceUnavailable({
+    publicMessage:
+      `${command} finished, but could not keep the schema lock to the end: another run took ` +
+      "it while the work ran. Check the database before running it again.",
+    logContext: { reason: "schema lock lost while held", command },
+  });
 }
 
 /** The caller's two-method logger, widened to the session's `Logger`. */
@@ -1157,25 +1308,6 @@ function sessionLogger(logger: SchemaLockOptions["logger"]): Logger {
     warn: (message, meta) => logger?.warn?.(message, meta),
     error: (message, meta) => logger?.warn?.(message, meta),
   };
-}
-
-/** Renew the earlier migrate lock's row alone, for a run that could not take the schema row. */
-async function renewEarlierRow(
-  adapter: DrizzleAdapter,
-  claim: string,
-  timings: LeaseTimings
-): Promise<boolean> {
-  return adapter.transaction(async ctx => {
-    await ctx.runStatement(
-      sql`UPDATE ${id(EARLIER_MIGRATE_LOCK_TABLE)}
-          SET ${id("expires_at")} = ${futureExpression("postgresql", timings.ttlSeconds)}
-          WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${claim}`
-    );
-    const rows = await ctx.queryStatement<{ owner: string | null }>(
-      sql`SELECT ${id("owner")} FROM ${id(EARLIER_MIGRATE_LOCK_TABLE)} WHERE ${id("id")} = ${ROW_ID}`
-    );
-    return rows[0]?.owner === claim;
-  });
 }
 
 // ---------------------------------------------------------------------------

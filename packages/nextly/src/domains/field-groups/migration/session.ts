@@ -286,7 +286,7 @@ async function readLockStateOutsideTransaction(
  * Issues the REAL state query rather than inspecting a catalogue, so it cannot drift from the
  * statement acquisition is about to run: if this one succeeds, that one will too.
  */
-async function lockTableUnderstandsExpiry(
+export async function lockTableUnderstandsExpiry(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect
 ): Promise<boolean> {
@@ -575,6 +575,15 @@ export async function withMigrationSession<T>(
      * gone. Absent, the claim is held on {@link LOCK_TTL_SECONDS}.
      */
     leaseSeconds?: number;
+    /**
+     * Who renews the claim. `self` (the default): this session, on a timer, declaring the claim
+     * lost once it cannot confirm it in time. `caller`: the schema lock, which holds this lock
+     * beside its own row and renews both in one statement sequence, on a connection of its own
+     * where it has one. A caller-renewed claim is judged at the end by ownership alone — the row
+     * still naming this claim means no other run took it — so a renewal held up behind a long
+     * migration's transaction on a small pool is not, by itself, a lost claim.
+     */
+    renewal?: "self" | "caller";
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
@@ -1013,7 +1022,8 @@ export async function withMigrationSession<T>(
   // The attempt currently in flight, or a settled placeholder when there is none.
   let outstandingRenewal: Promise<unknown> = Promise.resolve();
 
-  const renewal = setInterval(() => {
+  const callerRenews = args.renewal === "caller";
+  const renewal = renewalTimer(!callerRenews, timings.renewIntervalMs, () => {
     // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
     // that never comes back reports nothing at all, and the lease drains while it hangs.
     if (leaseRemainingMs() <= 0) {
@@ -1065,10 +1075,7 @@ export async function withMigrationSession<T>(
       }
     );
     void outstandingRenewal;
-  }, timings.renewIntervalMs);
-  // Never a reason for the process to stay alive: this timer exists to protect work that is already
-  // running, so if nothing else is pending there is nothing left to protect.
-  renewal.unref?.();
+  });
 
   // Captured rather than returned from inside the `try`, so the lock verification below can run
   // AFTER the release without throwing from a `finally`. A throw there would discard an exception
@@ -1160,12 +1167,12 @@ export async function withMigrationSession<T>(
       // still land afterwards and re-extend a row this session no longer watches. So the release is
       // handed to the quiet-clear below, which waits that attempt out, and the run is failed rather
       // than told it held a lock it could not confirm.
-      const confirmed = await settleWithin(
-        outstandingRenewal,
-        leaseRemainingMs()
+      // A caller-renewed claim has no attempt of this session's in flight to wait for.
+      const confirmed = await renewalSettled(callerRenews, () =>
+        settleWithin(outstandingRenewal, leaseRemainingMs())
       );
       if (confirmed) {
-        heldToTheEnd = await release(adapter, dialect, claim);
+        heldToTheEnd = await release(adapter, dialect, claim, !callerRenews);
       } else {
         heldToTheEnd = false;
         clearWhenQuiet();
@@ -1239,6 +1246,34 @@ export async function withMigrationSession<T>(
     });
   }
   return result;
+}
+
+/**
+ * The session's own renewal timer, or none when its caller renews the claim.
+ *
+ * Never a reason for the process to stay alive: the timer exists to protect work that is already
+ * running, so if nothing else is pending there is nothing left to protect.
+ */
+function renewalTimer(
+  enabled: boolean,
+  intervalMs: number,
+  tick: () => void
+): ReturnType<typeof setInterval> | undefined {
+  if (!enabled) return undefined;
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  return timer;
+}
+
+/**
+ * Whether the session's own last renewal settled in time. A caller-renewed claim has no attempt of
+ * the session's in flight, so there is nothing to wait for.
+ */
+async function renewalSettled(
+  callerRenews: boolean,
+  settle: () => Promise<boolean>
+): Promise<boolean> {
+  return callerRenews || settle();
 }
 
 /**
@@ -1511,7 +1546,8 @@ export async function releaseMigrationClaim(
 async function release(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect,
-  claim: string
+  claim: string,
+  requireLive = true
 ): Promise<boolean> {
   return adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
@@ -1522,7 +1558,9 @@ async function release(
     // takeover reaches here with `claimWasLost` still false, releases nothing, and returns the
     // callback's value as though the work had been protected. This is the last observable moment.
     const before = await readLockState(ctx, dialect);
-    const heldToTheEnd = before?.owner === claim && before.live;
+    // A caller-renewed claim is judged by ownership alone: see the session's `renewal` option.
+    const heldToTheEnd =
+      before?.owner === claim && (before.live || !requireLive);
     await ctx.runStatement(clearClaimStatement(claim));
     return heldToTheEnd;
   });

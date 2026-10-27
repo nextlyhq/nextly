@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../../errors/nextly-error";
 import { withMigrationExcluded } from "../../../field-groups/migration/sync-guard";
 import { withMigrateLock } from "../locks";
@@ -271,6 +273,35 @@ describe.each(LOCK_DIALECTS)("the schema lock on %s", dialect => {
     // Still this run's, after the session had reported the loss: nothing was released under work
     // that had not stopped.
     expect(ownerMidWork).toEqual(expect.any(String));
+  }, 60_000);
+
+  it("keeps a run whose work holds a transaction for several leases, on a pool of two", async () => {
+    // A small pool, where the work's transaction holds the one connection the lock does not.
+    const small = await world.connect({ poolMax: 2 });
+    try {
+      await expect(
+        withSchemaLock(
+          {
+            adapter: small,
+            command: "nextly migrate",
+            whenHeld: "refuse",
+            leaseSeconds: 2,
+            logger: quiet,
+          },
+          () =>
+            small.transaction(async ctx => {
+              await ctx.queryStatement(
+                sql`SELECT 1 AS ${sql.identifier("one")}`
+              );
+              // Three leases inside one transaction, as a long migration file's would be.
+              await sleep(6_000);
+              return "ran";
+            })
+        )
+      ).resolves.toEqual({ ran: true, value: "ran" });
+    } finally {
+      await small.disconnect();
+    }
   }, 60_000);
 
   it("excludes db:sync while another process runs nextly migrate", async () => {

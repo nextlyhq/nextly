@@ -43,8 +43,11 @@ export interface LockWorld {
   readonly dialect: SupportedDialect;
   /** What a second process connects with: the server URL, or the SQLite file. */
   readonly url: string;
-  /** A new adapter on the same database, connected, its dialect's tables loaded. */
-  connect(): Promise<DrizzleAdapter>;
+  /**
+   * A new adapter on the same database, connected, its dialect's tables loaded; `poolMax` sizes a
+   * server's pool (SQLite has one connection whatever it is asked).
+   */
+  connect(options?: { poolMax?: number }): Promise<DrizzleAdapter>;
   /** Drop every lock table and anything with this world's prefix. */
   reset(adapter: DrizzleAdapter, tables?: readonly string[]): Promise<void>;
   /** Remove what the world made: the SQLite file, or a database made for it. */
@@ -79,11 +82,15 @@ export async function lockWorld(
   return {
     dialect,
     url,
-    async connect() {
+    async connect(connectOptions = {}) {
+      const pool =
+        connectOptions.poolMax === undefined
+          ? {}
+          : { pool: { max: connectOptions.poolMax } };
       const adapter = (dialect === "postgresql"
-        ? createPostgresAdapter({ url })
+        ? createPostgresAdapter({ url, ...pool })
         : dialect === "mysql"
-          ? createMySqlAdapter({ url })
+          ? createMySqlAdapter({ url, ...pool })
           : createSqliteAdapter({
               url: `file:${url}`,
             })) as unknown as DrizzleAdapter;

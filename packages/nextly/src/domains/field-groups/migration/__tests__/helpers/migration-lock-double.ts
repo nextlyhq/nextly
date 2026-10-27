@@ -191,6 +191,9 @@ const EARLIER = "nextly_migrate_lock";
 const SCHEMA_EXISTS = new RegExp(
   String.raw`^SELECT "id" FROM "${SCHEMA}" WHERE "id" = \$\d+$`
 );
+const SCHEMA_OWNER = new RegExp(
+  String.raw`^SELECT "owner" FROM "${SCHEMA}" WHERE "id" = \$\d+$`
+);
 const SCHEMA_SEED = new RegExp(
   String.raw`^INSERT INTO "${SCHEMA}" \("id"\) VALUES \(\$\d+\)$`
 );
@@ -222,6 +225,7 @@ const EARLIER_RELEASE = new RegExp(
 /** Every schema lock and earlier migrate lock statement, for classifying one. */
 const SCHEMA_STATEMENTS: readonly RegExp[] = [
   SCHEMA_EXISTS,
+  SCHEMA_OWNER,
   SCHEMA_SEED,
   SCHEMA_STATE,
   SCHEMA_CLAIM,
@@ -250,6 +254,7 @@ function interpretSchemaLockStatement(
     owner !== null && expiresAt !== null && expiresAt > now;
   let m: RegExpExecArray | null;
   if (SCHEMA_EXISTS.test(flat)) return row.seeded ? [{ id: 1 }] : [];
+  if (SCHEMA_OWNER.test(flat)) return row.seeded ? [{ owner: row.owner }] : [];
   if (SCHEMA_SEED.test(flat)) {
     row.seeded = true;
     return [];
