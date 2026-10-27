@@ -153,6 +153,70 @@ describe("withMigrateLock (mysql named lock)", () => {
   });
 });
 
+describe("withMigrateLock (mysql, while an older version holds the old name)", () => {
+  /**
+   * Both names share one wait. A `GET_LOCK` that used most of the budget must
+   * leave the old name's check only what is left, not a fresh budget, or a
+   * caller's maximum wait could nearly double.
+   */
+  /** A MySQL whose own lock is free, and granted only after `getLockMs`, while an older version holds the old name. */
+  function legacyHeld(getLockMs = 0) {
+    return {
+      execute: vi.fn(async (q: unknown) => {
+        const text = JSON.stringify(q);
+        if (text.includes("GET_LOCK")) {
+          if (getLockMs)
+            await new Promise(resolve => setTimeout(resolve, getLockMs));
+          return { rows: [{ locked: 1 }] };
+        }
+        if (text.includes("IS_USED_LOCK")) return { rows: [{ holder: 7 }] };
+        return { rows: [] };
+      }),
+    };
+  }
+
+  it("spends one wait across the per-database lock and the old name", async () => {
+    // A clock of its own, so a slow host cannot fail it: GET_LOCK takes 1.2 s
+    // of the 1 s budget, so the old name's check has nothing left and the call
+    // settles at once. A fresh budget for the old name would keep it waiting.
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const outcome = withMigrateLock(
+        legacyHeld(1200),
+        "mysql",
+        async () => "x",
+        { mode: "wait", maxWaitMs: 1_000 }
+      );
+      void outcome.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_300);
+      expect(settled).toBe(true);
+      await expect(outcome).resolves.toEqual({
+        ran: false,
+        reason: "lock-held",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the lock it met is the old server-wide one, not this database's", async () => {
+    await expect(
+      withMigrateLock(legacyHeld(), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATE_LOCK_BUSY",
+      publicMessage: expect.stringContaining("server-wide"),
+    });
+    await expect(
+      withMigrateLock(legacyHeld(), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("on this database"),
+    });
+  });
+});
+
 describe("withMigrateLock (postgres lock row)", () => {
   it("acquires (row returned), runs fn, releases", async () => {
     const db = fakeDb({ acquireRows: [1] });

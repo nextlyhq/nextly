@@ -30,7 +30,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { WidgetLayoutService } from "../../../services/widgets/widget-layout-service";
-import type { WidgetPlacement } from "../layout";
+import { MAX_PLACEMENTS, type WidgetPlacement } from "../layout";
 
 const silent = {
   debug: () => {},
@@ -43,6 +43,9 @@ const silent = {
 const POSTS = "cv_blog_posts";
 /** No rule: only the super admin may read it. */
 const SECRET = "cv_secret";
+/** Two collections whose slugs spell one generated id, so neither gets generated cards. */
+const TWIN_UNDERSCORE = "cv_twin";
+const TWIN_HYPHEN = "cv-twin";
 
 interface LayoutRead {
   placements: WidgetPlacement[];
@@ -142,9 +145,20 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: POSTS,
             access: { read: () => true },
+            // A lifecycle, so core generates the posts' breakdown card, and a
+            // saved one converts.
+            status: true,
             fields: [text({ name: "title" })],
           }),
           defineCollection({ slug: SECRET, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: TWIN_UNDERSCORE,
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: TWIN_HYPHEN,
+            fields: [text({ name: "title" })],
+          }),
         ],
       });
       // The first account of an instance is its super admin.
@@ -167,14 +181,14 @@ describe.each(getConfiguredTestDialects())(
         placement => placement.widgetId !== "core/team"
       );
       // The count and health cards are one Count card set to the real slug,
-      // at the first one's place and the widest width Count allows; the
-      // deleted collection's card is kept, set to none.
+      // at the first one's place and the widest width Count allows. The
+      // deleted collection's card is core's no longer -- nothing generates
+      // its id -- so it is not converted, and not shown.
       expect(mine).toEqual([
         card("count", "core/count", {
           width: "half",
           config: { collection: POSTS },
         }),
-        card("gone", "core/count"),
       ]);
       // 🔴 The collection this reader may not read is named nowhere: not as a
       // card, not as a setting.
@@ -187,7 +201,7 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(res.status).toBe(200);
       // The save stores what the reader holds, converted, and carries the
-      // card they were never shown back in, in its place and as it was.
+      // cards they were never shown back in, in their places and as they were.
       const stored = await service().getLayout("user", editor);
       expect(
         stored.layout?.placements.filter(
@@ -199,8 +213,30 @@ describe.each(getConfiguredTestDialects())(
           config: { collection: POSTS },
         }),
         card("secret", "collection/cv-secret-count"),
-        card("gone", "core/count"),
+        card("gone", "collection/cv-gone-count"),
       ]);
+    });
+
+    it("shows a Count card set to either of two readable collections whose slugs collide", async () => {
+      // 🔴 Judged by the reader's verdict on each collection, not read off the
+      // generated cards, which the collision drops for both: read that way,
+      // a card set to either was withheld as one they may not read.
+      const reader = await account("cv-twins@example.com");
+      await grantTo(handle, reader, "read", [TWIN_UNDERSCORE, TWIN_HYPHEN]);
+      const own = [
+        card("under", "core/count", {
+          config: { collection: TWIN_UNDERSCORE },
+        }),
+        card("hyphen", "core/count", { config: { collection: TWIN_HYPHEN } }),
+      ];
+      await service().saveLayout("user", reader, own, 0);
+      const seen = await read(reader);
+      expect(seen.placements).toEqual(own);
+      // The must-differ half: a reader who may read only one is shown only it.
+      const half = await account("cv-one-twin@example.com");
+      await grantTo(handle, half, "read", [TWIN_UNDERSCORE]);
+      await service().saveLayout("user", half, own, 0);
+      expect((await read(half)).placements).toEqual([own[0]]);
     });
 
     it("withholds a Count card set to a collection the reader may not read, and keeps it in the row", async () => {
@@ -307,6 +343,87 @@ describe.each(getConfiguredTestDialects())(
           placement => placement.id === "guess"
         )
       ).toBe(false);
+    });
+
+    it("turns saved list, table, timeline and breakdown cards into exactly the cards a reader adds today", async () => {
+      // 🔴 The converted card is the added card: drawn from the same settings
+      // by the same path. One that kept anything of the old card's beyond its
+      // collection would draw differently, and would be a second card to
+      // maintain.
+      const converter = await account("cv-converter@example.com");
+      await grantTo(handle, converter, "read", [POSTS]);
+      await service().saveLayout(
+        "user",
+        converter,
+        [
+          card("list", "collection/cv-blog-posts-recent", { width: "half" }),
+          card("table", "collection/cv-blog-posts-table", { width: "full" }),
+          card("chart", "collection/cv-blog-posts-timeline", {
+            width: "full",
+          }),
+          card("split", "collection/cv-blog-posts-breakdown", {
+            width: "half",
+          }),
+        ],
+        0
+      );
+      const converted = (await read(converter)).placements;
+      // A list and a table of one collection are one Recent entries card.
+      expect(converted.map(placement => placement.widgetId)).toEqual([
+        "core/recent-entries",
+        "core/over-time",
+        "core/breakdown",
+      ]);
+
+      // Another reader holds the same cards as added today, at the same
+      // places and widths: set to the collection, a breakdown by status. The first
+      // is in their row already; the other two they add through a save.
+      const added = converted.map(placement => ({
+        ...placement,
+        config:
+          placement.widgetId === "core/breakdown"
+            ? { collection: POSTS, groupBy: "status" }
+            : { collection: POSTS },
+      }));
+      const adder = await account("cv-adder@example.com");
+      await grantTo(handle, adder, "read", [POSTS]);
+      await service().saveLayout("user", adder, added.slice(0, 1), 0);
+      const before = await read(adder);
+      expect(before.placements).toEqual(added.slice(0, 1));
+      const res = await call(adder, "PUT", {
+        placements: [...before.placements, ...added.slice(1)],
+        version: before.version,
+        scope: before.scope,
+      });
+      expect(res.status).toBe(200);
+      expect((await read(adder)).placements).toEqual(converted);
+    });
+
+    it("lets a reader add a card whatever number of unconverted cards their row carries out of view", async () => {
+      // 🔴 Kept and hidden, an unconverted card must never cost the reader an
+      // add: the payload limit counts what they submit, and the row's own
+      // ceiling drops carried cards rather than refusing, so neither answer
+      // depends on cards they cannot see.
+      const reader = await account("cv-hoarder@example.com");
+      await grantTo(handle, reader, "read", [POSTS]);
+      const hidden = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
+        card(`gone${i}`, `collection/cv-gone-${i}-count`)
+      );
+      await service().saveLayout("user", reader, hidden, 0);
+      const seen = await read(reader);
+      expect(seen.placements).toEqual([]);
+
+      const added = card("posts", "core/count", {
+        config: { collection: POSTS },
+      });
+      const res = await call(reader, "PUT", {
+        placements: [added],
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual([...hidden, added]);
     });
 
     it("converts the same card for a reader who may read its collection", async () => {

@@ -136,6 +136,7 @@ import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -1835,6 +1836,7 @@ const NO_WIDGETS: WidgetAudience = {
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
   registeredCollections: undefined,
+  readableCollections: new Set(),
 };
 
 /**
@@ -1905,6 +1907,7 @@ function emptyForAudience<
 function widgetsForAudience(
   plugin: PluginAdminMeta,
   audience: WidgetAudience,
+  readable: ReadonlySet<string>,
   shipped: Set<string>
 ): PluginAdminMeta {
   if (plugin.widgets === undefined) return plugin;
@@ -1913,7 +1916,9 @@ function widgetsForAudience(
   for (const widget of widgets) {
     if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
     shipped.add(widget.id);
-    visible.push(actionsForAudience(widget, audience));
+    visible.push(
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   }
   return visible.length > 0 ? { ...rest, widgets: visible } : rest;
 }
@@ -2028,10 +2033,14 @@ async function buildAdminMeta(
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
   const shipped = new Set<string>();
+  // The collections this reader may read, as the layout judges them: a widget
+  // declaration below ships its Collection setting's default only when it
+  // names one of them (`collectionDefaultForReader`).
+  const readable = audience.readableCollections;
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience, shipped));
+  ).map(plugin => widgetsForAudience(plugin, audience, readable, shipped));
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -2084,7 +2093,12 @@ async function buildAdminMeta(
   const widgets = [
     ...publishableWidgets()
       .filter(widget => audience.declared.has(widget.id))
-      .map(widget => actionsForAudience(widget, audience)),
+      .map(widget =>
+        collectionDefaultForReader(
+          actionsForAudience(widget, audience),
+          readable
+        )
+      ),
     ...audience.generated,
   ];
   if (widgets.length > 0) {
@@ -2092,7 +2106,7 @@ async function buildAdminMeta(
   }
   // What a card's content settings may offer this reader, derived from the
   // cards above: a collection is offered exactly when its own card is.
-  const widgetSources = publishableContentSources(audience.visible);
+  const widgetSources = publishableContentSources(audience.readableCollections);
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }
