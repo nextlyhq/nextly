@@ -571,6 +571,11 @@ function WidgetCardFooter({
       className={cn(
         // A gap and a link's line, 28 px, as `cardBodyHeightPx` counts it.
         "flex h-7 shrink-0 items-center justify-end gap-3 border-0 bg-transparent p-0",
+        // Clicks pass through the footer's own room to what is drawn under it: in a short card
+        // the body's empty state, with its one action, runs into this room, and an empty footer
+        // laid over it took the click. Only what the footer holds, its link and anything a body
+        // draws into it, takes clicks.
+        "pointer-events-none",
         FRAME_FOOTER_GAP.className,
         // Out of reach in customise mode, and dimmed with the body so it does not look usable.
         inert && "opacity-55"
@@ -579,10 +584,13 @@ function WidgetCardFooter({
       <div
         ref={slotRef}
         data-testid="widget-card-footer-slot"
-        className="contents"
+        className="pointer-events-auto contents"
       />
       {link !== undefined && (
-        <Link href={link.href} className={CARD_FOOTER_LINK_CLASS}>
+        <Link
+          href={link.href}
+          className={cn(CARD_FOOTER_LINK_CLASS, "pointer-events-auto")}
+        >
           {link.label}
         </Link>
       )}
