@@ -43,6 +43,7 @@ import {
 import {
   copyableMediaUrl,
   formatFileSize,
+  mediaImageSrc,
   parseMediaSizes,
 } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
@@ -257,7 +258,7 @@ export function MediaEditDialog({
               {isImage && (
                 <div className="w-full sm:w-[340px] flex-shrink-0">
                   <MediaFocalPoint
-                    src={media.url}
+                    src={mediaImageSrc(media, { purpose: "preview" })}
                     alt={media.altText || media.originalFilename}
                     focalX={media.focalX}
                     focalY={media.focalY}

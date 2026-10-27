@@ -95,14 +95,21 @@ export function parseMediaSizes(
   }
 }
 
-/** What `wholeImageSrc` reads from an item. */
-export interface WholeImageSource {
+/** What `mediaImageSrc` reads from an item. */
+export interface MediaImageSource {
   url: string;
   thumbnailUrl?: string | null;
   width?: number | null;
   height?: number | null;
   sizes?: Record<string, ImageSizeVariant> | string | null;
 }
+
+/**
+ * What an image is drawn for: a `tile`, one of a page of many, or a
+ * `preview`, one image on its own (the details panel, the viewer, the edit
+ * dialog).
+ */
+export type MediaImagePurpose = "tile" | "preview";
 
 /**
  * Whether a stored size shows the whole image: its sides keep the image's
@@ -124,35 +131,39 @@ function showsWholeImage(
   );
 }
 
-/**
- * Where to draw an item's whole image from, for a tile: the smallest stored
- * copy that still shows the whole picture, so a page of tiles doesn't
- * download every original.
- *
- * 1. The smallest stored size whose proportions are the image's.
- * 2. Otherwise the thumbnail, but only for a square image: the thumbnail is
- *    a square cut from the middle, which is the whole picture only then.
- * 3. Otherwise the file itself. Unknown dimensions land here too: a crop
- *    shown as the whole image is the mistake this exists to prevent, and a
- *    larger download is the safe side.
- *
- * The one place a tile's image is chosen, so fitted thumbnails, when they
- * exist, change this function and nothing else.
- */
-export function wholeImageSrc(media: WholeImageSource): string {
+/** The smallest stored size that shows the whole image, if there is one. */
+function smallestWholeImageSize(media: MediaImageSource): string | null {
   const { width, height } = media;
   if (
     !(typeof width === "number" && width > 0) ||
     !(typeof height === "number" && height > 0)
   ) {
-    return media.url;
+    return null;
   }
   const fitted = Object.values(parseMediaSizes(media.sizes) ?? {})
     .filter(variant => showsWholeImage(variant, width, height))
     .sort((a, b) => a.width * a.height - b.width * b.height)[0];
-  if (fitted) return fitted.url;
-  if (width === height && media.thumbnailUrl) return media.thumbnailUrl;
-  return media.url;
+  return fitted?.url ?? null;
+}
+
+/**
+ * Where to draw an item's image from, for what it is drawn for. The one place
+ * the choice is made, so fitted thumbnails, when they exist, change this
+ * function and nothing else.
+ *
+ * - A preview shows one image, whole and sharp: the original file.
+ * - A tile is one of a page of many, so it takes the lightest copy that will
+ *   do: the smallest stored size that shows the whole image; otherwise the
+ *   stored thumbnail, a square cut from the middle, which crops anything that
+ *   isn't square but keeps the page light; and the original only when there
+ *   is no thumbnail either.
+ */
+export function mediaImageSrc(
+  media: MediaImageSource,
+  { purpose }: { purpose: MediaImagePurpose }
+): string {
+  if (purpose === "preview") return media.url;
+  return smallestWholeImageSize(media) ?? media.thumbnailUrl ?? media.url;
 }
 
 /**

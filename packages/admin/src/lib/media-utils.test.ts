@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ImageSizeVariant } from "@admin/types/media";
 
-import { copyableMediaUrl, wholeImageSrc } from "./media-utils";
+import { copyableMediaUrl, mediaImageSrc } from "./media-utils";
 
 describe("copyableMediaUrl", () => {
   // Local storage serves a path, which a page resolves on its own host but an
@@ -54,45 +54,65 @@ function wide(sizes: Record<string, ImageSizeVariant> | null) {
   };
 }
 
-describe("wholeImageSrc", () => {
-  it("prefers the smallest size fitted inside the image over the original", () => {
+describe("mediaImageSrc for a tile", () => {
+  const tile = { purpose: "tile" } as const;
+
+  it("takes the smallest size that shows the whole image", () => {
     expect(
-      wholeImageSrc(
+      mediaImageSrc(
         wide({
           large: variant("large", 1024, 427),
           small: variant("small", 480, 200),
-        })
+        }),
+        tile
       )
     ).toBe("/uploads/small.jpg");
   });
 
-  it("never picks a cropped size, however small", () => {
+  it("never picks a size cropped to other proportions", () => {
     expect(
-      wholeImageSrc(
+      mediaImageSrc(
         wide({
           // A square cut from a wide photo: smaller, and missing its sides.
           card: variant("card", 300, 300),
           medium: variant("medium", 768, 320),
-        })
+        }),
+        tile
       )
     ).toBe("/uploads/medium.jpg");
   });
 
-  it("falls back to the original when no stored size shows the whole image", () => {
-    expect(wholeImageSrc(wide({ card: variant("card", 300, 300) }))).toBe(
+  it("takes the thumbnail, centre crop and all, when no size shows the whole image", () => {
+    // No sizes at all is what an install starts with: the original would
+    // make every tile of a page download a full photo.
+    expect(mediaImageSrc(wide(null), tile)).toBe("/uploads/thumb.jpg");
+    expect(mediaImageSrc(wide({ card: variant("card", 300, 300) }), tile)).toBe(
+      "/uploads/thumb.jpg"
+    );
+  });
+
+  it("takes the original only when there is no thumbnail either", () => {
+    expect(mediaImageSrc({ ...wide(null), thumbnailUrl: null }, tile)).toBe(
       "/uploads/original.jpg"
     );
-    expect(wholeImageSrc(wide(null))).toBe("/uploads/original.jpg");
   });
 
   it("reads sizes an adapter returned as a JSON string", () => {
     const sizes = JSON.stringify({ small: variant("small", 480, 200) });
-    expect(wholeImageSrc({ ...wide(null), sizes })).toBe("/uploads/small.jpg");
-  });
-
-  it("uses the square thumbnail for a square image with no smaller fitted size", () => {
-    expect(wholeImageSrc({ ...wide(null), width: 1200, height: 1200 })).toBe(
-      "/uploads/thumb.jpg"
+    expect(mediaImageSrc({ ...wide(null), sizes }, tile)).toBe(
+      "/uploads/small.jpg"
     );
+  });
+});
+
+describe("mediaImageSrc for a preview", () => {
+  it("takes the original, whatever smaller sizes exist", () => {
+    // The panel and the viewer show one image at a time, and must show it
+    // whole and sharp.
+    expect(
+      mediaImageSrc(wide({ small: variant("small", 480, 200) }), {
+        purpose: "preview",
+      })
+    ).toBe("/uploads/original.jpg");
   });
 });

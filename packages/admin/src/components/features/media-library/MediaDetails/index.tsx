@@ -26,6 +26,7 @@ import {
   formatFileSize,
   formatUploadedDate,
   getMediaType,
+  mediaImageSrc,
 } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
@@ -119,7 +120,7 @@ export function MediaPreview({
       <MediaFocalPoint
         // The original, not the thumbnail: the stored thumbnail is a square
         // crop, and a point placed on a crop lands somewhere else on the image.
-        src={media.url}
+        src={mediaImageSrc(media, { purpose: "preview" })}
         alt={media.altText || media.originalFilename}
         focalX={media.focalX}
         focalY={media.focalY}

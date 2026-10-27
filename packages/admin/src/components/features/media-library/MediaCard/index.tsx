@@ -4,7 +4,8 @@
  * MediaCard Component
  *
  * One tile in the media grid, shared by the library and the media picker: a
- * square of neutral backdrop with the whole image fitted inside it, the name
+ * square of neutral backdrop with the image fitted inside it (from the
+ * lightest stored copy, chosen by `mediaImageSrc`), the name
  * and the file's facts underneath, a "No alt text" mark on an image that has
  * none, and a checkbox for bulk actions when the grid offers selection.
  *
@@ -30,7 +31,7 @@ import {
 import {
   formatFileSize,
   getMediaType,
-  wholeImageSrc,
+  mediaImageSrc,
 } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { MediaCardProps } from "@admin/types/ui/media-card";
@@ -123,8 +124,10 @@ export function MediaCard({
         className
       )}
     >
-      {/* The thumbnail: a square of neutral backdrop with the whole image
-          fitted inside it, so a wide or tall picture keeps its edges. The
+      {/* The thumbnail: a square of neutral backdrop with the image fitted
+          inside it, so a whole-image size keeps a wide or tall picture's
+          edges; the stored square thumbnail, used when there is none, is
+          already a centre crop. The
           focus ring and the open tile's ring sit on this square, which is
           what a person reads as the tile. */}
       <div
@@ -140,7 +143,7 @@ export function MediaCard({
       >
         {!imageError && media.url && isImage ? (
           <img
-            src={wholeImageSrc(media)}
+            src={mediaImageSrc(media, { purpose: "tile" })}
             alt={media.altText || name}
             loading="lazy"
             decoding="async"

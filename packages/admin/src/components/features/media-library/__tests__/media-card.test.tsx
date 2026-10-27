@@ -1,10 +1,10 @@
 /**
- * A library tile shows the whole image.
+ * A library tile: the image fitted inside a neutral backdrop, drawn from the
+ * smallest stored copy that shows the whole picture, and marked when an image
+ * has no alt text.
  *
- * The stored thumbnail is a square cut from the middle of the image, so a tile
- * drawn from it showed a crop of anything that isn't square, however the tile
- * fitted it. A tile now draws the image whole, fitted inside a neutral
- * backdrop, and marks an image that has no alt text.
+ * Which copy is chosen is pinned in `lib/media-utils.test.ts`; these check the
+ * tile draws what that choice gives, fitted rather than filled.
  */
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -33,17 +33,33 @@ function media(overrides: Partial<Media> = {}): Media {
 }
 
 describe("a library tile", () => {
-  it("draws a wide image whole, from the image rather than its square thumbnail", () => {
-    render(<MediaCard media={media()} />);
+  it("draws a wide image from its smallest whole-image size, fitted inside the square", () => {
+    render(
+      <MediaCard
+        media={media({
+          sizes: {
+            small: {
+              url: "/uploads/coast-480.jpg",
+              path: "coast-480.jpg",
+              width: 480,
+              height: 200,
+              filesize: 900,
+              mimeType: "image/jpeg",
+              filename: "coast-480.jpg",
+            },
+          },
+        })}
+      />
+    );
     const image = screen.getByRole("img", { name: "Coastline at dusk" });
 
-    expect(image).toHaveAttribute("src", "/uploads/coast.jpg");
+    expect(image).toHaveAttribute("src", "/uploads/coast-480.jpg");
     // Fitted, not filled: the whole picture inside the tile's square.
     expect(image).toHaveClass("object-contain", "h-full", "w-full");
   });
 
-  it("uses the thumbnail for a square image, which the thumbnail shows whole", () => {
-    render(<MediaCard media={media({ width: 1200, height: 1200 })} />);
+  it("draws the light thumbnail rather than the original when no whole-image size exists", () => {
+    render(<MediaCard media={media()} />);
     expect(
       screen.getByRole("img", { name: "Coastline at dusk" })
     ).toHaveAttribute("src", "/uploads/thumb_coast.jpg");

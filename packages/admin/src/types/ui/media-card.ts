@@ -11,14 +11,15 @@ import type { Media } from "../media";
 /**
  * MediaCard component props
  *
- * One tile of the media grid: the whole image fitted inside a square of
- * neutral backdrop, with the name and the file's facts underneath.
+ * One tile of the media grid: the image fitted inside a square of neutral
+ * backdrop, from the lightest stored copy `mediaImageSrc` chooses, with the
+ * name and the file's facts underneath.
  *
  * ```
  * ┌─────────────────┐
  * │ [□]             │  ← Checkbox, when the grid offers selection
- * │     image,      │  ← Fitted whole (object-contain), never cropped
- * │     whole       │
+ * │     image,      │  ← Fitted (object-contain), not filled
+ * │     fitted      │
  * │ [No alt text]   │  ← On an image with no alt text
  * └─────────────────┘
  *   filename.jpg
