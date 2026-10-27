@@ -28,6 +28,16 @@ export const PUBLIC_ROLE_SLUG = "public";
 export const PUBLIC_ROLE_META_KEY = "public-role-created";
 
 /**
+ * Whether a role may be given to a person or a key, or joined to another
+ * role's inheritance: every role but the Public role, which
+ * {@link refuseLinkingPublicRole} refuses for each. Sent with each role so a
+ * screen offering roles to pick from leaves out the one it would be refused.
+ */
+export function isAssignableRole(role: { slug: string }): boolean {
+  return role.slug !== PUBLIC_ROLE_SLUG;
+}
+
+/**
  * Refuses, as a built-in role's refusal, a change that would give the Public
  * role to someone (`assign`) or join it to inheritance (`inherit`), when any
  * of `roleIds` is the Public role. Read on `db`, by the dialect it reads.

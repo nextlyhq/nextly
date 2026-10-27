@@ -1,6 +1,7 @@
 import React from "react";
 
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
+import { PluginPageHold } from "@admin/components/shared/plugin-page-hold";
 import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
@@ -9,7 +10,11 @@ import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { routedDocumentView } from "./plugins/document-view-registry";
-import { matchPluginPage } from "./plugins/plugin-route-registry";
+import {
+  arePluginPagesKnown,
+  isPluginPageAddress,
+  matchPluginPage,
+} from "./plugins/plugin-route-registry";
 import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
@@ -158,7 +163,7 @@ function matchDynamicRoute(pathname: string): {
  */
 const SLUG_ROUTE_ACCESS: Record<
   string,
-  { action: "read" | "create" | "update"; subject: AccessSubject }
+  { action: EntityAccess["action"]; subject: AccessSubject }
 > = {
   [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
@@ -169,13 +174,28 @@ const SLUG_ROUTE_ACCESS: Record<
   // it asks.
   [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
-  // Reading a document's history is a read of that document, and restoring
+  // A document's history is read in every language, as the server judges
+  // it, so a user who may read only some is not offered the page. Restoring
   // from it goes through the ordinary update path with its own check.
-  [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
+  [ROUTES.COLLECTION_ENTRY_VERSIONS]: {
+    action: "readHistory",
+    subject: "collection",
+  },
   [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
-  [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VERSIONS]: { action: "readHistory", subject: "single" },
+};
+
+/**
+ * The permission a route's request names: its action, and `read` for the
+ * history, which reads the document.
+ */
+const PERMISSION_OF: Record<EntityAccess["action"], string> = {
+  read: "read",
+  create: "create",
+  update: "update",
+  readHistory: "read",
 };
 
 function getSlugRouteAccess(
@@ -194,7 +214,7 @@ function getSlugRouteAccess(
     : undefined;
   if (!access || !slug) return undefined;
   return {
-    requiredPermission: `${access.action}-${slug}`,
+    requiredPermission: `${PERMISSION_OF[access.action]}-${slug}`,
     accessSubject: access.subject,
     entityAccess: { slug, action: access.action },
   };
@@ -264,6 +284,21 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: pluginPage.requiredPermission,
       pluginComponentPath: pluginPage.component,
       section: pluginPage.section ?? "plugins",
+    };
+  }
+
+  // A plugin page's address before plugin pages are known: it may yet be one,
+  // so it is held rather than called missing. Before the dynamic routes, as a
+  // registered plugin page is: a page named like a core one (`settings`) must
+  // not draw the core screen while the registry is unknown. Private, as the page would be,
+  // so the session check and the permissions request start during the hold.
+  if (isPluginPageAddress(pathname) && !arePluginPagesKnown()) {
+    return {
+      Component: () => React.createElement(PluginPageHold),
+      params: {},
+      searchParams: parseSearchParams(rawSearch),
+      routeType: "private",
+      section: "plugins",
     };
   }
 

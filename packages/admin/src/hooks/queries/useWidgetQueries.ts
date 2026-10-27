@@ -36,6 +36,7 @@ import {
   isTimeseriesInterval,
   MAX_QUERIES_PER_REQUEST,
   WIDGET_SOURCE_FIELD_TYPES,
+  type ListDensity,
   type WidgetQuery,
 } from "nextly/config";
 import { useMemo } from "react";
@@ -52,6 +53,17 @@ import { fetchWidgetBatch, type CardAsk } from "./widget-query-stream";
 export type { CardAsk } from "./widget-query-stream";
 
 /** One card's request: the id to key the answer back to, and what to ask. */
+/**
+ * The size a card's query was sized for: its tier, its height in grid rows where it has one, and
+ * the density its list is drawn at. A list's rows are counted from the height at the density; a
+ * card with no height is counted from its tier.
+ */
+export interface SizedAt {
+  tier: SizeTier;
+  h?: number;
+  density?: ListDensity;
+}
+
 export interface WidgetQueryRequest {
   /**
    * Which PLACEMENT asked, not which widget.
@@ -101,16 +113,16 @@ export interface WidgetQueryRequest {
    */
   attempt?: number;
   /**
-   * The query as the card's tier asks it, and that tier: what is SENT, while `query` is what
+   * The query as the card's size asks it, and that size: what is SENT, while `query` is what
    * the cache is keyed by.
    *
    * 🔴 Kept out of the key on purpose. A card's tier follows the dashboard's width, and every
    * card of a dashboard travels in one partition, so a sized limit in the key would refetch the
-   * whole dashboard whenever any one card crossed a tier. Sent at fetch time instead, a resize
-   * refetches nothing, the next refresh asks every card at its current tier, and a card that
-   * now draws more than was fetched asks again alone (see `fetchedTierFor`).
+   * whole dashboard whenever any one card crossed a tier or changed height. Sent at fetch time
+   * instead, a resize refetches nothing, the next refresh asks every card at its current size,
+   * and a card that now draws more than was fetched asks again alone (see `fetchedSizeFor`).
    */
-  sized?: { query: WidgetQuery; tier: SizeTier };
+  sized?: SizedAt & { query: WidgetQuery };
   /**
    * The query as the card's SETTINGS ask it, when they change it: what is sent (sized for the
    * tier when `sized` is given, from this), while `query` -- the widget's declared question --
@@ -222,13 +234,13 @@ export interface UseWidgetQueriesResult {
    */
   updatedAt: Date | null;
   /**
-   * The tier a card's answer was fetched at, for a card whose request was sized; `undefined`
-   * before its first fetch in this mount, or for a request that carried no tier.
+   * The size a card's answer was fetched at, for a card whose request was sized; `undefined`
+   * before its first fetch in this mount, or for a request that carried no size.
    *
    * Part of this hook's contract: the batch sizes each card's query at fetch time and records
-   * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
+   * the size it sent here, so a card that now draws more than was fetched can ask again alone.
    */
-  fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  fetchedSizeFor: (placementId: string) => SizedAt | undefined;
   /**
    * What each placement's answer was asked with (see `appliedKey`), read from the answer, or
    * from a request that settled by failing; `undefined` while the first request is in flight.
@@ -403,11 +415,12 @@ function readSlot(value: Record<string, unknown>): WidgetSlot {
     ok?: unknown;
     error?: unknown;
     code?: unknown;
+    setting?: unknown;
     result?: unknown;
     empty?: unknown;
   };
 
-  if (slot.ok === false) return refusal(slot.error, slot.code);
+  if (slot.ok === false) return refusal(slot.error, slot.code, slot.setting);
   if (slot.ok !== true) return malformed();
 
   const result = asResult(slot.result);
@@ -752,7 +765,9 @@ function asResult(value: unknown): WidgetResult | undefined {
 
   if (result.op === "count") return asCount(result.total, result.atLeast);
 
-  if (result.op === "list") return asList(result.items, result.fields);
+  if (result.op === "list") {
+    return asList(result.items, result.fields, result.total, result.atLeast);
+  }
 
   if (result.op === "groupBy") {
     return asGrouped(
@@ -779,12 +794,28 @@ function asResult(value: unknown): WidgetResult | undefined {
  * fails there rather than here -- the same shape as a count's `total`, one
  * level down.
  */
-function asList(items: unknown, fields: unknown): WidgetResult | undefined {
+function asList(
+  items: unknown,
+  fields: unknown,
+  total: unknown,
+  atLeast: unknown
+): WidgetResult | undefined {
   if (!Array.isArray(items)) return undefined;
   const rows: unknown[] = items;
   if (!rows.every(isObject)) return undefined;
   const described = asResultFields(fields);
-  return { op: "list", items: rows, ...(described && { fields: described }) };
+  // The list's whole count travels with its rows, so a card's "View all (N)" names the number
+  // the server counted. Kept only as a count can be: a whole number of at least zero; anything
+  // else is left out, and the card falls back to saying more exist as a floor.
+  const counted =
+    typeof total === "number" && Number.isInteger(total) && total >= 0;
+  return {
+    op: "list",
+    items: rows,
+    ...(described && { fields: described }),
+    ...(counted && { total }),
+    ...(counted && atLeast === true && { atLeast: true }),
+  };
 }
 
 /**
@@ -843,17 +874,30 @@ function malformed(): WidgetSlot {
  * failure -- refusing to show it would be a second, silent one -- so it falls
  * back rather than being discarded.
  */
-function refusal(error: unknown, code?: unknown): WidgetSlot {
+function refusal(
+  error: unknown,
+  code?: unknown,
+  setting?: unknown
+): WidgetSlot {
   const usable = typeof error === "string" && error.trim() !== "";
-  return {
-    ok: false,
-    error: usable ? error : MALFORMED_SLOT_ERROR,
-    // The one code the server sends for a source that is not available, kept so the card can
-    // say "Not available to you" rather than offering Retry for something that will not change.
-    // Only on a well-formed refusal: a slot missing its message is a broken answer that may
-    // recover, and the code would hide that behind a state that removes Retry.
-    ...(usable && code === "unavailable" && { code: "unavailable" as const }),
-  };
+  if (!usable) return { ok: false, error: MALFORMED_SLOT_ERROR };
+  // The codes the server sends for a card that is not a failure, each kept so the card says so
+  // rather than offering Retry for something a retry will not change: a source not available to
+  // the reader, a setting the card needs and lacks (naming it), and a widget not shown for them.
+  // Only on a well-formed refusal: a slot missing its message is a broken answer that may
+  // recover, and a code would hide that behind a state that removes Retry. So is a needs-setting
+  // that names no setting, which is read as the failure it then is.
+  if (code === "unavailable" || code === "not-shown") {
+    return { ok: false, error, code };
+  }
+  if (
+    code === "needs-setting" &&
+    typeof setting === "string" &&
+    setting.trim() !== ""
+  ) {
+    return { ok: false, error, code, setting };
+  }
+  return { ok: false, error };
 }
 
 /** One partition's answer as the cache holds it, filled in slot by slot while it streams. */
@@ -869,7 +913,7 @@ interface PartitionAnswer {
   settled: boolean[];
   /** Whether the answer has ended. Until it has, a slot not yet arrived is on its way, not lost. */
   complete: boolean;
-  tiers: Record<string, SizeTier>;
+  sizes: Record<string, SizedAt>;
   applied: Record<string, string>;
   /** What each cells card's sent cells were asked with, by placement then cell key. */
   cellsApplied: Record<string, Record<string, string>>;
@@ -891,7 +935,7 @@ async function askPartition(
   queryKey: QueryKey,
   signal: AbortSignal
 ): Promise<PartitionAnswer> {
-  const tiers = tiersSent(partition);
+  const sizes = sizesSent(partition);
   const applied = appliedSent(partition);
   const cellsApplied = cellsAppliedSent(partition);
   const sent = partition.map(isSent);
@@ -933,7 +977,7 @@ async function askPartition(
         slots: [...slots],
         settled: [...settled],
         complete: false,
-        tiers: askedSoFar(held?.tiers, tiers),
+        sizes: askedSoFar(held?.sizes, sizes),
         applied: askedSoFar(held?.applied, applied),
         cellsApplied: cellsAskedSoFar(
           partition,
@@ -974,7 +1018,7 @@ async function askPartition(
     slots: answerAt,
     settled: partition.map(() => true),
     complete: true,
-    tiers,
+    sizes,
     applied,
     cellsApplied,
     sent,
@@ -1058,7 +1102,7 @@ export function useWidgetQueries(
   // The tier each placement's answer was fetched at, read from the cached answer itself: the
   // request that wrote it may belong to a render that has since left, and the answer a returning
   // card receives is that request's, at that request's tier.
-  const fetchedTiers: Record<string, SizeTier> = emptyRecord();
+  const fetchedSizes: Record<string, SizedAt> = emptyRecord();
   // What each answer was asked with, read from the cached answer for the same reason.
   const fetchedApplied: Record<string, string> = emptyRecord();
   const fetchedCellsApplied: Record<
@@ -1095,7 +1139,7 @@ export function useWidgetQueries(
             : asSlot(slot)
         );
       });
-      Object.assign(fetchedTiers, answer.data.tiers);
+      Object.assign(fetchedSizes, answer.data.sizes);
       Object.assign(fetchedApplied, answer.data.applied);
       mergeCellsApplied(fetchedCellsApplied, answer.data.cellsApplied);
       return;
@@ -1152,13 +1196,13 @@ export function useWidgetQueries(
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
 
-  // Stable while the tiers are, so a caller keyed on it does not run again on every render.
-  const tiersKey = JSON.stringify(fetchedTiers);
-  const fetchedTierFor = useMemo(() => {
-    const tiers = JSON.parse(tiersKey) as Record<string, SizeTier>;
-    return (placementId: string): SizeTier | undefined =>
-      Object.hasOwn(tiers, placementId) ? tiers[placementId] : undefined;
-  }, [tiersKey]);
+  // Stable while the sizes are, so a caller keyed on it does not run again on every render.
+  const sizesKey = JSON.stringify(fetchedSizes);
+  const fetchedSizeFor = useMemo(() => {
+    const sizes = JSON.parse(sizesKey) as Record<string, SizedAt>;
+    return (placementId: string): SizedAt | undefined =>
+      Object.hasOwn(sizes, placementId) ? sizes[placementId] : undefined;
+  }, [sizesKey]);
   const appliedKeyOfAll = JSON.stringify(fetchedApplied);
   const fetchedAppliedFor = useMemo(() => {
     const applied = JSON.parse(appliedKeyOfAll) as Record<string, string>;
@@ -1204,7 +1248,7 @@ export function useWidgetQueries(
       settledAt.length > 0 && settledAt.every(at => at > 0)
         ? new Date(Math.min(...settledAt))
         : null,
-    fetchedTierFor,
+    fetchedSizeFor,
     fetchedAppliedFor,
     fetchedCellsAppliedFor,
   };
@@ -1287,17 +1331,23 @@ function mergeCellsApplied(
 }
 
 /**
- * The tier each sized request in `partition` was sent at, by placement: cached with the answer,
- * so whoever reads the answer reads the tier it was asked for.
+ * The size each sized request in `partition` was sent at, by placement: cached with the answer,
+ * so whoever reads the answer reads the size it was asked for.
  */
-function tiersSent(
+function sizesSent(
   partition: readonly WidgetQueryRequest[]
-): Record<string, SizeTier> {
-  const tiers: Record<string, SizeTier> = emptyRecord();
+): Record<string, SizedAt> {
+  const sizes: Record<string, SizedAt> = emptyRecord();
   for (const entry of partition) {
-    if (entry.sized) tiers[entry.placementId] = entry.sized.tier;
+    if (!entry.sized) continue;
+    const { tier, h, density } = entry.sized;
+    sizes[entry.placementId] = {
+      tier,
+      ...(h === undefined ? {} : { h }),
+      ...(density === undefined ? {} : { density }),
+    };
   }
-  return tiers;
+  return sizes;
 }
 
 /**

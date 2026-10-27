@@ -22,7 +22,6 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
@@ -37,7 +36,9 @@ import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING } from "./draw-failures";
 import type { CardState } from "./frame/card-state";
+import { listDensityOf } from "./frame/list-rows";
 import type { SkeletonShape } from "./frame/states";
+import type { AnswerSize } from "./frame/tier";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -87,6 +88,9 @@ function skeletonFor(archetype: string): SkeletonShape {
   }
 }
 
+/** What a card its widget does not show for this person says, where customise mode shows it. */
+const NOT_SHOWN = "Not shown for you right now";
+
 /** Every outcome the frame draws itself, which is all but a plugin's own component. */
 type FramedOutcome = Exclude<
   WidgetOutcome,
@@ -110,8 +114,16 @@ function answeredState(isFetching: boolean): CardState {
 function cardForOutcome(
   outcome: FramedOutcome,
   live: { isFetching: boolean; onRetry?: (() => void) | undefined }
-): { state: CardState; body: ReactNode } {
+): { state: CardState; body: ReactNode; notShown?: true } {
   switch (outcome.state) {
+    case "not-shown":
+      // Drawn as an empty card the frame takes off the dashboard, as it takes a card hidden
+      // while empty, and marks in customise mode instead.
+      return {
+        state: { kind: "empty", empty: { title: NOT_SHOWN } },
+        body: null,
+        notShown: true,
+      };
     case "loading":
       // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
       return { state: { kind: "loading" }, body: null };
@@ -184,10 +196,10 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
-   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
-   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   * The size the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerSizeContext`.
    */
-  answerTier?: SizeTier;
+  answerSize?: AnswerSize;
   /**
    * Which CARD this render is, and what its reader configured.
    *
@@ -226,7 +238,7 @@ function sharedCardProps(
     | "quick"
     | "leading"
     | "customizing"
-    | "answerTier"
+    | "answerSize"
     | "subtitle"
   >
 ) {
@@ -236,8 +248,12 @@ function sharedCardProps(
     ...controls,
     hidesWhenEmpty: definition.hidesWhenEmpty === true,
     cardId: placement?.id ?? definition.id,
+    // The card's height, which its list rows are counted from.
+    ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    // The density the card's list rows, and the skeleton holding their place, are drawn at.
+    listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),
     // A stats card's labels; a custom card's cells draw no skeleton of their own.
     skeletonCells: definition.cells?.flatMap(cell =>
@@ -390,7 +406,7 @@ export function WidgetRenderer({
   customizing = false,
   onRetry,
   isFetching = false,
-  answerTier,
+  answerSize,
   subtitle,
 }: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, placement, {
@@ -398,7 +414,7 @@ export function WidgetRenderer({
     quick,
     leading,
     customizing,
-    answerTier,
+    answerSize,
     subtitle,
   });
 
@@ -444,7 +460,11 @@ export function WidgetRenderer({
 
   const drawn = cardForOutcome(outcome, { isFetching, onRetry });
   return (
-    <WidgetCard {...shared} state={drawn.state}>
+    <WidgetCard
+      {...shared}
+      state={drawn.state}
+      {...(drawn.notShown ? { notShown: true } : {})}
+    >
       {drawn.body}
     </WidgetCard>
   );

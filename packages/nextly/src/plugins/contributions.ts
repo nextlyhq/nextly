@@ -69,7 +69,10 @@ export interface PluginPermission {
  * grant). Reference permissions by their `${action}-${resource}` slug.
  */
 export interface PluginRole {
-  /** Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` is reserved. */
+  /**
+   * Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` and
+   * `'public'` are reserved for the built-in roles.
+   */
   slug: string;
   /** Human-readable name (e.g. `'Content Reviewer'`). */
   name: string;
@@ -678,6 +681,19 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   permissions?: PluginPermission[];
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */
   roles?: PluginRole[];
+  /**
+   * @experimental Permissions the Public role, the role every visitor is
+   * judged by, is granted on this plugin's own collections.
+   *
+   * Each is granted once, at the first boot that sees it, and recorded, so an
+   * owner who takes it away keeps it away. `collection` is the slug as this
+   * plugin declares it in `collections`; a host's rename is followed. A grant
+   * on a collection this plugin does not contribute is refused and logged.
+   *
+   * @example `[{ collection: "form-submissions", action: "create" }]`, so a
+   * visitor may submit a form.
+   */
+  publicGrants?: Array<{ collection: string; action: "read" | "create" }>;
   /**
    * @experimental Background job types this plugin can run.
    *

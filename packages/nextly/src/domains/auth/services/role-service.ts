@@ -94,9 +94,12 @@ export class RoleService extends BaseService {
     data: Array<{
       id: string;
       name: string;
+      slug: string;
       description: string | null;
       level: number;
       isSystem: boolean;
+      /** Whether it may be given to someone or inherited. */
+      assignable: boolean;
     }>;
     meta: {
       total: number;
@@ -123,6 +126,8 @@ export class RoleService extends BaseService {
     description: string | null;
     level: number;
     isSystem: boolean;
+    /** Whether it may be given to someone or inherited. */
+    assignable: boolean;
   }> {
     return this.queryService.getRoleById(roleId);
   }

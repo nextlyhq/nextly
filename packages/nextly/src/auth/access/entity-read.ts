@@ -16,9 +16,13 @@ import { scopeRowsAgree, slugGrants } from "../authenticated-scope";
 import { codeAccessAllows, type ReadAccessCaller } from "../code-access";
 
 import { holdsPermission, type Actor } from "./actor";
-import { decide, declaresRule, type AccessTarget } from "./decide";
+import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
+import {
+  answeredRead as answered,
+  decidedRead as decided,
+} from "./read-decision";
 import { actorForKey, actorForUserFailingClosed } from "./resolve-actor";
 
 /** The target as the access-control service registers it, or one with no rule. */
@@ -27,15 +31,6 @@ function targetOf(
   rbac: RBACAccessControlService | undefined
 ): AccessTarget {
   return rbac?.getRegisteredTarget(slug) ?? { kind: "collection", slug };
-}
-
-/**
- * The decision about reading `target`: the reader's answer, or the one a
- * deviation compares today's with. With the service, `target` is what it
- * registers now; without one, the rules the app declared stand in.
- */
-async function decided(actor: Actor, target: AccessTarget): Promise<boolean> {
-  return (await decide(actor, "read", target)).allowed;
 }
 
 /**
@@ -85,7 +80,7 @@ async function keyReads(
       decided(actor, target)
     );
   }
-  return decided(actor, target);
+  return answered(actor, target);
 }
 
 /** The entity reader's answer for a signed-in user. */
@@ -114,7 +109,7 @@ async function userReads(
       resource: slug,
     });
   }
-  return decided(await actor(), target);
+  return answered(await actor(), target);
 }
 
 /**

@@ -39,10 +39,6 @@ export const DEVIATIONS = [
   // A route that accepts any of several permissions asks no rule, for people
   // or keys, even where the target declares one.
   "any-of-skips-rules",
-  // A route asking one permission on a system resource, and the
-  // system-resource readers, do not count that resource's `manage-`
-  // permission as read, create, update or delete on it.
-  "manage-not-counted",
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
@@ -58,6 +54,10 @@ export const DEVIATIONS = [
   // The schema list shows a collection to whoever holds its read permission,
   // without reading the collection's read rule.
   "schema-list-ignores-rules",
+  // A collection's read rule that answers a well-formed filter is refused by
+  // a way in that does not apply the filter, where the decision allows the
+  // entries it matches.
+  "filter-not-applied",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];

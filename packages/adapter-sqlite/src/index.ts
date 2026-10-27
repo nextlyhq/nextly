@@ -47,6 +47,8 @@ import {
   type PoolStats,
   type TransactionContext,
   type TransactionOptions,
+  type SessionOptions,
+  type StatementSession,
   type SqlParam,
   type WhereClause,
   type WhereCondition,
@@ -544,21 +546,55 @@ export class SqliteAdapter extends DrizzleAdapter {
       // interleaved savepoints would release or roll back each other.
       return enqueueIn(parent, () => this.runSavepoint(work, parent));
     }
-    const run = async (): Promise<Committed<T>> => this.runTransaction(work);
-    const previous = this.transactionQueue;
-    // The one connection is this queue's to hand out, so its wait is the
-    // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
-    // the transaction fails as busy without having begun.
-    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
-    // The queue moves on once the transaction before this one AND this one
-    // are done. One that gave up waiting never ran, and the next must still
-    // wait for the one it gave up on, or it would begin inside it.
-    this.transactionQueue = previous.then(() => next).catch(() => undefined);
-    const { result, effects } = await next;
+    const { result, effects } = await this.takeTurn(() =>
+      this.runTransaction(work)
+    );
     // After the queue has moved on rather than inside it: an effect that opens
     // a transaction of its own would otherwise wait behind the one running it.
     await this.runHeldEffects(effects);
     return result;
+  }
+
+  /**
+   * Runs `work` outside a transaction, each statement committing as it runs,
+   * once no other flow's transaction is open on the one connection.
+   *
+   * @remarks
+   * Waits its turn in `transactionQueue` as a transaction does: a statement
+   * run while another flow's transaction is open would join it, and be undone
+   * if it rolled back. Transactions begun meanwhile wait behind the session in
+   * turn, so `work` must not open one of its own: it would wait behind the
+   * session that waits for it, until it fails as busy.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    // A precondition: before the session takes its turn.
+    this.refuseSessionInTransaction();
+    return this.takeTurn(() =>
+      work({
+        execute: <R = unknown>(statement: string, params?: SqlParam[]) =>
+          this.executeQuery<R>(statement, params),
+      })
+    );
+  }
+
+  /**
+   * Runs `run` once every turn queued before it in `transactionQueue` is
+   * done, and holds the queue until `run` is done too.
+   */
+  private takeTurn<R>(run: () => Promise<R>): Promise<R> {
+    const previous = this.transactionQueue;
+    // The one connection is this queue's to hand out, so its wait is the
+    // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
+    // the turn fails as busy without having begun.
+    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
+    // The queue moves on once the turn before this one AND this one are
+    // done. One that gave up waiting never ran, and the next must still wait
+    // for the one it gave up on, or it would begin inside it.
+    this.transactionQueue = previous.then(() => next).catch(() => undefined);
+    return next;
   }
 
   /**

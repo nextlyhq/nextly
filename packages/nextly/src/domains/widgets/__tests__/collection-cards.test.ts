@@ -128,6 +128,25 @@ describe("the Collection settings as scope-token inputs", () => {
   it("is the same for the same declaration", () => {
     expect(token({ ...pinnedSetting })).toEqual(token(pinnedSetting));
   });
+
+  it("changes with a Collection setting no query of its widget drives", () => {
+    // A registration replaced the widget's query with one the setting does not
+    // reach, so the setting withholds nothing; the settings sheet and the
+    // workspace payload still show it, so a change to it must move the token.
+    // As the canonical summary carries it: with the queries its knobs read.
+    const undriven = (setting: AnyWidgetSetting) => {
+      const widget = {
+        id: "acme/pinned",
+        collectionSetting: setting,
+        knobQueries: [{ source: "single:homepage", op: "count" }],
+      };
+      return collectionSettingsToken([widget]);
+    };
+    expect(undriven(pinnedSetting)).toHaveLength(1);
+    expect(undriven({ ...pinnedSetting, defaultValue: "posts" })).not.toEqual(
+      undriven(pinnedSetting)
+    );
+  });
 });
 
 describe("a declaration as a reader is told it", () => {

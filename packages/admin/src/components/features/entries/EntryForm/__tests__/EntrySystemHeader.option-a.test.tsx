@@ -22,6 +22,10 @@ import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
 import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: () => true,
+}));
 // The share popover reads the document's live links when it opens.
 vi.mock("@admin/services/previewLinkApi", () => ({
   previewLinkApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) },
