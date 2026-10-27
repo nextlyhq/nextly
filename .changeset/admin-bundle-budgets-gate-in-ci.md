@@ -28,6 +28,7 @@
 "create-nextly-app": patch
 "nextly": patch
 ---
+
 ---
 
-The shipped admin bundle is gated against the spec's two budgets on every CI run: the shipped total and every built-in route's direct-visit size, with each breach named by its measured size and its budget. The report behind the gate also derives route roots across the whole reachable graph, so every lazily loaded page is measured, and states what a direct visit to each route downloads.
+The admin's bundle size is now checked on every CI run, so a change that makes it noticeably bigger fails with the size it measured and the budget it broke. The total the package ships stays within 3,500 KB minified; the code every admin page shares stays within 280 KB gzipped; and each page is held to its own measured size plus 10%. A new page has to be measured and pinned when it is added (`pnpm --filter @nextlyhq/admin check:budgets --pin`). Lazily loaded pages now ship in chunks named after their place in the admin, so each can be told apart from build to build.
