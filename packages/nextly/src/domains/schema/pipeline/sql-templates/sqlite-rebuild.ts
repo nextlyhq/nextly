@@ -50,6 +50,8 @@
  * - A collation on any column (`COLLATE ...`). No snapshot records one, so
  *   the rebuilt table would compare and index that column by SQLite's default
  *   instead, with nothing to say so.
+ * - An index or UNIQUE constraint the target spec does not declare, which the
+ *   rebuild would not recreate (`untrackedIndexCount`).
  *
  * The same rebuild changes a column's nullability or default in a migration
  * file, which SQLite cannot do in place; the rebuilt column takes both from
@@ -228,6 +230,7 @@ export function sqliteTableRebuildStatements(
   const wouldDropTriggers = `rebuilding ${name} would drop the triggers on it`;
   const untracked = untrackedConstraintCounts(table, ops);
   const collations = untrackedCollationCount(table);
+  const indexes = untrackedIndexCount(table);
   return [
     // The guard: one row, checked on insert, before anything is dropped.
     `CREATE TABLE ${q(guard)} ("foreign_keys" INTEGER NOT NULL, ` +
@@ -235,16 +238,18 @@ export function sqliteTableRebuildStatements(
       `"untracked_foreign_keys" INTEGER NOT NULL, ` +
       `"untracked_checks" INTEGER NOT NULL, ` +
       `"untracked_collations" INTEGER NOT NULL, ` +
+      `"untracked_indexes" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "foreign keys"))} CHECK ("untracked_foreign_keys" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0), ` +
-      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0))`,
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks", "untracked_collations") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -266,7 +271,7 @@ export function sqliteTableRebuildStatements(
  */
 export function untrackedConstraintRefusal(
   table: string,
-  kind: "foreign keys" | "checks" | "triggers" | "collations"
+  kind: "foreign keys" | "checks" | "triggers" | "collations" | "indexes"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }
@@ -373,6 +378,39 @@ function untrackedCollationCount(table: TableSpec): string {
     `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'COLLATE', ''))) / 7 ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`
   );
+}
+
+/**
+ * A SQL expression counting the indexes and UNIQUE constraints the live table
+ * has that a rebuild from `table` would silently lose: the rebuild recreates
+ * only `table.indexes`, and an index added by a hand-written migration, which
+ * no snapshot records, would go with the old table — a unique one taking its
+ * uniqueness with it. Counted when the rebuild runs, after the statements
+ * before it, so an index the same file dropped or created is judged as it then
+ * stands.
+ *
+ * - Indexes made by CREATE INDEX (`sql IS NOT NULL`) whose name the target
+ *   does not declare, case-folded as SQLite resolves names.
+ * - UNIQUE in the stored CREATE statement, as a bare substring: Nextly never
+ *   writes a UNIQUE constraint into a table's own definition, so any one
+ *   there is untracked; the word elsewhere counts too, which refuses rather
+ *   than risks a false "none".
+ */
+function untrackedIndexCount(table: TableSpec): string {
+  const name = literalOf(table.name);
+  const declared = (table.indexes ?? []).map(index =>
+    literalOf(index.name.toLowerCase())
+  );
+  const created =
+    `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = ${name} AND sql IS NOT NULL` +
+    (declared.length > 0
+      ? ` AND lower(name) NOT IN (${declared.join(", ")})`
+      : "") +
+    ")";
+  const inline =
+    `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'UNIQUE', ''))) / 6 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`;
+  return `(${created} + ${inline})`;
 }
 
 /** Every table name an operation reads or writes. */

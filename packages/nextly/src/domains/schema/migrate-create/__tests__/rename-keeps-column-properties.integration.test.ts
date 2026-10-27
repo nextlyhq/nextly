@@ -414,6 +414,27 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose an index the schema does not track",
+        async () => {
+          // An index a hand-written migration added: the rebuild recreates only the snapshot's, and
+          // this one's uniqueness would go with the old table.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          await exec(
+            `CREATE UNIQUE INDEX "hand_unique_views" ON "dc_posts" ("views")`
+          );
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop indexes its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       it.skipIf(dialect !== "mysql")(
         "refuses to rewrite a MySQL check that names the renamed column inside a string",
         async () => {
