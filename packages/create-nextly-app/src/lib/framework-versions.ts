@@ -19,6 +19,7 @@ import {
 import type { PackageManager } from "../types";
 import {
   compareVersions,
+  highestMajorIn,
   lowestVersionIn,
   satisfiesRange,
 } from "../utils/version-range";
@@ -49,7 +50,13 @@ function declaredSpec(
   manifest: Record<string, unknown>,
   name: string
 ): string | undefined {
-  for (const field of DEPENDENCY_FIELDS) {
+  // npm lets an optionalDependencies entry override the same name in
+  // dependencies, so the install resolves that one: it is read first.
+  const fields = [
+    "optionalDependencies",
+    ...DEPENDENCY_FIELDS.filter(field => field !== "optionalDependencies"),
+  ];
+  for (const field of fields) {
     const deps = manifest[field];
     if (!deps || typeof deps !== "object") continue;
     const spec = (deps as Record<string, unknown>)[name];
@@ -59,13 +66,68 @@ function declaredSpec(
 }
 
 /**
+ * The version an app is headed for, the one judged against the range: the
+ * installed copy, unless the app's declaration points past it.
+ */
+function judgedVersion(
+  installed: string | undefined,
+  declared: string | undefined,
+  supported: string
+): string | undefined {
+  const lowestDeclared =
+    declared !== undefined ? lowestVersionIn(declared) : undefined;
+  const floor = lowestVersionIn(supported);
+  if (floor === undefined) return installed ?? lowestDeclared;
+  // A declaration whose lowest version is already past the supported major
+  // is judged even when the installed copy is in range: the next install
+  // reconciles to it, so the app is headed there. One that merely starts
+  // lower (`^16.0.0` beside an installed 16.4.2) is left to the installed copy.
+  if (
+    lowestDeclared !== undefined &&
+    compareVersions(lowestDeclared, floor) > 0 &&
+    !satisfiesRange(lowestDeclared, supported)
+  ) {
+    return lowestDeclared;
+  }
+  // With nothing installed, the install resolves the newest version the
+  // declaration admits, so a range open past the supported major
+  // (`>=16.4.1`, `^16.4.1 || ^17.0.0`) is headed for the next one.
+  const highest = declared !== undefined ? highestMajorIn(declared) : undefined;
+  if (
+    installed === undefined &&
+    highest !== undefined &&
+    highest > major(floor)
+  ) {
+    return `${major(floor) + 1}.0.0`;
+  }
+  return installed ?? lowestDeclared;
+}
+
+/**
+ * Too new only on a later major than the range covers; anything else outside
+ * it (below the floor, or a prerelease within the major) needs a supported
+ * release of the same major. A range without a floor leaves nothing to
+ * compare, and the version is then reported as too new.
+ */
+function directionOf(
+  judged: string,
+  supported: string
+): FrameworkVersionProblem["direction"] {
+  const floor = lowestVersionIn(supported);
+  return floor === undefined || major(judged) > major(floor)
+    ? "too-new"
+    : "too-old";
+}
+
+/**
  * Every supported framework package the app at `cwd` has outside its range.
  *
- * The version judged is the installed one, read from the `node_modules` Node
- * would load it from; with none installed, the lowest version the app's
- * package.json range admits, which is what an install could resolve to. A
- * package the app neither has installed nor declares in a form that names a
- * version (a dist-tag, `workspace:*`) is not judged.
+ * The version judged is the one the app is headed for (`judgedVersion`): the
+ * installed copy, read from the `node_modules` Node would load it from,
+ * unless the app's package.json declaration points past it; with none
+ * installed, what an install of that declaration could resolve to. A package
+ * the app neither has installed nor declares in a form that names a version
+ * (a dist-tag, `workspace:*`) is not judged.
  */
 export async function frameworkVersionProblems(
   cwd: string
@@ -78,30 +140,9 @@ export async function frameworkVersionProblems(
     const supported = SUPPORTED_RANGES[name];
     const installed = await installedVersion(cwd, name);
     const declared = declaredSpec(manifest, name);
-    const lowestDeclared =
-      declared !== undefined ? lowestVersionIn(declared) : undefined;
-    const floor = lowestVersionIn(supported);
-    // A declaration whose lowest version is already past the supported major
-    // is judged even when the installed copy is in range: the next install
-    // reconciles to it, so the app is headed there. One that merely starts
-    // lower (`^16.0.0` beside an installed 16.4.2) is left to the installed copy.
-    const declaredTooNew =
-      lowestDeclared !== undefined &&
-      floor !== undefined &&
-      compareVersions(lowestDeclared, floor) > 0 &&
-      !satisfiesRange(lowestDeclared, supported);
-    const judged = declaredTooNew
-      ? lowestDeclared
-      : (installed ?? lowestDeclared);
+    const judged = judgedVersion(installed, declared, supported);
     if (judged === undefined || satisfiesRange(judged, supported)) continue;
-    // Too new only on a later major than the range covers; anything else
-    // outside it (below the floor, or a prerelease within the major) needs a
-    // supported release of the same major. A range without a floor leaves
-    // nothing to compare, and the version is then reported as too new.
-    const direction =
-      floor === undefined || major(judged) > major(floor)
-        ? "too-new"
-        : "too-old";
+    const direction = directionOf(judged, supported);
     problems.push({ name, installed, declared, supported, judged, direction });
   }
   return problems;

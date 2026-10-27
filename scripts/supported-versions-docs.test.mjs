@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+// The ranges have one home, which create-nextly-app also holds an existing app to.
+import { SUPPORTED_RANGES } from "../packages/create-nextly-app/src/supported-versions.ts";
+
 /**
  * The Next.js and React versions Nextly supports are stated on one docs page,
  * and every other page, package README and agent skill links there. Two copies
@@ -17,10 +20,18 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The page that states the supported versions. */
 const CANONICAL = "docs/getting-started/installation.mdx";
-const NEXT_RANGE = "`^16.4.1`";
-const REACT_RANGE = "`^19.3.0`";
+// Read from the ranges themselves, so a release review that moves them moves
+// what this page is held to as well.
+const NEXT_RANGE = `\`${SUPPORTED_RANGES.next}\``;
+const REACT_RANGE = `\`${SUPPORTED_RANGES.react}\``;
+/** The version a range starts at: `^16.4.1` → `16.4.1`. */
+const versionOf = range => range.replace(/^[\^~]/, "");
 /** Any spelling of either range's version, so a restatement without backticks is caught too. */
-const RANGE_VERSION = /16\.4\.1|19\.3\.0/;
+const RANGE_VERSION = new RegExp(
+  [SUPPORTED_RANGES.next, SUPPORTED_RANGES.react]
+    .map(range => versionOf(range).replaceAll(".", "\\."))
+    .join("|")
+);
 
 /** Every file under `dir` (relative to the repository root) whose name passes `keep`. */
 function filesUnder(dir, keep) {
@@ -51,7 +62,9 @@ const packageReadmes = () =>
       }
     })
     .sort();
-const skillFiles = () => filesUnder(".agents/skills", isDoc);
+// The contributor skills, and the user skills create-nextly-app bundles into
+// every app it creates, which tell a coding agent what the app may run.
+const skillFiles = () => [...filesUnder(".agents/skills", isDoc), ...filesUnder("skills", isDoc)];
 
 const read = file => readFileSync(resolve(repoRoot, file), "utf8");
 
@@ -115,6 +128,7 @@ describe("supported Next.js and React versions", () => {
     const files = [...docsPages(), "README.md", ...packageReadmes(), ...skillFiles()];
     expect(files).toContain("packages/nextly/README.md");
     expect(files.some(file => file.startsWith(".agents/skills/"))).toBe(true);
+    expect(files).toContain("skills/nextly-install/SKILL.md");
     const found = files.flatMap(file =>
       oldMajorMentions(read(file)).map(line => `${file}: ${line.trim()}`)
     );
@@ -133,6 +147,15 @@ describe("supported Next.js and React versions", () => {
       expect(row).toContain("nextlyhq.com/docs/getting-started/installation#requirements");
       expect(row.split("|")[2]).not.toMatch(/\d/);
     }
+  });
+
+  // The install skill states the ranges for an agent working offline, so it
+  // names exactly the ones the CLI holds an app to, and moves with them.
+  it("has the bundled install skill state exactly the supported ranges", () => {
+    const skill = read("skills/nextly-install/SKILL.md");
+    expect(skill).toContain(`Next.js \`${SUPPORTED_RANGES.next}\``);
+    expect(skill).toContain(`React \`${SUPPORTED_RANGES.react}\``);
+    expect(skill).toContain("nextlyhq.com/docs/getting-started/installation#requirements");
   });
 
   it("recognises the ways a page names a dropped major", () => {
