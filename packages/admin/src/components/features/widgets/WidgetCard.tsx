@@ -210,6 +210,28 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
 }
 
 /**
+ * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
+ * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
+ * customising, so it can still be moved or removed.
+ */
+function hiddenFlags(
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  state: CardState,
+  customizing: boolean
+) {
+  const notShown = props.notShown === true;
+  const hidden =
+    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  return {
+    hiddenEmpty: hidden && !customizing,
+    markedHidden: hidden && customizing,
+    hiddenBecause: notShown
+      ? "Not shown for you right now"
+      : "Hidden while empty",
+  };
+}
+
+/**
  * What the frame derives from the state it shows, decided once so the markup below only reads it:
  * whether the grid should take the card out, whether customise mode marks it as hidden, whether
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
@@ -225,15 +247,9 @@ function frameFlags(
 ) {
   const { customizing } = modes;
   const refreshing = modes.refreshing || state.kind === "refreshing";
-  const notShown = props.notShown === true;
-  const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  const hidden = hiddenFlags(props, state, customizing);
   return {
-    hiddenEmpty: hidden && !customizing,
-    markedHidden: hidden && customizing,
-    hiddenBecause: notShown
-      ? "Not shown for you right now"
-      : "Hidden while empty",
+    ...hidden,
     // A quick control changes the question; before the first answer there is no question on
     // show to change, and in customise mode the card's menu stands there.
     quickInert: state.kind === "loading" || customizing,
