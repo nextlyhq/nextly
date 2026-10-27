@@ -48,7 +48,7 @@ vi.mock("../../di/container", () => ({
 import { userActor } from "../access/actor";
 import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
 import { routeVerdictFor, runWithAccessMemo } from "../access/request-memo";
-import { ruleLanguageKey } from "../access/rule-language";
+import { currentRuleLanguage } from "../access/rule-language";
 import { apiKeyScope } from "../authenticated-scope";
 import {
   authorizationScheduler,
@@ -334,7 +334,7 @@ describe("canReadEntity — a declared read rule that answers a filter", () => {
         userId: "u1",
         slug: "posts",
         action: "read",
-        language: ruleLanguageKey(),
+        language: currentRuleLanguage(),
       }),
     ]);
     expect(answer).toBe(true);

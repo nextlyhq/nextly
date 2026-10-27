@@ -20,7 +20,7 @@ import { readsEntity } from "./access/entity-read";
 import { rememberRouteVerdict } from "./access/request-memo";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
 import { readOf, type FilteredRead } from "./access/rule-answer";
-import { ruleLanguageKey } from "./access/rule-language";
+import { currentRuleLanguage } from "./access/rule-language";
 import { scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
@@ -134,7 +134,7 @@ export async function entityReadFor(
       userId: caller.userId,
       slug,
       action: "read",
-      language: ruleLanguageKey(),
+      language: currentRuleLanguage(),
     },
     { filter: read.filter }
   );
