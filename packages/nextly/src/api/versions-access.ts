@@ -68,7 +68,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -676,12 +675,7 @@ export async function redactSnapshotForUser(
   // field is declared. The same map takes the read rules into components.
   const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -857,8 +851,7 @@ export async function stripAutosavePasswords(
   stripPasswordsThroughComponents(
     snapshot,
     fields,
-    await autosaveComponentFields(fields, scopeKind, slug),
-    stripPasswordFieldValues
+    await autosaveComponentFields(fields, scopeKind, slug)
   );
 }
 

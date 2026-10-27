@@ -93,7 +93,7 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
-  hasPasswordField,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -104,6 +104,7 @@ import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -1150,9 +1151,18 @@ export class SingleQueryService extends BaseService {
       // the final redaction below is defense in depth. The server-only set
       // includes any column a schema hook contributed to this Single's table:
       // it is a real column, so the row read above carries it.
-      const singleHasPassword = hasPasswordField(singleMeta.fields);
+      // Through the field groups held inline in its containers, whose
+      // passwords sit in those containers' values.
+      const passwordReach = await passwordReachOf(
+        singleMeta.fields,
+        this.fieldGroupDataService
+      );
+      const singleHasPassword = reachesPasswordField(
+        singleMeta.fields,
+        passwordReach
+      );
       if (singleHasPassword) {
-        stripPasswordFieldValues(doc, singleMeta.fields);
+        stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
@@ -1184,7 +1194,7 @@ export class SingleQueryService extends BaseService {
       // point at which a password value or a server-only column could still be
       // put back.
       if (singleHasPassword) {
-        stripPasswordFieldValues(doc, singleMeta.fields);
+        stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
@@ -1973,7 +1983,16 @@ export class SingleQueryService extends BaseService {
             parentRow[name] = value;
           }
         }
-        applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
+        applyReadShape(
+          parentRow,
+          singleMeta.fields,
+          singleMeta.tableName,
+          await passwordReachOf(
+            singleMeta.fields,
+            this.fieldGroupDataService,
+            tx.getDrizzle()
+          )
+        );
         const { versionNo } = await captureInTx(tx, this.versionCapture, {
           lifecycle: hasLifecycle(singleMeta),
           ref: {

@@ -43,6 +43,7 @@ import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
@@ -175,6 +176,11 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),
+    // Always on, because its widgets are drawn by their own components, which
+    // the committed component map must hold; offered only from the add panel,
+    // named as test fixtures. Moves to the dev-only widget preview page once
+    // there is one.
+    widgetKitFixturePlugin,
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

@@ -112,12 +112,13 @@ export function sharedFieldNames(
 export type SharedViews = ReadonlyMap<string, (value: unknown) => unknown>;
 
 /**
- * A junction's ids, in one order: the view a junction-backed field is compared
- * through, since a junction keeps no order.
+ * A junction's ids, each once and in one order: the view a junction-backed
+ * field is compared through, since a junction keeps no order and links an id
+ * at most once, so a repeated id names no second link.
  */
 export function asIdSet(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
-  return value.map(id => String(id)).sort();
+  return [...new Set(value.map(id => String(id)))].sort();
 }
 
 /** The shared fields whose values differ between two copies of a document. */

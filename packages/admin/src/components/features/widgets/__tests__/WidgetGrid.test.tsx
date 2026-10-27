@@ -16,7 +16,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { coreDraws } from "../outcome";
-import { GRID_GAP_PX } from "../sizes";
+import { GRID_ROW_GAP_PX, gridColumnGapPx } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -369,12 +369,11 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
-  it("claims no freshness for a query that never ran", async () => {
+  it("gives the page a freshness only from the cards whose queries ran", async () => {
     // The widget declares a query, so `widget.query` is truthy -- but its
     // archetype is undrawable, so the grid deliberately left it out of the
-    // batch. Reading `widget.query` again to decide the card's freshness gave
-    // it an "Updated just now" for a request nothing ever sent, and marked it
-    // busy while an unrelated widget refetched.
+    // batch. No card says when its data arrived; the page's one line is told
+    // the oldest answer on show, from the cards that took part.
     mockBranding = brandingWith([
       {
         id: "acme/recent",
@@ -395,15 +394,20 @@ describe("WidgetGrid — collection and gating", () => {
 
     renderGrid();
 
-    // The metric card asked and answered, so it carries the batch's timestamp.
     await waitFor(() =>
       expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
     );
     const cells = screen.getAllByTestId(/^widget-cell-/);
     expect(cells).toHaveLength(2);
 
-    // Exactly one freshness line on the page: the widget that took part.
-    expect(screen.getAllByTestId("widget-card-freshness")).toHaveLength(1);
+    // No card says when its data arrived; the grid says when the oldest
+    // answer it shows did, for the page.
+    expect(document.querySelectorAll("time")).toHaveLength(0);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Dashboard widgets")).toHaveAttribute(
+        "data-answered-at"
+      )
+    );
   });
 
   it("DOES spend a query when a component can draw the result", async () => {
@@ -897,17 +901,24 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws its gap at the pixels a card's predicted width counts", () => {
-    // A card's first query is sized from a width predicted with GRID_GAP_PX. A gap in rem would
-    // follow the page's root font size and draw cards at another width than predicted.
+  it("draws its gaps at the pixels a card's predicted width counts", () => {
+    // A card's first query is sized from a width predicted with `gridColumnGapPx`. A gap in rem
+    // would follow the page's root font size, and a gap that differed from the prediction would
+    // draw cards at another width than predicted.
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
       { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
     ]);
     renderGrid();
-    expect(screen.getByLabelText("Dashboard widgets").className).toContain(
-      `gap-[${GRID_GAP_PX}px]`
+    const classes = screen.getByLabelText("Dashboard widgets").className;
+    expect(classes).toContain(`gap-x-[${gridColumnGapPx(1279)}px]`);
+    expect(classes).toContain(
+      `@min-[1280px]/dashboard:gap-x-[${gridColumnGapPx(1280)}px]`
     );
+    // Down, one gap at every width, so a card's height never changes with the dashboard's.
+    expect(classes).toContain(`gap-y-[${GRID_ROW_GAP_PX}px]`);
+    expect(classes).not.toMatch(/:gap-y-|:gap-\[/);
+    expect([gridColumnGapPx(1279), gridColumnGapPx(1280)]).toEqual([16, 24]);
   });
 
   it("honours the deprecated half alias without half-width phones", () => {

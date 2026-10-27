@@ -188,6 +188,8 @@ describe("the settings sheet's preview", () => {
       expect(result.current.slotFor?.("total")).toMatchObject({ ok: true })
     );
     expect(sent()).toEqual([[{ op: "count", source: "collection:pages" }]]);
-    expect(result.current.definition.title).toBe("Count: pages");
+    // Titled by its subject, with the widget's own name beneath it.
+    expect(result.current.definition.title).toBe("pages");
+    expect(result.current.subtitle).toBe("Count");
   });
 });

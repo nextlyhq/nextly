@@ -8,6 +8,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
@@ -41,15 +42,17 @@ function answer(items: Record<string, unknown>[]) {
 function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   return render(
     <CardTierContext.Provider value={tier}>
-      <UpcomingReleasesCard
-        widgetId="core/upcoming-releases"
-        placementId="card-1"
-        settings={{}}
-        slot={undefined}
-        isFetching={false}
-        query={QUERY}
-        {...props}
-      />
+      {inFrame(
+        <UpcomingReleasesCard
+          widgetId="core/upcoming-releases"
+          placementId="card-1"
+          settings={{}}
+          slot={undefined}
+          isFetching={false}
+          query={QUERY}
+          {...props}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }

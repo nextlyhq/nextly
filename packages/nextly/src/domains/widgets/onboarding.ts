@@ -76,15 +76,21 @@ export interface OnboardingProgress {
 export async function onboardingProgress(
   probe: ConditionProbe
 ): Promise<OnboardingProgress> {
-  const answer = await probe.getStarted();
+  const { answer, fellBack, unlisted } = await probe.getStartedDetail();
   // True by construction: an unauthenticated caller never reaches this, and
   // no permission gates having made the account one is already using.
   const steps: OnboardingStep[] = [{ id: "account", complete: true }];
   for (const id of ["collection", "entry"] as const) {
     const offered = answer.steps.find(candidate => candidate.kind === id);
     if (offered) steps.push({ id, complete: offered.status === "done" });
+    // 🔴 Deprecated, and answering as it always has until it is removed: a
+    // step whose own check fell back is a row not complete, not a missing
+    // row. The Get started card withholds that step; this read does not.
+    else if (fellBack.has(id)) steps.push({ id, complete: false });
   }
-  return { steps, unknown: answer.unknown };
+  // "Not known" as this read has always meant it: the registries unlisted,
+  // not a step's own check falling back, which its row already says.
+  return { steps, unknown: unlisted };
 }
 
 /**

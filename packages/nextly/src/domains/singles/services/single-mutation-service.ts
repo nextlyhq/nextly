@@ -95,6 +95,7 @@ import {
   keepDeniedFieldGroupsInDraft,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
@@ -1627,7 +1628,13 @@ export class SingleMutationService extends BaseService {
 
       // 6.5. Password fields store bcrypt hashes, never the submitted
       // value — same guarantee as the collection write paths.
-      await hashPasswordFieldValues(currentData, fieldConfigs);
+      // At every depth, through the field groups held inline in a container:
+      // their passwords are stored in that container's value.
+      await hashPasswordFieldValues(
+        currentData,
+        fieldConfigs,
+        await passwordReachOf(fieldConfigs, this.fieldGroupDataService)
+      );
 
       // 6.5. Normalize upload field values (strip expanded media objects to IDs)
       normalizeUploadFields(currentData, fieldConfigs);
@@ -3499,7 +3506,16 @@ export class SingleMutationService extends BaseService {
               // Redact and normalise before the snapshot is durable: a password
               // hash written into version history stays recoverable after the
               // password changes, and an unparsed JSON field restores wrongly.
-              applyReadShape(parentRow, fieldConfigs, singleMeta.tableName);
+              applyReadShape(
+                parentRow,
+                fieldConfigs,
+                singleMeta.tableName,
+                await passwordReachOf(
+                  fieldConfigs,
+                  this.fieldGroupDataService,
+                  tx.getDrizzle()
+                )
+              );
               // Read the component subtrees from the TRANSACTION (read-your-
               // writes, #226): the component save above just persisted them, so
               // the read returns the complete, read-shaped, password-stripped
@@ -3581,7 +3597,15 @@ export class SingleMutationService extends BaseService {
                 if (singleHasStatus) {
                   prevParentRow.status = previousLocaleStatus;
                 }
-                stripPasswordFieldValues(prevParentRow, fieldConfigs);
+                stripPasswordFieldValues(
+                  prevParentRow,
+                  fieldConfigs,
+                  await passwordReachOf(
+                    fieldConfigs,
+                    this.fieldGroupDataService,
+                    tx.getDrizzle()
+                  )
+                );
                 stripServerOnlyColumns(prevParentRow, singleMeta.tableName);
                 for (const field of fieldConfigs) {
                   if (!("name" in field) || !field.name) continue;
@@ -4198,7 +4222,11 @@ export class SingleMutationService extends BaseService {
       // mutation response can never echo a value the reader is denied. A
       // route-authorized REST caller isn't a trusted-server read, so its
       // override does not skip redaction (mirrors the collection path).
-      stripPasswordFieldValues(updatedDoc, fieldConfigs);
+      stripPasswordFieldValues(
+        updatedDoc,
+        fieldConfigs,
+        await passwordReachOf(fieldConfigs, this.fieldGroupDataService)
+      );
       stripServerOnlyColumns(updatedDoc, singleMeta.tableName);
       await applyFieldReadAccess({
         kind: "single",

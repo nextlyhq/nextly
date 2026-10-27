@@ -93,6 +93,10 @@ describe("whether a publish edits what it promotes", () => {
     // 🔴 A junction keeps no order: the same ids in another order are no edit.
     expect(promote(["b", "a"])).toBe(false);
     expect(promote(["a", "c"])).toBe(true);
+    // 🔴 A set holds an id once: a repeated id is no second link, so no edit.
+    expect(promote(["a", "b", "a"])).toBe(false);
+    // The must-differ half: a missing id is still an edit.
+    expect(promote(["a", "a"])).toBe(true);
     // The control: without the view, order counts.
     expect(edits({ tags: ["b", "a"] }, linked)).toBe(true);
   });
