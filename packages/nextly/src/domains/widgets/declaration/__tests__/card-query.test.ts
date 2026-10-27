@@ -19,8 +19,7 @@ const recentEntries = defineWidget({
   title: "Recent entries",
   description: "The newest entries of one collection",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: {
     collection: settings.collection(),
     sort: settings.sort({ of: "collection", default: "-updatedAt" }),
@@ -47,7 +46,7 @@ describe("the query core runs for a card", () => {
         collection: "posts",
         sort: "title",
         range: "7d",
-        items: 12,
+        items: 8,
       })
     ).toEqual({
       source: "collection:posts",
@@ -55,7 +54,7 @@ describe("the query core runs for a card", () => {
       select: ["title"],
       sort: "title",
       where: { createdAt: { after: "7d" } },
-      limit: 12,
+      limit: 8,
     });
   });
 
@@ -70,7 +69,7 @@ describe("the query core runs for a card", () => {
   ])("changes with %s", (_label, changed, expected) => {
     // One setting changed against the same baseline: the query changes in
     // exactly the part that setting writes, and nowhere else.
-    const base = { collection: "posts", sort: "title", range: "7d", items: 12 };
+    const base = { collection: "posts", sort: "title", range: "7d", items: 8 };
     const before = buildCardQuery(recentEntries, base);
     const after = buildCardQuery(recentEntries, { ...base, ...changed });
     expect(after).toEqual({ ...before, ...expected });
@@ -95,8 +94,7 @@ describe("the query core runs for a card", () => {
       title: "Trims",
       description: "Counts one collection",
       category: "Test",
-      widths: ["full"],
-      width: "full",
+      size: { default: { w: 12, h: 4 } },
       settings: { collection: settings.collection() },
       data: { query },
       display: "metric",
@@ -153,8 +151,7 @@ describe("the query core runs for a card", () => {
       title: "Fn",
       description: "A data function",
       category: "Test",
-      widths: ["full"],
-      width: "full",
+      size: { default: { w: 12, h: 4 } },
       data: async () => ({ total: 1 }),
       display: "metric",
     });

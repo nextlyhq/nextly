@@ -197,6 +197,10 @@ const LIST_DATA = z.looseObject({
   fields: z.array(RESULT_FIELD).optional(),
   // The span the source looked at, in whole days; absent when unbounded.
   window: z.looseObject({ days: z.number().int().positive() }).optional(),
+  // How many rows the read matched in all, which a card's "View all (N)" names: a whole
+  // count of at least zero, and whether it is a floor.
+  total: z.number().int().nonnegative().optional(),
+  atLeast: z.boolean().optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {

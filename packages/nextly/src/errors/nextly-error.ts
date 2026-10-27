@@ -353,14 +353,18 @@ export class NextlyError extends Error {
    */
   static builtIn(opts: {
     thing: "role" | "permission";
-    change: "change" | "delete";
+    change: "change" | "delete" | "assign" | "inherit";
     logContext?: Record<string, unknown>;
   }): NextlyError {
+    const done = {
+      change: "changed",
+      delete: "deleted",
+      assign: "assigned",
+      inherit: "inherited",
+    }[opts.change];
     return new NextlyError({
       code: "FORBIDDEN",
-      publicMessage: `This ${opts.thing} is built in, so it can't be ${
-        opts.change === "change" ? "changed" : "deleted"
-      }.`,
+      publicMessage: `This ${opts.thing} is built in, so it can't be ${done}.`,
       logContext: opts.logContext,
     });
   }

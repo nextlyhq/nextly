@@ -11,7 +11,10 @@ import { renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { updateSpy } = vi.hoisted(() => ({ updateSpy: vi.fn() }));
+const { updateSpy, onScreen } = vi.hoisted(() => ({
+  updateSpy: vi.fn(),
+  onScreen: { localizationEnabled: false },
+}));
 
 vi.mock("@admin/services/entryApi", async importOriginal => {
   const actual =
@@ -20,7 +23,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
 });
 
 vi.mock("@admin/hooks/useLocalization", () => ({
-  useLocalization: () => ({ enabled: false }),
+  useLocalization: () => ({ enabled: onScreen.localizationEnabled }),
 }));
 
 vi.mock("@admin/components/ui", () => ({
@@ -46,7 +49,10 @@ function makeClient() {
 }
 
 describe("useUpdateEntry", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onScreen.localizationEnabled = false;
+  });
 
   it("seeds the server response into the detail query the editor reads", async () => {
     const client = makeClient();
@@ -129,5 +135,39 @@ describe("useUpdateEntry", () => {
       _isWorkingDraft: false,
       status: "published",
     });
+  });
+
+  it("writes to the document read without translation state where it may not be read", async () => {
+    // A localized editor whose user may not read every language's state reads
+    // the document without `translationStatus`; the save writes to that same
+    // entry, not to one keyed as if the state were asked.
+    onScreen.localizationEnabled = true;
+    const client = makeClient();
+    const key = entryKeys.detailScoped("posts", "e1", {
+      locale: "de",
+      fallbackLocale: "none",
+      translationStatus: false,
+      draft: false,
+    });
+    client.setQueryData(key, { id: "e1", title: "old" });
+    updateSpy.mockResolvedValue({ item: { id: "e1", title: "new" } });
+
+    const { result } = renderHook(
+      () =>
+        useUpdateEntry({
+          collectionSlug: "posts",
+          entryId: "e1",
+          locale: "de",
+          draft: false,
+          // As the editor decides it for this user.
+          translationStatus: false,
+          showToast: false,
+        }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync({ title: "new" });
+
+    expect(client.getQueryData(key)).toMatchObject({ title: "new" });
   });
 });

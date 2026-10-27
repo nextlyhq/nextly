@@ -4,11 +4,19 @@ name: Main catch-up
 # run has tested it. On a busy day each push supersedes the one before and
 # skips its tests (its gate then refuses rather than passes), so without this
 # main could go untested for as long as merges keep coming. A look that finds
-# the commit tested, or a run still on its way, starts nothing.
+# the commit tested, or a run still on its way, starts nothing, unless main's
+# last verdict is over three hours old: under runner starvation every push's
+# run is still queued when this looks, so it then tests main anyway.
 # `scripts/main-catch-up.mjs` has the rule.
+#
+# Also on every push to main: under load GitHub delays or drops scheduled
+# runs (three of about six ran in one ten-hour stretch), and a look costs a
+# few seconds. The concurrency group keeps at most one look waiting.
 on:
   schedule:
     - cron: "23 */2 * * *"
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions: {}

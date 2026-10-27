@@ -17,7 +17,11 @@
  */
 
 import type { RelativeSpan, WidgetQuery } from "../query";
-import { MAX_WIDGET_ROWS } from "../query-limits";
+import {
+  LIST_DENSITIES,
+  type ListDensity,
+  MAX_WIDGET_ROWS,
+} from "../query-limits";
 
 /**
  * Carries a setting's value type without a runtime property.
@@ -174,6 +178,22 @@ function declare<Value, Kind extends string, On extends string = never>(
 const quickFlag = (quick: boolean | undefined) =>
   quick === true ? { quick: true } : {};
 
+/**
+ * What the reader is shown for each density. A record over every density, so one added to
+ * `LIST_DENSITIES` cannot reach a settings sheet unnamed.
+ */
+const DENSITY_LABELS: Readonly<Record<ListDensity, string>> = {
+  default: "Default",
+  compact: "Compact",
+};
+
+/**
+ * A list card's Density options, one for every density, each named for the reader: what
+ * `settings.density()` offers, and what core's own list cards offer, so the two cannot differ.
+ */
+export const DENSITY_OPTIONS: readonly { label: string; value: ListDensity }[] =
+  LIST_DENSITIES.map(value => ({ label: DENSITY_LABELS[value], value }));
+
 /** A fixed set of values, as a select definition lists its options. */
 function choices<Option extends string>(values: readonly Option[]) {
   return values.map(value => ({ label: value, value }));
@@ -198,7 +218,7 @@ export const settings = {
   groupBy: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "groupBy", On>("groupBy", options),
   /**
-   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 25), 5 by
+   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 10), 5 by
    * default. Read from that one limit, so the editor never offers rows the card would not draw.
    */
   items: ({ default: start = 5 }: { default?: number } = {}) =>
@@ -226,6 +246,17 @@ export const settings = {
       default: start,
       options: choices(CHART_STYLES),
       ...quickFlag(quick),
+    }),
+  /**
+   * Density: a select of default or compact rows, for a list card; default
+   * unless chosen. A compact card holds more rows at the same size.
+   *
+   * @experimental
+   */
+  density: ({ default: start = "default" }: { default?: ListDensity } = {}) =>
+    declare<ListDensity, "select">("select", {
+      default: start,
+      options: DENSITY_OPTIONS,
     }),
   /** Only mine: a checkbox, off by default. */
   onlyMine: ({

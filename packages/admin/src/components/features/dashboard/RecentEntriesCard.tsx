@@ -2,11 +2,12 @@
 
 /**
  * Recent entries: a collection's entries changed most recently, every row a link to its entry,
- * and a "View all" link to the collection's list under the card's Filter and Sort.
+ * and, when there are more than it draws, "View all (N)" to the collection's list under the
+ * card's Filter and Sort.
  *
- * By the card's own width, as core's lists are: small lists titles alone; medium adds a line
- * under each with its status and when it was updated; large is a table, headed by the columns
- * the server described. It draws at most the reader's "Number of items".
+ * Drawn as core's lists are, by the one list card: stacked rows with when each was updated and
+ * its status, or a table at the large tier. It draws the rows its body holds, and at most the
+ * reader's "Number of items".
  *
  * @module components/features/dashboard/RecentEntriesCard
  */
@@ -14,14 +15,16 @@
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
-import { TieredRows } from "../widgets/archetypes/tiered-rows";
+import { answerTotal } from "../widgets/archetypes/tiered-rows";
 import { FrameState } from "../widgets/frame/card-state";
+import { ListCard } from "../widgets/frame/list-card";
 import { useListCard } from "../widgets/frame/list-slot";
+import { listViewHref } from "../widgets/frame/list-view-href";
 
-import { entryDetail, entryHref, rowLabelField } from "./recent-entries-model";
+import { recentEntriesModel, rowLabelField } from "./recent-entries-model";
 
 export const RecentEntriesCard: React.FC<WidgetComponentProps> = props => {
-  const { now, read } = useListCard(props);
+  const { tier, drawn, density, now, read } = useListCard(props);
   const { query } = props;
   if ("node" in read) return read.node;
   const label = rowLabelField(query);
@@ -44,15 +47,14 @@ export const RecentEntriesCard: React.FC<WidgetComponentProps> = props => {
   }
   const columns = read.list.fields ?? [];
   return (
-    <TieredRows
-      items={read.list.items}
-      columns={columns}
-      labelField={label}
-      detailField={undefined}
-      detailOf={item => entryDetail(item, columns, now)}
-      hrefOf={item => entryHref(query, item)}
-      query={query}
-      viewAll
+    <ListCard
+      model={recentEntriesModel(query, label, columns, now)}
+      rows={read.list.items}
+      drawn={drawn}
+      total={answerTotal(read.list)}
+      viewAllHref={listViewHref(query)}
+      tier={tier}
+      density={density}
     />
   );
 };

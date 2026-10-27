@@ -15,13 +15,14 @@ import type {
 
 import { listBody } from "../list";
 import { CardEmpty } from "../../frame/states";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
     id: "acme/recent",
     title: "Recent posts",
     archetype: "list",
-    size: "md",
+    size: gridBounds(4),
     query: {
       source: "collection:posts",
       op: "list",
@@ -32,6 +33,16 @@ const widget = (select?: string[]): DashboardWidget =>
 const listOf = (items: Record<string, unknown>[]): WidgetResult => ({
   op: "list",
   items,
+});
+
+/** A list answer as the server sends one for a query that selected `names`: each described. */
+const describedListOf = (
+  items: Record<string, unknown>[],
+  names: string[]
+): WidgetResult => ({
+  op: "list",
+  items,
+  fields: names.map(name => ({ name })),
 });
 
 /** Renders a successful body, or fails loudly with the refusal's message. */
@@ -60,11 +71,31 @@ describe("the list archetype", () => {
     expect(screen.getByText("hello")).toBeInTheDocument();
   });
 
-  it("ignores fields past the second", () => {
-    // Two lines is the card's whole vocabulary. A third would either wrap into
-    // the next row or silently truncate, and neither reads as a list.
-    draw(listOf([{ a: "one", b: "two", c: "three" }]), widget(["a", "b", "c"]));
-    expect(screen.queryByText("three")).not.toBeInTheDocument();
+  it("puts the other described fields on the meta line under the title", () => {
+    draw(
+      describedListOf([{ title: "Hello", slug: "hello" }], ["title", "slug"]),
+      widget(["title", "slug"])
+    );
+    expect(screen.getByTestId("entity-row-title")).toHaveTextContent("Hello");
+    expect(screen.getByTestId("entity-row-meta")).toHaveTextContent("hello");
+  });
+
+  it("ignores fields past the third on the meta line", () => {
+    // A title and three meta fields is the row's whole vocabulary. A fourth
+    // would either wrap into the next row or silently truncate, and neither
+    // reads as a list.
+    const names = ["a", "b", "c", "d", "e"];
+    draw(
+      describedListOf(
+        [{ a: "one", b: "two", c: "three", d: "four", e: "five" }],
+        names
+      ),
+      widget(names)
+    );
+    expect(screen.getByTestId("entity-row-meta")).toHaveTextContent(
+      "two · three · four"
+    );
+    expect(screen.queryByText("five")).not.toBeInTheDocument();
   });
 
   it("refuses a list whose query selects nothing, by name", () => {
@@ -90,13 +121,13 @@ describe("the list archetype", () => {
     draw(listOf([]), widget(["title"]));
     // The frame's one empty state, not a list of nothing.
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
-    expect(screen.queryByTestId("widget-list-row")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("entity-row")).not.toBeInTheDocument();
   });
 
   it("caps the rows it draws", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ title: `Row ${i}` }));
     draw(listOf(many), widget(["title"]));
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(5);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
   });
 
   it("does NOT stringify an object cell into [object Object]", () => {
@@ -109,7 +140,7 @@ describe("the list archetype", () => {
     );
     expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
     // The row still occupies its place, so the count matches the result.
-    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(1);
   });
 
   it("prints a zero rather than dropping it", () => {
@@ -118,9 +149,18 @@ describe("the list archetype", () => {
     expect(screen.getByText("0")).toBeInTheDocument();
   });
 
-  it("leaves the second line off when that field is absent", () => {
-    draw(listOf([{ title: "Hello" }]), widget(["title", "slug"]));
-    const row = screen.getByTestId("widget-list-row");
-    expect(row.textContent).toBe("Hello");
+  it("leaves the meta line off a row whose field is absent", () => {
+    // The first row holds the field, so the column is described and the
+    // second row's missing value is the only reason it has no meta line.
+    draw(
+      describedListOf(
+        [{ title: "First", slug: "first" }, { title: "Hello" }],
+        ["title", "slug"]
+      ),
+      widget(["title", "slug"])
+    );
+    const [first, second] = screen.getAllByTestId("entity-row");
+    expect(first.textContent).toBe("Firstfirst");
+    expect(second.textContent).toBe("Hello");
   });
 });

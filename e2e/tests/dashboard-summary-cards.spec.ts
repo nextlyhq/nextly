@@ -6,7 +6,7 @@
  * - Team draws the number of people and links to Users.
  * - Content draws a tile per collection, each linking to its list.
  * - Create draws its shortcuts.
- * - Upcoming releases links to Releases.
+ * - Upcoming releases, with nothing scheduled, offers Releases as its one way on.
  *
  * The cards are placed through the layout write first, so the test does not
  * depend on which conditional cards this run's other specs left offered; the
@@ -21,6 +21,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 
@@ -37,17 +38,18 @@ const CARDS = [
 interface Layout {
   version: number;
   scope: string;
-  widgets: Record<string, { defaultWidth: string }>;
+  widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
   }>;
 }
 
 /**
- * Place each of the four cards, at the width a new one starts at and not removed, in the saved
+ * Place each of the four cards, at the size a new one starts at and not removed, in the saved
  * layout: not every card may be drawn full width.
  */
 async function placeCards(page: Page): Promise<void> {
@@ -66,15 +68,16 @@ async function placeCards(page: Page): Promise<void> {
   const others = layout.placements.filter(
     placement => !CARDS.includes(placement.widgetId as (typeof CARDS)[number])
   );
-  const placements = [
-    ...CARDS.map(widgetId => ({
+  const placed = [];
+  for (const widgetId of CARDS) {
+    placed.push({
       id: `e2e-${widgetId.replace("/", "-")}`,
       widgetId,
-      width: layout.widgets[widgetId].defaultWidth,
+      ...(await defaultSizeOf(page, widgetId)),
       removed: false,
-    })),
-    ...others,
-  ];
+    });
+  }
+  const placements = [...placed, ...others];
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: { placements, version: layout.version, scope: layout.scope },
   });
@@ -104,9 +107,11 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
 
     await expect(cell(page, "core/quick-create")).toBeVisible();
 
+    // The release made above is a draft holding nothing, so nothing is scheduled: the card says
+    // so, and offers Releases as its one way on.
     const releases = cell(page, "core/upcoming-releases");
     await expect(
-      releases.getByRole("link", { name: "All releases" })
+      releases.getByRole("link", { name: "Open Releases" })
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
     // A card refreshing its data dims its body and marks it aria-busy until the
