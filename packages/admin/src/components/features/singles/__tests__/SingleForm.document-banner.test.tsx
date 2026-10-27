@@ -13,6 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 
 vi.mock(
+  "@admin/components/features/entries/EntryForm/DocumentViewBody",
+  () => ({ DocumentViewBody: () => <div data-testid="document-view" /> })
+);
+vi.mock(
   "@admin/components/features/entries/EntryForm/EntrySystemHeader",
   () => ({ EntrySystemHeader: () => <div data-testid="system-header" /> })
 );
@@ -55,5 +59,23 @@ describe("the Single editor's document banner", () => {
     const banner = screen.getByText("Scheduled for Friday");
     expect(banner.parentElement).toBe(header.parentElement);
     expect(header.nextElementSibling).toBe(banner);
+  });
+
+  it("is drawn above a document view, which has no header of its own", () => {
+    render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        onSubmit={vi.fn()}
+        documentView={{ component: "pages-builder", onExit: vi.fn() }}
+        documentBanner={<p>Scheduled for Friday</p>}
+      />
+    );
+
+    const view = screen.getByTestId("document-view");
+    const banner = screen.getByText("Scheduled for Friday");
+    expect(
+      banner.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });

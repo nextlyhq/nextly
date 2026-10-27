@@ -981,15 +981,21 @@ export function EntryForm({
                       isSubmitting={isSubmitting}
                     />
                     {documentView ? (
-                      <DocumentViewBody
-                        view={documentView}
-                        target={{ collectionSlug, entryId: savedEntryId }}
-                        form={form}
-                        lock={lock}
-                        recovery={recovery}
-                        viewingVersion={viewingVersion}
-                        fields={getCollectionFields(collection)}
-                      />
+                      <>
+                        {/* A document view has no header, so the banner sits
+                            above it: an author working in the view still sees
+                            the document is in a scheduled release. */}
+                        {documentBanner}
+                        <DocumentViewBody
+                          view={documentView}
+                          target={{ collectionSlug, entryId: savedEntryId }}
+                          form={form}
+                          lock={lock}
+                          recovery={recovery}
+                          viewingVersion={viewingVersion}
+                          fields={getCollectionFields(collection)}
+                        />
+                      </>
                     ) : (
                       <div className={cn("space-y-0", className)}>
                         {/* Its native submit — Enter in a field, or a
