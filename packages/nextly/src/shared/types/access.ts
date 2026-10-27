@@ -15,6 +15,8 @@
 import type { RequestContext } from "../../collections/fields/types/base";
 import type { Principal } from "../../plugins/principals/types";
 
+import type { UntypedRuleFilter } from "./rule-filter";
+
 // ============================================================
 // Minimal User Type
 // ============================================================
@@ -231,8 +233,21 @@ export type AccessControlFunction = (
 export interface CollectionAccessControl {
   /** Access rule for creating new documents */
   create?: AccessControlFunction | boolean;
-  /** Access rule for reading/listing documents */
-  read?: AccessControlFunction | boolean;
+  /**
+   * Access rule for reading/listing documents. It may answer a filter, which
+   * allows only the entries it matches (see `CollectionFilterRule`).
+   * `defineCollection` types that filter by the collection's fields.
+   *
+   * Spelled out rather than as `CollectionFilterRule`: a rule typed by a
+   * collection's fields is stored here, and the checker, comparing two uses
+   * of one generic alias by how its fields parameter varies, would refuse it.
+   * Compared as written, it holds every typed rule.
+   */
+  read?:
+    | ((
+        ctx: AccessControlContext
+      ) => boolean | UntypedRuleFilter | Promise<boolean | UntypedRuleFilter>)
+    | boolean;
   /** Access rule for updating existing documents */
   update?: AccessControlFunction | boolean;
   /** Access rule for deleting documents */
