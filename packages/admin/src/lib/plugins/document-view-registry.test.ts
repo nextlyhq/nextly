@@ -9,12 +9,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
-import EditEntryPage from "@admin/pages/dashboard/entries/[slug]/[id]/index";
-import EntryVersionsPage from "@admin/pages/dashboard/entries/[slug]/[id]/versions";
-import SingleEditPage from "@admin/pages/dashboard/singles/[slug]/index";
-import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
+import { routeConfig } from "@admin/pages/registry";
 
 import {
+  addressableFieldsWithin,
   clearDocumentViews,
   documentViewApplies,
   documentViewMissing,
@@ -23,6 +21,15 @@ import {
   registerDocumentViews,
   routedDocumentView,
 } from "./document-view-registry";
+
+// Pages load on demand through lazyRoute, so the resolver hands back the
+// route table's own wrapper for each page. Identity is asserted against
+// those entries rather than against the raw page modules.
+const EditEntryPage = routeConfig[ROUTES.COLLECTION_ENTRY_EDIT].component;
+const EntryVersionsPage =
+  routeConfig[ROUTES.COLLECTION_ENTRY_VERSIONS].component;
+const SingleEditPage = routeConfig[ROUTES.SINGLE_EDIT].component;
+const SingleVersionsPage = routeConfig[ROUTES.SINGLE_VERSIONS].component;
 
 afterEach(() => clearDocumentViews());
 
@@ -412,5 +419,32 @@ describe("resolveRoute for a document view", () => {
     );
     expect(single.Component).toBe(SingleEditPage);
     expect(single.params).toEqual({ slug: "homepage" });
+  });
+});
+
+describe("the fields a document addresses at its own level", () => {
+  it("stops at an unnamed group already open on its path, directly or through another", () => {
+    // Raw config can hold a cycle. Each group's fields are still found once,
+    // the group that reaches itself is not walked again, and named fields
+    // keep the unnamed groups they sit in.
+    const direct: Record<string, unknown> = { type: "group", fields: [] };
+    direct.fields = [{ name: "secret", type: "text" }, direct];
+    const outer: Record<string, unknown> = { type: "group", fields: [] };
+    const inner = {
+      type: "group",
+      fields: [outer, { name: "note", type: "text" }],
+    };
+    outer.fields = [{ name: "secret", type: "text" }, inner];
+
+    const names = (fields: object[]) =>
+      addressableFieldsWithin(fields).map(({ field, within }) => [
+        (field as { name?: string }).name,
+        within.length,
+      ]);
+    expect(names([direct])).toEqual([["secret", 1]]);
+    expect(names([outer])).toEqual([
+      ["secret", 1],
+      ["note", 2],
+    ]);
   });
 });

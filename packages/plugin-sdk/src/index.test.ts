@@ -47,12 +47,10 @@ describe("the dashboard widget surface is reachable from the SDK", () => {
   });
 
   it("re-exports the vocabularies a declaration is checked against", async () => {
-    // The runtime arrays, not just their types: a plugin picking a size or an
-    // op from a list needs the values, and a type-only re-export would compile
-    // and then be `undefined` at runtime.
+    // The runtime arrays, not just their types: a plugin picking an archetype
+    // or an op from a list needs the values, and a type-only re-export would
+    // compile and then be `undefined` at runtime.
     const sdk = await import("./index");
-    expect(sdk.WIDGET_SIZES).toContain("md");
-    expect(sdk.WIDGET_HEIGHTS).toContain("tall");
     expect(sdk.WIDGET_ARCHETYPES).toContain("metric");
     expect(sdk.WIDGET_OPS).toContain("count");
     expect(sdk.WIDGET_SOURCE_KINDS).toContain("collection");

@@ -15,6 +15,7 @@ import {
   useCardQuickSetting,
   type CellSettingsWrite,
 } from "../useCardQuickSetting";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 // No quick setting drives a query knob yet, so the query a setting asks is stood in for here:
 // the chosen range becomes part of the query, which is what makes the change ask again.
@@ -38,7 +39,7 @@ const WIDGET: DashboardWidget = {
   id: "core/activity",
   title: "Activity",
   archetype: "custom",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [
     {

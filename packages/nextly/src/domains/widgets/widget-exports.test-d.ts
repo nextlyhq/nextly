@@ -3,10 +3,10 @@
  *
  * `__tests__/export-contract.test.ts` proves these names are exported and that
  * example values are assignable to them. Neither claim survives a WIDENING:
- * `type WidgetHeight = string` exports the same name and accepts `"tall"`
+ * `type WidgetOp = string` exports the same name and accepts `"count"`
  * happily, so both assertions stay green while every plugin author loses the
  * only thing the type was for -- a typo becoming a compile error instead of a
- * card that silently draws at the wrong height.
+ * card that silently asks a question its source cannot answer.
  *
  * In a `.test-d.ts` rather than a `.test.ts` for the reason
  * `shared/addressable-fields.test-d.ts` states: a passive annotation in a
@@ -26,11 +26,12 @@
  * would be imported by files that are not type tests.
  */
 import type {
+  GridSize,
   WidgetArchetype,
-  WidgetHeight,
+  WidgetDefinition,
   WidgetOp,
   WidgetFieldChoice,
-  WidgetSize,
+  WidgetSizeDeclaration,
   WidgetSourceField,
   WidgetSourceFieldType,
   WidgetSourceKind,
@@ -46,8 +47,6 @@ type AssignableTo<A, B> = [A] extends [B] ? true : false;
 
 // The unions, member for member. `toMatchTypeOf`-style containment would be
 // satisfied by a widened alias; equality in BOTH directions is what refuses one.
-assertType<Exact<WidgetHeight, "short" | "tall">>(true);
-assertType<Exact<WidgetSize, "sm" | "md" | "lg" | "xl" | "full">>(true);
 assertType<Exact<WidgetOp, "count" | "list" | "groupBy" | "timeseries">>(true);
 assertType<
   Exact<WidgetSourceKind, "collection" | "single" | "system" | "plugin">
@@ -84,26 +83,6 @@ assertType<
 // deferred, and the wrapper evaluated to `false` for a HEALTHY union -- a helper
 // that fails on correct code and would have been "fixed" by deleting the
 // assertions it broke. Instantiated directly, they resolve.
-assertType<
-  Exact<
-    [
-      AssignableTo<"tall", WidgetHeight>,
-      AssignableTo<string, WidgetHeight>,
-      AssignableTo<"long", WidgetHeight>,
-    ],
-    [true, false, false]
-  >
->(true);
-assertType<
-  Exact<
-    [
-      AssignableTo<"lg", WidgetSize>,
-      AssignableTo<string, WidgetSize>,
-      AssignableTo<"medium", WidgetSize>,
-    ],
-    [true, false, false]
-  >
->(true);
 assertType<
   Exact<
     [
@@ -159,4 +138,25 @@ assertType<
 >(true);
 assertType<
   Exact<AssignableTo<{ name: string; type: "string" }, WidgetSourceField>, true>
+>(true);
+
+// 🔴 The one size vocabulary: a size is `{ w, h }` in grid units, and a
+// definition's `size` takes nothing else. A named width or size, the old
+// vocabulary, does not type-check where a size is taken.
+assertType<Exact<GridSize, { w: number; h: number }>>(true);
+assertType<Exact<WidgetDefinition["size"], WidgetSizeDeclaration>>(true);
+assertType<
+  Exact<
+    [
+      AssignableTo<{ default: { w: 6; h: 4 } }, WidgetSizeDeclaration>,
+      AssignableTo<
+        { default: { w: 3; h: 2 }; min: { w: 3; h: 2 }; max: { w: 12; h: 4 } },
+        WidgetSizeDeclaration
+      >,
+      AssignableTo<"lg", WidgetSizeDeclaration>,
+      AssignableTo<{ default: "half" }, WidgetSizeDeclaration>,
+      AssignableTo<{ default: { width: "full" } }, WidgetSizeDeclaration>,
+    ],
+    [true, true, false, false, false]
+  >
 >(true);

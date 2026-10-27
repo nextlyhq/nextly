@@ -11,6 +11,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -40,7 +41,7 @@ async function placeBreakdown(page: Page): Promise<void> {
           {
             id: "e2e-breakdown",
             widgetId: CARD,
-            width: "half",
+            ...(await defaultSizeOf(page, CARD)),
             removed: false,
             config: { collection: "posts" },
           },

@@ -14,6 +14,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { useSettingsPreview } from "../useSettingsPreview";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -36,7 +37,7 @@ const WIDGET: DashboardWidget = {
   id: "core/recent",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [{ name: "limit", type: "number", label: "Rows", defaultValue: 5 }],
 };
@@ -78,7 +79,7 @@ function preview(
     shown = {},
   }: {
     widget?: DashboardWidget;
-    shown?: { answerTier?: "small" | "medium" | "large" };
+    shown?: { answerSize?: { tier: "small" | "medium" | "large" } };
   } = {}
 ) {
   return renderHook(
@@ -121,23 +122,27 @@ describe("the settings sheet's preview", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 13"));
+    await waitFor(() => expect(titleOf(result.current.slot)).toBe("limit 11"));
     // One request, for the settled question only, with the settings it would keep. Sized as a
-    // card the dashboard draws: one row more than the twelve it draws, which is how a list learns
-    // that more exist, at the widest tier, which serves whatever width the sheet gives it.
+    // card the dashboard draws: one row more than the ten it draws of the twelve chosen (ten
+    // being the most any card draws), which is how a list learns that more exist, at the widest
+    // tier, which serves whatever width the sheet gives it.
     expect(sent()).toEqual([
-      [{ source: "collection:posts", op: "list", limit: 13 }],
+      [{ source: "collection:posts", op: "list", limit: 11 }],
     ]);
-    expect(result.current.answerTier).toBe("large");
+    expect(result.current.answerSize).toEqual({ tier: "large" });
     expect(result.current.placement.settings).toMatchObject({ limit: 12 });
   });
 
   it("draws the card's own answer with the tier it was fetched at", () => {
     // 🔴 A small card's answer is three rows and a fourth that says more exist. Drawn without its
-    // tier, a wider preview shows all four as rows, and nothing says more exist.
-    const { result } = preview({}, { shown: { answerTier: "small" } });
+    // size, a wider preview shows all four as rows, and nothing says more exist.
+    const { result } = preview(
+      {},
+      { shown: { answerSize: { tier: "small" } } }
+    );
     expect(result.current.slot).toBe(SHOWN);
-    expect(result.current.answerTier).toBe("small");
+    expect(result.current.answerSize).toEqual({ tier: "small" });
   });
 
   it("asks a custom card's changed question as declared, since its own component draws it", async () => {
@@ -154,7 +159,7 @@ describe("the settings sheet's preview", () => {
     expect(sent()).toEqual([
       [{ source: "collection:posts", op: "list", limit: 12 }],
     ]);
-    expect(result.current.answerTier).toBeUndefined();
+    expect(result.current.answerSize).toBeUndefined();
   });
 
   it("asks a cells card's cells under the changed values, and hands their answers back by key", async () => {
@@ -173,7 +178,7 @@ describe("the settings sheet's preview", () => {
       id: "core/count",
       title: "Count",
       archetype: "custom",
-      size: "sm",
+      size: gridBounds(3),
       settings: [
         { name: "collection", type: "collection", label: "Collection" },
       ],

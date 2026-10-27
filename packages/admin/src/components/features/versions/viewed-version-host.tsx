@@ -71,6 +71,7 @@ import {
 } from "./version-changes";
 import { VersionChangesForm } from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
+import { WithheldFieldsProvider } from "./withheld-fields-context";
 
 /**
  * Whether the editor's write affordances are withheld: they act on the LIVE
@@ -509,21 +510,26 @@ function VersionContent({
           writing into the version this area claims is frozen. Empty is the
           context's own answer for "offers nothing". */}
       <TranslationFieldProvider value={{}}>
-        {changes ? (
-          <VersionChangesForm
-            fields={fields}
-            values={values}
-            changes={changes}
-            order={order}
-            current={current}
-            showUnchanged={showUnchanged}
-            onToggleUnchanged={() => setShowUnchanged(v => !v)}
-          />
-        ) : (
-          // Nothing to mark yet (the first version, or while what changed is
-          // read): the version reads whole.
-          <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
-        )}
+        {/* What the read held back, so a field whose value was withheld says
+            so where the value would be. It wraps both forms: a field is
+            withheld whether or not what changed has been read yet. */}
+        <WithheldFieldsProvider paths={viewing.withheld}>
+          {changes ? (
+            <VersionChangesForm
+              fields={fields}
+              values={values}
+              changes={changes}
+              order={order}
+              current={current}
+              showUnchanged={showUnchanged}
+              onToggleUnchanged={() => setShowUnchanged(v => !v)}
+            />
+          ) : (
+            // Nothing to mark yet (the first version, or while what changed is
+            // read): the version reads whole.
+            <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
+          )}
+        </WithheldFieldsProvider>
       </TranslationFieldProvider>
     </EntryLocaleProvider>
   );

@@ -190,9 +190,14 @@ export async function prepareRuleFilter(
 }> {
   const { collectionName, action = "read" } = params;
   const unbuildable = (error: unknown): SQLWrapper => {
+    // Only the builder's own refusal of the filter, a validation error
+    // naming what the collection lacks, is a filter that cannot be built.
+    // Anything else, a lookup the build needs failing as a lost connection
+    // does, fails the read as it would any other.
+    if (!NextlyError.isValidation(error)) throw error;
     logger.error(`A ${action} rule's filter could not be built`, {
       collectionName,
-      code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
+      code: error.code,
     });
     return sql`1 = 0`;
   };

@@ -27,7 +27,7 @@ import {
   runWithAccessMemo,
 } from "./request-memo";
 import type { RuleFilter } from "./rule-answer";
-import { ruleLanguageKey, withRuleLanguage } from "./rule-language";
+import { currentRuleLanguage, withRuleLanguage } from "./rule-language";
 import { clearRuleAnswerNotices } from "./rule-answer-log";
 import {
   collectionGateVerdict,
@@ -360,7 +360,7 @@ describe("a read whose route already authorized it", () => {
   /** A route's verdict kept for `userId`, on `slug`, in the language now. */
   const kept = (userId: string, filter: unknown, slug = "posts") =>
     rememberRouteVerdict(
-      { userId, slug, action: "read", language: ruleLanguageKey() },
+      { userId, slug, action: "read", language: currentRuleLanguage() },
       { filter: filter as RuleFilter }
     );
   const routeRead = (userId = "u1", read: unknown = filtering()) =>
@@ -401,7 +401,7 @@ describe("a read whose route already authorized it", () => {
           userId: "u1",
           slug: "posts",
           action: "read",
-          language: ruleLanguageKey(),
+          language: currentRuleLanguage(),
         },
         { all: true }
       );
@@ -429,6 +429,43 @@ describe("a read whose route already authorized it", () => {
     });
     expect(verdict.allowed).toBe(false);
     expect(verdict).not.toMatchObject({ filter: OWN });
+  });
+
+  /** A route's verdict kept for u1 on posts, as judged in `language`. */
+  const keptIn = (
+    language: { locale?: string; locales: string[] },
+    verdict: { all: true } | { filter: RuleFilter }
+  ) =>
+    rememberRouteVerdict(
+      { userId: "u1", slug: "posts", action: "read", language },
+      verdict
+    );
+  const routeReadIn = (language: { locale?: string; locales: string[] }) =>
+    withRuleLanguage(language, () => routeRead());
+
+  it("answers a read in one language from a route that judged a set including it", async () => {
+    // A history judged at the route in every language at once, then read in
+    // one of them.
+    const all = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "de"] }, { all: true });
+      return routeReadIn({ locale: "en", locales: ["en"] });
+    });
+    expect(all).toEqual({ allowed: true });
+    const filtered = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "de"] }, { filter: OWN as RuleFilter });
+      return routeReadIn({ locale: "en", locales: ["en"] });
+    });
+    expect(filtered).toMatchObject({ filter: OWN });
+  });
+
+  it("refuses a read in a language no route judged, though the route allowed every entry in others", async () => {
+    // A rule refusing German was asked about English and French only: its
+    // allow there says nothing of German.
+    const verdict = await runWithAccessMemo(async () => {
+      keptIn({ locales: ["en", "fr"] }, { all: true });
+      return routeReadIn({ locale: "de", locales: ["de"] });
+    });
+    expect(verdict.allowed).toBe(false);
   });
 
   it("allows every entry, asking no rule nor the permission, where no route kept a verdict", async () => {

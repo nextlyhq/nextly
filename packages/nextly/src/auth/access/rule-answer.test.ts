@@ -123,6 +123,16 @@ describe("ruleAnswer, for an answer that is not plain data", () => {
     shared.slug.equals = "b";
     expect(read).toEqual({ kind: "filter", filter: { slug: { equals: "a" } } });
   });
+
+  it("copies a date it reads, so a rule that changes its date afterwards changes nothing", () => {
+    const cutoff = new Date("2026-10-26T00:00:00Z");
+    const read = ruleAnswer({ publishAt: { less_than: cutoff } });
+    cutoff.setUTCFullYear(2099);
+    expect(read).toEqual({
+      kind: "filter",
+      filter: { publishAt: { less_than: new Date("2026-10-26T00:00:00Z") } },
+    });
+  });
 });
 
 describe("mayAnswerFilter", () => {

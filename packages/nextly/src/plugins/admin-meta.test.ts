@@ -287,7 +287,7 @@ describe("buildPluginAdminMeta", () => {
                 {
                   id: "stats",
                   component: "@acme/p/admin#Stats",
-                  size: "half",
+                  size: { default: { w: 6, h: 4 } },
                   requiredPermission: "read-stats",
                 },
               ],
@@ -301,7 +301,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].widgets?.[0]).toMatchObject({
       id: "stats",
       component: "@acme/p/admin#Stats",
-      size: "half",
+      size: { default: { w: 6, h: 4 } },
       requiredPermission: "read-stats",
     });
   });

@@ -17,7 +17,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
-import { defineCollection, json, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  json,
+  text,
+} from "../../../config";
 import {
   registerBeforeOperationHook,
   unregisterBeforeOperationHook,
@@ -39,6 +45,11 @@ const PLACES = "rulefilter_places";
 // A rule whose filter changes with every call, as one built from state that
 // moves between calls would.
 const SHIFTING = "rulefilter_shifting";
+// A read rule whose filter names a field the collection does not have.
+const VANISHED = "rulefilter_vanished";
+// A component, and a read rule whose filter names a field inside it.
+const META = "rulefilter_meta";
+const COMPONENTED = "rulefilter_componented";
 let shiftingCalls = 0;
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
@@ -56,7 +67,18 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    fieldGroups: [
+      defineFieldGroup({ slug: META, fields: [text({ name: "heading" })] }),
+    ],
     collections: [
+      defineCollection({
+        slug: COMPONENTED,
+        access: { read: answering({ "meta.heading": { equals: "x" } }) },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "meta", component: META }),
+        ],
+      }),
       defineCollection({
         slug: NOTES,
         access: { read: answering({ team: { equals: "public" } }) },
@@ -82,6 +104,11 @@ async function boot(): Promise<TestNextly> {
             };
           }),
         },
+        fields: [text({ name: "title" }), text({ name: "team" })],
+      }),
+      defineCollection({
+        slug: VANISHED,
+        access: { read: answering({ vanished: { equals: "x" } }) },
         fields: [text({ name: "title" }), text({ name: "team" })],
       }),
       defineCollection({
@@ -232,6 +259,33 @@ describe("a read rule that answers a filter", () => {
     // The rule's filter names the same field, and the read is answered.
     const listed = await t.nextly.find({ collection: NOTES, ...asVisitor });
     expect(listed.meta.total).toBe(3);
+  });
+
+  it("lists nothing, rather than an error naming the rule's field, where the rule's filter cannot be built", async () => {
+    const t = await boot();
+    await seed(t, VANISHED);
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    // Not a validation error describing the rule's private configuration to
+    // the caller: the filter matches no entry.
+    const listed = await t.nextly.find({ collection: VANISHED, ...asVisitor });
+    expect(listed.items).toEqual([]);
+    expect(listed.meta.total).toBe(0);
+    expect(
+      (await t.nextly.count({ collection: VANISHED, ...asVisitor })).total
+    ).toBe(0);
+  });
+
+  it("fails the read, rather than listing nothing, where reading what the rule's filter needs fails", async () => {
+    const t = await boot();
+    // The component table lookup the rule's filter needs, failing as a lost
+    // database connection does: not a filter that cannot be built.
+    vi.spyOn(
+      t.getService("fieldGroupDataService"),
+      "getComponentTableName"
+    ).mockRejectedValue(new Error("connection lost"));
+    await expect(
+      t.nextly.find({ collection: COMPONENTED, ...asVisitor })
+    ).rejects.toThrow();
   });
 
   it("refuses a filter using near, and reports it once, rather than reading every entry", async () => {

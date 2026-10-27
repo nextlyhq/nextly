@@ -13,7 +13,7 @@
  * - Error handling in access evaluation (fail-secure)
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 import { container } from "../../../di/container";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -42,6 +42,13 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 

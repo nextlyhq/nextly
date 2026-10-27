@@ -844,6 +844,9 @@ export async function takeLiveSharedValuesForDocument(args: {
     args.scopeKind === "single"
       ? await getService("singleEntryService").takeLiveSharedValues({
           slug: args.slug,
+          // The document every check above was made against: a Single's row
+          // replaced since is refused rather than written.
+          entryId: args.entryId,
           ...caller,
         })
       : await getService("collectionsHandler")
