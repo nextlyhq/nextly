@@ -466,7 +466,6 @@ public visitor read collection throws at service  403 FORBIDDEN thrown  missing=
 public visitor read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc user is key maker.
 public visitor read collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't see this pc user is key maker.
 public visitor read collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc user is key maker.
-public visitor read media none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read roles none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor read roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -9712,7 +9711,6 @@ service visitor read collection throws at service  403 FORBIDDEN thrown  missing
 service visitor read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c user is key maker.
 service visitor read collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't see this c user is key maker.
 service visitor read collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=same  | You can't see this c user is key maker.
-service visitor read media none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read roles none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
