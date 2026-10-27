@@ -20,8 +20,11 @@ import { fileURLToPath } from "node:url";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
+import { media } from "../../../../schemas/media/mysql";
 import { users } from "../../../../schemas/users/mysql";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
+import { registeredStatus } from "../../migrate/metadata-register";
+import { loadSnapshots, newestApplied } from "../../migrate/snapshot-source";
 import { resolveCollectionTableName } from "../../utils/resolve-table-name";
 import { toMinimalEntities } from "../config-entities";
 import {
@@ -168,6 +171,25 @@ async function blogEntities() {
   };
 }
 
+/**
+ * Whether a visual blog reads each table as Draft/Published, by table name. A
+ * visual blog registers its collections and Singles from the template's
+ * migration snapshot, read and resolved here by the same functions
+ * registration uses, with the same default for a snapshot that leaves `status`
+ * out. A table no snapshot describes is not registered, so it has no entry.
+ */
+async function visualStatus(): Promise<Map<string, boolean>> {
+  const loaded = await loadSnapshots({
+    migrationsDir: fileURLToPath(new URL("migrations", TEMPLATE)),
+  });
+  return new Map(
+    [
+      ...newestApplied(loaded, s => s.collections),
+      ...newestApplied(loaded, s => s.singles),
+    ].map(entry => [entry.tableName, registeredStatus(entry)])
+  );
+}
+
 describe("the blog template's code, as this test loads it", () => {
   it("imports nextly from this package's source", async () => {
     await blogEntities();
@@ -183,15 +205,14 @@ describe("the blog template's migration", () => {
         "utf8"
       );
       const created = createdTables(sql);
-      // A table the template gives a `status` column is read as a Draft/Published
-      // one, whatever the code-first config says: the visual approach has no
-      // config to say otherwise. So it must carry every column nextly adds with
-      // status, which the builder below decides, not this test.
+      // A table is Draft/Published when the code-first config says so, or when
+      // a visual blog registers it so. Both approaches run this one migration,
+      // so it must carry every column nextly adds with status for either, which
+      // the builder below decides, not this test.
+      const visual = await visualStatus();
       const withStatus = (e: MinimalConfigEntity): MinimalConfigEntity => ({
         ...e,
-        status:
-          e.status === true ||
-          (created.get(e.tableName) ?? []).some(c => c.name === "status"),
+        status: e.status === true || visual.get(e.tableName) === true,
       });
       const { collections, singles } = await blogEntities();
       const expected = buildDesiredSnapshotFromConfig(
@@ -293,31 +314,44 @@ describe("the blog template's MySQL migration", () => {
     ).toBeNull();
   });
 
-  // nextly's users.id is as wide as the ids an auth adapter may give, which
-  // can be longer than a UUID: a narrower reference refuses a real user's id.
-  it("gives each reference to users the width nextly gives users.id", () => {
+  // A foreign key's column holds its target's ids, so it has the target
+  // column's exact type: narrower refuses a real id (a user id longer than 36
+  // characters, error 1406, before users' references were widened), wider
+  // holds values the target never can. The targets nextly owns are read from
+  // nextly's own schema, the template's from this file.
+  it("gives each foreign key its target column's exact type", () => {
     const created = createdTables(sql);
-    const references: Array<[string, string]> = [];
+    const typeOf = (table: string, column: string) =>
+      created.get(table)?.find(c => c.name === column)?.type;
+    const nextlyIds: Record<string, string> = {
+      users: users.id.getSQLType().toLowerCase(),
+      media: media.id.getSQLType().toLowerCase(),
+    };
+    const keys: Array<[string, string, string, string]> = [];
+    const reference =
+      /FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`([^`]+)`\s*\(`([^`]+)`\)/;
     for (const [, table, body] of sql.matchAll(
       /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
     ))
-      for (const [, column] of body.matchAll(
-        /FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`users`/g
+      for (const [, column, target, targetColumn] of body.matchAll(
+        new RegExp(reference.source, "g")
       ))
-        references.push([table, column]);
-    for (const [, table, column] of sql.matchAll(
-      /ALTER TABLE\s+`([^`]+)`\s+ADD CONSTRAINT\s+`[^`]+`\s+FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`users`/g
-    ))
-      references.push([table, column]);
-    expect(references.length).toBeGreaterThan(0);
-    const width = users.id.getSQLType().toLowerCase();
-    expect(
-      references.map(
-        ([table, column]) =>
-          `${table}.${column} ${created.get(table)?.find(c => c.name === column)?.type}`
+        keys.push([table, column, target, targetColumn]);
+    for (const [, table, column, target, targetColumn] of sql.matchAll(
+      new RegExp(
+        /ALTER TABLE\s+`([^`]+)`\s+ADD CONSTRAINT\s+`[^`]+`\s+/.source +
+          reference.source,
+        "g"
       )
-    ).toEqual(
-      references.map(([table, column]) => `${table}.${column} ${width}`)
+    ))
+      keys.push([table, column, target, targetColumn]);
+    expect(keys.length).toBeGreaterThan(0);
+    const expected = (target: string, targetColumn: string) =>
+      targetColumn === "id" && target in nextlyIds
+        ? nextlyIds[target]
+        : typeOf(target, targetColumn);
+    expect(keys.map(([t, c]) => `${t}.${c} ${typeOf(t, c)}`)).toEqual(
+      keys.map(([t, c, target, tc]) => `${t}.${c} ${expected(target, tc)}`)
     );
   });
 
