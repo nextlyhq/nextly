@@ -132,11 +132,8 @@ no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can  # no-service
 no-service key-role-based read single returns-null at entity  # no-service
-no-service visitor read related none at population  # no-service
-no-service visitor read related returns-false at population  # no-service
 no-service user-with read related returns-false at population  # no-service
 no-service key-role-based read related returns-false at population  # no-service
-no-service visitor read related returns-null at population  # no-service
 no-service user-with read related returns-null at population  # no-service
 no-service key-role-based read related returns-null at population  # no-service
 service user-with read collection async-throws at schema  # schema-list-ignores-rules
@@ -817,7 +814,6 @@ no-service key-role-based read single returns-filter at rest
 no-service key-role-based read single returns-filter at direct  # no-service
 no-service key-role-based read single returns-filter at can  # no-service
 no-service key-role-based read single returns-filter at entity  # no-service
-no-service visitor read related returns-filter at population  # no-service
 no-service user-with read related returns-filter at population  # no-service
 no-service key-role-based read related returns-filter at population  # no-service
 no-service key-role-based read collection returns-filter at widget  # holds-permission-key-skips-rules
@@ -837,7 +833,6 @@ no-service key-role-based read single async-filter at rest
 no-service key-role-based read single async-filter at direct  # no-service
 no-service key-role-based read single async-filter at can  # no-service
 no-service key-role-based read single async-filter at entity  # no-service
-no-service visitor read related async-filter at population  # no-service
 no-service user-with read related async-filter at population  # no-service
 no-service key-role-based read related async-filter at population  # no-service
 no-service key-role-based read collection async-filter at widget  # holds-permission-key-skips-rules
@@ -857,7 +852,6 @@ no-service key-role-based read single returns-empty-in at rest
 no-service key-role-based read single returns-empty-in at direct  # no-service
 no-service key-role-based read single returns-empty-in at can  # no-service
 no-service key-role-based read single returns-empty-in at entity  # no-service
-no-service visitor read related returns-empty-in at population  # no-service
 no-service user-with read related returns-empty-in at population  # no-service
 no-service key-role-based read related returns-empty-in at population  # no-service
 no-service key-role-based read collection returns-empty-in at widget  # holds-permission-key-skips-rules
@@ -877,7 +871,6 @@ no-service key-role-based read single malformed-filter at rest
 no-service key-role-based read single malformed-filter at direct  # no-service
 no-service key-role-based read single malformed-filter at can  # no-service
 no-service key-role-based read single malformed-filter at entity  # no-service
-no-service visitor read related malformed-filter at population  # no-service
 no-service user-with read related malformed-filter at population  # no-service
 no-service key-role-based read related malformed-filter at population  # no-service
 no-service key-role-based read collection malformed-filter at widget  # holds-permission-key-skips-rules
