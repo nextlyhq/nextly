@@ -324,7 +324,9 @@ const REACH: Record<Door, Reach> = {
   },
   // Media, users and roles are read by the namespaces a principal cannot call
   // (only collection and Single operations can be made as one), so they are
-  // asked of the callers REST names there.
+  // asked of the callers REST names there. A checked read of media names a
+  // signed-in caller before any decision, so a visitor is asked it nowhere
+  // here (`visitor-refused-before-the-decision.integration.test.ts`).
   direct: {
     callers: PRESENTED,
     targets: {
@@ -336,7 +338,7 @@ const REACH: Record<Door, Reach> = {
       roles: READ,
     },
     callersOf: {
-      media: NOT_PRINCIPAL,
+      media: SIGNED_IN,
       users: NOT_PRINCIPAL,
       roles: NOT_PRINCIPAL,
     },
@@ -795,7 +797,7 @@ export function oneAnswer(row: Row): Verdict {
   const { caller, target, rule } = row;
   const action = judgedAs(row.action);
   if (PRINCIPALS.includes(caller) && target === "media") {
-    return publicHolds(row.setup, target, rule, action) ? "allow" : "refuse";
+    return visitorAnswer(row, action);
   }
   if (PRINCIPALS.includes(caller)) {
     const allowed =

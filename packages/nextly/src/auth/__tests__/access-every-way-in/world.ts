@@ -24,7 +24,6 @@ import { getWidget, registerWidget } from "../../../domains/widgets/registry";
 import type { RateLimitStore } from "../../../middleware/rate-limit";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
-import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -698,13 +697,12 @@ interface SeededUser {
  * holding the same permissions, and `chief`, which inherits super-admin.
  */
 async function seedUsers(t: TestNextly) {
+  // The harness ran the boot's seeding (`seedPublic`): every target's
+  // permissions, the preset roles (`editor` among them, which `makeRole` below
+  // takes over), the Public role and what boot grants it. Each step logs its
+  // failure rather than throw, so `grantPublic` checks what the Public role
+  // was left holding.
   const services = new ServiceContainer(t.adapter);
-  // The seeding an install's boot runs, which the harness does not: every
-  // target's permissions, the role presets, the Public role and what boot
-  // grants it. Before the roles below, which a preset of the same slug would
-  // otherwise reset to its own grants. Each step logs its failure rather than
-  // throw, so `grantPublic` checks what the Public role was left holding.
-  await seedPermissionsAndRolePresets();
   const rootId = await makeUser(t, "root");
   const superAdminRole = (await services.roles.ensureSuperAdminRole()).id;
 
@@ -1096,6 +1094,9 @@ export async function boot(dialect: TestDialect): Promise<World> {
       refsCollection(set),
     ]),
     singles: TARGET_SETS.flatMap(set => ruleSingles(set)),
+    // The boot's seeding: every target's permissions, the preset roles, the
+    // Public role and what boot grants it.
+    seedPublic: true,
     plugins: [probePlugin(), membersPlugin()],
   });
   // Replaces the boot's registration outright, cached instance and all, so
