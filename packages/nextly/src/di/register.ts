@@ -308,6 +308,7 @@ import {
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
+import { languageChangeContentCache } from "./registrations/language-change-content-cache";
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
 import { getService } from "./service-access";
@@ -1046,7 +1047,15 @@ async function registerServicesOnce(
   );
   container.registerSingleton<LanguageSettingsService>(
     "languageSettingsService",
-    () => new LanguageSettingsService(adapter, ctx.languages, ctx.logger)
+    // With the content cache, so a committed change also flushes the cached content reads that
+    // were resolved in the previous default language.
+    () =>
+      new LanguageSettingsService(
+        adapter,
+        ctx.languages,
+        ctx.logger,
+        languageChangeContentCache()
+      )
   );
 
   registerDomainServices(ctx);
