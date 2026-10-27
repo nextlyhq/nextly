@@ -19,7 +19,12 @@
  * @module domains/auth/services/public-read-grant
  */
 import { visitorActor } from "../../../auth/access/actor";
-import { askRule, type AccessTarget } from "../../../auth/access/decide";
+import {
+  askRule,
+  declaresRule,
+  plainRule,
+  type AccessTarget,
+} from "../../../auth/access/decide";
 import {
   everyLanguage,
   languagesOfContent,
@@ -137,33 +142,41 @@ export async function permissionIdsBySlug(permissions: {
 const NO_ANSWER = Symbol("no-answer");
 
 /**
- * Asks a target's rule for `action` about a visitor, through the evaluator
- * every door uses, in `language`, bounded in time.
+ * One deadline for every rule asked in a boot: a single timer, however many
+ * rules and languages there are, and stopped once the asking is over.
  */
-async function askIn(
-  target: AccessTarget,
-  action: Action,
-  language: RuleLanguage | undefined
-): Promise<Answer> {
+function sharedDeadline(): {
+  deadline: Promise<typeof NO_ANSWER>;
+  stop: () => void;
+} {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof NO_ANSWER>(resolve => {
     timer = setTimeout(() => resolve(NO_ANSWER), RULE_ANSWER_TIMEOUT_MS);
     timer.unref?.();
   });
+  return { deadline, stop: () => clearTimeout(timer) };
+}
+
+/**
+ * Asks a target's rule for `action` about a visitor, through the evaluator
+ * every door uses, in `language`, until `deadline`.
+ */
+async function askIn(
+  target: AccessTarget,
+  action: Action,
+  language: RuleLanguage | undefined,
+  deadline: Promise<typeof NO_ANSWER>
+): Promise<Answer> {
   const asking = () => askRule(visitorActor(), action, target);
-  try {
-    const outcome = await Promise.race([
-      language ? withRuleLanguage(language, asking) : asking(),
-      deadline,
-    ]);
-    if (outcome === NO_ANSWER) return { kind: "failed" };
-    if (!outcome.declared) return { kind: "no-rule" };
-    return "threw" in outcome
-      ? { kind: "failed" }
-      : { kind: "answered", value: outcome.value };
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  const outcome = await Promise.race([
+    language ? withRuleLanguage(language, asking) : asking(),
+    deadline,
+  ]);
+  if (outcome === NO_ANSWER) return { kind: "failed" };
+  if (!outcome.declared) return { kind: "no-rule" };
+  return "threw" in outcome
+    ? { kind: "failed" }
+    : { kind: "answered", value: outcome.value };
 }
 
 /**
@@ -215,9 +228,19 @@ function languageContexts(
  * failure, as the rule could not be told apart from one that lets them
  * through.
  */
-async function ask(target: AccessTarget, action: Action): Promise<Answer> {
+async function ask(
+  target: AccessTarget,
+  action: Action,
+  contexts: () => Array<RuleLanguage | undefined>,
+  deadline: Promise<typeof NO_ANSWER>
+): Promise<Answer> {
+  // A rule that is not there, or is a plain yes or no, reads nothing of the
+  // caller or the language: its answer is the same in every context.
+  if (!declaresRule(target, action)) return { kind: "no-rule" };
+  const plain = plainRule(target, action);
+  if (plain !== undefined) return { kind: "answered", value: plain };
   const answers = await Promise.all(
-    languageContexts(target).map(language => askIn(target, action, language))
+    contexts().map(language => askIn(target, action, language, deadline))
   );
   const allows = (answer: Answer) =>
     answer.kind === "answered" && answer.value === true;
@@ -361,22 +384,33 @@ export async function seedPublicReadGrants({
   const roleId = await publicRoleId();
   if (roleId === null) return;
   // Every rule of every target is asked at once, so one deadline bounds them.
-  const asked: Asked[] = await Promise.all(
-    (await targets()).map(async target => {
-      const [read, ...writes] = await Promise.all([
-        ask(target, "read"),
-        ...WRITES[target.kind].map(action => ask(target, action)),
-      ]);
-      return {
-        target,
-        read,
-        writes: WRITES[target.kind].map((action, i) => ({
-          action,
-          answer: writes[i],
-        })),
-      };
-    })
-  );
+  const { deadline, stop } = sharedDeadline();
+  let asked: Asked[];
+  try {
+    asked = await Promise.all(
+      (await targets()).map(async target => {
+        // Worked out once per target, and only where a rule reads them.
+        let contexts: Array<RuleLanguage | undefined> | undefined;
+        const once = () => (contexts ??= languageContexts(target));
+        const [read, ...writes] = await Promise.all([
+          ask(target, "read", once, deadline),
+          ...WRITES[target.kind].map(action =>
+            ask(target, action, once, deadline)
+          ),
+        ]);
+        return {
+          target,
+          read,
+          writes: WRITES[target.kind].map((action, i) => ({
+            action,
+            answer: writes[i],
+          })),
+        };
+      })
+    );
+  } finally {
+    stop();
+  }
 
   const ids = await permissionIds();
   const wanted = [

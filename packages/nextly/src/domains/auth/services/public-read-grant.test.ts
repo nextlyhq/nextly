@@ -6,7 +6,7 @@
  * the role holds already is claimed and left as it is. The claim is made in
  * the transaction that adds, so a failed add leaves nothing claimed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../../services/shared";
 
@@ -217,6 +217,35 @@ describe("seedPublicReadGrants", () => {
 
     // The failed add made nothing, so both are made now.
     expect(next.granted).toEqual(["media", "posts"]);
+  });
+});
+
+describe("seedPublicReadGrants asking rules", () => {
+  it("bounds every rule it asks with one deadline", async () => {
+    // Timeouts only: the in-memory `nextly_meta` turns with `setImmediate`.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const never = () => new Promise<boolean>(() => {});
+      const { seeding } = site();
+      const seeded = seedPublicReadGrants({
+        ...seeding,
+        targets: async () =>
+          ["a", "b", "c"].map(slug => ({
+            kind: "collection" as const,
+            slug,
+            access: { read: never, create: never },
+          })),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Six rules waiting, and one timer for all of them.
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await seeded;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
