@@ -97,7 +97,7 @@ export interface DynamicTableLoadOptions {
    *
    * Given, a row removed from code (its source is the app's code and its slug
    * is not declared) is registered only while every table it owns exists: its
-   * main table and, for a localized one, its translation table. Registering a
+   * main table and, where it has translatable columns, its translation table. Registering a
    * localized entity creates a missing translation table, so registering one
    * whose tables a migration dropped would bring part of it back, empty. One
    * whose tables are all there is registered as before, so its rows can still
@@ -108,17 +108,39 @@ export interface DynamicTableLoadOptions {
 
 /**
  * Whether every table a registry row owns exists: its main table, and its
- * translation table when it is localized.
+ * translation table when it owns one.
+ *
+ * Whether it owns one is asked of the same specification that creates it. A
+ * localized entity whose every field is shared has no translatable column, so
+ * nothing ever creates its translation table, and requiring one would leave
+ * its standing main table unregistered.
  */
 async function ownedTablesExist(
   adapter: DrizzleAdapter,
-  tableName: string,
+  row: { slug: string; tableName: string },
+  fields: unknown[],
   localized: boolean
 ): Promise<boolean> {
-  if (!(await adapter.tableExists(tableName))) return false;
-  if (!localized) return true;
+  if (!(await adapter.tableExists(row.tableName))) return false;
+  // Imported here, on the one path that needs it: only a removed entity whose
+  // main table stands ever reaches this question.
+  const { deriveCompanionSpec } = await import(
+    "../domains/i18n/migration/derive-companion-spec"
+  );
+  const companion = deriveCompanionSpec({
+    slug: row.slug,
+    dbName: row.tableName,
+    fields: fields as Parameters<typeof deriveCompanionSpec>[0]["fields"],
+    dialect: adapter.getCapabilities().dialect,
+    // Read only to seed existing rows; deciding whether a table exists reads
+    // neither this nor the builder, which shape its columns.
+    defaultLocale: "en",
+    collectionLocalized: localized,
+    builtBy: "codeFirst",
+  });
+  if (companion === null) return true;
   return await adapter.tableExists(
-    `${tableName}${STORAGE_FORMAT.companionSuffix}`
+    `${row.tableName}${STORAGE_FORMAT.companionSuffix}`
   );
 }
 
@@ -229,7 +251,12 @@ export async function loadDynamicTables(
         if (
           options.declaredSlugs !== undefined &&
           isRemovedFromCode(row, options.declaredSlugs) &&
-          !(await ownedTablesExist(adapter, row.table_name, localized))
+          !(await ownedTablesExist(
+            adapter,
+            { slug: row.slug, tableName: row.table_name },
+            fields,
+            localized
+          ))
         ) {
           continue;
         }

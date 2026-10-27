@@ -531,9 +531,10 @@ describe("loadDynamicTables — an entity removed from code", () => {
     options?: Parameters<typeof loadDynamicTables>[3]
   ): Promise<string[]> => {
     const { adapter } = makeAdapter(rows);
-    (adapter as unknown as { tableExists: unknown }).tableExists = vi.fn(
-      async (name: string) => existing.includes(name)
-    );
+    Object.assign(adapter, {
+      tableExists: vi.fn(async (name: string) => existing.includes(name)),
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+    });
     const register = vi.fn(async (tableName: string) => {
       void tableName;
     });
@@ -543,7 +544,7 @@ describe("loadDynamicTables — an entity removed from code", () => {
   const rows = [
     {
       table_name: "dc_posts",
-      fields: "[]",
+      fields: JSON.stringify([{ name: "headline", type: "text" }]),
       slug: "posts",
       localized: 1,
       source: "code",
@@ -571,6 +572,25 @@ describe("loadDynamicTables — an entity removed from code", () => {
     expect(
       await registeredTables(rows, ["dc_posts", "dc_posts_locales"], declared)
     ).toEqual(["dc_posts", "dc_tags", "dc_drafts"]);
+  });
+
+  // A localized entity whose every field is shared has no translatable column,
+  // so nothing creates a translation table for it and none is required.
+  it("is registered with no translation table when it has nothing to translate", async () => {
+    const shared = [
+      {
+        table_name: "dc_notes",
+        fields: JSON.stringify([
+          { name: "title", type: "text", localized: false },
+        ]),
+        slug: "notes",
+        localized: 1,
+        source: "code",
+      },
+    ];
+    expect(await registeredTables(shared, ["dc_notes"], declared)).toEqual([
+      "dc_notes",
+    ]);
   });
 
   it("registers every row when the caller declares nothing", async () => {
