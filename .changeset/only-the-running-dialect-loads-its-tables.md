@@ -39,3 +39,5 @@ Four functions now read a loaded dialect's tables, and throw, naming the fix, if
 - `getStaticRelations`, `getDialectTables` and `getDialectTablesForPush`, from `nextly` and `nextly/database`.
 
 Creating the adapter loads its dialect, so code that runs after that is unaffected. Code that calls them without an adapter, such as schema tooling, first runs `await loadDialectTables(dialect)`, exported from `nextly`, `nextly/database` and `nextly/schemas`.
+
+`new ServiceContainer(adapter)`, from `nextly`, reads its adapter's tables when it is constructed. An adapter made by `createAdapter`, or handed to Nextly's config, is unaffected; one built directly from `@nextlyhq/adapter-postgres`, `@nextlyhq/adapter-mysql` or `@nextlyhq/adapter-sqlite` first needs `await loadDialectTables(adapter.getCapabilities().dialect)`, and the constructor's error names that line. `seedPermissions` and `seedSuperAdmin`, from `nextly/database/seeders`, load the dialect of the adapter they are given themselves.
