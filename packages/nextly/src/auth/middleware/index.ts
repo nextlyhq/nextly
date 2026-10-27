@@ -893,6 +893,16 @@ export async function requireCollectionAccess(
 }
 
 /**
+ * Whether authentication refused a visitor: a request carrying no credential
+ * at all, neither a session cookie nor a key. One whose credential is not
+ * valid is not a visitor, and is asked to sign in again whatever the Public
+ * role grants. The one test every gate that may serve a visitor asks.
+ */
+export function isVisitorRefusal(refused: ErrorResponse): boolean {
+  return refused.noCredential === true;
+}
+
+/**
  * The answer for a request that authentication refused, at a collection or
  * Single gate. Where the route admits visitors and the request carries no
  * credential at all, it is a visitor, judged by the one decision with the
@@ -915,7 +925,7 @@ async function visitorAnswer(
   resource: string,
   operation: RouteOperation | undefined
 ): Promise<ErrorResponse | null> {
-  if (operation?.admitsVisitor !== true || refused.noCredential !== true) {
+  if (operation?.admitsVisitor !== true || !isVisitorRefusal(refused)) {
     return refused;
   }
   return withRuleLanguage(requestLanguage(operation), async () => {
