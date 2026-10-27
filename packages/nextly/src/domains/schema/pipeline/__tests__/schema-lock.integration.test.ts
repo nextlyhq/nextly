@@ -22,7 +22,7 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { withMigrationExcluded } from "../../../field-groups/migration/sync-guard";
 import { withMigrateLock } from "../locks";
-import { withSchemaLock } from "../schema-lock";
+import { RENEWAL_APPLICATION_NAME, withSchemaLock } from "../schema-lock";
 
 import {
   LOCK_DIALECTS,
@@ -353,6 +353,42 @@ describe.each(LOCK_DIALECTS)("the schema lock on %s", dialect => {
       } finally {
         await single.disconnect();
         await other.disconnect();
+      }
+    },
+    60_000
+  );
+
+  (dialect === "postgresql" ? it : it.skip)(
+    "survives its renewal connection dropping, renewing through the pool again",
+    async () => {
+      const single = await world.connect({ poolMax: 1 });
+      try {
+        await expect(
+          withSchemaLock(
+            {
+              adapter: single,
+              command: "nextly migrate",
+              whenHeld: "refuse",
+              leaseSeconds: 2,
+              logger: quiet,
+            },
+            async () => {
+              await sleep(600);
+              // The server drops the renewal connection between two renewals, as a failover or
+              // an idle timeout would.
+              const dropped = await adapter.executeQuery(
+                `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                 WHERE application_name = '${RENEWAL_APPLICATION_NAME}' AND datname = current_database()`
+              );
+              // The renewal connection existed, and it was the one dropped.
+              expect(dropped).toHaveLength(1);
+              await sleep(1_500);
+              return "ran";
+            }
+          )
+        ).resolves.toEqual({ ran: true, value: "ran" });
+      } finally {
+        await single.disconnect();
       }
     },
     60_000

@@ -497,8 +497,13 @@ function transactionRunner(ctx: TransactionContext): StatementRunner {
 /** A connection this run opened for its renewals alone, and how to close it. */
 interface RenewalConnection {
   readonly runner: StatementRunner;
+  /** The connection failed and was given up; renewals go back to the adapter's own pool. */
+  readonly broken: () => boolean;
   close(): Promise<void>;
 }
+
+/** What `pg_stat_activity` names the renewal connection, so an operator can tell what it is. */
+export const RENEWAL_APPLICATION_NAME = "nextly schema lock renewal";
 
 /**
  * A connection of its own for renewals, on a pool that cannot spare one.
@@ -527,6 +532,7 @@ interface PgPoolLike {
     connect(): Promise<void>;
     query(text: string, params: unknown[]): Promise<{ rows: unknown[] }>;
     end(): Promise<void>;
+    on(event: "error", listener: (error: unknown) => void): unknown;
   };
 }
 
@@ -538,7 +544,17 @@ async function openPostgresRenewal(
     return undefined;
   }
   // The pool's own client class and options, so the connection is made exactly as the pool's are.
-  const connection = new pool.Client(pool.options);
+  const connection = new pool.Client({
+    ...pool.options,
+    application_name: RENEWAL_APPLICATION_NAME,
+  });
+  // A connection that drops between renewals is reported as an event rather than through a query.
+  // Unheard, that event would end the process; heard, the connection is given up and renewals go
+  // back through the adapter's pool, as on any pool that can spare a connection.
+  let broken = false;
+  connection.on("error", () => {
+    broken = true;
+  });
   await connection.connect();
   const { PgDialect } = await import("drizzle-orm/pg-core");
   const compiler = new PgDialect();
@@ -553,6 +569,7 @@ async function openPostgresRenewal(
       },
       query,
     },
+    broken: () => broken,
     close: () => connection.end(),
   };
 }
@@ -972,7 +989,10 @@ class SchemaLockHold {
   private ownRunner(): StatementRunner | undefined {
     const connection = this.earlier?.connection;
     if (connection !== undefined) return connectionRunner(connection);
-    return this.renewalConnection?.runner;
+    const renewal = this.renewalConnection;
+    return renewal !== undefined && !renewal.broken()
+      ? renewal.runner
+      : undefined;
   }
 
   /** Close the renewal connection, once nothing will renew again. */
