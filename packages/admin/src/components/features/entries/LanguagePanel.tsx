@@ -744,6 +744,13 @@ function PublishAllConfirm({
   );
 }
 
+/** The publish hook's options: the lifecycle flag only where the caller knows it. */
+function publishOptions(
+  hasStatus: boolean | undefined
+): Parameters<typeof usePublishAllLanguages>[0] {
+  return hasStatus === undefined ? {} : { hasStatus };
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
@@ -761,9 +768,7 @@ export function LanguagePanel({
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
   const copy = useCopyFromLanguageScope();
-  const publish = usePublishAllLanguages(
-    hasStatus === undefined ? {} : { hasStatus }
-  );
+  const publish = usePublishAllLanguages(publishOptions(hasStatus));
 
   if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 

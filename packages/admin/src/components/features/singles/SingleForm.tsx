@@ -293,6 +293,7 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   enabled,
   hasStatus,
   locale,
@@ -302,6 +303,7 @@ function SingleFormLanguagePanel({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   enabled: boolean;
   hasStatus: boolean;
   locale?: string;
@@ -319,6 +321,7 @@ function SingleFormLanguagePanel({
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -374,6 +377,7 @@ function SingleFormFieldsPanel({
 function SingleFormRail({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   entry,
   hasStatus,
   isDirty,
@@ -383,6 +387,7 @@ function SingleFormRail({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   isDirty: boolean;
@@ -401,6 +406,7 @@ function SingleFormRail({
           isDirty={isDirty}
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
+          publishAllDisabled={publishAllDisabled}
           {...(locale === undefined ? {} : { locale })}
           {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         />

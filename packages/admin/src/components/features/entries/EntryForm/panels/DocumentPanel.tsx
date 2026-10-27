@@ -31,6 +31,8 @@ export interface DocumentPanelProps {
   actionsDisabled?: boolean;
   /** Withholds opening another language; the same as `actionsDisabled` unless given. */
   navigationDisabled?: boolean;
+  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
+  publishAllDisabled?: boolean;
   /** Whether the form has unsaved local changes. When the entry is
    *  published and the form is dirty, the status pill renders as
    *  "Modified" (Strapi pattern) so the user sees both "what's live"
@@ -88,6 +90,7 @@ export function DocumentPanel({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
   isDirty = false,
 }: DocumentPanelProps): React.ReactElement | null {
   const isCreate = mode === "create";
@@ -130,6 +133,7 @@ export function DocumentPanel({
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -146,6 +150,7 @@ function TranslationsRow({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
 }: {
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
@@ -153,6 +158,7 @@ function TranslationsRow({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   actionsDisabled?: boolean;
   navigationDisabled?: boolean;
+  publishAllDisabled?: boolean;
 }) {
   // The panel self-hides when localization is off, so an absent map is not a
   // reason to withhold it: a localized entry fetched without
@@ -172,6 +178,7 @@ function TranslationsRow({
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );

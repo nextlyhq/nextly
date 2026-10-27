@@ -28,6 +28,8 @@ export interface EntryFormSidebarProps {
   actionsDisabled?: boolean;
   /** Withholds opening another language; the same as `actionsDisabled` unless given. */
   navigationDisabled?: boolean;
+  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
+  publishAllDisabled?: boolean;
   /** Whether the form has unsaved local changes. Forwarded to DocumentPanel
    *  so it can render the "Modified" pill state on a dirty published entry. */
   isDirty?: boolean;
@@ -42,6 +44,7 @@ export function EntryFormSidebar({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
   isDirty = false,
 }: EntryFormSidebarProps): JSX.Element | null {
   if (hidden) return null;
@@ -56,6 +59,7 @@ export function EntryFormSidebar({
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
         isDirty={isDirty}
       />
     </div>
