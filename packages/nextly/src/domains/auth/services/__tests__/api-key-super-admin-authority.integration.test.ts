@@ -30,7 +30,10 @@ process.env.NEXTLY_SECRET =
 import { and, eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { narrowScope } from "../../../../auth/authenticated-scope";
+import {
+  narrowScope,
+  type AuthenticatedScope,
+} from "../../../../auth/authenticated-scope";
 import {
   SESSION_CUTOFF_SECONDS,
   resetSessionStandingForTests,
@@ -51,6 +54,9 @@ import { EPOCH_TTL_MS } from "../../../../services/lib/rbac-epoch";
 import type { ApiKeyService, ApiKeyTokenType } from "../api-key-service";
 
 const PLUGIN = "@test/narrowing";
+
+/** A key's scope a plugin route kept past the request it arrived with. */
+let retained: AuthenticatedScope | undefined;
 
 /** A read rule only super-admin authority passes. */
 const posts = defineCollection({
@@ -84,6 +90,30 @@ const narrowing = definePlugin({
             }
           );
           // A refusal is thrown, and reaches the client as its status.
+          return Response.json({});
+        },
+      },
+      {
+        method: "POST",
+        path: "/retain",
+        handler: async (_req, ctx) => {
+          retained = ctx.authenticatedScope;
+          return Response.json({});
+        },
+      },
+      {
+        method: "POST",
+        path: "/read-retained",
+        handler: async (_req, ctx) => {
+          await ctx.services.collections.listEntries(
+            "posts",
+            {},
+            {
+              as: "user",
+              user: ctx.user ?? undefined,
+              authenticatedScope: retained,
+            }
+          );
           return Response.json({});
         },
       },
@@ -214,7 +244,7 @@ async function markSeen(
 
 /** One of the narrowing plugin's routes, with `key`: the status it answered. */
 async function pluginRead(
-  sub: "read" | "narrowed-read",
+  sub: "read" | "narrowed-read" | "retain" | "read-retained",
   key: string
 ): Promise<number> {
   const res = await createDynamicHandlers().POST(
@@ -523,6 +553,71 @@ describe.each(getConfiguredTestDialects())(
       expect(await pluginRead("read", key)).toBe(200);
       // Narrowed to keep every grant, the scope is judged on those alone.
       expect(await pluginRead("narrowed-read", key)).toBe(403);
+    });
+
+    it("loses it in a scope a plugin keeps past its request, once the bound its maker's sessions follow has passed", async () => {
+      const install = await boot();
+      const root = await maker(install, "root", {
+        roleId: install.superAdminRole,
+      });
+      const key = await keyOf(install, root, "full-access");
+      expect(await pluginRead("retain", key)).toBe(200);
+      expect(await pluginRead("read-retained", key)).toBe(200);
+
+      const removed = await install.services.userRoles.unassignRoleFromUser(
+        root,
+        install.superAdminRole
+      );
+      expect(removed.success).toBe(true);
+      // The key's next request carries none of it at once, and the kept scope
+      // still does within the bound: so the read below is the kept scope's.
+      expect(await readPosts(key)).toBe(403);
+      expect(await pluginRead("read-retained", key)).toBe(200);
+
+      await new Promise(resolve =>
+        setTimeout(resolve, SESSION_CUTOFF_SECONDS * 1000 + 100)
+      );
+      expect(await pluginRead("read-retained", key)).toBe(403);
+    }, 30_000);
+
+    it("is judged the same by a route that checks the key itself and hands the Direct API its actor", async () => {
+      const install = await boot();
+      const root = await maker(install, "root", {
+        roleId: install.superAdminRole,
+      });
+      const full = await keyOf(install, root, "full-access");
+      const readOnly = await keyOf(install, root, "read-only");
+
+      /** A custom route's read: the key checked, then its actor handed on. */
+      const viaCheck = async (rawKey: string, handBuilt = false) => {
+        const checked = await install.t.nextly.access.checkApiKey({ rawKey });
+        expect(checked.valid).toBe(true);
+        const actor: AuthenticatedScope | undefined = handBuilt
+          ? {
+              actorType: "apiKey",
+              permissions: checked.permissions ?? [],
+              roles: checked.roles ?? [],
+            }
+          : checked.actor;
+        try {
+          await install.t.nextly.find({
+            collection: "posts",
+            overrideAccess: false,
+            user: { id: String(checked.userId) },
+            actor,
+          });
+          return 200;
+        } catch (error) {
+          return (error as { statusCode?: number }).statusCode ?? 500;
+        }
+      };
+
+      expect(await viaCheck(full)).toBe(await readPosts(full));
+      expect(await viaCheck(full)).toBe(200);
+      expect(await viaCheck(readOnly)).toBe(await readPosts(readOnly));
+      expect(await viaCheck(readOnly)).toBe(403);
+      // A scope built by hand from the same answer carries none of it.
+      expect(await viaCheck(full, true)).toBe(403);
     });
 
     it("reads the schema journal, where the maker's read-only key may not", async () => {
