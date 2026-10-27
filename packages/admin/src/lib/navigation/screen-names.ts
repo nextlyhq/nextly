@@ -18,19 +18,18 @@ import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav"
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
 import type { NavSection } from "@admin/constants/nav-sections";
 import type { PluginMenuItemMeta, PluginMetadata } from "@admin/types/branding";
-import type { Collection } from "@admin/types/collection";
-import type { ApiSingle } from "@admin/types/entities";
+import type { ApiCollection, ApiSingle } from "@admin/types/entities";
 
 /**
  * The data a screen's name may depend on, beyond the route itself.
  *
  * Supplied by the title provider from answers the admin already holds: the
- * collection or Single a content route opens, and the plugin list from
- * admin-meta. Each is absent until it arrives.
+ * collection or Single a content route opens, as the sidebar's lists carry
+ * them, and the plugin list from admin-meta. Each is absent until it arrives.
  */
 export interface ScreenNameSources {
   pathname: string;
-  collection?: Pick<Collection, "name" | "label" | "labels">;
+  collection?: Pick<ApiCollection, "name" | "label" | "labels">;
   single?: Pick<ApiSingle, "slug" | "label">;
   plugins?: readonly PluginMetadata[];
 }

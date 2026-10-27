@@ -22,8 +22,14 @@ import {
   useRef,
 } from "react";
 
-import { useCollection } from "@admin/hooks/queries/useCollections";
-import { useSingleSchema } from "@admin/hooks/queries/useSingles";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+} from "@admin/hooks/queries/useCollections";
+import {
+  NAV_SINGLES_PARAMS,
+  useSingles,
+} from "@admin/hooks/queries/useSingles";
 import {
   formatDocumentTitle,
   resolveScreenName,
@@ -48,21 +54,35 @@ export const DocumentTitleContext = createContext<DocumentTitleItems | null>(
 
 /**
  * The screen's name, reading the open collection or Single when the route
- * opens one. The collection and Single are the answers the content screens
- * already ask for, so on those screens this adds no request of its own; on
- * every other route both queries are disabled.
+ * opens one.
+ *
+ * The label comes from the sidebar's own lists of collections and Singles,
+ * asked with the sidebar's params and so under the sidebar's cache keys. The
+ * sidebar loads both on every signed-in screen, so naming the tab reads an
+ * answer already in hand and sends nothing: a read of the one collection or
+ * Single would fetch a whole schema for its label alone. The lists are only
+ * asked for on a route that opens a collection or a Single; while one has not
+ * arrived the tab names the site alone.
  */
 function useScreenName(
   route: RouteResult,
   pathname: string
 ): string | undefined {
   const slug = route.entityAccess?.slug;
-  const { data: collection } = useCollection(
-    route.accessSubject === "collection" ? slug : undefined
-  );
-  const { data: single } = useSingleSchema(
-    route.accessSubject === "single" ? slug : undefined
-  );
+  const opensCollection = route.accessSubject === "collection";
+  const opensSingle = route.accessSubject === "single";
+  const { data: collections } = useCollections(NAV_COLLECTIONS_PARAMS, {
+    enabled: opensCollection,
+  });
+  const { data: singles } = useSingles(NAV_SINGLES_PARAMS, {
+    enabled: opensSingle,
+  });
+  const collection = opensCollection
+    ? collections?.items.find(item => item.name === slug)
+    : undefined;
+  const single = opensSingle
+    ? singles?.items.find(item => item.slug === slug)
+    : undefined;
   const { plugins } = useBranding();
   return resolveScreenName(route.screenName, {
     pathname,

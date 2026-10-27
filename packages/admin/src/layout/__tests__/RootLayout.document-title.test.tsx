@@ -16,6 +16,7 @@ import type { AdminBranding } from "@admin/types/branding";
 
 const publicGet = vi.fn();
 const protectedGet = vi.fn();
+const listGet = vi.fn();
 
 vi.mock("@admin/lib/api/publicApi", () => ({
   publicApi: { get: (...args: unknown[]) => publicGet(...args) },
@@ -24,6 +25,14 @@ vi.mock("@admin/lib/api/publicApi", () => ({
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get: (...args: unknown[]) => protectedGet(...args) },
 }));
+
+// The sidebar's collection and Single lists go out through the plain fetcher.
+vi.mock("@admin/lib/api/fetcher", async () => {
+  const actual = await vi.importActual<typeof import("@admin/lib/api/fetcher")>(
+    "@admin/lib/api/fetcher"
+  );
+  return { ...actual, fetcher: (path: string) => listGet(path) };
+});
 
 vi.mock("@admin/hooks/queries/useAuthSession", () => ({
   useAuthSession: () => ({
@@ -65,7 +74,28 @@ vi.mock("@admin/components/guards/PermissionGuard", () => ({
   ),
 }));
 
+import {
+  NAV_COLLECTIONS_PARAMS,
+  NAV_SINGLES_PARAMS,
+  collectionKeys,
+  singleKeys,
+} from "@admin/hooks/queries";
+
 import { RootLayout } from "../RootLayout";
+
+const POSTS = {
+  name: "posts",
+  label: "Post",
+  labels: { singular: "Post", plural: "Posts" },
+};
+const ABOUT = { slug: "about", label: "About Us" };
+
+/** Every request for one collection or Single, by any route or endpoint. */
+function itemRequests() {
+  return protectedGet.mock.calls
+    .map(([path]) => String(path))
+    .filter(path => /^\/(collections|singles)\//.test(path));
+}
 
 /** Answers the branding halves and a collection read the way the server does. */
 function answerWith(branding: AdminBranding) {
@@ -75,27 +105,35 @@ function answerWith(branding: AdminBranding) {
   protectedGet.mockImplementation((path: string) => {
     if (path === "/admin-meta/workspace")
       return Promise.resolve({ plugins: [] });
-    if (path === "/collections/posts") {
-      return Promise.resolve({
-        name: "posts",
-        label: "Post",
-        labels: { singular: "Post", plural: "Posts" },
-      });
+    // A collection's own read, answered so that a title taken from it would
+    // still come out right: what separates the two sources is whether this
+    // request is made at all.
+    if (path === "/collections/posts") return Promise.resolve(POSTS);
+    return Promise.reject(new Error(`unexpected request ${path}`));
+  });
+  listGet.mockImplementation((path: string) => {
+    const meta = { total: 1, page: 1, limit: 100, totalPages: 1 };
+    if (path.startsWith("/collections")) {
+      return Promise.resolve({ items: [POSTS], meta });
+    }
+    if (path.startsWith("/singles")) {
+      return Promise.resolve({ items: [ABOUT], meta });
     }
     return Promise.reject(new Error(`unexpected request ${path}`));
   });
 }
 
-function renderAt(pathname: string) {
+function renderAt(pathname: string, client = createClient()) {
   window.history.replaceState({}, "", pathname);
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   return render(
     <QueryClientProvider client={client}>
       <RootLayout />
     </QueryClientProvider>
   );
+}
+
+function createClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
 /** Moves the way an in-app link does: a history push, no page load. */
@@ -112,6 +150,7 @@ beforeEach(() => {
 afterEach(() => {
   publicGet.mockReset();
   protectedGet.mockReset();
+  listGet.mockReset();
 });
 
 describe("the admin's tab title", () => {
@@ -174,5 +213,48 @@ describe("the admin's tab title", () => {
     renderAt("/admin");
 
     await waitFor(() => expect(document.title).toBe("Dashboard · Acme Docs"));
+  });
+
+  it("names an entry's screen from the sidebar's collection list, with no request of its own", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin/collections/posts/e1");
+
+    await waitFor(() => expect(document.title).toBe("Posts · Golden Shop"));
+    expect(itemRequests()).toEqual([]);
+  });
+
+  it("names a Single from the sidebar's Single list, with no request of its own", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin/singles/about");
+
+    await waitFor(() => expect(document.title).toBe("About Us · Golden Shop"));
+    expect(itemRequests()).toEqual([]);
+  });
+
+  it("reads the very cache entries the sidebar's lists fill", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    // The lists as the sidebar left them, fresh, so nothing has reason to ask
+    // the server about collections or Singles again.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const meta = { total: 1, page: 1, limit: 100, totalPages: 1 };
+    client.setQueryData(collectionKeys.list(NAV_COLLECTIONS_PARAMS), {
+      items: [POSTS],
+      meta,
+    });
+    client.setQueryData(singleKeys.list(NAV_SINGLES_PARAMS), {
+      items: [ABOUT],
+      meta,
+    });
+
+    renderAt("/admin/collections/posts/e1/versions", client);
+    await waitFor(() => expect(document.title).toBe("Posts · Golden Shop"));
+
+    navigate("/admin/singles/about");
+    await waitFor(() => expect(document.title).toBe("About Us · Golden Shop"));
+
+    expect(listGet).not.toHaveBeenCalled();
+    expect(itemRequests()).toEqual([]);
   });
 });
