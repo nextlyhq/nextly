@@ -474,10 +474,11 @@ function answerState(
     error: query.error,
     hasAnswer:
       query.data !== undefined && !unusable && !query.isPlaceholderData,
-    // Only another language's answer is kept on screen: one for this
-    // language that no longer holds may have stopped holding because access
-    // changed, and is waited on rather than kept.
-    isPlaceholder: query.isPlaceholderData,
+    // Only another language's answer is kept on screen, and only while it
+    // holds: one that no longer does (this language's own, or the one moved
+    // from once a change invalidates it) may have stopped holding because
+    // access changed, and is waited on rather than kept.
+    isPlaceholder: query.isPlaceholderData && !unusable,
   };
 }
 

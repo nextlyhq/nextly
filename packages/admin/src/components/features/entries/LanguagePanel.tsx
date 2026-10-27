@@ -25,7 +25,7 @@
 
 import { Button, Input } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -677,10 +677,11 @@ export function DocumentLanguagePanel({
 }
 
 /**
- * The publish-all confirmation, open only while publishing is offered: one
+ * The publish-all confirmation, open only while publishing is offered. One
  * already open when the panel's actions are held (a language switch's answer
- * on its way, a past version on screen) closes rather than publish on their
- * word.
+ * on its way, a past version on screen) or publishing every language stops
+ * being offered is closed, not hidden, so it does not reopen on its own once
+ * the hold ends.
  */
 function PublishAllConfirm({
   open,
@@ -697,9 +698,13 @@ function PublishAllConfirm({
   pendingCount: number;
   publish: ReturnType<typeof usePublishAllLanguages>;
 }) {
+  const offered = !held && publish.available;
+  useEffect(() => {
+    if (open && !offered) onOpenChange(false);
+  }, [open, offered, onOpenChange]);
   return (
     <PublishAllConfirmDialog
-      open={open && !held}
+      open={open && offered}
       onOpenChange={onOpenChange}
       languageCount={languageCount}
       pendingCount={pendingCount}

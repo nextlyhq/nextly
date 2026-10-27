@@ -1147,6 +1147,39 @@ describe("switching language after a change to access", () => {
   });
 });
 
+describe("a change to access during a language switch", () => {
+  it("stops keeping the language moved from once a change invalidates it", async () => {
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // On to German, held back: the English answer is the placeholder.
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.content.isPlaceholder).toBe(true)
+    );
+
+    // A change to roles invalidates every answer while German is still
+    // asked: the English one may no longer describe the user's access.
+    server.capabilitiesGate = new Promise(() => {});
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() =>
+      expect(result.current.content.isPlaceholder).toBe(false)
+    );
+    expect(result.current.content.hasAnswer).toBe(false);
+  });
+});
+
 describe("invalidateCurrentUserAccess", () => {
   it("asks for both the permissions and the capabilities again", async () => {
     const client = newClient();

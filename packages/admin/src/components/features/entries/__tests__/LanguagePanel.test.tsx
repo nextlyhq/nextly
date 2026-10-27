@@ -653,6 +653,35 @@ describe("LanguagePanel", () => {
     );
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(publishAll).not.toHaveBeenCalled();
+
+    // Closed, not hidden: the hold ending does not bring it back.
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("closes an open publish-all confirmation once publishing every language is not offered", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
   });
 
   it("hides publish-all when the action does not apply", () => {
