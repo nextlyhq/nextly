@@ -19,6 +19,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -54,7 +55,8 @@ const RECENT_START = new Date(TODAY.getTime() - 29 * DAY_MS);
 /** The first instant of the 30 days before them. */
 const PRIOR_START = new Date(TODAY.getTime() - 59 * DAY_MS);
 
-const admin: ReadCaller = { user: { id: "admin", roles: ["super-admin"] } };
+/** A reader the gate finds holding super-admin, seeded at each boot. */
+const admin: ReadCaller = { user: { id: "admin" } };
 
 /** One post: its status, and the instant its row says it was created. */
 interface Row {
@@ -127,6 +129,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const t = current;
+      await superAdminUser(t, "admin");
       const handler = t.getService("collectionsHandler") as unknown as {
         createEntry: (
           p: Record<string, unknown>,

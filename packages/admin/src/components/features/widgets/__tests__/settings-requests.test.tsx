@@ -16,6 +16,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -46,7 +47,7 @@ function card(placementId: string, limit?: number): BatchCard {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "custom",
-    size: "md",
+    size: gridBounds(4),
     query: limit === undefined ? DECLARED : { ...DECLARED, limit },
   };
   return limit === undefined

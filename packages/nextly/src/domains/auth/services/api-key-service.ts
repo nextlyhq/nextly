@@ -84,6 +84,9 @@ import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+
+import { refuseLinkingPublicRole } from "./public-role";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -637,6 +640,14 @@ export class ApiKeyService extends BaseService {
           logContext: { tokenType },
         });
       }
+      // The Public role is what visitors hold, never a key's.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [roleId],
+        "assign",
+        { userId }
+      );
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);

@@ -17,8 +17,8 @@ vi.mock("@admin/components/ui", () => ({ toast: { error: toastError } }));
 import { useCardSettingsWrite } from "../useCardSettingsWrite";
 
 const PLACEMENTS: WidgetPlacement[] = [
-  { id: "p1", widgetId: "core/a", width: "half", removed: false },
-  { id: "p2", widgetId: "core/b", width: "half", removed: false },
+  { id: "p1", widgetId: "core/a", w: 6, h: 3, removed: false },
+  { id: "p2", widgetId: "core/b", w: 6, h: 3, removed: false },
 ];
 
 function stored(placements = PLACEMENTS): DashboardLayoutResponse {

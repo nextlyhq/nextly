@@ -7,6 +7,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -41,14 +42,16 @@ const CELLS: Record<string, WidgetSlot> = {
 function drawAt(tier: SizeTier, cells: Record<string, WidgetSlot>) {
   render(
     <CardTierContext.Provider value={tier}>
-      <CountCard
-        widgetId="core/count"
-        placementId="core/count:posts"
-        settings={{ collection: "posts" }}
-        slot={undefined}
-        cells={cells}
-        isFetching={false}
-      />
+      {inFrame(
+        <CountCard
+          widgetId="core/count"
+          placementId="core/count:posts"
+          settings={{ collection: "posts" }}
+          slot={undefined}
+          cells={cells}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }
@@ -107,15 +110,17 @@ describe("the Count card", () => {
     const onRetry = vi.fn();
     render(
       <CardTierContext.Provider value="medium">
-        <CountCard
-          widgetId="core/count"
-          placementId="core/count:posts"
-          settings={{ collection: "posts" }}
-          slot={undefined}
-          cells={{ split: { ok: false, error: "Down" } }}
-          isFetching={false}
-          onRetry={onRetry}
-        />
+        {inFrame(
+          <CountCard
+            widgetId="core/count"
+            placementId="core/count:posts"
+            settings={{ collection: "posts" }}
+            slot={undefined}
+            cells={{ split: { ok: false, error: "Down" } }}
+            isFetching={false}
+            onRetry={onRetry}
+          />
+        )}
       </CardTierContext.Provider>
     );
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));

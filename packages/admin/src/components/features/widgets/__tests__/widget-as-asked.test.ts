@@ -15,6 +15,7 @@ import {
   titleAsAsked,
   widgetAsAsked,
 } from "../widget-as-asked";
+import { gridBounds } from "./grid-bounds";
 
 const settings: DashboardWidget["settings"] = [
   {
@@ -30,7 +31,7 @@ const recentlyEdited: DashboardWidget = {
   id: "core/recently-edited",
   title: "Recently edited",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "system:recent-edits", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
@@ -83,7 +84,7 @@ describe("a custom card asking through cells", () => {
     id: "core/count",
     title: "Count",
     archetype: "custom",
-    size: "sm",
+    size: gridBounds(3),
     settings: [
       { name: "collection", label: "Collection", type: "collection" },
       { name: "filter", label: "Filter", type: "filter", of: "collection" },
@@ -142,14 +143,20 @@ describe("a custom card asking through cells", () => {
     });
   });
 
-  it("is titled by the collection it is set to, and as its widget when set to none", () => {
-    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toBe(
-      "Count: Posts"
-    );
-    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toBe(
-      "Count: drafts"
-    );
-    expect(titleAsAsked(count, {}, [posts])).toBe("Count");
+  it("is titled by its subject, the collection it is set to, with its widget's name beneath", () => {
+    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Count",
+    });
+    // A collection with no published label is named as stored.
+    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toEqual({
+      title: "drafts",
+      subtitle: "Count",
+    });
+  });
+
+  it("is titled as its widget, with no subtitle, when set to no collection", () => {
+    expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
   });
 });
 

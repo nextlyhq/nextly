@@ -57,6 +57,7 @@
     "src/domains/schema/migrate-create/__tests__/app-stream.test.ts",
     "src/route-handler/__tests__/auth-handler.localization-after-get-nextly.test.ts",
     "src/route-handler/__tests__/dispatcher-singleton.test.ts",
+    "src/route-handler/__tests__/request-boot-awaits-seeding.test.ts",
     "src/route-handler/__tests__/route-parser.email-send.test.ts",
     "src/services/dashboard/__tests__/admin-counts.test.ts",
     "src/services/dashboard/__tests__/list-read-gates-readers.test.ts"

@@ -208,9 +208,10 @@ export async function loadDialectTables(dialect: string): Promise<void> {
 
 /**
  * The loaded tables and relations of `dialect`. A dialect not loaded yet
- * fails here, naming the cause, rather than as a missing table far from it:
- * the tables are loaded when the adapter is created, so a read before that
- * is a read before the database layer exists.
+ * fails here, naming the cause and the fix, rather than as a missing table
+ * far from it: the tables are loaded when createAdapter or registerServices
+ * meets the adapter, so an adapter built directly from an adapter package
+ * (handed to `new ServiceContainer`, say) needs its dialect loaded first.
  */
 export function loadedDialect(dialect: string | undefined): LoadedDialect {
   const known = loadable(dialect);
@@ -229,8 +230,9 @@ export function loadedDialect(dialect: string | undefined): LoadedDialect {
     logContext: {
       reason:
         `the ${known} tables were read before that dialect was loaded. ` +
-        `createAdapter loads them, so read tables after the adapter exists, ` +
-        `or await loadDialectTables("${known}") first`,
+        `createAdapter and registerServices load them; for an adapter built ` +
+        `directly from an adapter package, or a read with no adapter, ` +
+        `await loadDialectTables("${known}") first`,
     },
   });
 }

@@ -12,9 +12,9 @@
  * A mean over the heaviest tenth, not a percentile: the files' counts have a
  * gap between the files that reach the registry and those that do not, and a
  * percentile landing at the gap jumps across it when one file is added or
- * removed anywhere in the suite, failing an unrelated change in either
- * direction. One file entering or leaving the tenth moves the mean by a few
- * modules.
+ * removed anywhere in the suite, or when another machine runs one file more,
+ * failing an unrelated change in either direction. One file entering or
+ * leaving the tenth moves the mean by a few modules.
  *
  * The counts come from this run: Vitest records the modules each file loaded
  * (`experimental.recordDependencies`) and writes the records before reporters

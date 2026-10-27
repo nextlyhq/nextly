@@ -1,7 +1,8 @@
 /**
  * The module budget's arithmetic: what counts as heavy, how the heaviest tenth
  * is averaged, when a pin is exceeded or should come down, the import chain a
- * failure names, and which imports cross the dialect boundary. The reporter applies these to the run's records; that it
+ * failure names, and which imports cross the dialect boundary. The reporter
+ * applies these to the run's records; that it
  * reads the right records is shown by the suite itself, which prints the
  * measurement on every whole run.
  */
