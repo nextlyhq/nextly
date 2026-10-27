@@ -21,8 +21,10 @@
  * `migrate:down`, `--force` for `prune` and `migrate:fresh`) cover that
  * command's deletions of anything but Nextly's own tables. A command says
  * which earlier spellings it honours, so one never reaches a command it did
- * not cover. `--yes` is not among them: it answers a question, and never
- * authorises deleting data.
+ * not cover. Once the consent itself is given, it alone decides: an earlier
+ * spelling still set beside it is named ignored, so a list cannot be widened
+ * by a variable left over from before. `--yes` is not among them: it answers a
+ * question, and never authorises deleting data.
  *
  * Pure apart from the counts, which read the database through the counting
  * helpers the schema classifier uses. Printing and asking are the caller's,
@@ -70,12 +72,23 @@ const ENV_SPELLINGS: ReadonlySet<EarlierSpelling> = new Set([
  * values, and for a removal of rows its table's rows. Absent when the
  * database could not be read.
  *
+ * `alongside` names what goes with a table that lives elsewhere, such as an
+ * entity's archived translations in a table every entity shares: it is the
+ * table's data, listed with it and covered by naming it, since naming the
+ * shared table would cover every other entity's too.
+ *
  * `unnamed` is a deletion its command can judge but not yet name, such as a
  * migration's DOWN read only as "drops something": no list of targets can
  * cover what it does not name, so only consent without targets covers it.
  */
 export type Deletion =
-  | { kind: "table"; table: string; core?: boolean; count?: number }
+  | {
+      kind: "table";
+      table: string;
+      core?: boolean;
+      count?: number;
+      alongside?: string;
+    }
   | {
       kind: "column";
       table: string;
@@ -102,12 +115,21 @@ export interface DataLossConsent {
     from: "flag" | "env";
     targets: "all" | ConsentTargets;
   };
-  /** The earlier spellings the run used that its command honours. */
+  /**
+   * The earlier spellings the run used that its command honours, and that
+   * still count: none once the consent itself is given.
+   */
   earlier: readonly EarlierSpelling[];
+  /** Earlier spellings the run used that the consent given replaced. */
+  ignored: readonly EarlierSpelling[];
 }
 
 /** No consent at all: what a command passes when nothing was given. */
-export const NO_CONSENT: DataLossConsent = { given: null, earlier: [] };
+export const NO_CONSENT: DataLossConsent = {
+  given: null,
+  earlier: [],
+  ignored: [],
+};
 
 /**
  * The tables and columns a consent's list names, or `all` for the values
@@ -178,7 +200,7 @@ export function resolveDataLossConsent(args: {
   const env = args.env ?? {};
   const honours = args.honours ?? [];
   const usedFlags = new Set(args.earlierFlags ?? []);
-  const earlier = honours.filter(spelling =>
+  const used = honours.filter(spelling =>
     ENV_SPELLINGS.has(spelling)
       ? env[spelling] === "1"
       : usedFlags.has(spelling)
@@ -200,23 +222,41 @@ export function resolveDataLossConsent(args: {
     const targets = raw === undefined ? null : parseTargets(raw, "env");
     if (targets !== null) given = { from: "env", targets };
   }
-  return { given, earlier };
+  // The consent given replaces the earlier spellings rather than adding to
+  // them: what it names is all the run may delete.
+  return given === null
+    ? { given, earlier: used, ignored: [] }
+    : { given, earlier: [], ignored: used };
 }
 
-/** The deprecation notice for each earlier spelling the run used. */
+/**
+ * The notice for each earlier spelling the run used: deprecated where it
+ * still counted, ignored where the consent given replaced it.
+ */
 export function deprecationNotices(consent: DataLossConsent): string[] {
-  return consent.earlier.map(spelling => {
-    const replacement = ENV_SPELLINGS.has(spelling)
-      ? `${ACCEPT_DATA_LOSS_ENV} (or ${ACCEPT_DATA_LOSS_FLAG})`
-      : ACCEPT_DATA_LOSS_FLAG;
-    const named = spelling.endsWith("--force")
-      ? `${spelling.replace(" --force", "")}'s --force`
-      : spelling;
-    return (
-      `${named} is deprecated and will be removed: use ${replacement}, ` +
-      `which can name the tables and columns it covers.`
-    );
-  });
+  const replacedBy =
+    consent.given?.from === "flag"
+      ? ACCEPT_DATA_LOSS_FLAG
+      : ACCEPT_DATA_LOSS_ENV;
+  const ignored = consent.ignored.map(
+    spelling =>
+      `${spelling} is ignored: ${replacedBy} was given, and it alone decides what this run may delete.`
+  );
+  return [
+    ...ignored,
+    ...consent.earlier.map(spelling => {
+      const replacement = ENV_SPELLINGS.has(spelling)
+        ? `${ACCEPT_DATA_LOSS_ENV} (or ${ACCEPT_DATA_LOSS_FLAG})`
+        : ACCEPT_DATA_LOSS_FLAG;
+      const named = spelling.endsWith("--force")
+        ? `${spelling.replace(" --force", "")}'s --force`
+        : spelling;
+      return (
+        `${named} is deprecated and will be removed: use ${replacement}, ` +
+        `which can name the tables and columns it covers.`
+      );
+    }),
+  ];
 }
 
 /** A key that names one deletion, for telling two listings' entries apart. */
@@ -264,10 +304,15 @@ function plural(count: number, one: string, many: string): string {
 /** One line of a listing: what is deleted, and how much of it when counted. */
 export function describeDeletion(deletion: Deletion): string {
   switch (deletion.kind) {
-    case "table":
-      return deletion.count === undefined
-        ? `table ${deletion.table}`
-        : `table ${deletion.table} (${plural(deletion.count, "row", "rows")})`;
+    case "table": {
+      const counted =
+        deletion.count === undefined
+          ? `table ${deletion.table}`
+          : `table ${deletion.table} (${plural(deletion.count, "row", "rows")})`;
+      return deletion.alongside === undefined
+        ? counted
+        : `${counted}, with ${deletion.alongside}`;
+    }
     case "column":
       return deletion.count === undefined
         ? `column ${deletion.table}.${deletion.column}`

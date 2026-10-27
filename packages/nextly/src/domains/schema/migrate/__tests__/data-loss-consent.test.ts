@@ -166,6 +166,35 @@ describe("earlier spellings", () => {
     expect(consentCovers(consent, column("posts", "summary"))).toBe(false);
   });
 
+  it("lets no earlier spelling widen the consent given, naming it ignored", () => {
+    const consent = resolveDataLossConsent({
+      flag: "dc_posts.summary",
+      env: { NEXTLY_ALLOW_CODE_FIRST_DROPS: "1" },
+      honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+    });
+    expect(consentCovers(consent, column("dc_posts", "summary"))).toBe(true);
+    expect(consentCovers(consent, column("dc_posts", "body"))).toBe(false);
+    expect(deprecationNotices(consent)).toEqual([
+      expect.stringMatching(
+        /NEXTLY_ALLOW_CODE_FIRST_DROPS is ignored.*--accept-data-loss was given/
+      ),
+    ]);
+  });
+
+  it("lets the variable replace an earlier spelling the same way", () => {
+    const consent = resolveDataLossConsent({
+      env: {
+        NEXTLY_ACCEPT_DATA_LOSS: "dc_posts.summary",
+        NEXTLY_ALLOW_CODE_FIRST_DROPS: "1",
+      },
+      honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+    });
+    expect(consentCovers(consent, column("dc_posts", "body"))).toBe(false);
+    expect(deprecationNotices(consent)[0]).toMatch(
+      /ignored.*NEXTLY_ACCEPT_DATA_LOSS was given/
+    );
+  });
+
   it("ignores an earlier spelling its command does not honour", () => {
     const consent = resolveDataLossConsent({
       env: { NEXTLY_ALLOW_CODE_FIRST_DROPS: "1" },
@@ -376,6 +405,14 @@ describe("describing a deletion", () => {
       describeDeletion({ kind: "column", table: "p", column: "c", count: 0 })
     ).toBe("column p.c (0 non-empty values)");
     expect(describeDeletion(rows("p"))).toBe("rows of p");
+    expect(
+      describeDeletion({
+        kind: "table",
+        table: "dc_p",
+        count: 2,
+        alongside: "its 3 archived translations",
+      })
+    ).toBe("table dc_p (2 rows), with its 3 archived translations");
     expect(describeDeletion(unnamed)).toBe(
       "0003_x's DOWN drops a table or column"
     );

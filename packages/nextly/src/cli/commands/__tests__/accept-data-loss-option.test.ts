@@ -112,6 +112,7 @@ describe("plugins uninstall", () => {
         },
       },
       earlier: [],
+      ignored: [],
     });
   });
 
@@ -121,12 +122,13 @@ describe("plugins uninstall", () => {
     expect(consentPassed()).toEqual({
       given: { from: "env", targets: "all" },
       earlier: [],
+      ignored: [],
     });
   });
 
   it("hands it no consent for --yes alone", async () => {
     await run("--yes");
-    expect(consentPassed()).toEqual({ given: null, earlier: [] });
+    expect(consentPassed()).toEqual({ given: null, earlier: [], ignored: [] });
   });
 });
 

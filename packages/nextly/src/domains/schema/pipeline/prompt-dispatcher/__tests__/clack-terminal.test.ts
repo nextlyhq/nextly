@@ -310,6 +310,29 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
     });
   });
 
+  it("lets NEXTLY_ALLOW_CODE_FIRST_DROPS widen no consent that names its drops", async () => {
+    await withEnv(
+      {
+        NEXTLY_ACCEPT_DATA_LOSS: "dc_posts.excerpt",
+        NEXTLY_ALLOW_CODE_FIRST_DROPS: "1",
+      },
+      async () => {
+        const { dispatcher, printed } = listingDispatcher();
+        await expect(
+          dispatcher.dispatch({
+            candidates: [],
+            events: [dropEvent("excerpt"), dropEvent("byline")],
+            classification: "interactive",
+            channel: "terminal",
+          })
+        ).rejects.toThrow(
+          /does not cover 1 deletion:\n {2}- column dc_posts\.byline/
+        );
+        expect(printed[0]).toMatch(/NEXTLY_ALLOW_CODE_FIRST_DROPS is ignored/);
+      }
+    );
+  });
+
   it("drops every column of a table the consent names", async () => {
     await withEnv({ NEXTLY_ACCEPT_DATA_LOSS: "dc_posts" }, async () => {
       const { dispatcher } = listingDispatcher();

@@ -20,6 +20,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
+import { and, count, eq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
@@ -41,6 +42,8 @@ import {
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
+import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -84,6 +87,32 @@ interface RunPruneArgs {
    * before anything changes.
    */
   approve: (deletions: Deletion[]) => Promise<boolean>;
+  /**
+   * How many archived translations an orphaned collection has, which its
+   * teardown removes from the archive every entity shares; undefined when
+   * that cannot be read. Absent, the listing says the collection's archived
+   * translations go with it, uncounted.
+   */
+  countArchived?: (slug: string) => Promise<number | undefined>;
+}
+
+/**
+ * What goes with an orphan's table: the collection's archived translations,
+ * which its teardown deletes from the shared archive. Listed with the table,
+ * and covered by naming it: they are the collection's data, and naming the
+ * shared archive instead would cover every other entity's too. Left out when
+ * the archive holds none for it, or when the caller has no way to count.
+ */
+async function archivedAlongside(
+  slug: string,
+  countArchived: RunPruneArgs["countArchived"]
+): Promise<string | undefined> {
+  if (countArchived === undefined) return undefined;
+  const count = await countArchived(slug);
+  if (count === 0) return undefined;
+  return count === undefined
+    ? "the collection's archived translations, if any"
+    : `the collection's ${String(count)} archived ${count === 1 ? "translation" : "translations"}`;
 }
 
 /** The main table a companion belongs to (`dc_pages_locales` -> `dc_pages`). */
@@ -114,15 +143,20 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
 
   // Every table the drop would take, each orphan's companion with it, judged
   // as one: a consent that leaves one out drops none of them.
-  const deletions: Deletion[] = [
-    ...orphans.flatMap(orphan => [
-      { kind: "table" as const, table: orphan.tableName },
-      ...(liveTables.has(`${orphan.tableName}_locales`)
-        ? [{ kind: "table" as const, table: `${orphan.tableName}_locales` }]
-        : []),
-    ]),
-    ...orphanedCompanions.map(table => ({ kind: "table" as const, table })),
-  ];
+  const deletions: Deletion[] = [];
+  for (const orphan of orphans) {
+    deletions.push({
+      kind: "table",
+      table: orphan.tableName,
+      alongside: await archivedAlongside(orphan.slug, args.countArchived),
+    });
+    if (liveTables.has(`${orphan.tableName}_locales`)) {
+      deletions.push({ kind: "table", table: `${orphan.tableName}_locales` });
+    }
+  }
+  deletions.push(
+    ...orphanedCompanions.map(table => ({ kind: "table" as const, table }))
+  );
   if (deletions.length === 0 || !(await args.approve(deletions))) {
     return {
       orphans: slugs,
@@ -175,6 +209,50 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   }
 
   return { orphans: slugs, dropped, orphanedCompanions, droppedCompanions };
+}
+
+/** The select surface of a Drizzle handle the archive count reads through. */
+interface ArchiveCountDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): Promise<Array<{ n: number | string }>>;
+    };
+  };
+}
+
+/**
+ * How many archived translations a collection's teardown removes: its rows in
+ * the shared archive, by slug and kind, as the teardown scopes its delete. 0
+ * when there is no archive. Undefined when that cannot be told: the count
+ * failed, or the archive holds rows for the slug whose kind is not yet known,
+ * which the teardown labels and may then remove.
+ */
+export async function countArchivedTranslations(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  slug: string
+): Promise<number | undefined> {
+  try {
+    if (!(await adapter.tableExists("nextly_i18n_archive"))) return 0;
+    const db = adapter.getDrizzle<ArchiveCountDb>();
+    const { nextlyI18nArchive } = nextlyI18nArchiveTables(dialect);
+    const rowsOfKind = async (kind: string) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(nextlyI18nArchive)
+        .where(
+          and(
+            eq(nextlyI18nArchive.collection, slug),
+            eq(nextlyI18nArchive.entityKind, kind)
+          )
+        );
+      return Number(row?.n ?? 0);
+    };
+    if ((await rowsOfKind(UNKNOWN_ARCHIVE_KIND)) > 0) return undefined;
+    return await rowsOfKind("collection");
+  } catch {
+    return undefined;
+  }
 }
 
 interface PruneCommandOptions {
@@ -305,6 +383,8 @@ export async function runPruneCommand(
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
+      countArchived: slug =>
+        countArchivedTranslations(drizzleAdapter, dialect, slug),
       approve: pruneApproval({
         consent,
         interactive: isInteractiveTerminal(),

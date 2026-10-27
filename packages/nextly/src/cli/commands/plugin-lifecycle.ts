@@ -563,6 +563,10 @@ function assertTablesCanBeUndone(
  * holds. A DOWN that is judged to lose data while the owner rows account for
  * none of it is listed by its module, as a deletion only the consent without
  * targets covers.
+ *
+ * Read from the plan: only its DOWNs delete, so a plan that runs none — an
+ * uninstall keeping its data — deletes nothing and needs no consent, whatever
+ * the plugin owns.
  */
 function uninstallDeletions(
   plugin: LifecyclePlugin,
@@ -570,6 +574,7 @@ function uninstallDeletions(
   owned: readonly OwnerRecord[],
   downs: readonly PreparedModuleDown[]
 ): Deletion[] {
+  if (plan.downModules.length === 0) return [];
   const dropped = new Set(plan.tablesDropped);
   const named: Deletion[] = [
     ...plan.tablesDropped.map(table => ({ kind: "table" as const, table })),

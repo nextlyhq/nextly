@@ -422,6 +422,30 @@ describe("RealClassifier — destructive_drop detection", () => {
     expect(nonEmptyValuesOf(result.events[0])).toBe(8);
   });
 
+  it("still emits the drop when its values cannot be counted, without a count", async () => {
+    const result = await new RealClassifier().classify({
+      operations: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "old-summary",
+          columnType: "text",
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockRejectedValue(new Error("unsafe identifier")),
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "postgresql",
+    });
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      kind: "destructive_drop",
+      columnName: "old-summary",
+    });
+    expect(nonEmptyValuesOf(result.events[0])).toBeUndefined();
+  });
+
   it("emits one destructive_drop per drop_column op across mixed batches", async () => {
     const ops: Operation[] = [
       {

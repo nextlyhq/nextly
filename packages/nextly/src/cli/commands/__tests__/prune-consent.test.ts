@@ -113,6 +113,24 @@ describe("nextly prune and the data-loss consent", () => {
     ]);
   });
 
+  it("lists the archived translations each orphan's teardown removes with its table", async () => {
+    const { approve, lines } = approvalFor(
+      resolveDataLossConsent({ flag: true, env: {} })
+    );
+    const db = orphanedDatabase();
+    await runPrune({
+      registry: db.registry as never,
+      adapter: db.adapter as never,
+      currentSlugs: [],
+      approve,
+      countArchived: async slug => (slug === "a" ? 3 : 0),
+    });
+    expect(lines).toContain(
+      "  - table dc_a, with the collection's 3 archived translations"
+    );
+    expect(lines).toContain("  - table dc_b");
+  });
+
   it("drops nothing when the consent names one orphan of two, naming the other", async () => {
     const { approve } = approvalFor(
       resolveDataLossConsent({ flag: "dc_a", env: {} })

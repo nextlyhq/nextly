@@ -173,19 +173,27 @@ export class RealClassifier implements Classifier {
         // Either way, prompt to confirm before destroying data. Row
         // count gives the user the magnitude of the loss.
         const tableRowCount = await args.countRows(op.tableName);
-        // The rows that hold a value, which is what the drop loses.
-        const nulls = await args.countNulls(op.tableName, op.columnName);
-        const drop: CountedDropEvent = {
+        const drop: DestructiveDropEvent = {
           id: formatEventId("destructive_drop", op.tableName, op.columnName),
           kind: "destructive_drop",
           tableName: op.tableName,
           columnName: op.columnName,
           columnType: op.columnType,
           tableRowCount,
-          nonEmptyValues: tableRowCount - nulls,
           applicableResolutions: ["confirm_drop", "abort"],
         };
-        events.push(drop);
+        // The rows that hold a value, which is what the drop loses, shown in
+        // the data-loss listing. Only shown: a column the counter cannot read
+        // (a name outside the identifiers it quotes) is still dropped as
+        // consented, listed without its count, rather than failing the push.
+        const nulls: unknown = await Promise.resolve()
+          .then(() => args.countNulls(op.tableName, op.columnName))
+          .catch(() => undefined);
+        const counted: CountedDropEvent | DestructiveDropEvent =
+          typeof nulls !== "number"
+            ? drop
+            : { ...drop, nonEmptyValues: tableRowCount - nulls };
+        events.push(counted);
       }
     }
 

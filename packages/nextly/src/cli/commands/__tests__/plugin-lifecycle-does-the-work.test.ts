@@ -1250,6 +1250,13 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
       deps({ db: ownsColumn as never, prepareDowns: prepared(true), runDown })
     );
     expect(runDown).toHaveBeenCalledTimes(2);
+
+    // Kept, the column is not deleted, so nothing is asked or refused.
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: true, yes: false },
+      deps({ db: ownsColumn as never, prepareDowns: prepared(true), runDown })
+    );
   });
 
   it("runs a DOWN that loses no data without asking", async () => {
