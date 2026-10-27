@@ -71,7 +71,9 @@ describe("Single create page", () => {
     await vi.waitFor(() => expect(mockWriteSingle).toHaveBeenCalledTimes(1));
 
     const entity = mockWriteSingle.mock.calls[0][0];
-    expect(JSON.stringify(entity)).toContain('"type":"blocks"');
+    expect(entity.fields).toEqual([
+      expect.objectContaining({ name: "blocks", type: "blocks" }),
+    ]);
   });
 
   it("creates a Single with no starting field for standard fields", () => {

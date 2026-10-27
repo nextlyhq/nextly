@@ -75,7 +75,9 @@ describe("Collection create page", () => {
     );
 
     const entity = mockWriteCollection.mock.calls[0][0];
-    expect(JSON.stringify(entity)).toContain('"type":"blocks"');
+    expect(entity.fields).toEqual([
+      expect.objectContaining({ name: "blocks", type: "blocks" }),
+    ]);
   });
 
   it("creates a collection with no starting field for standard fields", () => {
