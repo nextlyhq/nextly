@@ -131,7 +131,6 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
-import { checkDeclaredWidgetReferences } from "../domains/widgets/declaration/references";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import {
@@ -913,7 +912,8 @@ async function registerServicesOnce(
 
   const schemaRegistry = await initializeSchemaRegistry(
     adapter,
-    bootExtensionSchema
+    bootExtensionSchema,
+    transformedConfig
   );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
@@ -1078,22 +1078,12 @@ async function registerServicesOnce(
       judgeWorkflows(transformedConfig, changedComponents),
   });
 
-  const { databaseNotSetUp } = await syncCodeFirstEntities(
+  await syncCodeFirstEntities(
     adapter,
     resolvedLogger,
     transformedConfig,
     workflows
   );
-
-  // Declared widgets' starting queries, against the content just synced: the
-  // first point in boot where the collections, Singles and their fields exist.
-  // Refused only over what the deployed code defines; a query over the
-  // database's own content is warned about, and its card errors when it runs.
-  await checkDeclaredWidgetReferences({
-    collections: collectSlugs(transformedConfig.collections),
-    singles: collectSlugs(transformedConfig.singles),
-    databaseNotSetUp,
-  });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,
@@ -2777,9 +2767,14 @@ async function resolveAdapter(
  */
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
-  extensionSchema?: ExtensionSchema
+  extensionSchema: ExtensionSchema | undefined,
+  /** What the configuration declares, so an entity removed from code is told apart. */
+  declared: Pick<NextlyServiceConfig, "collections" | "singles">
 ): Promise<SchemaRegistry | undefined> {
   try {
+    const { declaredSlugsOf } = await import(
+      "../domains/dynamic-collections/services/removed-from-code"
+    );
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
     const { getFieldGroupRegistryAliases } = await import(
@@ -2850,7 +2845,10 @@ async function initializeSchemaRegistry(
           localized,
           builderOwned,
         });
-      }
+      },
+      // A collection removed from code is registered only while its tables
+      // stand, so this boot does not create its dropped translation table.
+      { declaredSlugs: declaredSlugsOf(declared.collections) }
     );
 
     // Step 3: Dynamic singles — the same registration as collections above,
@@ -2873,7 +2871,9 @@ async function initializeSchemaRegistry(
           localized,
           builderOwned,
         });
-      }
+      },
+      // The same rule for a Single removed from code.
+      { declaredSlugs: declaredSlugsOf(declared.singles) }
     );
 
     // Step 3.5: Plugin and app extension tables. Without this they reached
@@ -4087,9 +4087,18 @@ async function reconcileSingleTablesForBoot(
       );
     };
 
+    // The configuration's own Singles: a code-first one it no longer declares
+    // is left out of the reconcile, so its dropped table is not built again.
+    const { declaredSlugsOf } = await import(
+      "../domains/dynamic-collections/services/removed-from-code"
+    );
     let builderCreatedCount = 0;
     await reconcileSingleTables({
-      ...singleTableSources(singleRegistry, () => adapter.listTables()),
+      ...singleTableSources(
+        singleRegistry,
+        () => adapter.listTables(),
+        declaredSlugsOf(transformedConfig.singles)
+      ),
       createTable: async single => {
         const codeFirstConfig = transformedConfig.singles?.find(
           s => s.slug === single.slug

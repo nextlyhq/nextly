@@ -46,6 +46,14 @@ export const recentEntriesWidget = {
       label: "Sort",
       defaultValue: "-updatedAt",
     },
+    // The fields each row shows after its title, chosen from the ones the
+    // reader may read; unset, its status and when it was updated.
+    {
+      name: "fields",
+      type: "fields",
+      of: "collection",
+      label: "Fields on each row",
+    },
     RECENT_ENTRIES_ITEMS,
     LIST_DENSITY,
   ],

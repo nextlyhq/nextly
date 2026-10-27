@@ -35,10 +35,7 @@ import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
 import { manageCounts, type Actor, type KeyActor } from "./actor";
-import {
-  answeringPermissions,
-  storedSlugHolds,
-} from "./answering-permissions";
+import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";

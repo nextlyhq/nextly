@@ -1015,7 +1015,12 @@ export class SingleQueryService extends BaseService {
     slug: string,
     options: GetSingleOptions = {}
   ): Promise<SingleResult> {
-    this.logger.debug("Getting Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Getting Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row

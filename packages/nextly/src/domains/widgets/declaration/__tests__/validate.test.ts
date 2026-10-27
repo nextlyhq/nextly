@@ -51,7 +51,7 @@ function validComponent(overrides: Record<string, unknown> = {}): unknown {
     description: "Takings per day",
     category: "Shop",
     size: { default: { w: 12, h: 4 } },
-    load: { query: () => ({ collection: "orders", op: "count" }) },
+    load: async () => ({ total: 3 }),
     view: { component: "@acme/shop/admin#RevenueCard" },
     isEmpty: (data: { total: number }) => data.total === 0,
     ...overrides,
@@ -60,14 +60,15 @@ function validComponent(overrides: Record<string, unknown> = {}): unknown {
 
 /**
  * A valid declaration carrying every field startup accepts today, each
- * written correctly: `shows` is the one it does not, as it is refused until a
- * later release.
+ * written correctly: `summary` is the one it does not, as it is refused until
+ * the dashboard's header reads it.
  */
 function everyField(): Record<string, unknown> {
   return {
     ...(valid() as Record<string, unknown>),
     icon: "chart-bar",
     access: "read-orders",
+    shows: () => true,
     several: true,
     hidesWhenEmpty: true,
     isEmpty: (data: { buckets: unknown[] }) => data.buckets.length === 0,
@@ -208,18 +209,24 @@ describe("a widget declaration as startup receives it", () => {
     expect(problemsOf(valid({ several: "yes" }))[0]).toContain("several");
   });
 
-  it("refuses access and shows in the forms a later release judges, failing closed", () => {
-    // 🔴 Typed already, but not yet applied: a declaration that states one is
-    // refused rather than started with it ignored, which would show the card
-    // to everyone its rule meant to leave out.
-    expect(problemsOf(valid({ access: () => true }))).toEqual([
-      'access as a predicate of the person is available in a later release; until then name a permission such as "read-orders"',
-    ]);
-    expect(problemsOf(valid({ access: { collections: ["orders"] } }))).toEqual([
-      'access as the collections it reads is available in a later release; until then name a permission such as "read-orders"',
-    ]);
-    expect(problemsOf(valid({ shows: () => true }))).toEqual([
-      "shows is available in a later release: until then a widget that declares it is not started, so it is never shown to someone it should not be",
+  it("accepts access as the collections it reads or a predicate of the person, and shows as a function", () => {
+    // Judged per card, with the person, before its load runs.
+    expect(problemsOf(valid({ access: () => true }))).toEqual([]);
+    expect(problemsOf(valid({ access: { collections: ["orders"] } }))).toEqual(
+      []
+    );
+    expect(problemsOf(valid({ shows: () => true }))).toEqual([]);
+    // And refuses each malformed one, by what is wrong with it.
+    for (const collections of [[], ["orders", " "], "orders"]) {
+      expect(
+        problemsOf(valid({ access: { collections } })),
+        String(collections)
+      ).toEqual([
+        "access.collections must be a list of the collections the widget reads, each named by its slug",
+      ]);
+    }
+    expect(problemsOf(valid({ access: 3 }))).toEqual([
+      'access must be a permission name such as "read-orders", { collections }, or a function of the person, got 3',
     ]);
     expect(problemsOf(valid({ shows: "always" }))).toEqual([
       "shows must be a function of the person asking",
@@ -290,11 +297,20 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
-  it("refuses a load that is neither a load function nor a query", () => {
-    expect(problemsOf(valid({ load: "orders" }))[0]).toContain("load must be");
-    expect(problemsOf(valid({ load: { query: "orders" } }))[0]).toContain(
-      "load.query"
-    );
+  it("refuses a load that is not a function, naming the removed { query } form", () => {
+    expect(problemsOf(valid({ load: "orders" }))).toEqual([
+      "load must be a function of the card's settings and the person asking",
+    ]);
+    // 🔴 The query form is removed: a declaration still written with it is told
+    // what to write instead, whether its query is a function or not.
+    for (const query of [
+      () => ({ collection: "orders", op: "count" }),
+      "orders",
+    ]) {
+      expect(problemsOf(valid({ load: { query } }))).toEqual([
+        "load must be a function: the { query } form is removed. Read with the services a load function is handed (count, find), which read as the person asking",
+      ]);
+    }
   });
 
   it("refuses preview data without the shape a core view draws, naming the view as declared", () => {

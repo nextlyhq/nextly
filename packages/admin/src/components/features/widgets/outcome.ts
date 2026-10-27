@@ -171,6 +171,9 @@ export type WidgetOutcome =
   | { state: "failed"; message: string }
   // The source is forbidden, gone, or kept off the dashboard: one state for all three.
   | { state: "unavailable" }
+  // The widget's own `shows` said no for this person: left out of their dashboard, neither drawn
+  // nor counted; customise mode still shows it, marked, so it can be removed.
+  | { state: "not-shown" }
   | { state: "empty"; empty: CardEmptyContent }
   | { state: "ready"; node: ReactNode };
 
@@ -221,11 +224,25 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
   return definition.archetype === "custom" && definition.serverData === true;
 }
 
-/** A failed slot as the grid's outcome: one code marks every "not available". */
+/**
+ * A slot with no data as the grid's outcome: one code marks every "not available", a card whose
+ * widget needs a setting asks for it as its empty state, and one its widget does not show for
+ * this person is left out. Only the rest are failures.
+ */
 function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
-  return slot.code === "unavailable"
-    ? { state: "unavailable" }
-    : { state: "failed", message: slot.error };
+  switch (slot.code) {
+    case "unavailable":
+      return { state: "unavailable" };
+    case "needs-setting":
+      return {
+        state: "empty",
+        empty: { title: `Choose ${slot.setting} in the card's settings` },
+      };
+    case "not-shown":
+      return { state: "not-shown" };
+    default:
+      return { state: "failed", message: slot.error };
+  }
 }
 
 /**

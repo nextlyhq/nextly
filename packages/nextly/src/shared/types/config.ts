@@ -183,10 +183,12 @@ export interface DatabaseConfig {
   runMigrationsOnBoot?: boolean;
 
   /**
-   * Seconds a held migrate lock stays valid before another process may take it
-   * over (TTL). Tune up for unusually long migrations.
+   * The schema lock's lease, in seconds: how long the lock outlives a migration
+   * command that stopped without releasing it (killed, or its machine lost).
+   * A running holder renews the lock, so a migration of any length keeps it;
+   * this only bounds how long the next run waits on one that died.
    *
-   * @default 900
+   * @default 120
    */
   migrateLockTtlSeconds?: number;
 
@@ -1085,7 +1087,9 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
-  migrateLockTtlSeconds: 900,
+  // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
+  // migration; it bounds only how long a run that died keeps the lock.
+  migrateLockTtlSeconds: 120,
   rawSqlPlugins: [],
 };
 

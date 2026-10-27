@@ -3,7 +3,9 @@
  * and drawn by their own components, so e2e/tests/plugin-widget-kit.spec.ts can
  * prove a plugin card built only from `@nextlyhq/plugin-sdk/admin`'s widget kit
  * draws beside core's in light and dark, and that a component throwing while it
- * draws is that card's error alone.
+ * draws is that card's error alone. Beside them, widgets drawn by core displays:
+ * one whose data function throws, one its `shows` leaves out, and the layout
+ * cases the other dashboard specs need.
  *
  * Always registered, unlike the gated fixtures: a widget drawn by its own
  * component must be in the committed component map, which is generated with
@@ -87,6 +89,40 @@ const fullWidthWidget = defineWidget({
   view: "figure",
 });
 
+/**
+ * A card whose data function throws on the server, drawn by a core display, so the spec can prove
+ * that card shows its own error with Retry while the cards beside it draw. Its message names a
+ * customer, which must never reach the reader.
+ */
+const loadThrowsWidget = defineWidget({
+  id: "widget-kit-fixture/load-throws",
+  title: "Test fixture: failing data",
+  description:
+    "Exists for the e2e suite: its data function throws; the error stays in its own card.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  load: async (): Promise<{ total: number }> => {
+    throw new Error("the row for customer 42 could not be read");
+  },
+  view: "figure",
+});
+
+/**
+ * A card its widget never shows for anyone: off the dashboard at rest, and shown marked
+ * "Not shown for you right now" in customise mode, where it can still be removed.
+ */
+const notShownWidget = defineWidget({
+  id: "widget-kit-fixture/not-shown",
+  title: "Test fixture: not shown",
+  description:
+    "Exists for the e2e suite: its widget says it is not shown for this person.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  shows: () => false,
+  load: async () => ({ total: 7 }),
+  view: "figure",
+});
+
 export const widgetKitFixturePlugin = definePlugin({
   name: "widget-kit-fixture",
   version: "0.0.0",
@@ -98,6 +134,8 @@ export const widgetKitFixturePlugin = definePlugin({
         throwingCardWidget,
         hidesWhenEmptyWidget,
         fullWidthWidget,
+        loadThrowsWidget,
+        notShownWidget,
       ],
     },
   },
