@@ -345,6 +345,34 @@ export async function getStartedSteps(
   probe: ConditionProbe,
   budgetMs: number = CONTENT_CHECK_BUDGET_MS
 ): Promise<GetStartedAnswer> {
+  return (await getStartedDetail(probe, budgetMs)).answer;
+}
+
+/**
+ * The Get started answer, with what the deprecated onboarding read needs to
+ * answer exactly as it did before a fallen-back check withheld its step.
+ */
+export interface GetStartedDetail {
+  answer: GetStartedAnswer;
+  /** The kinds whose own check failed or ran out of time: not in `answer`. */
+  fellBack: ReadonlySet<GetStartedStepKind>;
+  /**
+   * Whether the collections or Singles could not be listed, or the Singles'
+   * steps worked out: "not known" as the onboarding read has always said it,
+   * before a fallen-back check counted too.
+   */
+  unlisted: boolean;
+}
+
+/**
+ * {@link getStartedSteps}, with the detail the deprecated onboarding read is
+ * projected from. One computation: the card's answer and that read never ask
+ * the steps twice.
+ */
+export async function getStartedDetail(
+  probe: ConditionProbe,
+  budgetMs: number = CONTENT_CHECK_BUDGET_MS
+): Promise<GetStartedDetail> {
   const stop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<void>(resolve => {
@@ -370,8 +398,17 @@ export async function getStartedSteps(
         branch(singleSteps(probe, stop.signal)),
         branch(inviteStep(probe, stop.signal)),
       ]);
-    const fellShort = [collection, entry, perSingle, invite].some(
-      answered => answered === FELL_BACK
+    const fellBackKinds = new Set<GetStartedStepKind>(
+      (
+        [
+          ["collection", collection],
+          ["entry", entry],
+          ["single", perSingle],
+          ["invite", invite],
+        ] as const
+      )
+        .filter(([, answered]) => answered === FELL_BACK)
+        .map(([kind]) => kind)
     );
     const steps = [
       collection,
@@ -382,13 +419,15 @@ export async function getStartedSteps(
       (offered): offered is GetStartedStep =>
         offered !== undefined && offered !== FELL_BACK
     );
-    return tallied(
-      !collections.reachable ||
-        !singles.reachable ||
-        fellShort ||
-        perSingle === undefined,
-      steps
-    );
+    // Named apart from the `unlisted` and `fellBack` helpers above: the
+    // deadline reads those by name in this block before these are declared.
+    const listsFailed =
+      !collections.reachable || !singles.reachable || perSingle === undefined;
+    return {
+      answer: tallied(listsFailed || fellBackKinds.size > 0, steps),
+      fellBack: fellBackKinds,
+      unlisted: listsFailed,
+    };
   } finally {
     clearTimeout(timer);
   }

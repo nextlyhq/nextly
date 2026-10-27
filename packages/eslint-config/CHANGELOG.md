@@ -1,5 +1,214 @@
 # @nextlyhq/eslint-config
 
+## 0.0.2-alpha.72
+
+### Patch Changes
+
+- [#2542](https://github.com/nextlyhq/nextly/pull/2542) [`012c992`](https://github.com/nextlyhq/nextly/commit/012c9925120136f2aedc58aaa4b630f8ad50b355) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A keyed send now holds up through crashes, slow providers and partial failures.
+  A send that reached some recipients and not others reports each recipient's
+  outcome (`partlyDelivered`, `recipients`), and a retry with the same key sends
+  only to those not yet accepted, whichever provider carries it. Every provider
+  call has a 2-minute deadline and a cancellation signal; a call that has not
+  answered by then is reported as unknown and retryable, and its claim stays held
+  for up to 10 minutes while the call may still answer. A failure whose delivery
+  cannot be known carries `unknown: true`. A keyed send's delivery records and
+  its outcome are committed together. Sends whose recipients all fare alike
+  return the result they always did.
+
+- [#2805](https://github.com/nextlyhq/nextly/pull/2805) [`bb1f8dd`](https://github.com/nextlyhq/nextly/commit/bb1f8dd3ff101c0209fff13ece785bde338043bd) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A publish that sends a related many-to-many field with an id repeated, such as `["a", "b", "a"]` over `["a", "b"]`, is no longer recorded as editing that field. The ids are compared as a set: each id counts once, whatever its order.
+
+- [#2717](https://github.com/nextlyhq/nextly/pull/2717) [`5288bfd`](https://github.com/nextlyhq/nextly/commit/5288bfd5d65646c267f3c0b98cb6bb84219e33b2) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A Single's publish that sends a whole group or field group no longer loses a pending edit to a field inside it that the publisher may not write. The publisher's copy of that field is judged at the pending change's value rather than the live one, so the publish is refused, naming the field, and the pending change is kept. A publish whose pending change leaves that field alone goes through as before.
+
+- [#2777](https://github.com/nextlyhq/nextly/pull/2777) [`8ead799`](https://github.com/nextlyhq/nextly/commit/8ead799267595329cf4bc7f0e68244950a3dead8) Thanks [@faisal-rx](https://github.com/faisal-rx)! - An entry you may not read is answered exactly as one that doesn't exist: 404 `NOT_FOUND`, "Not found.", whatever you asked to do with it. An entry you may read but not change is still answered 403, with what you may not do.
+
+  This holds for a request naming one collection entry or a Single's document, through REST, the Direct API, plugin services and the routes built on them, the document lock among them. The Direct API and plugin services answer an update, delete or publish of an entry you may not read with 404, as REST does. Whether you may read is asked as a plain read is, in the site's default language.
+
+  One place does not take that answer at its word: a dashboard card reading a Single. A card for a Single you may not read fails instead of showing "Nothing yet". Singles are the site's own configuration, defined in code, so their names are not secret, and an empty card for a refusal would tell the admin something false. A Single that really has no document still shows as empty.
+
+  A client that reads the status of a refused request on one entry should read the code instead: `NOT_FOUND` for one it may not read, `FORBIDDEN` for one it may read but not change. A caller with no identity keeps its current answer.
+
+- [#2795](https://github.com/nextlyhq/nextly/pull/2795) [`b1888dc`](https://github.com/nextlyhq/nextly/commit/b1888dc9c5e4c67cacadd21340b0940176bfc19b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A Breakdown card's Collection setting now offers only collections the card can divide, even when the card is already set to one: each collection is judged from the widget's declaration, not from the card as already asked.
+
+  A widget whose cells all depend on a condition the collection doesn't meet is no longer offered on that collection.
+
+  Registration now refuses a grouped query that leaves its key to a Group by setting the query's source doesn't take.
+
+- [#2771](https://github.com/nextlyhq/nextly/pull/2771) [`fd69795`](https://github.com/nextlyhq/nextly/commit/fd69795b39d7e2fb959cca28b2f56bd78f2916b0) Thanks [@faisal-rx](https://github.com/faisal-rx)! - `GET /me/capabilities` now names only the collections and Singles the signed-in caller may read, the same ones the collection and Single lists show that caller. Before, it named every collection and Single in the install, with `read: false` where the caller could not read one, so any signed-in user could learn every entity's name. A client that treated a missing entity as "nothing allowed" sees no change in what it may offer.
+
+- [#2836](https://github.com/nextlyhq/nextly/pull/2836) [`79a2a07`](https://github.com/nextlyhq/nextly/commit/79a2a0704ca7d7dda9afd6491bc15232f8058f23) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Dashboard cards set to a collection are judged more precisely:
+  - Which collections a reader may read is now asked of every collection a card may be set to, not read off core's generated cards. Two collections whose names differ only by `_` and `-` (for example `a_b` and `a-b`) lose their generated cards to the clash, but a Count, Recent entries, Over time or Breakdown card set to either is now shown to a reader who may read it, instead of being withheld.
+  - A widget's Collection setting withholds a card only where the setting actually decides what the card reads. A widget whose registration replaced its query, so the setting no longer reaches it, no longer has its cards withheld for a collection it never reads.
+  - A saved count card converted for a reader who may not see the Count widget takes the widths Count is registered with, not the core default.
+  - The admin's cached workspace data is refreshed when a widget's Collection setting changes, or when the collections a reader may read change, so the settings sheet never shows an outdated setting.
+
+- [#2789](https://github.com/nextlyhq/nextly/pull/2789) [`1b681df`](https://github.com/nextlyhq/nextly/commit/1b681dfbddaacbacbc172ad428f5aff5ae5b58b2) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Recent entries and Over time read what their settings name, and nothing else.
+  - **Recent entries**, or any titled list, set to a collection it cannot title (one naming no title field or having no `updatedAt`) reads nothing and shows that it is not available, rather than the collection its widget was declared with.
+  - **Over time** over 12 months, read on February 29, starts on February 28 of the year before, not on March 1, so its first month is drawn. Drawn as bars, the first and last bars are as wide as the rest and inside the chart.
+  - **Widget queries:** a timeseries with a `range` refuses a `limit`, which the range's own number of points would otherwise silently replace.
+
+- [#2809](https://github.com/nextlyhq/nextly/pull/2809) [`d7b2251`](https://github.com/nextlyhq/nextly/commit/d7b2251bb3366e5614718bdd6ffcec027c7cebc2) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Saved dashboard cards from core's generated per-collection widgets now become the widgets offered per collection, as saved count and health cards already became Count:
+  - a list or table card becomes Recent entries, which shows each entry's title, status and when it was updated from medium size, and is a table when drawn large;
+  - a timeline card becomes Over time, over the last 30 days, when it counted entries by when they were created;
+  - a breakdown card becomes Breakdown, by status, while its collection still has a draft and published lifecycle.
+
+  Each converted card is set to its collection, exactly the card a reader adds from the add panel; a Breakdown card also keeps grouping by status. It keeps its place, and its width is drawn at the nearest one its new widget allows. A collection's list and table cards become one Recent entries card. A converted card joins a card of the same widget the dashboard already holds for that collection only when that card has no other settings, so a filtered list stays as it was. A card is converted only when it can be converted exactly. Otherwise it stays as stored, out of view, and is never rewritten: a card whose collection the reader may not read (until they may), a timeline that counted by another date, a breakdown whose collection has no lifecycle any more, a deleted collection's card, and a plugin's card under a generated-looking id while that plugin is disabled.
+
+- [#2727](https://github.com/nextlyhq/nextly/pull/2727) [`15ba004`](https://github.com/nextlyhq/nextly/commit/15ba004d693c5c32c19ae30d480ecf4aa2bb4813) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard card set to a collection the reader may not read is no longer handed to them. Their layout read leaves it out, exactly as it leaves out a card of a widget they may not see, and their saves keep it in place, so it returns once they may read the collection. A collection that does not exist is treated the same way, so a reader cannot learn which collections exist from what comes back. A save that adds such a card is refused, with one answer whether the collection exists or not. The card's collection is read as its settings resolve it, its declared default included, and only a value shaped like a collection name names one: a special value such as `*` withholds nothing.
+
+  Saved count and health cards converting to Count cards also change in four ways:
+  - A card whose id two collections the reader may read could spell is set to no collection. A collection the reader may not read changes nothing: the card is set to the one readable collection that spells its id, so the result never tells the reader that the other exists.
+  - The merged card's width comes from the Count widget as registered, including a plugin's changes to it.
+  - A layout saved from a snapshot taken before a collection was renamed between such spellings (`a_b` to `a-b`) is refused, so it cannot write the old name back.
+  - The collections the conversion reads come from the same refresh as the reader's cards.
+
+- [#2787](https://github.com/nextlyhq/nextly/pull/2787) [`e8af47b`](https://github.com/nextlyhq/nextly/commit/e8af47bc65eb4e838443da79666333ea25f21411) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A reader can add a Breakdown card from a collection's group in the add panel. It shows how that collection's entries divide: by status on a collection with a draft and published lifecycle, otherwise by its first field with choices. Breakdown is offered only on collections with something to divide by, in the add panel and in the card's Collection setting alike. A field guarded by a read rule is never offered as a grouping. A stored grouping that names one falls back to the collection's own grouping, and a query naming one is still refused.
+
+  For widget authors, a Group by setting can take its default from the collection with `defaultFrom: "collection"`. A grouped query that leaves its key to such a setting may omit `groupBy`. Both are `@experimental`.
+
+- [#2779](https://github.com/nextlyhq/nextly/pull/2779) [`312ca31`](https://github.com/nextlyhq/nextly/commit/312ca315753c9ea4e6957a76d29973e77ab72e1e) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Removed from `nextly/auth`, deprecated in 0.0.2-alpha.69: the role checks `hasRole`, `hasAnyRole` and `hasAllRoles`, the guards `requireRole`, `requireAnyRole` and `requireAllRoles`, `checkPermission`, `authenticateApiKey`, `checkCollectionAccess`, and the session `AuthContext` type. The role checks compared role ids with role names, so they never matched. To ask whether a signed-in user may do something, use `nextly.access.check({ userId, resource, operation })`; for an API key, use `nextly.access.checkApiKey({ rawKey })`, which returns the key's own permissions and roles (it runs no collection rule, so if you passed `checkCollectionAccess` an `evaluateCodeAccess`, keep running that collection rule too); for super-admin authority, use `isSuperAdmin(userId)`. The error helpers `createErrorResponse`, `createJsonErrorResponse` and `isErrorResponse` stay.
+
+- [#2661](https://github.com/nextlyhq/nextly/pull/2661) [`d5fff1d`](https://github.com/nextlyhq/nextly/commit/d5fff1d2e510b5fdec786d3e0981b3a8ab3a717a) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The Email hub's Design tab now edits the brand settings beside a live preview. Pick an email, and the preview shows each change to the logo, its width, the accent, background and content colours, the font and the footer before anything is saved; a save bar says how many emails a save changes. Where the page builder's site style defines colours, **Match my site** offers its light-theme colours for each part of the email, suggesting the ones named for each, and the site's font where email clients have it or the closest email-safe one, saying which. The tab says which emails the brand settings reach and why they don't reach the others, and warns when the site's own Default layout keeps them from its emails. Layouts list the emails each one wraps and open in the same workbench as an email, and a layout kept as the previous engine sent it, or with an update from its owner, is said there too. The draft preview (`POST /api/email-templates/preview`) takes an optional `brand` change, checked by the rules a save is and laid over the saved settings for that render only.
+
+- [#2780](https://github.com/nextlyhq/nextly/pull/2780) [`5cc1065`](https://github.com/nextlyhq/nextly/commit/5cc10653b2a1015be09c70e38767f1c8fcdcb8ab) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A rule's `permissions` no longer includes the earlier `posts:read` spelling, deprecated in 0.0.2-alpha.69: a rule that checks `posts:read` now refuses, and nothing warns about it. Check the spelling the Roles screen shows, `read-posts`. The list a rule is handed holds each permission once, as stored.
+
+- [#2778](https://github.com/nextlyhq/nextly/pull/2778) [`9886067`](https://github.com/nextlyhq/nextly/commit/98860672ea50beaa36404b45e85b6228726cff18) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The entry list and editor offer only the actions your role allows. A collection's list shows "New" (and the empty list's "Create" and the new-entry shortcut) only to someone who may create there. It shows row checkboxes and the bulk bar only when a bulk action (delete, publish or unpublish) is allowed, and "Delete selected", a row's Delete and the editor's Delete only to someone who may delete. Select-all and the Delete key follow the same answers. The quick-edit and quick-create windows opened from a relationship field offer Save or Create only with the update or create permission; without it the entry is shown read-only. The answers come from the server, code access rules included, and the server still enforces every request.
+
+- [#2680](https://github.com/nextlyhq/nextly/pull/2680) [`9322000`](https://github.com/nextlyhq/nextly/commit/9322000ba67b7f21e8627ad292c85c5aed04b010) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Erasing someone now reaches their queued email (`@experimental` with the
+  queued send). Deleting a staff user, or a plugin reporting one of its people
+  deleted, cancels every queued email that names them and clears its message, in
+  the deletion's own transaction; erasing an address does the same for queued
+  email to it that names nobody. An email queued for someone already deleted is
+  stored cancelled and never sent, whichever of the two commits first. An
+  attempt already with the provider is left to finish, and its delivery record
+  is written erased.
+
+  Held messages are sealed again under the current `NEXTLY_SECRET` when the app
+  starts after a rotation, while `NEXTLY_SECRET_PREVIOUS` can still open them, so
+  a queued email stays deliverable across any number of rotations; the server
+  log says how many no configured secret can open.
+
+  A queued email now records the person it names, and a new
+  `email_queue_recipients` table keeps a keyed digest of each recipient, never
+  the address, so an erased address can be found. `nextly migrate` and boot add
+  both on all three databases.
+
+- [#2718](https://github.com/nextlyhq/nextly/pull/2718) [`1bf5f48`](https://github.com/nextlyhq/nextly/commit/1bf5f4827625c1793cafe28dd4a449ba23639e65) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Field rules in field groups now hold at more of a write's edges.
+  - **A new instance's inline field groups:** an update that adds a field-group instance creates the field groups it holds inline with it, so a child its create rule allows is stored rather than dropped. A single field group's instance sent without its id is still judged as the update its save makes.
+  - **Repeated row ids:** a repeater or field-group list row repeating another's id takes none of the stored row's protected values, and every row is judged by its own siblings.
+  - **Translated groups:** in a localized collection, a field group held in a translated group keeps a child its update rule denies, in each language.
+  - **Fields named like store columns:** a field a field group declares, named like one of the store's own columns (such as `updatedAt` inside a group), is judged as content when a publish is checked, so a pending edit to it that the publisher may not write is refused rather than lost.
+  - **Held drafts in every language:** a held draft that removes an instance keeps it when it holds a protected value in any language, without relying on the update's own check.
+  - **Protected passwords:** an update that clears a field-group instance, or leaves it out of a list, keeps it when a rule protects its password, though the stored hash is never read back.
+
+- [#2770](https://github.com/nextlyhq/nextly/pull/2770) [`a6185f9`](https://github.com/nextlyhq/nextly/commit/a6185f9cea74e5ac6652ddd4f15d47baddf0d592) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A field's write rule is now told the entry's id as stored, on an update, a transactional or batch update, a publish that puts a pending draft live, and taking a live value into a draft.
+
+  The `data` a field write rule reads no longer carries values only the server decides, as the request body sent them: the `id`, `createdAt`, `updatedAt`, `createdBy` and `firstPublishedAt`. On an update, `id` is the stored entry's. On a create, it is there only where the collection keeps the id a create sends (`db.allowIdOnCreate`), since that is the id the entry is stored under.
+
+- [#2827](https://github.com/nextlyhq/nextly/pull/2827) [`6dbec28`](https://github.com/nextlyhq/nextly/commit/6dbec28efc437ae6ff1a311dc3d2b8bce02d7fa6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The Get started card and the deprecated onboarding read are corrected in five ways:
+  - **The deprecated `GET /api/dashboard/onboarding` answers as it always has until it is removed.** A step whose own check failed or ran out of time is a row not complete again, and "not known" means only that the collections or Singles could not be listed. The Get started card still withholds such a step.
+  - **A failed sample-content load says so.** It shows its message and a Retry, instead of the controls disappearing.
+  - **Loading sample content, or declining it, counts as acting on the card.** A reader who finishes the last step from there is told "You're all set", and the card no longer simply goes.
+  - **A staged reset previews the default the reset will land on.** It includes Get started even when the reader's own arrangement holds no such card.
+  - **The card draws every step the server sends, in the server's order.** Runs of Singles still fold, and a step of a kind the admin does not know is drawn, not dropped.
+
+- [#2803](https://github.com/nextlyhq/nextly/pull/2803) [`0208272`](https://github.com/nextlyhq/nextly/commit/020827216f44f4d38a5831f3b7676b2abf3432bf) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Each system list and its dashboard count read who may see that list from one definition.
+
+  The users, roles, permissions, media, field-group and API-key lists each declare their read gate once, in `auth/list-read-gates`, and say how it is checked as well as what it asks. The users, roles, permissions and media gates are the system read policy's own, the one the checked Direct API reads, so the REST lists, the dashboard's counts and the Direct API admit the same callers. The list routes and the dashboard summary's counts both read those gates and check them the same way, so a count can no longer be given to a caller its list refuses, or kept from one it admits, after a change to only one of them. The API-key list's reach (every user's keys) is declared there too, and the key count covers what the list shows.
+
+  No caller's answer changes. The permissions count is now checked through the any-of check the permissions list uses, rather than the single-grant check. For an API key and for a session the two agree on `read-roles`.
+
+- [#2774](https://github.com/nextlyhq/nextly/pull/2774) [`014a66f`](https://github.com/nextlyhq/nextly/commit/014a66f9fe42b2ca5774f629e2f4a440102896c1) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Role assignments and role inheritance are stored under the ids the users and roles themselves carry. On MySQL, which matches ids without regard to letter case, a request naming a user or role in another case is stored as that row's own id, and a role named twice in two cases is recognized as one when it would inherit itself.
+
+- [#2785](https://github.com/nextlyhq/nextly/pull/2785) [`10b3066`](https://github.com/nextlyhq/nextly/commit/10b306694a8b9e2331469ce4cb3f14fa192e5d98) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Passwords are stored hashed at every depth, and no read returns one: not a read by id or in a list, a read of every translation, a version snapshot or a webhook payload.
+
+- [#2695](https://github.com/nextlyhq/nextly/pull/2695) [`cb25ebe`](https://github.com/nextlyhq/nextly/commit/cb25ebe597da13788b32aff8bffd46336c72ce37) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The `user_permission_cache` table is retired. Nothing has read it since permission answers stopped being stored, so a new install no longer creates it. While an existing database still has it, every access change empties it before the role version is published, so an instance still running an earlier release that reads it, even one upgrading past the release in between, never serves a revoked grant from it. Where `PERMISSION_CACHE_ENABLED=false` says no instance reads it, it is left as it is. An existing database keeps it, and the startup warning names it with its row count, until `nextly migrate` runs with `NEXTLY_DROP_RETIRED_AUTH_TABLES=1`. That drops it even when it holds rows, since they were only copies of answers recomputed from roles, and logs the drop; `NEXTLY_DROP_NONEMPTY_RETIRED` still governs only the retired `accounts` and `sessions` tables. Until the drop, on MySQL, where the table has no foreign key to `users`, a deleted user's rows stay in it; they name only the user's id and permissions.
+
+  The `userPermissionCache` schema export, deprecated in the previous release, is removed from `nextly`, `nextly/schemas` and the dialect schemas in `nextly/database`, together with the `users.permissionCache` relation. Nothing in Nextly reads the table, so code that queried it reads only answers no longer written; remove those queries. The name `user_permission_cache` is reserved, so an app table cannot take it.
+
+- [#2731](https://github.com/nextlyhq/nextly/pull/2731) [`9f5ebf7`](https://github.com/nextlyhq/nextly/commit/9f5ebf70ba8b14f6b6ea16c0d607e6c2ef9ed5cd) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A code access rule no longer lets in a signed-in user or an API key that lacks the permission: the permission is asked first, and the rule only narrows it, for collections, Singles, related rows and writes alike, as well as `nextly.access.check`. Where a rule was letting such users in, grant the permission on the role screen; for this release, each request newly refused this way is logged once, naming the permission to grant.
+
+- [#2557](https://github.com/nextlyhq/nextly/pull/2557) [`8192ba9`](https://github.com/nextlyhq/nextly/commit/8192ba9473e446ac31174de24a7b06d7b06ef464) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Publishing several languages at once asks the publish rule once for each
+  language it puts live.
+
+  Publishing every language of an entry or a Single, and writing
+  `status: "published"` with `locale: "*"`, used to ask the publish rule once,
+  told every language and no single one. A rule answering by language, such as
+  `publish: ({ locale }) => locale !== "fr"`, was then asked with no `locale`
+  and let French go live. Each of them now asks the rule once for each language
+  going live, with `locale` set to that language and `locales` to every
+  language going live, inside the publish, before anything is written. Any
+  refusal refuses the whole publish, so no language goes live; the server log
+  names the languages refused.
+
+  Unpublishing every language is still asked once, in every language.
+
+- [#2791](https://github.com/nextlyhq/nextly/pull/2791) [`fee1a3f`](https://github.com/nextlyhq/nextly/commit/fee1a3f7dcf0fd0e11ed495fac2196d1928511f6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A publish that only sends back what the draft already holds is no longer credited as the publisher's edit in Recently edited.
+
+  The draft and the document the publish writes are now compared once, as a stored snapshot holds them. So none of these counts as a change:
+  - a date sent as a `Date` beside the ISO string the draft keeps;
+  - part of a component sent back as the draft holds it;
+  - many-to-many ids in another order.
+
+  A Single's own field named `createdBy` counts as content, as it does for any field a person writes.
+
+  Two dashboard fixes:
+  - A Note's text is drawn as written, so a leading indent keeps its Markdown meaning.
+  - A layout write holds a placement id reused for another widget to the new widget's text bound.
+
+- [#2799](https://github.com/nextlyhq/nextly/pull/2799) [`3419aef`](https://github.com/nextlyhq/nextly/commit/3419aef09ec76e13dff4cde2e5e7937234581969) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A ranged widget query validates again unchanged, and settings say what they may hand back.
+  - **Widget queries:** a timeseries over a `range` carries no `limit` once validated, so what `validateWidgetQuery` returns validates again unchanged. A widget declaring a `limit` number setting beside a ranged query is refused at registration and as a contribution, since its range sets how many points are drawn.
+  - **`applyWidgetSettings`** returns `AppliedQuery<T>`: the query as declared with each setting applied, or, for a titled list set to a collection it cannot title, the same with no `source` and no `select`. The type is exported from `nextly/config`.
+
+  All of it is `@experimental` while the content widgets are built.
+
+- [#2740](https://github.com/nextlyhq/nextly/pull/2740) [`71bc1ed`](https://github.com/nextlyhq/nextly/commit/71bc1ed8a2b0b24506582e53693943d4da5b2ebc) Thanks [@faisal-rx](https://github.com/faisal-rx)! - Refusals that aren't about permission now say why, and stay 403 `FORBIDDEN`:
+  - A person-only action asked by an API key: "Only a signed-in person can manage API keys." (or webhooks, preview links, a dashboard layout, notices, or marking a version as seen).
+  - A change or delete of a role or permission built into Nextly: "This role is built in, so it can't be changed." (or "deleted", or "permission").
+  - A trigger request from a site the installation doesn't allow: "This request came from a site that isn't allowed to make it."
+  - A Single deleted without `force`: "A Single can't be deleted from here."
+
+  Each used to read "You don't have permission to perform this action.", which sent people looking for a permission that wouldn't help. One delete that was allowed is now refused. A built-in permission deleted by action and resource, rather than by id, was deleted when it was unassigned. It is now refused as the delete by id always refused it. A hidden internal permission is refused in the generic words, so a delete doesn't confirm it exists.
+
+  Refusals for want of permission are unchanged: they never say which check refused.
+
+- [#2792](https://github.com/nextlyhq/nextly/pull/2792) [`83a8583`](https://github.com/nextlyhq/nextly/commit/83a8583a754f8317ca5a5412f2b09fa244a78fa0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - New projects now ship the route that serves local uploads, `src/app/uploads/[...path]/route.ts`, and `create-nextly-app` writes it into an existing app it adds Nextly to, unless the app already answers `/uploads`. A production server then serves an upload the moment it finishes, with nothing to add by hand. An app created before this release adds the file itself, as [Media & Storage](https://nextlyhq.com/docs/guides/media-storage#how-local-uploads-are-served) shows.
+
+- [#2812](https://github.com/nextlyhq/nextly/pull/2812) [`c0147d0`](https://github.com/nextlyhq/nextly/commit/c0147d0e841b0e1db1137c9607043de5cebb050d) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Security: fast-uri moves to 3.1.9.
+  - fast-uri before 3.1.9 had URI-parsing flaws: scheme spoofing through percent-encoding, host confusion during canonicalization, and two lower-severity ones (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h, GHSA-333x-w4r6-6crp). `@nextlyhq/telemetry` reaches it through `conf` and `ajv`, which validate only telemetry's own consent settings against a fixed schema, so no untrusted URI passes through it. The floor still rises, so no install can resolve an affected version.
+
+- [#2796](https://github.com/nextlyhq/nextly/pull/2796) [`4b45393`](https://github.com/nextlyhq/nextly/commit/4b45393cb3a6db5fe16d512bf4870bedad0e7713) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Security: the MCP server SDK moves to 2.3.1, nodemailer to 10.2.1 and undici to 7.30.1.
+  - `@nextlyhq/plugin-mcp` moves from `@modelcontextprotocol/server` 2.0.0 to 2.3.1. Before 2.3.0, one HTTP request within the default size limit could exhaust the server's memory during validation (GHSA-46jr-4wx8-v453); the MCP endpoint validates every request, so it was reachable. Two other advisories fixed in 2.3.0 (GHSA-jm63-cq47-j5jp, GHSA-rvq5-wwqv-78pq) didn't apply: the endpoint already builds a fresh server for each request, and it doesn't use the SDK's bearer authentication.
+  - nextly's optional `nodemailer` peer moves from `^9.0.1` to `^10.2.1`. nodemailer before 10.1.4 had address-parser denial-of-service and parsing flaws (GHSA-prgh-xp8r-p3m5, GHSA-v53p-9fqp-m79j, GHSA-8c8m-p3m8-cjg8 and others), and the SMTP provider passes the addresses it sends to through that parser. **Apps using nodemailer for SMTP need nodemailer 10:** run `npm install nodemailer@^10.2.1`. nodemailer 10 needs Node.js 20 or later, which Nextly already requires, and nothing in Nextly's use of it changes.
+  - undici, which `@vercel/blob` and the jsdom behind HTML sanitizing pull in, moves to 7.30.1, past three denial-of-service and integrity advisories (GHSA-xjj6-f33q-929c, GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472). Neither path was exposed in practice: Vercel Blob's client talks only to Vercel's API, and sanitizing loads nothing over the network.
+
+- [#2825](https://github.com/nextlyhq/nextly/pull/2825) [`9609671`](https://github.com/nextlyhq/nextly/commit/96096711b0bff44ebd880549adcfb5cb3b2a2f1c) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The site config can shape the dashboard: `admin.dashboard`, checked at startup.
+  - **`widgets`, `hide`, `overrides`, `defaultLayout`, `suggestions` and `replace`** are accepted and checked, but **not applied yet** in this version. Startup logs one warning naming each one a site sets. The site's own widgets, declared with `defineWidget()` as a plugin's are, are checked together with the plugins' widgets, and other keys may name them.
+  - **Startup refuses a site config that names a widget that does not exist** (with the nearest id), or that uses a key `admin.dashboard`, an `overrides` entry or a `defaultLayout` card does not take (with the key it most likely meant). An id in the `collection/` or `single/` namespace, a card core derives from the content later, is not refused as unknown at startup; its entry's shape is still checked. It also refuses:
+    - a width a widget does not allow, or widths that widen rather than narrow;
+    - a setting a widget does not declare, or a value it does not accept;
+    - a title or a description that breaks the declaration rules;
+    - a default dashboard with more cards than a dashboard holds, or that lists a widget allowing one card more than once;
+    - a default or a replacement naming a hidden widget, or a replacement no plugin offers for that built-in.
+  - **A plugin's `suggest` and `alternatives`** may name only its own widgets, and an alternative only in place of a built-in that exists. A plugin's dashboard contribution is read once at startup, every check reads that copy, and a key it does not take is refused with the key it most likely meant.
+  - **All startup faults are reported together** with the widget declarations' own.
+  - `AdminDashboardConfig`, `WidgetRef`, `DefaultLayoutCard` and `WidgetOverride` are exported from `nextly`.
+
+  All of it is `@experimental` while the dashboard widget SDK is built.
+
+- [#2699](https://github.com/nextlyhq/nextly/pull/2699) [`48d7c12`](https://github.com/nextlyhq/nextly/commit/48d7c12382a268bfc3d2218b6eda4d2fa2915af5) Thanks [@faisal-rx](https://github.com/faisal-rx)! - A template test email no longer goes to the template's Cc and Bcc. Send test now reaches only the signed-in person who pressed it: the template's stored copies, such as a team inbox, are left out of the test, which carries sample data. Real sends of the template still copy them.
+
+- [#2682](https://github.com/nextlyhq/nextly/pull/2682) [`2a2b068`](https://github.com/nextlyhq/nextly/commit/2a2b068ec874d0c1081baf1534b9eb8b7c614beb) Thanks [@faisal-rx](https://github.com/faisal-rx)! - The admin now learns from the server what you may do with each collection and Single, so a collection's code access rule is reflected in what it offers, not only the permissions your roles hold: the collection and Single pages, the dashboard's quick-create shortcuts and the navigation all follow that answer. It is asked in the content language on screen, kept between pages rather than asked again by every component, and asked again on focus, when your soonest role assignment ends, after a change to roles, permissions or role assignments, and after a schema change. Once that role assignment has ended, the earlier answer no longer counts, even if asking again fails. Until the server has answered, no collection or Single is offered. The system sections (users, roles, media, settings, email, webhooks, releases) are still offered from your permission list, and stay available when only the answer about collections fails.
+
+- [#2735](https://github.com/nextlyhq/nextly/pull/2735) [`b142980`](https://github.com/nextlyhq/nextly/commit/b142980b0d06aeac05ef308fb3863f5cea01f91c) Thanks [@faisal-rx](https://github.com/faisal-rx)! - `useCan` and `<Can>` (exported by the admin and re-exported by `@nextlyhq/plugin-sdk`) now answer a read, create, update, delete, publish or unpublish of a collection or Single as the server decides it, code access rules included. `useCan("update-posts")` is `false` for a role that holds `update-posts` when a code rule on Posts refuses that update, and `true` where the server allows an action no permission names. The entry editor's publish and unpublish, bulk publish and unpublish, publishing every language, adding to a release and restoring a version follow that answer. Until the server has answered about collections and Singles, such a slug answers `false`, and once it has, such a slug for a resource the answer does not name answers `false` except to a super-admin, so give a plugin permission that is not about a collection or Single an action other than those six (`export-reports`) to check it with `useCan`. Every other slug (a system resource such as `read-webhooks`, or a plugin's own permission such as `manage-seo`) is still answered from the permissions your roles hold. The server still enforces every request either way.
+
+- [#2807](https://github.com/nextlyhq/nextly/pull/2807) [`9c7f145`](https://github.com/nextlyhq/nextly/commit/9c7f14539503957b0b728f9741199ca2af7ff81d) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A plugin's dashboard widget can be drawn by its own component. A widget declared with `defineWidget` and `display: { component }` is now offered on the dashboard. The admin draws its frame and its loading, no-permission and error states, and hands the component the props its declaration types: `WidgetProps` (data, settings, size, refreshing, retry). If the component throws while drawing, that card alone shows its error, with Retry.
+
+  `@nextlyhq/plugin-sdk/admin` now exports the widget kit, the parts core's own cards are drawn from: `CardSkeleton`, `CardEmpty`, `CardUnavailable`, `CardError`, `CardFigure`, `cardNumber`, `cardChange`, `GroupsChart` and `OverTimeChart`. They read the card's size and the admin's theme, so a plugin card matches core's in light and dark. `defineWidget` and the `WidgetProps`, `WidgetRenderSize` and `WidgetData` types are exported from `@nextlyhq/plugin-sdk`, and the types from `./widgets` too. All of it is `@experimental`.
+
+  Import the kit only through `@nextlyhq/plugin-sdk/admin`. If a second copy of the admin is loaded, development warns about it.
+
+- [#2816](https://github.com/nextlyhq/nextly/pull/2816) [`b0017eb`](https://github.com/nextlyhq/nextly/commit/b0017ebc05f5bb9e55d3d6414877481b6771ef22) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A dashboard widget whose Collection setting defaults to a collection the reader may not read no longer names that collection in the admin's workspace data. The default is left out for that reader, as the dashboard already leaves out their cards that rely on it. The widget is still offered for the collections they may read; a card they add from it is set to one of those before it saves.
+
 ## 0.0.2-alpha.71
 
 ### Patch Changes

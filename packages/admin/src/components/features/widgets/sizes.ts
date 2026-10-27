@@ -63,13 +63,33 @@ export const DASHBOARD_MEDIUM_FROM_PX = 640;
 /** From this dashboard width every width is drawn as chosen. */
 export const DASHBOARD_WIDE_FROM_PX = 1024;
 
+/** From this dashboard width the gap between cards across widens. */
+const DASHBOARD_WIDE_GAP_FROM_PX = 1280;
+
 /**
- * The space between the grid's tracks, in pixels: the grid's `gap-[24px]`, in pixels rather than
- * rem so it does not follow the page's root font size. A card's drawn width is
- * its tracks plus the gaps between them, so a width predicted without it is too wide by up to
+ * The space between cards down, in pixels, at every width: a card's height, and so the rows it
+ * holds, never changes with the dashboard's width. In pixels rather than rem so it does not
+ * follow the page's root font size.
+ */
+export const GRID_ROW_GAP_PX = 16;
+
+/**
+ * The space between the grid's tracks across, in pixels, on a dashboard `dashboardWidth` wide:
+ * 16, or 24 from `DASHBOARD_WIDE_GAP_FROM_PX`, as `GRID_GAP_CLASS` draws it. A card's drawn width
+ * is its tracks plus the gaps between them, so a width predicted without it is too wide by up to
  * a gap, which is enough to move a card across a tier's edge.
  */
-export const GRID_GAP_PX = 24;
+export function gridColumnGapPx(dashboardWidth: number): number {
+  return dashboardWidth >= DASHBOARD_WIDE_GAP_FROM_PX ? 24 : GRID_ROW_GAP_PX;
+}
+
+/**
+ * The grid's gaps, as both grids draw them: `gridColumnGapPx` across, against the dashboard's own
+ * width (its `@container/dashboard`), and `GRID_ROW_GAP_PX` down. ONE class, so the drawn gap and
+ * the predicted one cannot drift apart.
+ */
+export const GRID_GAP_CLASS =
+  "gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
 
 /** The columns of the table above: which spans a dashboard of a given width draws. */
 export type DashboardBand = "narrow" | "medium" | "wide";

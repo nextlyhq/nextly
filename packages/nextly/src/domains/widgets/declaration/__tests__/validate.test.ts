@@ -133,6 +133,14 @@ describe("a widget declaration as startup receives it", () => {
     expect(problemsOf(valid({ several: "yes" }))[0]).toContain("several");
   });
 
+  it("accepts hidesWhenEmpty as a boolean, and refuses anything else", () => {
+    expect(problemsOf(valid({ hidesWhenEmpty: true }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: false }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: "yes" }))).toEqual([
+      "hidesWhenEmpty must be true or false",
+    ]);
+  });
+
   it("refuses a sketch that names no core display", () => {
     expect(problemsOf(valid({ sketch: "pie" }))[0]).toContain("sketch");
     expect(problemsOf(valid({ sketch: "bars" }))).toEqual([]);

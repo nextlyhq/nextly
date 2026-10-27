@@ -113,7 +113,7 @@ describe("dispatchUser — actions (respondAction)", () => {
 });
 
 describe("dispatchUser — bare data reads (respondData)", () => {
-  it("getCurrentUserPermissions returns { permissions, isSuperAdmin, roles } body", async () => {
+  it("getCurrentUserPermissions returns { permissions, isSuperAdmin, roles, validUntil } body", async () => {
     // permissions library is a free function; mock via vi.mock dynamically would be
     // complex. Just call the dispatcher and verify the response shape — actual
     // permission resolution is tested in services/lib/permissions tests.
@@ -125,6 +125,8 @@ describe("dispatchUser — bare data reads (respondData)", () => {
       isSuperAdmin: vi.fn().mockResolvedValue(false),
       listEffectivePermissions: vi.fn().mockResolvedValue([]),
       listRoleSlugsForUser: vi.fn().mockResolvedValue([]),
+      // No role assignment ends, so the list is not bounded.
+      resolveUserRoles: vi.fn().mockResolvedValue({ validUntil: undefined }),
     }));
 
     // Re-import after mocking
@@ -148,6 +150,7 @@ describe("dispatchUser — bare data reads (respondData)", () => {
     expect(body).toHaveProperty("permissions");
     expect(body).toHaveProperty("isSuperAdmin");
     expect(body).toHaveProperty("roles");
+    expect(body.validUntil).toBeNull();
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("message");
 

@@ -285,7 +285,6 @@ export type {
   WidgetQueryCell,
   WidgetHeight,
   WidgetSize,
-  WidgetChrome,
 } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
@@ -347,6 +346,7 @@ export {
   effectiveWidgetSettings,
   naturalGroupBy,
   resolveWidgetSettings,
+  type AppliedQuery,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
