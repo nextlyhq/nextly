@@ -142,19 +142,30 @@ const update = (
   data: Record<string, unknown>
 ) => t.nextly.update({ collection, id, data, ...asAuthor } as never);
 
+/** The entry as the author reads it with its held edit, where it has one. */
+const readWithDraft = (t: TestNextly, collection: string, id: string) =>
+  t.nextly.findByID({
+    collection,
+    id,
+    draft: true,
+    ...asAuthor,
+  } as never) as Promise<{ title?: string; owner?: string } | null>;
+
 type Updated = Awaited<
   ReturnType<CollectionEntryService["updateEntryInTransaction"]>
 >;
 type Settled = { result?: Updated; error?: unknown };
 
 /**
- * An update of an `OPEN_POSTS` entry inside the caller's own transaction, the
- * way a plugin service writes, settled as its result or its error.
+ * An update inside the caller's own transaction, the way a plugin service
+ * writes, settled as its result or its error. An `OPEN_POSTS` entry unless
+ * `collectionName` names another.
  */
 const updateInTransaction = (
   t: TestNextly,
   entryId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  collectionName = OPEN_POSTS
 ): Promise<Settled> => {
   const entries = t
     .getService("collectionsHandler")
@@ -163,7 +174,7 @@ const updateInTransaction = (
     .transaction<Updated>(tx =>
       entries.updateEntryInTransaction(
         tx,
-        { collectionName: OPEN_POSTS, entryId, user: { id: AUTHOR } },
+        { collectionName, entryId, user: { id: AUTHOR } },
         data
       )
     )
@@ -406,28 +417,73 @@ describe("a publish or unpublish rule that answers a filter", () => {
     expect((await stored(t, DRAFTED, own))?.title).toBe("mine");
     expect((await stored(t, DRAFTED, others))?.title).toBe("theirs");
 
-    const read = (id: string) =>
-      t.nextly.findByID({
-        collection: DRAFTED,
-        id,
-        draft: true,
-        ...asAuthor,
-      } as never) as Promise<{ title?: string } | null>;
+    expect((await readWithDraft(t, DRAFTED, own))?.title).toBe("edited");
+    expect((await readWithDraft(t, DRAFTED, others))?.title).toBe("theirs");
+  });
 
-    expect((await read(own))?.title).toBe("edited");
-    expect((await read(others))?.title).toBe("theirs");
+  it("holds an edit that leaves the fields its update filter names as they are", async () => {
+    const t = await boot();
+    const { own } = await seed(t, DRAFTED, "published");
+    const live = await stored(t, DRAFTED, own);
+
+    await update(t, DRAFTED, own, { title: "edited" });
+
+    expect(await stored(t, DRAFTED, own)).toEqual(live);
+    expect((await readWithDraft(t, DRAFTED, own))?.title).toBe("edited");
+  });
+
+  it("refuses to hold an edit to a field its update filter names, holding nothing", async () => {
+    // The update filter matches the author's own posts by `owner`. A held
+    // edit changing `owner` could leave the entry outside the filter once it
+    // goes live, so it is refused as a move out of the filter is, and neither
+    // the live row nor a held edit carries it.
+    const t = await boot();
+    const { own } = await seed(t, DRAFTED, "published");
+    const live = await stored(t, DRAFTED, own);
+
+    const refused = await errorOf(() =>
+      update(t, DRAFTED, own, { title: "given away", owner: OTHER })
+    );
+
+    expect(refused.statusCode).toBe(403);
+    expect(await stored(t, DRAFTED, own)).toEqual(live);
+    const read = await readWithDraft(t, DRAFTED, own);
+    expect(read?.owner).toBe(AUTHOR);
+    expect(read?.title).toBe("mine");
+  });
+
+  it("refuses to hold an edit to a field its update filter names inside the caller's transaction", async () => {
+    const t = await boot();
+    const { own } = await seed(t, DRAFTED, "published");
+    const live = await stored(t, DRAFTED, own);
+
+    const refused = await updateInTransaction(
+      t,
+      own,
+      { owner: OTHER },
+      DRAFTED
+    );
+
+    expect(refused.result?.success ?? false).toBe(false);
+    expect(statusOf(refused)).toBe(403);
+    expect(await stored(t, DRAFTED, own)).toEqual(live);
+    expect((await readWithDraft(t, DRAFTED, own))?.owner).toBe(AUTHOR);
   });
 
   it("refuses a publish that would promote a held edit taking the entry out of the filter", async () => {
-    // A published post whose edit is held as a pending change: the save
-    // leaves the live row as it was, so it is judged on that row. Publishing
-    // would put the edit live, and the edit hands the post to someone else,
-    // outside the publish rule's filter: the publish is refused, the live row
-    // keeps its owner, and the held edit is kept.
+    // A published post whose edit is held as a pending change, held by a
+    // trusted write: the author may not hold an edit to the field its filter
+    // names. Publishing would put the edit live, and the edit hands the post
+    // to someone else, outside the publish rule's filter: the publish is
+    // refused, the live row keeps its owner, and the held edit is kept.
     const t = await boot();
     const { own } = await seed(t, DRAFTED, "published");
 
-    await update(t, DRAFTED, own, { title: "given away", owner: OTHER });
+    await t.nextly.update({
+      collection: DRAFTED,
+      id: own,
+      data: { title: "given away", owner: OTHER },
+    } as never);
     const live = await stored(t, DRAFTED, own);
     // POPULATION CONTROL: the edit was held, not written to the live row, so
     // a refusal below is the publish's, not the save's.

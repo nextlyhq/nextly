@@ -13,6 +13,8 @@
  * - Single-entry transaction helpers for batch operations
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   TransactionContext,
@@ -122,6 +124,7 @@ import {
   normalizeRelationshipFields,
   relationshipValidationView,
 } from "../../../shared/lib/field-transform";
+import { filterKeys } from "../../../shared/lib/filterable-fields";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   type FieldGroupReach,
@@ -844,10 +847,18 @@ interface WorkingDraftWriteContext {
   snapshotM2M: Record<string, string[]> | undefined;
   splitComponentSchemas: ComponentSchemas | null;
   updatePayload: Record<string, unknown>;
+  /**
+   * The update filters that judged this write. A held edit may not change a
+   * field one of them names: the live row was matched, and the edit, put
+   * live later, could leave the entry outside the filter.
+   */
+  updateFilters?: readonly FilteredWriteCheck[];
 }
 
 /** What the caller needs back: the draft as a read would shape it, and its predecessor. */
 interface WorkingDraftWriteResult {
+  /** The update filter a held edit changes a field of, which holds nothing. */
+  refusedBy?: FilteredWriteCheck;
   workingDraftDocument?: Record<string, unknown>;
   /** The draft BEFORE this save, so a hook diffing old against new is like-for-like. */
   priorWorkingDraftDocument?: Record<string, unknown>;
@@ -862,11 +873,35 @@ interface FilteredWriteCheck {
   params: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0] & {
     operation: FilteredWrite;
   };
+  /** The filter itself, which names the fields its match reads. */
+  filter: RuleFilter;
 }
 
 /** A filter a write in the caller's own transaction was judged by. */
 interface FilteredTransactionWrite extends FilteredWriteCheck {
   schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+}
+
+/**
+ * Whether a held edit changes a field `filter` names, or may: a filter's
+ * match moves only through the fields it reads, so an edit leaving each as
+ * the live document holds it cannot take the entry out of the filter. A
+ * dotted key names the field it starts with. A name the collection does not
+ * declare, and the live document does not hold, cannot be compared, and
+ * counts as changed.
+ */
+function changesFieldFilterNames(
+  filter: RuleFilter,
+  draft: Record<string, unknown>,
+  live: Record<string, unknown>,
+  fields: readonly FieldDefinition[]
+): boolean {
+  for (const key of filterKeys(filter)) {
+    const name = key.split(".")[0];
+    const known = fields.some(field => field.name === name) || name in live;
+    if (!known || !isDeepStrictEqual(draft[name], live[name])) return true;
+  }
+  return false;
 }
 
 export class CollectionMutationService extends BaseService {
@@ -5609,7 +5644,7 @@ export class CollectionMutationService extends BaseService {
           this.deserializeJsonFieldsForSnapshot(
             {
               ...(rawEntry as Record<string, unknown>),
-              ...(localizedWrite?.localizedFieldValues ?? {}),
+              ...localizedWrite?.localizedFieldValues,
               // Creating in a non-default locale with an explicit status moves
               // that status to the companion row and strips it from the main
               // insert, so the raw row carries the column default. Overlay the
@@ -8010,6 +8045,24 @@ export class CollectionMutationService extends BaseService {
    * live row: a second status-less save of different fields would otherwise
    * rebuild from live content and silently revert the first pending edit.
    */
+  /** The live document a held save leaves in place, at a draft's shape. */
+  private async liveDocumentOf(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext
+  ): Promise<Record<string, unknown>> {
+    return assembleDocument(
+      await this.snapshotPartsFor(
+        {
+          parentRow: ctx.liveParentRow,
+          components: ctx.snapshotComponents ?? {},
+          manyToMany: ctx.snapshotM2M ?? {},
+        },
+        ctx.fields,
+        tx
+      )
+    );
+  }
+
   private async buildAccumulatedDraft(
     tx: TransactionContext,
     ctx: WorkingDraftWriteContext,
@@ -8094,17 +8147,7 @@ export class CollectionMutationService extends BaseService {
     );
     const replaces = existingDraft
       ? draftBase
-      : assembleDocument(
-          await this.snapshotPartsFor(
-            {
-              parentRow: ctx.liveParentRow,
-              components: snapshotComponents ?? {},
-              manyToMany: snapshotM2M ?? {},
-            },
-            fields,
-            tx
-          )
-        );
+      : await this.liveDocumentOf(tx, ctx);
     return { draftDocument, replaces };
   }
 
@@ -8252,6 +8295,17 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    // Judged against the live document, not the draft it replaces: an edit
+    // held before may already carry a change this save would put on.
+    if (ctx.updateFilters?.length) {
+      const live = existingDraft
+        ? await this.liveDocumentOf(tx, ctx)
+        : replaces;
+      const refusedBy = ctx.updateFilters.find(check =>
+        changesFieldFilterNames(check.filter, draftDocument, live, fields)
+      );
+      if (refusedBy) return { refusedBy };
+    }
     await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
     // The held component values are judged as the publish would judge them:
     // merged into the draft, since a save carries only the sub-fields it
@@ -10306,7 +10360,7 @@ export class CollectionMutationService extends BaseService {
                   ...currentParent,
                   ...updatePayload,
                   ...priorLocalizedValues,
-                  ...(localizedUpdate?.localizedFieldValues ?? {}),
+                  ...localizedUpdate?.localizedFieldValues,
                   // Per-locale status lives in the companion, so the main row's
                   // `status` is not this locale's. Overlay the value this write
                   // committed, or — for a content-only update that carried no
@@ -10469,7 +10523,21 @@ export class CollectionMutationService extends BaseService {
                   snapshotM2M,
                   splitComponentSchemas,
                   updatePayload,
+                  updateFilters: writeFilters.filter(
+                    check => check.params.operation === "update"
+                  ),
                 });
+                // Refused as a write moving the entry out of its filter is,
+                // before anything of the edit is held.
+                if (draftWrite.refusedBy) {
+                  transitionDeniedResult =
+                    await this.accessService.refusalOutsideFilter(
+                      draftWrite.refusedBy.params,
+                      true,
+                      true
+                    );
+                  throw new StatusTransitionDeniedError();
+                }
                 workingDraftDocument = draftWrite.workingDraftDocument;
                 priorWorkingDraftDocument =
                   draftWrite.priorWorkingDraftDocument;
@@ -11373,7 +11441,9 @@ export class CollectionMutationService extends BaseService {
       prepared.match,
       params
     );
-    if (!outside) filteredWrites.push({ ...prepared, params });
+    if (!outside && access.filter) {
+      filteredWrites.push({ ...prepared, params, filter: access.filter });
+    }
     return outside;
   }
 
@@ -11588,7 +11658,9 @@ export class CollectionMutationService extends BaseService {
       match,
       asked.params
     );
-    if (!refused) checks.push({ match, params: asked.params });
+    if (!refused && asked.access.filter) {
+      checks.push({ match, params: asked.params, filter: asked.access.filter });
+    }
     return refused;
   }
 
@@ -13123,7 +13195,7 @@ export class CollectionMutationService extends BaseService {
       const {
         hold: storeAsWorkingDraft,
         componentSchemas: splitComponentSchemas,
-        draftLocale: draftLocale,
+        draftLocale,
       } = await this.resolveWorkingDraftHold({
         collection,
         fields,
@@ -13208,7 +13280,7 @@ export class CollectionMutationService extends BaseService {
             // The locale split moved the translatable values out of the patch.
             patch: {
               ...finalData,
-              ...(localizedUpdate?.localizedFieldValues ?? {}),
+              ...localizedUpdate?.localizedFieldValues,
             },
             fields,
             collectionName: params.collectionName,
@@ -13472,48 +13544,64 @@ export class CollectionMutationService extends BaseService {
       // method the other two paths use.
       let workingDraftDocument: Record<string, unknown> | undefined;
       if (storeAsWorkingDraft) {
-        ({ workingDraftDocument: workingDraftDocument } =
-          await this.storeWorkingDraftInTx(tx, {
-            collection,
-            collectionHasStatus:
-              (collection as { status?: boolean }).status === true,
-            componentFieldData,
-            draftLocale: draftLocale,
-            fields,
-            manyToManyData,
-            params: {
-              collectionName: params.collectionName,
-              entryId,
-              user: params.user,
-              actor: params.actor,
-              overrideAccess: params.overrideAccess,
-              authenticatedScope: params.authenticatedScope,
+        const draftWrite = await this.storeWorkingDraftInTx(tx, {
+          collection,
+          collectionHasStatus:
+            (collection as { status?: boolean }).status === true,
+          componentFieldData,
+          draftLocale: draftLocale,
+          fields,
+          manyToManyData,
+          params: {
+            collectionName: params.collectionName,
+            entryId,
+            user: params.user,
+            actor: params.actor,
+            overrideAccess: params.overrideAccess,
+            authenticatedScope: params.authenticatedScope,
+          },
+          parentRow: this.readShapeEventDocument(
+            {
+              ...existingEntry,
+              ...stripImmutableSystemFields(
+                finalData,
+                "collection",
+                tableName,
+                fields
+              ),
             },
-            parentRow: this.readShapeEventDocument(
-              {
-                ...existingEntry,
-                ...stripImmutableSystemFields(
-                  finalData,
-                  "collection",
-                  tableName,
-                  fields
-                ),
-              },
-              fields,
-              tableName,
-              await this.passwordReach(fields, tx.getDrizzle())
-            ),
-            liveParentRow: this.readShapeEventDocument(
-              existingEntry,
-              fields,
-              tableName,
-              await this.passwordReach(fields, tx.getDrizzle())
-            ),
-            snapshotComponents: previousParts.components,
-            snapshotM2M: previousParts.manyToMany,
-            splitComponentSchemas: splitComponentSchemas,
-            updatePayload: finalData,
-          }));
+            fields,
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
+          ),
+          liveParentRow: this.readShapeEventDocument(
+            existingEntry,
+            fields,
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
+          ),
+          snapshotComponents: previousParts.components,
+          snapshotM2M: previousParts.manyToMany,
+          splitComponentSchemas: splitComponentSchemas,
+          updatePayload: finalData,
+          updateFilters: filteredWrites.filter(
+            check => check.params.operation === "update"
+          ),
+        });
+        // In the caller's transaction a returned failure would leave what the
+        // write did so far, so the refusal aborts it.
+        if (draftWrite.refusedBy) {
+          throw markWriteIntegrityFailure(
+            errorFromServiceEnvelope(
+              await this.accessService.refusalOutsideFilter(
+                draftWrite.refusedBy.params,
+                true,
+                true
+              )
+            )
+          );
+        }
+        workingDraftDocument = draftWrite.workingDraftDocument;
       }
 
       // Handle many-to-many relationships on the caller's transaction so the
