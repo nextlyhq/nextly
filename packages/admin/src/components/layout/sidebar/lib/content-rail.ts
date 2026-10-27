@@ -8,6 +8,8 @@
  * panel's open state all read it rather than listing the two sections again.
  */
 
+import { ROUTES } from "@admin/constants/routes";
+
 /** The rail id of the Content item. */
 export const CONTENT_RAIL_ID = "content";
 
@@ -15,6 +17,15 @@ export const CONTENT_RAIL_ID = "content";
 const CONTENT_SECTIONS = ["collections", "singles"] as const;
 
 export type ContentSection = (typeof CONTENT_SECTIONS)[number];
+
+/**
+ * Each part's address. The panel's links and the rail's fallback both read it,
+ * so the two can't name different pages for one part.
+ */
+export const CONTENT_SECTION_HREF: Readonly<Record<ContentSection, string>> = {
+  collections: ROUTES.COLLECTIONS,
+  singles: ROUTES.SINGLES,
+};
 
 /** Whether a section is one of the Content item's. */
 export function isContentSection(section: string): section is ContentSection {
@@ -40,6 +51,27 @@ export function contentSectionToOpen(
 ): ContentSection {
   if (isContentSection(current) && available[current]) return current;
   return available.collections ? "collections" : "singles";
+}
+
+/**
+ * Where the Content item goes when selected: nowhere while it has a panel to
+ * open, and to the part it would have opened when the panel is suppressed.
+ */
+export function contentItemHref({
+  panelShown,
+  current,
+  available,
+}: {
+  /** Whether the Content panel can open on this surface. */
+  panelShown: boolean;
+  current: string;
+  available: Readonly<Record<ContentSection, boolean>>;
+}): string {
+  // A surface that suppresses the panel leaves selecting Content nothing to
+  // show, so the item goes to the part it would have opened instead.
+  return panelShown
+    ? "#"
+    : CONTENT_SECTION_HREF[contentSectionToOpen(current, available)];
 }
 
 /**

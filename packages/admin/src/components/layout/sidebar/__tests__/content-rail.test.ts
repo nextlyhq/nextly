@@ -7,9 +7,11 @@
 import { describe, expect, it } from "vitest";
 
 import { Feather } from "@admin/components/icons";
+import { ROUTES } from "@admin/constants/routes";
 
 import {
   CONTENT_RAIL_ID,
+  contentItemHref,
   contentSectionToOpen,
   panelSectionIds,
   railItemOf,
@@ -70,5 +72,36 @@ describe("selecting the Content item", () => {
     expect(
       contentSectionToOpen("singles", { collections: true, singles: false })
     ).toBe("collections");
+  });
+});
+
+describe("where the Content item goes", () => {
+  const both = { collections: true, singles: true };
+
+  it("nowhere while it has a panel to open", () => {
+    expect(
+      contentItemHref({
+        panelShown: true,
+        current: "settings",
+        available: both,
+      })
+    ).toBe("#");
+  });
+
+  it("to the part it would open when the panel is suppressed", () => {
+    expect(
+      contentItemHref({
+        panelShown: false,
+        current: "settings",
+        available: both,
+      })
+    ).toBe(ROUTES.COLLECTIONS);
+    expect(
+      contentItemHref({
+        panelShown: false,
+        current: "settings",
+        available: { collections: false, singles: true },
+      })
+    ).toBe(ROUTES.SINGLES);
   });
 });

@@ -47,6 +47,8 @@ export function useSidebarCollectionList() {
     items,
     data: query.data,
     isLoading: query.isLoading,
+    // One request answers for every collection, so arriving is completing.
+    isComplete: !query.isLoading,
     error: query.error,
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
@@ -109,6 +111,10 @@ export function useSidebarSingleList() {
   return {
     items,
     isLoading,
+    // Whether every page has arrived. The list draws from the first page on,
+    // but a search that matched nothing may only say so once this is true: the
+    // match may be on a page still on its way. A failed page ends the walk.
+    isComplete: !isLoading && !(hasNextPage && !isFetchNextPageError),
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
   };

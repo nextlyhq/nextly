@@ -17,7 +17,6 @@ import type { JSX } from "react";
 import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
 import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
@@ -28,7 +27,11 @@ import {
 } from "@admin/lib/sidebar-landing";
 import { cn } from "@admin/lib/utils";
 
-import { contentPanelView, type ContentSection } from "./lib/content-rail";
+import {
+  CONTENT_SECTION_HREF,
+  contentPanelView,
+  type ContentSection,
+} from "./lib/content-rail";
 import { SidebarSearch } from "./SidebarSearch";
 
 import { SidebarMenu } from "./index";
@@ -39,10 +42,14 @@ const PART: Record<
 > = {
   collections: {
     label: "Collections",
-    href: ROUTES.COLLECTIONS,
+    href: CONTENT_SECTION_HREF.collections,
     noun: "collections",
   },
-  singles: { label: "Singles", href: ROUTES.SINGLES, noun: "Singles" },
+  singles: {
+    label: "Singles",
+    href: CONTENT_SECTION_HREF.singles,
+    noun: "Singles",
+  },
 };
 
 interface ContentPanelProps {
@@ -79,9 +86,11 @@ export function ContentPanel({
         collections: searchSidebarCollections(collections.items, search).length,
         singles: searchSidebarSingles(singles.items, search).length,
       },
+      // Complete, not merely loaded: a search may say nothing matched only
+      // once every page has arrived.
       loading: {
-        collections: collections.isLoading,
-        singles: singles.isLoading,
+        collections: !collections.isComplete,
+        singles: !singles.isComplete,
       },
     });
 
