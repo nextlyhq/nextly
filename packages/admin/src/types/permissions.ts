@@ -82,6 +82,19 @@ export interface EntityCapabilitiesAnswer {
   create?: boolean;
   /** Collections only. */
   delete?: boolean;
+  /**
+   * The requests judged in languages other than the one asked about, each as
+   * the server judges it. Absent from a server that predates them, where the
+   * action's own cell stands in.
+   */
+  readTranslations?: boolean;
+  readHistory?: boolean;
+  publishEveryLanguage?: boolean;
+  /** Collections only. */
+  createInDefaultLanguage?: boolean;
+  updateInDefaultLanguage?: boolean;
+  /** Collections only. */
+  duplicate?: boolean;
 }
 
 /**
@@ -105,4 +118,9 @@ export interface UserPermissionsResponse {
   isSuperAdmin: boolean;
   /** User's role slugs (e.g., ['super-admin', 'editor']) */
   roles: string[];
+  /**
+   * When this list stops holding, in epoch ms, or null: the soonest end of a
+   * role assignment it was read under. Absent from a server that predates it.
+   */
+  validUntil?: number | null;
 }

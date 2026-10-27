@@ -935,7 +935,10 @@ async function registerServicesOnce(
   // needed. Building them from `transformedConfig.collections` here was the
   // defect: a Builder-authored collection has no config entry at all, so one
   // of the framework's two schema modes had no queryable source.
-  resetWidgetRegistries(transformedConfig.plugins ?? []);
+  resetWidgetRegistries(
+    transformedConfig.plugins ?? [],
+    transformedConfig.admin?.dashboard
+  );
 
   // Before any step that writes to the database or the registry: the Builder
   // reconcile and the code-first sync below would otherwise add a refused

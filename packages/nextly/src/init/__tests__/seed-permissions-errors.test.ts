@@ -18,11 +18,14 @@ const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 
+/** The registered adapter: one object per registration of the services. */
+let adapter = { getCapabilities: () => ({ dialect: "postgresql" }) };
+
 vi.mock("../../di/service-access", () => ({
   getService: (name: string) => {
     switch (name) {
       case "adapter":
-        return { getCapabilities: () => ({ dialect: "postgresql" }) };
+        return adapter;
       case "logger":
         return { debug() {}, info() {}, warn() {}, error };
       case "config":
@@ -74,7 +77,7 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   seedSystemPermissions.mockResolvedValue(seeded());
   seedRolePresets.mockResolvedValue(undefined);
-  seedPublicRole.mockResolvedValue(undefined);
+  seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
 });
@@ -208,6 +211,65 @@ describe("seedPermissionsAndRolePresets", () => {
       expect.stringContaining("Seeding public role's reads failed"),
     ]);
     expect(seedPluginRoles).toHaveBeenCalled();
+  });
+
+  it("seeds again when another boot's claim on the Public role lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      // Another boot holds the claim; it may have stopped, and its claim
+      // lapses in a minute.
+      seedPublicRole.mockResolvedValueOnce({
+        made: false,
+        retryAt: Date.now() + 60_000,
+      });
+
+      await seedPermissionsAndRolePresets();
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(seedPublicRole).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tries again a while after making the Public role fails", async () => {
+    vi.useFakeTimers();
+    try {
+      seedPublicRole.mockRejectedValueOnce(new Error("connection reset"));
+      await seedPermissionsAndRolePresets();
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(seedPublicRole).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not seed again for services registered anew meanwhile", async () => {
+    vi.useFakeTimers();
+    try {
+      seedPublicRole.mockResolvedValueOnce({
+        made: false,
+        retryAt: Date.now() + 60_000,
+      });
+      await seedPermissionsAndRolePresets();
+
+      // The services this boot registered are gone, and another
+      // registration, with its own adapter, has taken their place.
+      adapter = { getCapabilities: () => ({ dialect: "postgresql" }) };
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("writes nothing during a production build", async () => {

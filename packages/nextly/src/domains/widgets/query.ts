@@ -1270,7 +1270,9 @@ export function validateReadWidgetQuery(
     ...(groupBy ? { groupBy } : {}),
     ...timelineAsAsked(timeline, range),
     ...window,
-    limit: effectiveWidgetLimit(raw.limit),
+    // A range sets how many points are drawn, so a ranged query carries no
+    // limit, and what this returns validates again unchanged.
+    ...(range === undefined ? { limit: effectiveWidgetLimit(raw.limit) } : {}),
   };
 }
 

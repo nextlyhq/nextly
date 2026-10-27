@@ -340,3 +340,36 @@ describe("a super-admin named only by id", () => {
     expect(rule).not.toHaveBeenCalled();
   });
 });
+
+describe("a user handed in naming the super-admin role", () => {
+  // The role names a caller hands in say nothing the lookup does not: the
+  // user is judged by the roles they hold, so only holding super-admin passes.
+  const named = { id: "u1", role: "super-admin", roles: ["super-admin"] };
+  const single: AccessTarget = { kind: "single", slug: "site-settings" };
+  const atCollection = () =>
+    collectionGateVerdict(asked({ read: () => true }, { user: named }));
+  const atSingle = () =>
+    singleGateVerdict({
+      slug: "site-settings",
+      action: "update",
+      principal: null,
+      user: named,
+      rules: { getRegisteredTarget: () => single },
+    });
+
+  it("is refused at a collection and a Single where they hold neither the role nor the permission", async () => {
+    callerMayNot("read", "update");
+    expect((await atCollection()).allowed).toBe(false);
+    expect((await atSingle()).allowed).toBe(false);
+  });
+
+  it("passes at both once they hold the role", async () => {
+    // The control: the same caller, holding super-admin, is let through, so
+    // the refusals above are the lookup's answer and not the gate refusing
+    // everyone.
+    callerMayNot("read", "update");
+    callerIsSuperAdmin();
+    expect((await atCollection()).allowed).toBe(true);
+    expect((await atSingle()).allowed).toBe(true);
+  });
+});

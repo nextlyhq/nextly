@@ -40,7 +40,7 @@ import {
   callerMayReadReleases,
 } from "../releases/releases-widget-source";
 
-import { getStartedSteps } from "./get-started";
+import { getStartedDetail, type GetStartedDetail } from "./get-started";
 import type { GetStartedAnswer } from "./get-started-steps";
 import {
   createDisabledSlugs,
@@ -121,6 +121,11 @@ export interface ConditionProbe {
    * read, so the two cannot disagree.
    */
   getStarted(): Promise<GetStartedAnswer>;
+  /**
+   * The same answer with the detail the deprecated onboarding read is
+   * projected from, resolved at most once: `getStarted` is derived from it.
+   */
+  getStartedDetail(): Promise<GetStartedDetail>;
 }
 
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
@@ -132,7 +137,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let createCollection: Promise<boolean> | undefined;
   let readReleases: Promise<boolean> | undefined;
   let anyRelease: Promise<boolean> | undefined;
-  let started: Promise<GetStartedAnswer> | undefined;
+  let started: Promise<GetStartedDetail> | undefined;
 
   const readCollections = (): Promise<RegistryAnswer> => {
     collectionsRead ??= readableOfKind(caller, "collection");
@@ -260,8 +265,9 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
         .then(may => (may ? callerMayReadAnyRelease(caller) : false));
       return anyRelease;
     },
-    getStarted: () => {
-      started ??= getStartedSteps(probe);
+    getStarted: () => probe.getStartedDetail().then(detail => detail.answer),
+    getStartedDetail: () => {
+      started ??= getStartedDetail(probe);
       return started;
     },
   };

@@ -8,7 +8,7 @@ description: >-
   Nextly install shows no collections, fails to load nextly.config.ts, or its
   admin panel misbehaves after setup.
 metadata:
-  nextly-version: 0.0.2-alpha.71
+  nextly-version: 0.0.2-alpha.72
 ---
 
 # Install Nextly into an existing Next.js app

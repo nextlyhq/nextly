@@ -75,6 +75,7 @@ const FIELDS = new Set([
   "width",
   "permission",
   "several",
+  "hidesWhenEmpty",
   "sketch",
   "settings",
   "data",
@@ -142,6 +143,10 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
       ? undefined
       : "several must be true or false",
   d =>
+    d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
+      ? undefined
+      : "hidesWhenEmpty must be true or false",
+  d =>
     d.sketch === undefined || isCoreDisplay(d.sketch)
       ? undefined
       : `sketch must name one of core's displays (${CORE_DISPLAYS.join(", ")}), got ${quote(d.sketch)}`,
@@ -161,7 +166,8 @@ function declarationProblems(d: Record<string, unknown>): string[] {
   });
 }
 
-function requiredTextProblem(
+/** Why `value` is not a usable required text `field`, or `undefined`. */
+export function requiredTextProblem(
   field: string,
   value: unknown
 ): string | undefined {
@@ -200,7 +206,8 @@ function idProblem(id: unknown): string | undefined {
   return undefined;
 }
 
-function descriptionProblem(description: unknown): string | undefined {
+/** Why `description` breaks the one-line, 80-character rule, or `undefined`. */
+export function descriptionProblem(description: unknown): string | undefined {
   if (description === undefined) return "description is required";
   const parsed = nonBlank.safeParse(description);
   if (!parsed.success) return "description must be a non-empty string";

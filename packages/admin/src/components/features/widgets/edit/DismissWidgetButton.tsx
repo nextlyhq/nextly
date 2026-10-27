@@ -69,14 +69,6 @@ export interface DismissWidgetButtonProps {
    * leaves the Tab order and its reason with it.
    */
   unavailableReason?: string;
-  /**
-   * Whether the cell positions this control itself.
-   *
-   * A framed card places it in its own header, where space is reserved. An
-   * unframed one has no header to place it in, so the cell floats it in the
-   * corner the drag handle leaves free while not customising.
-   */
-  floating?: boolean;
   /** Registers the button, so focus can return here after an Undo. */
   buttonRef?: (element: HTMLElement | null) => void;
   onDismiss: () => void;
@@ -86,7 +78,6 @@ export function DismissWidgetButton({
   title,
   isDismissing,
   unavailableReason,
-  floating = false,
   buttonRef,
   onDismiss,
 }: DismissWidgetButtonProps): JSX.Element {
@@ -106,11 +97,7 @@ export function DismissWidgetButton({
           // refuses says the capability exists and is unavailable, and here it
           // simply does not apply at that width.
           "hidden md:inline-flex",
-          unavailable && "cursor-not-allowed opacity-50",
-          // Floated only where no header reserved space for it. Top RIGHT is
-          // free by construction while not customising: the drag handle takes
-          // the left and renders only while customising.
-          floating && "absolute right-2 top-2 z-10"
+          unavailable && "cursor-not-allowed opacity-50"
         )}
         disabled={isDismissing}
         aria-disabled={unavailable || undefined}
@@ -122,10 +109,6 @@ export function DismissWidgetButton({
         // page -- and a reader deciding whether to press it needs to know the
         // card is recoverable rather than gone.
         aria-label={`Dismiss ${title}. You can bring it back from Customize.`}
-        // Marks this as the cell's own chrome rather than the widget's body, so
-        // a cell holding nothing else still collapses. The cell's class names
-        // the attribute; renaming it here alone would reinstate the blank row.
-        data-widget-chrome=""
         data-testid="widget-dismiss"
       >
         <Icons.X aria-hidden className="size-4" />
