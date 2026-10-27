@@ -8,12 +8,8 @@ import type React from "react";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 
+import { FrameState, readSlot } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
-import {
-  CardSkeleton,
-  CardSlotFailure,
-  CardUnavailable,
-} from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 /**
@@ -87,15 +83,19 @@ export const TeamSummary: React.FC<WidgetComponentProps> = ({
   isFetching,
   onRetry,
 }) => {
-  if (!slot) return isFetching ? <CardSkeleton shape="figure" /> : null;
-  if (!slot.ok) {
-    return <CardSlotFailure slot={slot} title="Team" onRetry={onRetry} />;
-  }
-  const rows = slot.result.op === "list" ? slot.result.items : [];
+  const read = readSlot(slot, {
+    isFetching,
+    skeleton: { shape: "figure" },
+    onRetry,
+  });
+  if ("state" in read) return <FrameState state={read.state} />;
+  const rows = read.result.op === "list" ? read.result.items : [];
   const users = figureOf(rows, "users");
   const roles = figureOf(rows, "roles");
   // Neither figure came: the frame's one unavailable state, rather than an empty body.
-  if (users === undefined && roles === undefined) return <CardUnavailable />;
+  if (users === undefined && roles === undefined) {
+    return <FrameState state={{ kind: "no-access" }} />;
+  }
   return <TeamTiles users={users} roles={roles} />;
 };
 

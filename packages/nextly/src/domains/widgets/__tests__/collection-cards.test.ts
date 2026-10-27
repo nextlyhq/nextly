@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collectionDefaultForReader,
   collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
@@ -20,7 +21,8 @@ const card = (
 ): WidgetPlacement => ({
   id: "c",
   widgetId,
-  width: "quarter",
+  w: 3,
+  h: 2,
   removed: false,
   ...(config === undefined ? {} : { config }),
 });
@@ -125,5 +127,83 @@ describe("the Collection settings as scope-token inputs", () => {
 
   it("is the same for the same declaration", () => {
     expect(token({ ...pinnedSetting })).toEqual(token(pinnedSetting));
+  });
+});
+
+describe("a declaration as a reader is told it", () => {
+  const limit: AnyWidgetSetting = {
+    name: "limit",
+    type: "number",
+    defaultValue: 5,
+  };
+  const declaration = (setting: AnyWidgetSetting) => ({
+    id: "acme/pinned",
+    settings: [setting, limit],
+  });
+
+  it("withholds a Collection setting's default naming a collection the reader may not read", () => {
+    // 🔴 Shipped as declared, the slug tells the reader of a collection they
+    // may not read, whether or not they hold a card.
+    const told = collectionDefaultForReader(
+      declaration(pinnedSetting),
+      new Set(["posts"])
+    );
+    expect(told.settings).toEqual([
+      { name: "source", type: "collection", label: "Collection" },
+      limit,
+    ]);
+    expect(JSON.stringify(told)).not.toContain("secret");
+  });
+
+  it("ships the same declaration when its default names a collection the reader may read", () => {
+    // The must-differ half: the same declaration, for a reader who may read it.
+    const whole = declaration(pinnedSetting);
+    expect(collectionDefaultForReader(whole, new Set(["secret"]))).toBe(whole);
+  });
+
+  it("keeps a default that names no collection, and a declaration with no Collection setting", () => {
+    const everything = declaration({ ...pinnedSetting, defaultValue: "*" });
+    expect(collectionDefaultForReader(everything, new Set())).toBe(everything);
+    const plain = { id: "core/team", settings: [limit] };
+    expect(collectionDefaultForReader(plain, new Set())).toBe(plain);
+    const bare: { id: string; settings?: readonly AnyWidgetSetting[] } = {
+      id: "core/note",
+    };
+    expect(collectionDefaultForReader(bare, new Set())).toBe(bare);
+  });
+});
+
+describe("a Collection setting judged by the query it drives", () => {
+  it("withholds nothing for a setting no knob drives on the widget's effective query", () => {
+    // 🔴 A registration that overrides the query can leave the setting reaching
+    // nothing: the card reads a Single, not the collection the setting names.
+    const overridden = collectionWidgets([
+      {
+        id: "acme/pinned",
+        collectionSetting: pinnedSetting,
+        knobQueries: [{ source: "single:homepage", op: "count" }],
+      },
+    ]);
+    expect(
+      unreadableCollectionCard(
+        overridden,
+        new Set(["posts"])
+      )(card("acme/pinned", { source: "secret" }))
+    ).toBe(false);
+    // The must-differ half: over a collection's query the setting names the
+    // collection read, and the card is withheld.
+    const reading = collectionWidgets([
+      {
+        id: "acme/pinned",
+        collectionSetting: pinnedSetting,
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ]);
+    expect(
+      unreadableCollectionCard(
+        reading,
+        new Set(["posts"])
+      )(card("acme/pinned", { source: "secret" }))
+    ).toBe(true);
   });
 });

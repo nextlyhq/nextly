@@ -71,6 +71,8 @@ interface PublicRoleSeeding {
   moveRoleOffPublicSlug: (id: string) => Promise<string | null>;
   /** Makes the Public role where no role holds the slug. */
   ensurePublicRole: () => Promise<unknown>;
+  /** Removes any inheritance link the Public role is part of. */
+  unlinkPublicRole: () => Promise<void>;
   meta: {
     get<T>(key: string): Promise<T | null>;
     set(key: string, value: unknown): Promise<void>;
@@ -127,12 +129,13 @@ const isClaim = (value: unknown): value is Claim =>
  */
 export async function seedPublicRole(
   seeding: PublicRoleSeeding
-): Promise<void> {
-  const { ensurePublicRole, meta } = seeding;
+): Promise<PublicRoleSeeded> {
+  const { ensurePublicRole, unlinkPublicRole, meta } = seeding;
   const state = await meta.get<unknown>(PUBLIC_ROLE_META_KEY);
   if (state === MADE) {
     await ensurePublicRole();
-    return;
+    await unlinkPublicRole();
+    return { made: true };
   }
   const mine: Claim = { claim: randomUUID(), at: new Date().toISOString() };
   if (state === null) {
@@ -152,14 +155,40 @@ export async function seedPublicRole(
   const holder = await meta.get<unknown>(PUBLIC_ROLE_META_KEY);
   if (holder === MADE) {
     await ensurePublicRole();
-    return;
+    await unlinkPublicRole();
+    return { made: true };
   }
-  // Another boot is making it; the next boot makes sure it exists.
-  if (!isClaim(holder) || holder.claim !== mine.claim) return;
+  // Another boot is making it. Should that boot stop, its claim lapses, and
+  // this one tries again then rather than waiting for the next start.
+  if (!isClaim(holder) || holder.claim !== mine.claim) {
+    return { made: false, retryAt: lapsesAt(holder) };
+  }
 
-  if (!(await moveSitesRole(seeding, holder))) return;
+  if (!(await moveSitesRole(seeding, holder))) {
+    return { made: false, retryAt: lapsesAt(null) };
+  }
   await makePublicRole(seeding);
   await meta.set(PUBLIC_ROLE_META_KEY, MADE);
+  await unlinkPublicRole();
+  return { made: true };
+}
+
+/**
+ * Whether this boot found the Public role made, or made it; where another
+ * boot holds the claim to make it, when that claim lapses and this boot is
+ * to try again.
+ */
+export type PublicRoleSeeded =
+  | { made: true }
+  | { made: false; retryAt: number };
+
+/**
+ * When a claim lapses: `claim`'s own time and the lapse, or a lapse from now
+ * where there is no claim to read it from.
+ */
+function lapsesAt(claim: unknown): number {
+  const at = isClaim(claim) ? Date.parse(claim.at) : Number.NaN;
+  return (Number.isNaN(at) ? Date.now() : at) + CLAIM_LAPSES_AFTER_MS + 1000;
 }
 
 /**

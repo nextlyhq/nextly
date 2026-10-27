@@ -50,10 +50,40 @@ export function stepPresentation(
 ): StepPresentation {
   const label =
     step.single === undefined ? undefined : singleLabels.get(step.single);
-  return BY_KIND[step.kind](step.single, label);
+  // A server newer than this admin can send a kind it has no words for: drawn
+  // as a plain row naming the step, never a crash that takes the card with it.
+  const present = BY_KIND[step.kind] as
+    | (typeof BY_KIND)[GetStartedStepKind]
+    | undefined;
+  return present === undefined
+    ? { label: `Finish setup: ${step.key}`, href: ROUTES.DASHBOARD }
+    : present(step.single, label);
 }
 
 /** Whether a reader may skip this step: core's list, the one its skips are applied by. */
 export function isSkippable(step: GetStartedStep): boolean {
   return GET_STARTED_SKIPPABLE_KINDS.includes(step.kind);
+}
+
+/** A run of the answer's steps, in the server's order: Singles folded together. */
+export type StepRun =
+  | { kind: "steps"; steps: GetStartedStep[] }
+  | { kind: "singles"; steps: GetStartedStep[] };
+
+/**
+ * The answer's steps as the card draws them: in the order the server sent,
+ * consecutive Single steps gathered into one run the card can fold.
+ *
+ * Every step is drawn, whatever its kind: a kind added on the server is drawn
+ * as a plain row rather than counted in "x of y" and missing from the list.
+ */
+export function stepRuns(steps: readonly GetStartedStep[]): StepRun[] {
+  const runs: StepRun[] = [];
+  for (const step of steps) {
+    const kind = step.kind === "single" ? "singles" : "steps";
+    const last = runs.at(-1);
+    if (last?.kind === kind) last.steps.push(step);
+    else runs.push({ kind, steps: [step] });
+  }
+  return runs;
 }

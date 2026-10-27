@@ -37,8 +37,8 @@ export interface GridAnnouncer {
     to: number,
     count: number
   ) => void;
-  /** Say the width a card was just set to, by its name ("Half width"). */
-  announceWidth: (title: string, widthName: string) => void;
+  /** Say the size a card was just set to, by its name ("6 columns by 4 rows"). */
+  announceSize: (title: string, sizeName: string) => void;
   /**
    * Say that a card was taken off the dashboard.
    *
@@ -163,8 +163,8 @@ export function useGridAnnouncer(
     [say]
   );
 
-  const announceWidth = useCallback(
-    (title: string, widthName: string) => say(`${title} set to ${widthName}.`),
+  const announceSize = useCallback(
+    (title: string, sizeName: string) => say(`${title} set to ${sizeName}.`),
     [say]
   );
 
@@ -218,7 +218,7 @@ export function useGridAnnouncer(
     announcement,
     announceSettingChanged,
     announceMoved,
-    announceWidth,
+    announceSize,
     announceRemoved,
     announceRestored,
     announceReset,

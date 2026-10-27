@@ -29,6 +29,6 @@
 "nextly": patch
 ---
 
-At boot, the Public role is given `read-media` and the read of each collection and Single whose `read` rule answers `true` for a visitor. Each read is granted once, so one an owner removes stays removed. Access doesn't change yet.
+A plugin route whose `requiredPermission` cannot be worked out, because its resolver throws or returns an empty permission, now answers 500 `INTERNAL_ERROR`, as any server fault does. It is not answered 403, since no access the caller held could have been enough, and the request is never let through.
 
-Each startup log names what the Public role does not hold yet that visitors may rely on: reads with no `read` rule, reads whose rule answers neither `true` nor `false`, writes whose rule answers `true` for anyone, and rules that failed or gave no answer when asked. Grant the Public role each one visitors should keep.
+A REST request whose handler reports a failure as a returned result, rather than throwing it, is answered with that failure's own status and code: a refusal 403 `FORBIDDEN`, a missing record 404, a busy database 503. A reported failure with no message is answered by its status too.

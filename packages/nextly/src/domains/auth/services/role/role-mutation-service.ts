@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
@@ -111,13 +111,19 @@ export class RoleMutationService extends BaseService {
    * visitor is judged by, created holding nothing. Only its permissions may
    * change after that, so it is never brought back to a set of its own.
    *
+   * `declaredNames` are names roles the app or its plugins declare go by,
+   * which the built-in role leaves to them even where those roles are not
+   * made yet.
+   *
    * @returns Role ID and whether it was newly created
    */
-  async ensurePublicRole(): Promise<{ id: string; created: boolean }> {
+  async ensurePublicRole(
+    declaredNames: readonly string[] = []
+  ): Promise<{ id: string; created: boolean }> {
     const existing = await this.findRoleIdBySlug(PUBLIC_ROLE_SLUG);
     if (existing) return { id: existing.id, created: false };
     return this.ensureBuiltInRole({
-      name: await this.firstFreeRoleName("Public"),
+      name: await this.firstFreeRoleName("Public", declaredNames),
       slug: PUBLIC_ROLE_SLUG,
       description: "What anyone may do without signing in",
       level: 0,
@@ -128,9 +134,14 @@ export class RoleMutationService extends BaseService {
    * `base`, or where a role already has that name (names are unique), the
    * first of `<base> built-in`, `<base> built-in 2`, … no role has: names the
    * admin's role form accepts, so the role can still be saved there. A site's
-   * own role keeps its name; the built-in role takes another.
+   * own role keeps its name, as does one in `reserved`; the built-in role
+   * takes another. Compared without case, as a database may compare them.
    */
-  private async firstFreeRoleName(base: string): Promise<string> {
+  private async firstFreeRoleName(
+    base: string,
+    reserved: readonly string[]
+  ): Promise<string> {
+    const held = new Set(reserved.map(name => name.toLowerCase()));
     const { roles } = this.tables;
     for (let n = 1; ; n++) {
       const name =
@@ -139,6 +150,7 @@ export class RoleMutationService extends BaseService {
           : n === 2
             ? `${base} built-in`
             : `${base} built-in ${n - 1}`;
+      if (held.has(name.toLowerCase())) continue;
       const taken = await this.db
         .select({ id: roles.id })
         .from(roles)
@@ -146,6 +158,36 @@ export class RoleMutationService extends BaseService {
         .limit(1);
       if (taken.length === 0) return name;
     }
+  }
+
+  /**
+   * Removes every inheritance link the Public role is part of, either way,
+   * and clears what is cached from the grants of each role it joined. Its
+   * own refusals keep such a link from being made, but an instance still
+   * running code from before them can make one; read on each boot, a link
+   * made so does not last past the next.
+   */
+  async unlinkPublicRole(publicRoleId: string): Promise<void> {
+    const { roleInherits } = this.tables;
+    const touching = or(
+      eq(roleInherits.parentRoleId, publicRoleId),
+      eq(roleInherits.childRoleId, publicRoleId)
+    );
+    const links = await this.db
+      .select({
+        parentRoleId: roleInherits.parentRoleId,
+        childRoleId: roleInherits.childRoleId,
+      })
+      .from(roleInherits)
+      .where(touching);
+    if (links.length === 0) return;
+    await this.db.delete(roleInherits).where(touching);
+    const roles = new Set<string>();
+    for (const { parentRoleId, childRoleId } of links) {
+      roles.add(String(parentRoleId));
+      roles.add(String(childRoleId));
+    }
+    for (const id of roles) await afterRoleGrantsChanged(id);
   }
 
   /**
@@ -182,11 +224,30 @@ export class RoleMutationService extends BaseService {
       .limit(1);
     if (!role) return null;
     let slug = String(role.slug);
-    for (let n = 1; slug === PUBLIC_ROLE_SLUG; n++) {
+    // The slug in any case: MySQL's collation finds a role whose slug is
+    // `Public` when asked for `public`, so that one holds it there too.
+    for (let n = 1; slug.toLowerCase() === PUBLIC_ROLE_SLUG; n++) {
       const free = `${PUBLIC_ROLE_SLUG}-${n}`;
       if (await this.findRoleIdBySlug(free)) continue;
-      await this.db.update(roles).set({ slug: free }).where(eq(roles.id, id));
-      slug = free;
+      // Only while the role still has the slug it was read with: a rename
+      // another instance made meanwhile stands, and is read back below.
+      try {
+        await this.db
+          .update(roles)
+          .set({ slug: free })
+          .where(and(eq(roles.id, id), eq(roles.slug, slug)));
+      } catch (error) {
+        // Another role took the free slug in the meantime: try the next.
+        if (await this.findRoleIdBySlug(free)) continue;
+        throw error;
+      }
+      const [now] = await this.db
+        .select({ slug: roles.slug })
+        .from(roles)
+        .where(eq(roles.id, id))
+        .limit(1);
+      if (!now) return null;
+      slug = String(now.slug);
     }
     await afterRoleGrantsChanged(id);
     return slug;

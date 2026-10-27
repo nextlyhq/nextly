@@ -36,3 +36,7 @@ A site whose own role already used the slug `public` keeps that role under the n
 Saving a role in the admin keeps its slug.
 
 An app or plugin role declared with the slug `public` is refused at boot, as one declared with `super-admin` already is.
+
+At boot, the Public role is given `read-media` and the read of each collection and Single whose `read` rule answers `true` for a visitor. Each read is granted once, so one an owner removes stays removed. Access doesn't change yet.
+
+Each startup log names what the Public role does not hold yet that visitors may rely on: reads with no `read` rule, reads whose rule answers neither `true` nor `false`, writes whose rule answers `true` for anyone, and rules that failed or gave no answer when asked. Grant the Public role each one visitors should keep.

@@ -20,7 +20,7 @@ export function RevenueCard({
 }: WidgetProps<typeof revenue>) {
   const total = data.points.reduce((sum, point) => sum + point.total, 0);
   const label = settings.net ? "net" : "gross";
-  return size.class === "small"
+  return size.tier === "small"
     ? `${total}`
     : `${total} ${data.currency} ${label}, ${settings.range}`;
 }

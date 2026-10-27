@@ -6,7 +6,7 @@
  * the role holds already is claimed and left as it is. The claim is made in
  * the transaction that adds, so a failed add leaves nothing claimed.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../../services/shared";
 
@@ -218,6 +218,70 @@ describe("seedPublicReadGrants", () => {
 
     // The failed add made nothing, so both are made now.
     expect(next.granted).toEqual(["media", "posts"]);
+  });
+});
+
+describe("seedPublicReadGrants asking rules", () => {
+  it("bounds every rule it asks with one deadline", async () => {
+    // Timeouts only: the in-memory `nextly_meta` turns with `setImmediate`.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let started = 0;
+      const never = () => {
+        started++;
+        return new Promise<boolean>(() => {});
+      };
+      const { seeding } = site();
+      const seeded = seedPublicReadGrants({
+        ...seeding,
+        targets: async () =>
+          ["a", "b", "c"].map(slug => ({
+            kind: "collection" as const,
+            slug,
+            access: { read: never, create: never },
+          })),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // All six rules asked at once, before any time passes, and one timer
+      // for all of them.
+      expect(started).toBe(6);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await seeded;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("seedPublicReadGrants timing", () => {
+  it("gives the rules their whole time after the targets are found", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { seeding, granted } = site();
+      const seeded = seedPublicReadGrants({
+        ...seeding,
+        // A slow registry: the targets take longer to find than a rule has.
+        targets: async () => {
+          await new Promise(resolve => setTimeout(resolve, 2500));
+          return [
+            {
+              kind: "collection" as const,
+              slug: "posts",
+              access: { read: async () => true },
+            },
+          ];
+        },
+      });
+      await vi.advanceTimersByTimeAsync(2500);
+      await seeded;
+
+      expect(granted).toContain("posts");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

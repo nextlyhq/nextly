@@ -14,13 +14,16 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { effectiveWidgetLimit, MAX_WIDGET_ROWS } from "nextly/config";
+import {
+  effectiveWidgetLimit,
+  GRID_COLUMNS,
+  MAX_WIDGET_ROWS,
+} from "nextly/config";
 import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
-import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
-import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
+import { columnGapPx, drawnSpan } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -35,33 +38,34 @@ export function tierForWidth(width: number | null): SizeTier | undefined {
 }
 
 /**
- * The outer width, in pixels, of a card drawn at `width` on a dashboard `dashboardWidth` wide.
+ * The outer width, in pixels, of a card of `w` columns on a dashboard `dashboardWidth` wide.
  *
- * Twelve tracks with a gap between each: a card spanning n of them takes n twelfths of the
- * dashboard and its share of the gaps, less the gap that follows it. This is the width the card
- * measures once drawn, so a tier read from it is the tier the card then measures.
+ * Twelve columns with a gap between each: a card spanning n of them takes n twelfths of the
+ * dashboard and its share of the gaps, less the gap that follows it, at the span its band draws
+ * it across and the gap that width draws (`sizes.ts`). This is the width the card measures once
+ * drawn, so a tier read from it is the tier the card then measures.
  */
-export function cardOuterWidth(
-  width: WidgetWidth,
-  dashboardWidth: number
-): number {
-  const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
-  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+export function cardOuterWidth(w: number, dashboardWidth: number): number {
+  const span = drawnSpan(w, dashboardWidth);
+  const gap = columnGapPx(dashboardWidth);
+  return ((dashboardWidth + gap) * span) / GRID_COLUMNS - gap;
 }
 
 /**
  * A card's tier before it is drawn: the tier its predicted outer width reads as.
  *
  * What a card's first query is sized by, since the query is asked before the card can measure
- * itself. Read through {@link tierForWidth}, the rule the measured tier uses, so the two cannot
- * disagree about a width; `undefined` while the dashboard itself has no width yet.
+ * itself. Only a prediction: once drawn, the card's tier is the one its own rendered width
+ * reads as, never the window's. Read through {@link tierForWidth}, the rule the measured tier
+ * uses, so the two cannot disagree about a width; `undefined` while the dashboard itself has no
+ * width yet.
  */
 export function predictedTier(
-  width: WidgetWidth,
+  w: number,
   dashboardWidth: number | null | undefined
 ): SizeTier | undefined {
   if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
-  return tierForWidth(cardOuterWidth(width, dashboardWidth));
+  return tierForWidth(cardOuterWidth(w, dashboardWidth));
 }
 
 /** The most rows a small card draws: below 340 px a fourth row is a scroll. */
@@ -111,10 +115,60 @@ export function rowsLayout(tier: SizeTier, columns: number): RowsLayout {
     : { kind: "list" };
 }
 
+/** Where the one card-tier context is kept, across every copy of this module. */
+const CARD_TIER_CONTEXT_KEY = Symbol.for("nextly.admin.card-tier-context");
+
+/** Whether a second copy has been named already, across every copy. */
+const SECOND_COPY_WARNED_KEY = Symbol.for(
+  "nextly.admin.card-tier-context.second-copy-warned"
+);
+
+const contexts = globalThis as {
+  [CARD_TIER_CONTEXT_KEY]?: Context<SizeTier | undefined>;
+  [SECOND_COPY_WARNED_KEY]?: true;
+};
+
+/** What the console is told when a second copy of the kit is loaded. */
+const SECOND_ADMIN_COPY_WARNING =
+  "[nextly] A second copy of @nextlyhq/admin's widget kit was loaded. " +
+  "A plugin likely bundles the admin: import the kit from " +
+  "@nextlyhq/plugin-sdk/admin and leave @nextlyhq/admin to the host.";
+
+/**
+ * The card-tier context, one for the whole page however many copies of the
+ * admin are loaded.
+ *
+ * 🔴 A plugin that bundles its own copy of the admin, rather than importing the
+ * kit through `@nextlyhq/plugin-sdk/admin` with the admin left to the host,
+ * would otherwise make a second context: its card states would read the tier
+ * of a provider that is never drawn, `undefined`, and draw at the wrong size
+ * with nothing saying why. Kept on a global key, the second copy reads the
+ * host's, and the console is told once that a second copy was loaded.
+ *
+ * 🔴 Once, and in every environment, with no `NODE_ENV` test: the admin is
+ * built as a library with `NODE_ENV` set to production, so a development-only
+ * guard is folded away and the published package would never say it. Loading
+ * the admin twice is a mistake wherever it happens, and the one line is the
+ * only sign of it. The flag lives on a global key too, so a third copy says
+ * nothing more.
+ */
+function sharedCardTierContext(): Context<SizeTier | undefined> {
+  const existing = contexts[CARD_TIER_CONTEXT_KEY];
+  if (existing !== undefined) {
+    if (contexts[SECOND_COPY_WARNED_KEY] !== true) {
+      contexts[SECOND_COPY_WARNED_KEY] = true;
+      console.warn(SECOND_ADMIN_COPY_WARNING);
+    }
+    return existing;
+  }
+  const created = createContext<SizeTier | undefined>(undefined);
+  contexts[CARD_TIER_CONTEXT_KEY] = created;
+  return created;
+}
+
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */
-export const CardTierContext: Context<SizeTier | undefined> = createContext<
-  SizeTier | undefined
->(undefined);
+export const CardTierContext: Context<SizeTier | undefined> =
+  sharedCardTierContext();
 
 /** The tier of the card this is drawn in. */
 export function useCardTier(): SizeTier | undefined {

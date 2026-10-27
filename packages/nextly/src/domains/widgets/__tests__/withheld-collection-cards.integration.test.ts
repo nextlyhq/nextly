@@ -1,14 +1,13 @@
 /**
- * Saved count and health cards becoming Count cards, through the real layout
- * endpoint on every configured dialect: what each reader is handed, and what
- * their save stores.
+ * Cards set to a collection, through the real layout endpoint on every
+ * configured dialect: what each reader is handed, and what their save stores.
  *
- * What only the endpoint and a database can settle: the conversion follows
+ * What only the endpoint and a database can settle: the withholding follows
  * the reader's real access, a collection they may not read is never named to
  * them, and a save keeps that collection's card in the row for the day they may
  * read it.
  *
- * @module domains/widgets/__tests__/count-conversion.integration.test
+ * @module domains/widgets/__tests__/withheld-collection-cards.integration.test
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -30,7 +29,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { WidgetLayoutService } from "../../../services/widgets/widget-layout-service";
-import type { WidgetPlacement } from "../layout";
+import { MAX_PLACEMENTS, type WidgetPlacement } from "../layout";
 
 const silent = {
   debug: () => {},
@@ -43,6 +42,9 @@ const silent = {
 const POSTS = "cv_blog_posts";
 /** No rule: only the super admin may read it. */
 const SECRET = "cv_secret";
+/** Two collections whose slugs spell one generated id, so neither gets generated cards. */
+const TWIN_UNDERSCORE = "cv_twin";
+const TWIN_HYPHEN = "cv-twin";
 
 interface LayoutRead {
   placements: WidgetPlacement[];
@@ -57,26 +59,17 @@ const card = (
 ): WidgetPlacement => ({
   id,
   widgetId,
-  width: "quarter",
+  w: 3,
+  h: 2,
   removed: false,
   ...patch,
 });
 
-/** A row holding a readable collection's two cards, a hidden one's and a deleted one's. */
-const SAVED = [
-  card("count", "collection/cv-blog-posts-count", { width: "half" }),
-  card("team", "core/team", { width: "third" }),
-  card("health", "collection/cv-blog-posts-stats", { width: "full" }),
-  card("secret", "collection/cv-secret-count"),
-  card("gone", "collection/cv-gone-count"),
-];
-
 describe.each(getConfiguredTestDialects())(
-  "saved count cards becoming Count cards (%s)",
+  "cards set to a collection the reader may not read (%s)",
   (dialect: TestDialect) => {
     let handle: TestNextly;
     let admin: string;
-    let editor: string;
 
     async function account(email: string): Promise<string> {
       const nextly = handle.nextly as unknown as {
@@ -145,62 +138,44 @@ describe.each(getConfiguredTestDialects())(
             fields: [text({ name: "title" })],
           }),
           defineCollection({ slug: SECRET, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: TWIN_UNDERSCORE,
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: TWIN_HYPHEN,
+            fields: [text({ name: "title" })],
+          }),
         ],
       });
       // The first account of an instance is its super admin.
       admin = await account("cv-admin@example.com");
-      editor = await account("cv-editor@example.com");
-      // A code rule only narrows the permission, so the editor holds read on
-      // the posts their rule admits everyone to.
-      await grantTo(handle, editor, "read", [POSTS]);
     }, 120_000);
 
     afterAll(async () => {
       await handle?.destroy();
     });
 
-    it("hands a reader one Count card per readable collection, names no other, and keeps the rest in the row", async () => {
-      await service().saveLayout("user", editor, SAVED, 0);
-
-      const seen = await read(editor);
-      const mine = seen.placements.filter(
-        placement => placement.widgetId !== "core/team"
-      );
-      // The count and health cards are one Count card set to the real slug,
-      // at the first one's place and the widest width Count allows; the
-      // deleted collection's card is kept, set to none.
-      expect(mine).toEqual([
-        card("count", "core/count", {
-          width: "half",
-          config: { collection: POSTS },
+    it("shows a Count card set to either of two readable collections whose slugs collide", async () => {
+      // 🔴 Judged by the reader's verdict on each collection, not read off the
+      // generated cards, which the collision drops for both: read that way,
+      // a card set to either was withheld as one they may not read.
+      const reader = await account("cv-twins@example.com");
+      await grantTo(handle, reader, "read", [TWIN_UNDERSCORE, TWIN_HYPHEN]);
+      const own = [
+        card("under", "core/count", {
+          config: { collection: TWIN_UNDERSCORE },
         }),
-        card("gone", "core/count"),
-      ]);
-      // 🔴 The collection this reader may not read is named nowhere: not as a
-      // card, not as a setting.
-      expect(JSON.stringify(seen)).not.toMatch(/cv[-_]secret/);
-
-      const res = await call(editor, "PUT", {
-        placements: seen.placements,
-        version: seen.version,
-        scope: seen.scope,
-      });
-      expect(res.status).toBe(200);
-      // The save stores what the reader holds, converted, and carries the
-      // card they were never shown back in, in its place and as it was.
-      const stored = await service().getLayout("user", editor);
-      expect(
-        stored.layout?.placements.filter(
-          placement => placement.widgetId !== "core/team"
-        )
-      ).toEqual([
-        card("count", "core/count", {
-          width: "half",
-          config: { collection: POSTS },
-        }),
-        card("secret", "collection/cv-secret-count"),
-        card("gone", "core/count"),
-      ]);
+        card("hyphen", "core/count", { config: { collection: TWIN_HYPHEN } }),
+      ];
+      await service().saveLayout("user", reader, own, 0);
+      const seen = await read(reader);
+      expect(seen.placements).toEqual(own);
+      // The must-differ half: a reader who may read only one is shown only it.
+      const half = await account("cv-one-twin@example.com");
+      await grantTo(handle, half, "read", [TWIN_UNDERSCORE]);
+      await service().saveLayout("user", half, own, 0);
+      expect((await read(half)).placements).toEqual([own[0]]);
     });
 
     it("withholds a Count card set to a collection the reader may not read, and keeps it in the row", async () => {
@@ -309,15 +284,43 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(false);
     });
 
-    it("converts the same card for a reader who may read its collection", async () => {
-      await service().saveLayout("user", admin, SAVED, 0);
+    it("lets a reader add a card whatever number of withheld cards their row carries out of view", async () => {
+      // 🔴 Kept and hidden, a card of a widget nobody declares must never cost
+      // the reader an add: the payload limit counts what they submit, and the
+      // row's own ceiling drops carried cards rather than refusing, so neither
+      // answer depends on cards they cannot see.
+      const reader = await account("cv-hoarder@example.com");
+      await grantTo(handle, reader, "read", [POSTS]);
+      const hidden = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
+        card(`gone${i}`, `collection/cv-gone-${i}-count`)
+      );
+      await service().saveLayout("user", reader, hidden, 0);
+      const seen = await read(reader);
+      expect(seen.placements).toEqual([]);
+
+      const added = card("posts", "core/count", {
+        config: { collection: POSTS },
+      });
+      const res = await call(reader, "PUT", {
+        placements: [added],
+        version: seen.version,
+        scope: seen.scope,
+      });
+      expect(res.status).toBe(200);
+      const stored = await service().getLayout("user", reader);
+      expect(stored.layout?.placements).toEqual([...hidden, added]);
+    });
+
+    it("hands the same card to a reader who may read its collection", async () => {
+      const own = [
+        card("secret", "core/count", { config: { collection: SECRET } }),
+      ];
+      await service().saveLayout("user", admin, own, 0);
 
       const seen = await read(admin);
       expect(
         seen.placements.filter(placement => placement.id === "secret")
-      ).toEqual([
-        card("secret", "core/count", { config: { collection: SECRET } }),
-      ]);
+      ).toEqual(own);
     });
   }
 );
