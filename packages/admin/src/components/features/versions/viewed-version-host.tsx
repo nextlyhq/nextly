@@ -19,6 +19,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode, type JSX } from "react";
+import { createPortal } from "react-dom";
 
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
@@ -545,11 +546,13 @@ function ViewedVersionFrame({
   fields,
   values,
   actionsDisabled,
+  bannerSlot,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
   values: Record<string, unknown>;
   actionsDisabled: boolean;
+  bannerSlot: HTMLElement | null;
 }) {
   const { restore } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
@@ -572,26 +575,32 @@ function ViewedVersionFrame({
           the changes query, as on the comparison page: side by side, each
           change's two sides take columns only where this box has room. */}
       <div className="@container/diff @4xl/content:p-8 pt-6 pb-20 sm:pb-0">
-        <VersionComparisonBar
-          layoutToggle={
-            order.length > 0 ? (
-              <ChangesLayoutToggle
-                layout={changesLayout}
-                onChange={setChangesLayout}
-                splittable={splittable}
-              />
-            ) : null
-          }
-          versionNo={viewing.versionNo}
-          about={viewing.about}
-          comparedWith={viewing.comparedWith}
-          changes={state}
-          position={position}
-          onMove={move}
-          onBackToHistory={restore?.backToHistory}
-          onOpenComparison={restore?.compare}
-          onCompareCurrent={restore?.compareCurrent}
-        />
+        <VersionBanner slot={bannerSlot}>
+          <VersionComparisonBar
+            // Inside the host's band, the bar drops its own card surface.
+            {...(bannerSlot
+              ? { className: "mb-0 rounded-none border-0 bg-transparent p-0" }
+              : {})}
+            layoutToggle={
+              order.length > 0 ? (
+                <ChangesLayoutToggle
+                  layout={changesLayout}
+                  onChange={setChangesLayout}
+                  splittable={splittable}
+                />
+              ) : null
+            }
+            versionNo={viewing.versionNo}
+            about={viewing.about}
+            comparedWith={viewing.comparedWith}
+            changes={state}
+            position={position}
+            onMove={move}
+            onBackToHistory={restore?.backToHistory}
+            onOpenComparison={restore?.compare}
+            onCompareCurrent={restore?.compareCurrent}
+          />
+        </VersionBanner>
         <VersionContent
           viewing={viewing}
           fields={fields}
@@ -612,6 +621,26 @@ function ViewedVersionFrame({
       </div>
     </ChangesLayoutProvider>
   );
+}
+
+/**
+ * The version's comparison bar, drawn into the host's banner stack when the
+ * host keeps a place for it, and in place otherwise.
+ *
+ * A portal rather than moving the bar up to the host: the bar shares its
+ * change navigation (which change is current, moving between them) with the
+ * fields below, and that state is the frame's, keyed by the version. Drawn
+ * through a portal it keeps that state and sits where the document's other
+ * banners are, under the document bar.
+ */
+function VersionBanner({
+  slot,
+  children,
+}: {
+  slot: HTMLElement | null;
+  children: ReactNode;
+}) {
+  return slot ? createPortal(children, slot) : <>{children}</>;
 }
 
 /**
@@ -643,11 +672,17 @@ export function ViewedVersionBody({
   fields,
   values,
   actionsDisabled,
+  bannerSlot = null,
   children,
 }: {
   fields: FieldConfig[];
   values?: Record<string, unknown>;
   actionsDisabled: boolean;
+  /**
+   * Where the host draws its document banners, for the version's comparison
+   * bar to be drawn among them; null draws it at the top of the version.
+   */
+  bannerSlot?: HTMLElement | null;
   children?: ReactNode;
 }): JSX.Element {
   const { viewing } = useDocumentHistory();
@@ -673,6 +708,7 @@ export function ViewedVersionBody({
           fields={fields}
           values={values ?? {}}
           actionsDisabled={actionsDisabled}
+          bannerSlot={bannerSlot}
         />
       ) : null}
     </>

@@ -101,6 +101,19 @@ describe("TranslationPanes", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the admin's top bar, so the trail to the document stays on screen", () => {
+    render(
+      <TranslationPanes source={SOURCE} onExit={() => {}}>
+        <p>the editor</p>
+      </TranslationPanes>
+    );
+
+    const request = suppress.mock.calls[0]?.[0] as { layers: string[] };
+    // The control: the mode does take the furniture beside the editor.
+    expect(request.layers).toContain("subSidebar");
+    expect(request.layers).not.toContain("header");
+  });
+
   it("leaves the mode when the exit is used", async () => {
     const onExit = vi.fn();
     render(

@@ -118,13 +118,18 @@ function ActivePanes({
   // `documentSidebar` is deliberately absent: this asks for the admin's
   // furniture, and the editor's own rail is the document's, collapsed through
   // the form's own control rather than taken away from underneath it.
+  // `header` is absent too: the top bar carries the trail to the document,
+  // which says what is being translated and is the way back to its list.
   useSuppressAdminChrome({
-    layers: ["primaryRail", "subSidebar", "header", "pageFrame"],
+    layers: ["primaryRail", "subSidebar", "pageFrame"],
     canExit: true,
   });
 
   return (
-    <div className="flex h-dvh flex-col">
+    // The window less the top bar (4rem), and below `lg` less the phone's
+    // menu bar above it as well (3.5rem), so the panes fill the content area
+    // exactly and each scrolls on its own rather than the page around them.
+    <div className="flex h-[calc(100dvh-4rem)] flex-col max-lg:h-[calc(100dvh-7.5rem)]">
       <ModeBar source={source} onExit={onExit} control={control} />
       {/* Sizes are PERCENTAGE STRINGS, and that is load-bearing rather than a
           style choice: this library reads a bare number as PIXELS, so

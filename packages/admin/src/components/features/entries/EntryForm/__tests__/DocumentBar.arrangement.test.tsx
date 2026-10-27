@@ -1,12 +1,13 @@
 /**
- * The editor header's arrangement, and that it draws no empty control.
+ * The document bar's arrangement, and that it draws no empty control.
  *
- * The header is one top row (the way back at the left, every action at the
- * right with History first), then the title on its own line, then the status
- * line. And in every document state, each button shows something: an icon, or
- * words that are not hidden. A button whose only content is a label hidden at
- * narrow widths draws as an empty bordered box, which is what the editor
- * showed beside "Saved" before the title had a line of its own.
+ * The bar is one sticky band: where the document stands at the left (status,
+ * save state, language), every action at the right in one order (a feature's
+ * controls, History, Preview, Save draft, the primary action, More, the panel
+ * toggle). The title and the way back are not in it. And in every document
+ * state, each button shows something: an icon, or words that are not hidden. A
+ * button whose only content is a label hidden at narrow widths draws as an
+ * empty bordered box.
  *
  * jsdom evaluates no CSS, so "hidden" is read from the classes that hide: a
  * label inside an element carrying `sr-only`, under any width variant, is not
@@ -18,8 +19,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { EntryLocaleProvider } from "../../EntryLocaleContext";
 import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
@@ -85,20 +87,24 @@ const STATES: State[] = [
 
 function Harness({
   state,
-  backLink,
   share = false,
+  toolbarSlot,
+  preview = false,
 }: {
   state: State;
-  backLink?: { href: string; label: string };
   /** Whether this document may be shared, which offers the share row. */
   share?: boolean;
+  /** A feature's toolbar control. */
+  toolbarSlot?: React.ReactNode;
+  /** Whether a preview can be opened, which draws the preview control. */
+  preview?: boolean;
 }) {
   const methods = useForm({
     defaultValues: { title: state.entry?.title ?? "" },
   });
   return (
     <FormProvider {...methods}>
-      <EntrySystemHeader
+      <DocumentBar
         mode={state.mode}
         hasStatus={state.hasStatus ?? true}
         draftsEnabled={state.draftsEnabled ?? false}
@@ -107,7 +113,12 @@ function Harness({
         collectionSlug="posts"
         historyFields={[]}
         autosaveEnabled
-        {...(backLink === undefined ? {} : { backLink })}
+        documentStatus={{
+          status: state.entry?.status ?? "draft",
+          hasWorkingDraft: state.entry?._isWorkingDraft === true,
+        }}
+        toolbarSlot={toolbarSlot}
+        {...(preview ? { isPreviewAvailable: true, onPreview: vi.fn() } : {})}
         {...(share
           ? {
               shareDocument: { collection: "posts", entryId: "e1" },
@@ -150,7 +161,7 @@ function showsSomething(button: HTMLElement): boolean {
   return false;
 }
 
-describe("the editor header", () => {
+describe("the document bar", () => {
   it.each(STATES.map(state => [state.name, state] as const))(
     "draws no empty control for %s",
     (_, state) => {
@@ -169,35 +180,93 @@ describe("the editor header", () => {
     }
   );
 
-  it("puts the way back first, every action after it with History first, then the title on its own line", () => {
+  it("draws its actions in one order: a feature's controls, History, Preview, Save draft, the primary action, More, then the panel toggle", () => {
     render(
       <Harness
         state={STATES[1]!}
-        backLink={{ href: "/admin/collections/posts", label: "Posts" }}
+        preview
+        toolbarSlot={<button type="button">SEO check</button>}
       />
     );
-    const back = screen.getByRole("link", { name: "Posts" });
-    expect(back).toHaveAttribute("href", "/admin/collections/posts");
-    const history = screen.getByRole("button", { name: "History" });
-    const save = screen.getByRole("button", { name: /^save draft$/i });
-    const title = screen.getByRole("textbox");
-
+    const order = [
+      screen.getByRole("button", { name: "SEO check" }),
+      screen.getByRole("button", { name: "History" }),
+      screen.getByRole("button", { name: /^preview$/i }),
+      screen.getByRole("button", { name: /^save draft$/i }),
+      screen.getByRole("button", { name: /^publish$/i }),
+      screen.getByRole("button", { name: "More actions" }),
+      screen.getByRole("button", { name: /^(show|hide) rail$/i }),
+    ];
     const follows = (a: Node, b: Node) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(back, history)).toBe(true);
-    expect(follows(history, save)).toBe(true);
-    // The title is below the action row, not between the way back and it.
-    expect(follows(save, title)).toBe(true);
-    // The way back and the actions share the top row; the title has its own.
-    const topRow = history.closest("div.min-h-9");
-    expect(topRow).not.toBeNull();
-    expect(within(topRow as HTMLElement).getByRole("link")).toBe(back);
-    expect(topRow?.contains(title)).toBe(false);
+    for (let i = 1; i < order.length; i++) {
+      expect(follows(order[i - 1]!, order[i]!)).toBe(true);
+    }
+    expect(order[4]).toHaveAttribute("data-primary", "true");
   });
 
-  it("draws no back link where the document has no list to go back to", () => {
+  it("sticks to the top of the editor's scroll area", () => {
     render(<Harness state={STATES[1]!} />);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    const bar = screen.getByTestId("document-bar");
+    expect(bar.className).toMatch(/(^|\s)sticky(\s|$)/);
+    expect(bar.className).toMatch(/(^|\s)top-0(\s|$)/);
+  });
+
+  it("says where the document stands first: the status, then the save state, then the language off the default", () => {
+    function Translating() {
+      const methods = useForm({ defaultValues: { title: "Bonjour" } });
+      return (
+        <EntryLocaleProvider
+          value={{
+            locale: "fr",
+            rtl: false,
+            collectionLocalized: true,
+            isNonDefaultLocale: true,
+          }}
+        >
+          <FormProvider {...methods}>
+            <DocumentBar
+              mode="edit"
+              hasStatus
+              isDirty
+              entry={{ id: "e1", status: "published", title: "Bonjour" }}
+              documentStatus={{ status: "published", hasWorkingDraft: false }}
+              collectionSlug="posts"
+              historyFields={[]}
+              onSaveDraft={vi.fn()}
+              onPublish={vi.fn()}
+              onSaveChanges={vi.fn()}
+              onUnpublish={vi.fn()}
+            />
+          </FormProvider>
+        </EntryLocaleProvider>
+      );
+    }
+    render(<Translating />);
+    const bar = screen.getByTestId("document-bar");
+    const pill = within(bar).getByText("Published");
+    const save = within(bar).getByTestId("save-state-indicator");
+    const language = within(bar).getByText("fr");
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(pill, save)).toBe(true);
+    expect(follows(save, language)).toBe(true);
+    // Before every action.
+    expect(
+      follows(language, within(bar).getByRole("button", { name: "History" }))
+    ).toBe(true);
+  });
+
+  it("shows no language code in the default language", () => {
+    render(<Harness state={STATES[1]!} />);
+    expect(screen.queryByText("en")).not.toBeInTheDocument();
+  });
+
+  it("draws neither the title nor a link: the title is the editor's, the way back the top bar's", () => {
+    render(<Harness state={STATES[1]!} />);
+    const bar = screen.getByTestId("document-bar");
+    expect(within(bar).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("gives every icon-only button a name and a tooltip", () => {

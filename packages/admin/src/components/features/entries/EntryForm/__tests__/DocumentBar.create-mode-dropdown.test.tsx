@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 interface HarnessProps {
   mode: "create" | "edit";
@@ -20,7 +20,7 @@ function Harness({ mode, entry = null, isDirty = false }: HarnessProps) {
   const methods = useForm({ defaultValues: { title: entry?.title ?? "" } });
   return (
     <FormProvider {...methods}>
-      <EntrySystemHeader
+      <DocumentBar
         mode={mode}
         hasStatus
         isDirty={isDirty}
@@ -39,7 +39,7 @@ function Harness({ mode, entry = null, isDirty = false }: HarnessProps) {
   );
 }
 
-describe("EntrySystemHeader — action dropdown visibility (Task 7 PR-8)", () => {
+describe("DocumentBar — action dropdown visibility", () => {
   it("hides the entire action dropdown in create mode (clean form)", () => {
     render(<Harness mode="create" />);
     expect(

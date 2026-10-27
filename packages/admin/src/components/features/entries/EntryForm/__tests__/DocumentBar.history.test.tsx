@@ -30,7 +30,7 @@ vi.mock("@admin/components/features/versions/VersionHistorySheet", () => ({
   },
 }));
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 /**
  * The header reads form state through context, so it is given a real form
@@ -47,7 +47,7 @@ const fields = [{ name: "title", type: "text" }] as FieldConfig[];
 function renderHeader(overrides: Record<string, unknown> = {}) {
   return render(
     <WithForm>
-      <EntrySystemHeader
+      <DocumentBar
         mode="edit"
         hasStatus={false}
         collectionSlug="posts"
@@ -61,7 +61,7 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
   );
 }
 
-describe("EntrySystemHeader version history", () => {
+describe("DocumentBar version history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     history.readable = true;
@@ -166,7 +166,7 @@ describe("EntrySystemHeader version history", () => {
 
 const { actionBarProps } = vi.hoisted(() => ({
   actionBarProps: {
-    current: null as { actions: { id: string }[] } | null,
+    current: null as { actions: { id: string; placement: string }[] } | null,
   },
 }));
 
@@ -180,7 +180,9 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@admin/components/features/entries/EntryForm/DocumentActionBar")
     >()),
-    DocumentActionBar: (props: { actions: { id: string }[] }) => {
+    DocumentActionBar: (props: {
+      actions: { id: string; placement: string }[];
+    }) => {
       actionBarProps.current = props;
       return null;
     },
@@ -205,7 +207,7 @@ const contributed: ContributedAction[] = [
   },
 ];
 
-describe("EntrySystemHeader — contributed actions while reading history", () => {
+describe("DocumentBar — contributed actions while reading history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     actionBarProps.current = null;
@@ -225,7 +227,7 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
             setRestore: () => {},
           }}
         >
-          <EntrySystemHeader
+          <DocumentBar
             mode="edit"
             hasStatus={false}
             collectionSlug="posts"
@@ -250,8 +252,11 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
   it("draws the version's own actions in place of the document's while a version is being read", () => {
     // The document's verbs, a feature's contributions among them, act on the
     // LIVE document, which is not what is on screen. A contribution cannot be
-    // expected to know about history, so the header replaces the whole bar
-    // with the version's own actions rather than greying each control.
+    // expected to know about history, so the host withholds every one, and
+    // the bar draws the version's own actions where the primary and toolbar
+    // verbs sat. The menu stays with the model's own rows only: View API
+    // response reads rather than writes, and is most useful while reading a
+    // version; each writing row carries the model's reason it is held.
     renderWithHistory({
       versionNo: 3,
       snapshot: { title: "as it was" },
@@ -264,7 +269,10 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
       about: null,
     });
 
-    expect(actionBarProps.current).toBeNull();
+    const offered = actionBarProps.current?.actions ?? [];
+    expect(offered.map(action => action.id)).toContain("view-api");
+    expect(offered.map(action => action.id)).not.toContain("add-to-release");
+    expect(offered.every(action => action.placement === "menu")).toBe(true);
     expect(
       screen.getByRole("button", { name: "Back to current" })
     ).toBeInTheDocument();

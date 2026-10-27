@@ -101,24 +101,21 @@ vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
-vi.mock(
-  "@admin/components/features/entries/EntryForm/EntrySystemHeader",
-  () => ({
-    EntrySystemHeader: (props: { hasUnsavedWork?: boolean }) => {
-      headerProps.current = props;
-      const { setViewing, setRestore } = useDocumentHistory();
-      useEffect(() => {
-        setViewing(viewed.current);
-        setRestore({
-          canRestore: true,
-          request: vi.fn(),
-          returnToCurrent: vi.fn(),
-        });
-      }, [setViewing, setRestore]);
-      return null;
-    },
-  })
-);
+vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
+  DocumentBar: (props: { hasUnsavedWork?: boolean }) => {
+    headerProps.current = props;
+    const { setViewing, setRestore } = useDocumentHistory();
+    useEffect(() => {
+      setViewing(viewed.current);
+      setRestore({
+        canRestore: true,
+        request: vi.fn(),
+        returnToCurrent: vi.fn(),
+      });
+    }, [setViewing, setRestore]);
+    return null;
+  },
+}));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({

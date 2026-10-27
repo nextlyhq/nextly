@@ -24,8 +24,8 @@ const { viewed } = vi.hoisted(() => ({
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
-vi.mock("../EntrySystemHeader", () => ({
-  EntrySystemHeader: () => {
+vi.mock("../DocumentBar", () => ({
+  DocumentBar: () => {
     const { setViewing, setRestore } = useDocumentHistory();
     useEffect(() => {
       setViewing(viewed.current);
