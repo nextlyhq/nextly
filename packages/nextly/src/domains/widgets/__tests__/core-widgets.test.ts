@@ -20,7 +20,8 @@ import {
   validateWidgetDefinition,
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
-import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { settings } from "../declaration/setting-builders";
+import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -225,6 +226,28 @@ describe("core widget definitions", () => {
   });
 });
 
+describe("the list cards' Density", () => {
+  it.each([
+    "core/recent-entries",
+    "core/recently-edited",
+    "core/recent-activity",
+    "core/upcoming-releases",
+  ])("%s offers the shared choice, one option for every density", id => {
+    // 🔴 Restated by hand, a density added to the list would reach a plugin's list cards and
+    // not core's.
+    const widget = CORE_WIDGETS.find(w => w.id === id);
+    const density = widget?.settings?.find(
+      setting => setting.name === "density"
+    );
+    expect(density).toMatchObject(settings.density());
+    expect(
+      (density as { options?: { value: string }[] } | undefined)?.options?.map(
+        option => option.value
+      )
+    ).toEqual([...LIST_DENSITIES]);
+  });
+});
+
 describe("the content card", () => {
   it("asks for every collection, not the default five", () => {
     // An omitted limit is materialized as the default 5, which would cut a
@@ -267,12 +290,16 @@ describe("the default dashboard", () => {
   // The agreed cards, in order, each at its agreed size and within its agreed
   // bounds, in grid units: [id, default, min, max].
   const AGREED = [
-    ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
-    ["core/quick-create", [4, 3], [4, 2], [12, 4]],
-    ["core/recently-edited", [6, 4], [4, 3], [12, 6]],
-    ["core/recent-activity", [6, 4], [4, 3], [12, 6]],
+    // Needs attention four rows tall at the least, so each of its three kinds has a row;
+    // Create as tall, beside it.
+    ["core/needs-attention", [8, 4], [4, 4], [12, 6]],
+    ["core/quick-create", [4, 4], [4, 2], [12, 4]],
+    // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
+    // default, but four beside Team, whose row it shares.
+    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
-    ["core/upcoming-releases", [4, 4], [4, 3], [8, 6]],
+    ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
     ["core/team", [4, 4], [3, 2], [6, 4]],
   ] as const;
 

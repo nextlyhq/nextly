@@ -419,6 +419,8 @@ export {
   DEFAULT_WIDGET_LIMIT,
   MAX_WIDGET_LIMIT,
   MAX_WIDGET_ROWS,
+  LIST_DENSITIES,
+  type ListDensity,
   effectiveWidgetLimit,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and

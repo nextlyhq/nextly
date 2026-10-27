@@ -27,7 +27,7 @@ import {
   LIST_DETAIL_CLASS,
   LIST_LABEL_CLASS,
   LIST_ROW_CLASS,
-  MORE_LINE_CLASS,
+  LIST_ROW_HEIGHT_CLASS,
   ROWS_STACK_CLASS,
   STATS_CELL_CLASS,
   STATS_GRID_CLASS,
@@ -37,7 +37,9 @@ import {
   TABLE_HEAD_ROW_CLASS,
   TABLE_HEADING_CLASS,
   TABLE_ROW_CLASS,
+  TABLE_ROW_HEIGHT_CLASS,
 } from "./geometry";
+import { useListDensity } from "./list-rows";
 import type { RowsLayout } from "./tier";
 
 /** The kinds of body a skeleton can be shaped like, so it matches what will arrive. */
@@ -69,15 +71,17 @@ function SkeletonLine({
 }
 
 /**
- * The rows a list or table card will draw, in the same line boxes and gaps (`frame/geometry`),
- * and the "More exist" line under them.
+ * The rows a list or table card will draw, in the same fixed-height row boxes at the card's
+ * density (`frame/geometry`).
  *
- * The line is ALWAYS held. Whether more exist is only known from the answer, and holding it
- * makes the only change an answer can bring a shrink: a list that has fewer rows than were held,
- * or no more beyond them, closes up once, and nothing on the dashboard is ever pushed down.
+ * Its "View all" line is not held here: it is drawn in the card's footer, which the frame keeps
+ * whether or not it holds anything, so an answer that brings the line moves nothing.
  */
 function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
   const widths = ["w-full", "w-4/5", "w-3/5"];
+  // The card's density, as the rows that will arrive are drawn at.
+  const density = useListDensity();
+  const rowHeight = LIST_ROW_HEIGHT_CLASS[density];
   return (
     <div className={ROWS_STACK_CLASS}>
       {layout.kind === "table" ? (
@@ -93,7 +97,10 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
           </thead>
           <tbody>
             {Array.from({ length: rows }, (_, r) => (
-              <tr key={r} className={TABLE_ROW_CLASS}>
+              <tr
+                key={r}
+                className={cn(TABLE_ROW_CLASS, TABLE_ROW_HEIGHT_CLASS[density])}
+              >
                 {Array.from({ length: layout.columns }, (_, c) => (
                   <td key={c} className={TABLE_CELL_CLASS}>
                     <Skeleton
@@ -111,7 +118,7 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
       ) : (
         <div className={LIST_CLASS}>
           {Array.from({ length: rows }, (_, r) => (
-            <div key={r} className={LIST_ROW_CLASS}>
+            <div key={r} className={cn(LIST_ROW_CLASS, rowHeight)}>
               <SkeletonLine
                 lineClass={LIST_LABEL_CLASS}
                 width={widths[r % 3]}
@@ -123,7 +130,6 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
           ))}
         </div>
       )}
-      <SkeletonLine lineClass={MORE_LINE_CLASS} width="w-20" />
     </div>
   );
 }
