@@ -24,12 +24,19 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 // The permissions the signed-in caller holds, as the guard asks about them.
 const held = new Set<string>();
-vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({
-    hasPermission: (slug: string) => held.has(slug),
-    isLoading: false,
-  }),
-}));
+vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
+  // Asked as the product asks: a `manage-` permission counts as the plain
+  // ones it stands for.
+  const { holdsPermission } = await import(
+    "@admin/lib/permissions/holds-permission"
+  );
+  return {
+    useCurrentUserPermissions: () => ({
+      hasPermission: (slug: string) => holdsPermission(held, slug),
+      isLoading: false,
+    }),
+  };
+});
 
 // Where a refused caller is sent; observed rather than followed.
 const navigateTo = vi.hoisted(() => vi.fn());

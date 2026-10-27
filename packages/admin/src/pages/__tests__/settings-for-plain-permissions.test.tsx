@@ -90,8 +90,13 @@ const CREATED = [
 /** The settings nav entries a settings reader is shown. */
 const NAV = ["general", "image-sizes", "user-fields"];
 
+/** The settings nav entries shown, the API-key and webhook entries aside. */
 const navIds = (access: { hasPermission: (slug: string) => boolean }) =>
-  visibleSettingsNav(access).flatMap(group => group.items.map(item => item.id));
+  visibleSettingsNav({
+    hasPermission: access.hasPermission,
+    canAccessApiKeys: false,
+    canAccessWebhooks: false,
+  }).flatMap(group => group.items.map(item => item.id));
 
 describe("the settings pages, by plain permission", () => {
   it("shows a role holding read and update on settings every settings page, and lets it edit", async () => {
