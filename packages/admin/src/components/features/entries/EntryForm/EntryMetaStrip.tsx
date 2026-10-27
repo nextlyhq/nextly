@@ -8,12 +8,14 @@ import { useFormContext } from "react-hook-form";
 import { Pencil } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { DocumentIdCopy } from "./DocumentIdCopy";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 
 // Why: thin metadata strip below the system header. Carries the slug (with
-// inline pencil-to-edit) and, when the rail is collapsed, the Draft/Published
-// status pill. When the rail is expanded the status pill renders inside the
-// Document panel instead, so this strip stays quiet.
+// inline pencil-to-edit) and, wherever the rail is not on screen, the
+// Draft/Published status pill and the document's id. Where the rail is
+// expanded both render inside the Document panel instead, so this strip stays
+// quiet.
 
 export interface EntryMetaStripProps {
   /** Slug field config from the Builder schema. When present, slug renders
@@ -38,6 +40,9 @@ export interface EntryMetaStripProps {
    *  Resolved by the form via `useHasPublicAddress`, which knows about per-locale publishing and
    *  collections that have no draft lifecycle at all. */
   hasPublicAddress?: boolean;
+  /** The document's id, offered to copy wherever the Document panel is not
+   *  on screen. Absent before the document exists. */
+  documentId?: string | null | undefined;
 }
 
 export function EntryMetaStrip({
@@ -48,36 +53,44 @@ export function EntryMetaStrip({
   isRailCollapsed,
   lockSlug = false,
   hasPublicAddress = false,
+  documentId,
 }: EntryMetaStripProps): JSX.Element | null {
   const showStatusPill = hasStatus && !!status;
   const showSlug = !!slugField;
+  const showId = !!documentId;
 
-  if (!showStatusPill && !showSlug) return null;
+  if (!showStatusPill && !showSlug && !showId) return null;
 
   /*
-   * The status says itself in the document panel where that panel is on
-   * screen and open, so the pill steps aside there and only there: at the
-   * width the panel appears from (`@4xl/content`), while it is expanded. Below
-   * that width the panel is not drawn at all, so the pill is the only place
-   * the status is said, whatever the panel's setting.
+   * The status and the id say themselves in the document panel where that
+   * panel is on screen and open, so they step aside there and only there: at
+   * the width the panel appears from (`@4xl/content`), while it is expanded.
+   * Below that width the panel is not drawn at all, so this strip is the only
+   * place they are said, whatever the panel's setting.
    */
-  const pillBesidePanel = isRailCollapsed ? undefined : "@4xl/content:hidden";
+  const besidePanel = isRailCollapsed ? undefined : "@4xl/content:hidden";
 
   return (
     <div
       className={cn(
         "px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground",
-        // With nothing else in it, the strip steps aside with the pill rather
-        // than standing empty.
-        !showSlug && pillBesidePanel
+        // With nothing else in it, the strip steps aside with the pill and
+        // the id rather than standing empty.
+        !showSlug && besidePanel
       )}
     >
       {showStatusPill && (
         <StatusPill
           status={status}
           hasWorkingDraft={hasWorkingDraft}
-          className={pillBesidePanel}
+          className={besidePanel}
         />
+      )}
+      {showId && (
+        <div className={cn("flex items-center gap-1 shrink-0", besidePanel)}>
+          <span className="text-muted-foreground">ID:</span>
+          <DocumentIdCopy id={documentId} />
+        </div>
       )}
       {showSlug && (
         <SlugInlineEditor

@@ -10,7 +10,6 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import {
   useMemo,
@@ -29,6 +28,7 @@ import type {
 
 import type { CellSlotLookup } from "../archetypes/types";
 import { CardGrowContext, grownRows } from "../frame/grow";
+import type { AnswerSize } from "../frame/tier";
 import type { MoveDirection } from "../layout-editor";
 import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
 import {
@@ -94,8 +94,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
-    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
-    answerTier?: SizeTier;
+    /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerSize?: AnswerSize;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };

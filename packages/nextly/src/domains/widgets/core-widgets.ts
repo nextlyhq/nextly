@@ -60,7 +60,7 @@
 
 import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
 
-import { settings } from "./declaration/setting-builders";
+import { DENSITY_OPTIONS, settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { GET_STARTED_WIDGET_ID } from "./get-started-steps";
 import { MAX_WIDGET_LIMIT } from "./query-limits";
@@ -105,6 +105,21 @@ const NOTE_TEXT: WidgetSetting = {
 
 /** Recent entries' "Number of items", the same offer under the same name. */
 const RECENT_ENTRIES_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
+
+/**
+ * Every list card's Density: default or compact rows, default unless chosen.
+ * One declaration, so each list card offers the same choice under one name,
+ * and the admin reads it by that name to decide how many rows fit.
+ */
+const LIST_DENSITY: WidgetSetting = {
+  name: "density",
+  label: "Density",
+  type: "select",
+  defaultValue: "default",
+  // The builder's own options, one per density the admin sizes rows by, so core's list cards
+  // and a plugin's offer the same choice.
+  options: [...DENSITY_OPTIONS],
+};
 
 /**
  * Over time's Date range, its one quick setting: the range its chart draws,
@@ -249,8 +264,10 @@ const CORE_WIDGET_LITERALS = [
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
     // From a third, where its row of create buttons wraps, to the full width.
+    // Four rows tall by default, the height of Needs attention, whose row of the
+    // default dashboard it shares.
     size: {
-      default: { w: 4, h: 3 },
+      default: { w: 4, h: 4 },
       min: { w: 4, h: 2 },
       max: { w: 12, h: 4 },
     },
@@ -288,9 +305,11 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     // Two thirds by default; from a third, where its small tier still names
     // each kind, to the full width, where each kind breaks down per collection.
+    // Four rows tall at the least: a row for each of its three kinds always
+    // fits, with room for a part beneath them.
     size: {
-      default: { w: 8, h: 3 },
-      min: { w: 4, h: 3 },
+      default: { w: 8, h: 4 },
+      min: { w: 4, h: 4 },
       max: { w: 12, h: 6 },
     },
     defaultOrder: 10,
@@ -321,11 +340,12 @@ const CORE_WIDGET_LITERALS = [
     // the card's like any other's.
     archetype: "custom",
     component: "core#RecentlyEdited",
-    // Half the row by default; from a third, where its rows still read, to the full width.
+    // Half the row by default; from a third, where its rows still read, to the full width. Five
+    // rows tall at the default density (h 5), from four (h 4) to the ten a list draws (h 8).
     size: {
-      default: { w: 6, h: 4 },
-      min: { w: 4, h: 3 },
-      max: { w: 12, h: 6 },
+      default: { w: 6, h: 5 },
+      min: { w: 4, h: 4 },
+      max: { w: 12, h: 8 },
     },
     defaultOrder: 30,
     // From the activity trail, one row per document at its latest save the
@@ -359,6 +379,7 @@ const CORE_WIDGET_LITERALS = [
       RECENTLY_EDITED_ONLY_MINE,
       RECENTLY_EDITED_COLLECTION,
       RECENTLY_EDITED_ITEMS,
+      LIST_DENSITY,
     ],
   },
   {
@@ -369,12 +390,14 @@ const CORE_WIDGET_LITERALS = [
     // rows; the rows themselves are drawn as core's list cards draw them.
     archetype: "custom",
     component: "core#UpcomingReleases",
-    link: { label: "All releases", href: "/admin/releases" },
-    // From a third, where its rows still read, to two thirds: a short list needs no more.
+    // From a third, where its rows still read, to two thirds: a short list needs no more. Four
+    // rows tall by default (h 4), the height of Team, whose row of the default dashboard it
+    // shares, and up to ten (h 8). Its list's "View all (N)" leads to Releases, so the card has
+    // no link of its own.
     size: {
       default: { w: 4, h: 4 },
-      min: { w: 4, h: 3 },
-      max: { w: 8, h: 6 },
+      min: { w: 4, h: 4 },
+      max: { w: 8, h: 8 },
     },
     defaultOrder: 60,
     // Beside its gate: offered once a release exists that the reader may
@@ -431,11 +454,13 @@ const CORE_WIDGET_LITERALS = [
       source: RELEASES_SOURCE_ID,
       op: "list",
       // Selecting `reason` is what asks the source for the attention rows; see `system:releases`.
-      select: ["kind", "title", "scheduledAt", "reason", "count"],
+      // `id` is what each release row links to.
+      select: ["kind", "id", "title", "scheduledAt", "reason", "count"],
       limit: 5,
     },
     // Asked like core's lists: the rows its size draws and one more, for "more exist".
     sizedQuery: true,
+    settings: [LIST_DENSITY],
   },
   {
     id: "core/recent-activity",
@@ -447,11 +472,12 @@ const CORE_WIDGET_LITERALS = [
     // other's, and answered by `system:activity` through the batch, the same
     // read the activity endpoint makes.
     archetype: "custom",
-    // Half the row by default; from a third, where its rows still read, to the full width.
+    // Half the row by default; from a third, where its rows still read, to the full width. Five
+    // rows tall at the default density (h 5), from four (h 4) to the ten a list draws (h 8).
     size: {
-      default: { w: 6, h: 4 },
-      min: { w: 4, h: 3 },
-      max: { w: 12, h: 6 },
+      default: { w: 6, h: 5 },
+      min: { w: 4, h: 4 },
+      max: { w: 12, h: 8 },
     },
     defaultOrder: 40,
     component: "core#RecentActivity",
@@ -459,7 +485,7 @@ const CORE_WIDGET_LITERALS = [
     // Asked like core's own lists: the rows its size draws and one more, so the
     // card can say more exist at every size.
     sizedQuery: true,
-    settings: [RECENT_ACTIVITY_ITEMS],
+    settings: [RECENT_ACTIVITY_ITEMS, LIST_DENSITY],
   },
   {
     id: "core/count",
@@ -591,11 +617,12 @@ const CORE_WIDGET_LITERALS = [
     // Added from a collection's group of the add panel, once per collection or
     // more, and never placed on the default dashboard.
     offered: "per-collection",
-    // Half the row by default; from a third, where its rows still read, to the full width.
+    // Half the row by default; from a third, where its rows still read, to the full width. Five
+    // rows tall at the default density (h 5), from four (h 4) to the ten a list draws (h 8).
     size: {
-      default: { w: 6, h: 4 },
-      min: { w: 4, h: 3 },
-      max: { w: 12, h: 6 },
+      default: { w: 6, h: 5 },
+      min: { w: 4, h: 4 },
+      max: { w: 12, h: 8 },
     },
     // Asked like core's own lists: the rows its size draws and one more, so the
     // card can say more exist at every size.
@@ -618,6 +645,7 @@ const CORE_WIDGET_LITERALS = [
         defaultValue: "-updatedAt",
       },
       RECENT_ENTRIES_ITEMS,
+      LIST_DENSITY,
     ],
     query: { op: "list", status: "all", sort: "-updatedAt", limit: 5 },
   },

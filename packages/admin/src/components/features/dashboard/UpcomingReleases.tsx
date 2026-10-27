@@ -6,8 +6,8 @@
  * reader's releases need attention ("1 stopped · 2 overdue"), each part linking
  * to the Releases list filtered to that reason. The source sends those counts
  * as rows of their own, because the query selects `reason`; the card draws the
- * rest exactly as core's list cards draw rows, through the same `TieredRows`,
- * so "more exist" counts the release rows alone.
+ * rest exactly as core's list cards draw rows, through the same `ListCard`, so
+ * its footer counts the release rows alone, and each row leads to its release.
  *
  * @module components/features/dashboard/UpcomingReleases
  */
@@ -15,17 +15,18 @@
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
-import { TieredRows } from "@admin/components/features/widgets/archetypes/tiered-rows";
+import { answerListModel } from "@admin/components/features/widgets/archetypes/tiered-rows";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
+import { ListCard } from "@admin/components/features/widgets/frame/list-card";
+import { useListDensity } from "@admin/components/features/widgets/frame/list-rows";
 import { readListSlot } from "@admin/components/features/widgets/frame/list-slot";
 import {
-  rowsDrawn,
   useCardTier,
-  useRowsTier,
+  useRowsDrawn,
 } from "@admin/components/features/widgets/frame/tier";
 import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 
 /** Why releases need attention, in the order the line names them. */
 const REASONS = ["stopped", "overdue"] as const;
@@ -61,11 +62,21 @@ function attentionHref(reason: Reason): string {
   return `${ROUTES.RELEASES}?tab=attention&reason=${reason}`;
 }
 
+/**
+ * The attention line's height and the gap under it, in pixels: what the rows under it may not
+ * take. One line that never wraps (20 px, `h-5`) and a 12 px gap (`gap-3`), so the room it takes
+ * is known before it is drawn.
+ */
+const ATTENTION_LINE_PX = 20 + 12;
+
 /** "1 stopped · 2 overdue": one part per reason with any, each a link to its list. */
 const AttentionLine: React.FC<{
   counts: readonly { reason: Reason; count: number }[];
 }> = ({ counts }) => (
-  <p className="text-sm text-foreground" data-testid="release-attention">
+  <p
+    className="h-5 truncate whitespace-nowrap text-sm text-foreground"
+    data-testid="release-attention"
+  >
     {counts.map(({ reason, count }, index) => (
       <span key={reason}>
         {index > 0 && <span aria-hidden="true"> · </span>}
@@ -89,7 +100,15 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
+  const density = useListDensity();
+  const drawn = useRowsDrawn(tier, query?.limit, density);
+  // With the attention line above them, the rows have its room the less.
+  const drawnUnderLine = useRowsDrawn(
+    tier,
+    query?.limit,
+    density,
+    ATTENTION_LINE_PX
+  );
 
   const read = readListSlot({ slot, isFetching, rows: drawn, onRetry });
   if ("node" in read) return read.node;
@@ -102,6 +121,9 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
           empty: {
             title: "Nothing scheduled",
             detail: "Releases you schedule appear here, soonest first.",
+            // The card's one way on when it has no rows to list: the card is offered only to a
+            // reader who may open Releases.
+            action: { label: "Open Releases", href: ROUTES.RELEASES },
           },
         }}
       />
@@ -112,15 +134,18 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
     field => field.name === "title" || field.name === "scheduledAt"
   );
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {attention.length > 0 && <AttentionLine counts={attention} />}
       {releases.length > 0 && (
-        <TieredRows
-          items={releases}
-          columns={columns}
-          labelField="title"
-          detailField="scheduledAt"
-          query={query}
+        // The release rows alone, so the footer counts releases and never the attention line's
+        // counts; each row leads to its release, and "View all (N)" to Releases.
+        <ListCard
+          model={answerListModel(columns, "title", releaseHref)}
+          rows={releases}
+          drawn={attention.length > 0 ? drawnUnderLine : drawn}
+          viewAllHref={ROUTES.RELEASES}
+          tier={tier}
+          density={density}
         />
       )}
     </div>
@@ -128,3 +153,10 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
 };
 
 UpcomingReleasesCard.displayName = "UpcomingReleasesCard";
+
+/** A release row's page; nothing for a row without an id to open. */
+function releaseHref(row: Record<string, unknown>): string | undefined {
+  return typeof row.id === "string" && row.id !== ""
+    ? buildRoute(ROUTES.RELEASES_DETAIL, { id: row.id })
+    : undefined;
+}

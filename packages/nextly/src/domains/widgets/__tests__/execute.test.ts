@@ -151,6 +151,25 @@ describe("executeWidgetQuery", () => {
     });
   });
 
+  it("answers a list's total from the read that returned its rows", async () => {
+    // The total a card's "View all (N)" names is the read's own count, not a
+    // second one: three rows asked, forty-two matched, and the answer says 42.
+    find.mockResolvedValue({
+      items: [{ id: "1" }, { id: "2" }, { id: "3" }],
+      meta: { total: 42 },
+    });
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      limit: 3,
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(count).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ op: "list", total: 42 });
+  });
+
   it("describes the selected fields, in the order they were selected", async () => {
     // The rows carry both selected keys, which is what a read returns when
     // neither field is denied -- the columns follow `select`, not the row's own

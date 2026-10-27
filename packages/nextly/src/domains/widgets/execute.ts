@@ -381,10 +381,14 @@ async function runList(
   });
   const items = result.items ?? [];
   const fields = describeSelectedFields(query, source, items);
+  // The read's own count of what it matched, so a card's "View all (N)" is the
+  // number its linked list shows; absent when the read did not count.
+  const total = result.meta?.total;
   return {
     op: "list",
     items,
     ...(fields && { fields }),
+    ...(typeof total === "number" && { total }),
   };
 }
 
@@ -491,7 +495,13 @@ async function runSingle(
   const items =
     document === undefined ? [] : [projectedTo(document, query.select)];
   const fields = describeSelectedFields(query, source, items);
-  return { op: "list", items, ...(fields && { fields }) };
+  // A Single is its one document, so the rows shown are all there are.
+  return {
+    op: "list",
+    items,
+    ...(fields && { fields }),
+    total: items.length,
+  };
 }
 
 /**
