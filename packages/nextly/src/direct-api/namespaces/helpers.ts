@@ -10,6 +10,7 @@
  */
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
+import { readsAsVisitor } from "../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   authorizeCaller,
@@ -20,11 +21,15 @@ import {
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../auth/resource-readable";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
 } from "../../domains/auth/services/role-change-caller";
-import type { RouteGrant } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  type RouteGrant,
+} from "../../domains/auth/system-write-policy";
 import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -372,6 +377,34 @@ export async function checkWrite(
  * is read and a trusted one is untouched.
  */
 export const checkRead = checkWrite;
+
+/**
+ * The check a read of media runs first. A checked call naming no user and no
+ * key is a visitor's: judged by the one decision with the Public role's grants
+ * (`read-media`), as REST's media routes judge a request with no credential,
+ * and refused as a call naming nobody is, since signing in could grant it.
+ * Any other call is checked as {@link checkRead} checks it.
+ */
+export async function checkMediaRead(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): Promise<void> {
+  const access = accessOptions(
+    mergeConfig(defaultConfig, suppliedByCall(args))
+  );
+  if (
+    access.overrideAccess === false &&
+    access.authenticatedScope === undefined &&
+    readsAsVisitor({ overrideAccess: false, user: access.user?.id })
+  ) {
+    const { resource } = SYSTEM_READ_POLICY.media.read;
+    if (await visitorReadsSystemResource(resource)) return;
+    throw NextlyError.authRequired({
+      logContext: { reason: "visitor-lacks-read-media" },
+    });
+  }
+  await checkRead(defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+}
 
 /**
  * A write that may change who holds which role, run as REST runs it: checked

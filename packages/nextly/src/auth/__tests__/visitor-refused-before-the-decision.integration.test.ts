@@ -1,9 +1,8 @@
 /**
  * The doors that refuse a visitor before any access decision.
  *
- * A plugin route that is not public, the schema builder's collection list, a
- * document lock claim and a checked Direct API read of media each ask for a
- * signed-in caller first, so a visitor
+ * A plugin route that is not public, the schema builder's collection list and
+ * a document lock claim each ask for a signed-in caller first, so a visitor
  * (no session, no key) is answered 401 there whatever the Public role holds
  * and whatever the target's rule says. The access table leaves the visitor
  * out of those doors, since a row there would test this gate rather than the
@@ -124,7 +123,7 @@ describe.each(getConfiguredTestDialects())(
         collections: [notes],
         plugins: [gatedPlugin],
         // The boot's seeding: permissions, the Public role, and its read of
-        // `gated_notes`, whose read rule answers `true`, and of media.
+        // `gated_notes`, whose read rule answers `true`.
         seedPublic: true,
       });
 
@@ -191,11 +190,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.roles.getPermissions({ id: String(publicRole?.id) })
       ).map(permission => permission.slug);
       expect(slugs).toEqual(
-        expect.arrayContaining([
-          `read-${NOTES}`,
-          `update-${NOTES}`,
-          "read-media",
-        ])
+        expect.arrayContaining([`read-${NOTES}`, `update-${NOTES}`])
       );
     });
 
@@ -252,29 +247,6 @@ describe.each(getConfiguredTestDialects())(
           await request("POST", ["document-lock"], VISITOR, ref)
         );
         expect(refusal).toMatchObject({ status: 401, code: "AUTH_REQUIRED" });
-      });
-    });
-
-    describe("a checked Direct API read of media", () => {
-      it("answers a super-admin named as the user", async () => {
-        const found = await t.nextly.media.find({
-          overrideAccess: false,
-          user: { id: rootId },
-        });
-        expect(Array.isArray(found.items)).toBe(true);
-      });
-
-      it("refuses a visitor 401, asking for a credential", async () => {
-        const refused = await t.nextly.media
-          .find({ overrideAccess: false })
-          .then(
-            () => undefined,
-            (error: unknown) => error
-          );
-        expect(refused).toMatchObject({
-          statusCode: 401,
-          code: "AUTH_REQUIRED",
-        });
       });
     });
   }
