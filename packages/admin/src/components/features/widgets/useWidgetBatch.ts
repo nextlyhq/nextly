@@ -19,6 +19,7 @@ import {
   useWidgetQueries,
   type CellSlots,
   type DeclaredCellQuery,
+  type SizedAt,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type {
@@ -27,6 +28,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { DREW_NOTHING } from "./draw-failures";
+import { listDensityOf } from "./frame/list-rows";
 import { drawsFrom } from "./frame/tier";
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { queryForTier } from "./tier-query";
@@ -51,6 +53,11 @@ export interface BatchCard {
    * drawn somewhere with no dashboard width, whose query is asked as declared.
    */
   tier?: SizeTier;
+  /**
+   * The card's height in grid rows, which a list's rows are counted from; absent for a card
+   * drawn with none, counted from its tier.
+   */
+  h?: number;
   /**
    * The widget's query as DECLARED, when the card's settings change it: `widget` is then the
    * widget as its settings ask it. The batch keys the card by this and sends `widget.query`, so
@@ -97,10 +104,10 @@ export interface WidgetBatch {
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
   /**
-   * The tier the answer one card shows was fetched at. A card that grew keeps a smaller answer
+   * The size the answer one card shows was fetched at. A card that grew keeps a smaller answer
    * on screen until a larger one lands, and draws no more rows than that answer was asked for.
    */
-  fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  fetchedSizeFor: (placementId: string) => SizedAt | undefined;
 }
 
 /**
@@ -279,7 +286,24 @@ function queryAskFor(card: BatchCard, query: WidgetQuery): WidgetQueryRequest {
     placementId,
     query: declared,
     ...(declared === query ? {} : { applied: query }),
-    ...(tier ? { sized: { query: queryForTier(query, tier), tier } } : {}),
+    // Sized at the card's height and density too: a taller or compact card's body holds more
+    // rows. The size travels with the query, so the answer records what it was asked for.
+    ...(tier ? { sized: sizedAsk(query, tier, card) } : {}),
+  };
+}
+
+/** A card's query sized for its tier, height and density, with that size. */
+function sizedAsk(
+  query: WidgetQuery,
+  tier: SizeTier,
+  card: BatchCard
+): NonNullable<WidgetQueryRequest["sized"]> {
+  const density = listDensityOf(card.config);
+  return {
+    query: queryForTier(query, tier, density, card.h),
+    tier,
+    density,
+    ...(card.h === undefined ? {} : { h: card.h }),
   };
 }
 
@@ -365,7 +389,7 @@ export function useWidgetBatch(
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
   const retries = useCardRetries(requests, batch);
-  const { retry, updatedAtFor, grow, fetchedTierFor } = retries;
+  const { retry, updatedAtFor, grow, fetchedSizeFor } = retries;
   const cellSlots = useMemo(
     () => unsourcedCellSlots(cards, retries.cellSlots),
     [cards, retries.cellSlots]
@@ -383,9 +407,9 @@ export function useWidgetBatch(
   );
 
   // A card that now draws more than its answer was fetched for asks again, alone. Each card is
-  // offered on every change, and `grow` judges it against the tier its shown answer was fetched
-  // at, so a card is never asked again for a tier it already has; a card whose tier shrinks
-  // draws a prefix of what it holds and asks nothing.
+  // offered on every change, and `grow` judges it against the size its shown answer was fetched
+  // at, so a card is never asked again for a size it already has; a card that shrinks draws a
+  // prefix of what it holds and asks nothing.
   useEffect(() => {
     for (const asks of byCard(requests)) grow(asks);
   }, [requests, slots, grow]);
@@ -456,6 +480,6 @@ export function useWidgetBatch(
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
-    fetchedTierFor,
+    fetchedSizeFor,
   };
 }

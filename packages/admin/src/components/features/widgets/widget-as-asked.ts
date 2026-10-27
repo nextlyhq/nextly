@@ -19,7 +19,7 @@ import {
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { collectionSlugOf } from "./archetypes/more-exist";
+import { collectionSlugOf } from "./frame/list-view-href";
 
 /**
  * Whether a query can be asked as it stands: it names what it reads, and a

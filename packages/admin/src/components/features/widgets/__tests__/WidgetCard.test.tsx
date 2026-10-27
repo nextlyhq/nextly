@@ -2,7 +2,7 @@
  * The card is the one anatomy every widget wears, so these assert what a user
  * or a screen reader can observe about it, not which props were forwarded.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
@@ -107,7 +107,7 @@ describe("WidgetCard", () => {
     expect(links[0]).toHaveAttribute("href", "/dashboard/entries/posts");
   });
 
-  it("drops the footer while the card is loading, failed or not available", () => {
+  it("drops the footer's link while the card is loading, failed or not available", () => {
     for (const state of STATES) {
       const { unmount } = render(
         <WidgetCard
@@ -118,13 +118,15 @@ describe("WidgetCard", () => {
           <p>42</p>
         </WidgetCard>
       );
-      // An empty card keeps its link: "View all" still leads somewhere.
+      // An empty card keeps its link: "View all" still leads somewhere. The footer itself is
+      // always kept, so the card is one height whatever it shows.
       const keepsLink =
         state.kind === "ready" ||
         state.kind === "refreshing" ||
         state.kind === "empty";
+      const footer = screen.getByTestId("widget-card-footer");
       expect(
-        screen.queryByTestId("widget-card-footer") !== null,
+        within(footer).queryByRole("link", { name: "View all" }) !== null,
         state.kind
       ).toBe(keepsLink);
       unmount();
@@ -334,7 +336,7 @@ describe("a state the body reports", () => {
     );
   });
 
-  it("withholds the footer when the body reports an error", () => {
+  it("withholds the footer's link when the body reports an error", () => {
     render(
       <WidgetCard
         title="Posts"
@@ -343,7 +345,9 @@ describe("a state the body reports", () => {
         <FrameState state={{ kind: "error", message: "Unreadable." }} />
       </WidgetCard>
     );
-    expect(screen.queryByTestId("widget-card-footer")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("widget-card-footer")).queryByRole("link")
+    ).toBeNull();
     expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
       "Unreadable."
     );

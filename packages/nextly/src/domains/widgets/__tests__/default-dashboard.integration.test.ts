@@ -34,12 +34,15 @@ import {
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { refreshCollectionWidgets } from "../collection-widgets";
 
-/** The agreed default, in order, each at its agreed size, `w` by `h` in grid units. */
+/**
+ * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
+ * five rows tall, the height whose body holds five rows, but four beside Team, whose row it shares.
+ */
 const AGREED = [
-  ["core/needs-attention", "8x3"],
-  ["core/quick-create", "4x3"],
-  ["core/recently-edited", "6x4"],
-  ["core/recent-activity", "6x4"],
+  ["core/needs-attention", "8x4"],
+  ["core/quick-create", "4x4"],
+  ["core/recently-edited", "6x5"],
+  ["core/recent-activity", "6x5"],
   ["core/content", "12x4"],
   ["core/upcoming-releases", "4x4"],
   ["core/team", "4x4"],
@@ -135,15 +138,15 @@ describe.each(getConfiguredTestDialects())(
 
       // No grants: nothing to create, count or list, and neither the team nor releases.
       expect(await defaultFor(editor)).toEqual([
-        ["core/recently-edited", "6x4"],
-        ["core/recent-activity", "6x4"],
+        ["core/recently-edited", "6x5"],
+        ["core/recent-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "8x3"],
-        ["core/recently-edited", "6x4"],
-        ["core/recent-activity", "6x4"],
+        ["core/needs-attention", "8x4"],
+        ["core/recently-edited", "6x5"],
+        ["core/recent-activity", "6x5"],
         ["core/content", "12x4"],
       ]);
     });

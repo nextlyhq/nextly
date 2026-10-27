@@ -57,10 +57,13 @@ test("the card's link opens the posts it counted", async ({ page }) => {
   const href = (await postsLink.getAttribute("href")) ?? "";
   const where = new URLSearchParams(href.split("?")[1]).get("where");
   expect(JSON.parse(where ?? "null")).toEqual({ _pendingChange: true });
-  // The number the card showed for that link, as it is spoken.
-  const counted = Number(
-    /:\s*(\d+)/.exec((await postsLink.getAttribute("aria-label")) ?? "")?.[1]
-  );
+  // The number the card showed for that link, as it is spoken: a row link says it in text kept
+  // for assistive technology, a small card's inline link in its label.
+  const spoken =
+    (await postsLink.getAttribute("aria-label")) ??
+    (await postsLink.locator(".sr-only").first().textContent()) ??
+    "";
+  const counted = Number(/:\s*(\d+)/.exec(spoken)?.[1]);
   expect(counted).toBeGreaterThan(0);
 
   await postsLink.click();
