@@ -33,7 +33,7 @@ import {
   plainTags,
   settings,
 } from "../../../domains/collections/__tests__/helpers/collection-dependents-fixtures";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, relationship, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
 import { createContext } from "../../program";
@@ -159,6 +159,34 @@ describeEachDialect(
       expect(run.exited).toBe("process.exit(1)");
       expect(run.errors.join("\n")).toContain(
         `Fields that point at it: the Single ${SETTINGS}.featured.`
+      );
+      expect(await migrationFiles()).toEqual(before);
+    });
+
+    it("still counts a surviving collection whose slug a removed table's name reads as", async () => {
+      // The removed table `dc_labels` reads as the slug `labels`, which a
+      // surviving collection holds: its field must not be taken for one that
+      // goes with the removed collection.
+      const labelled = defineCollection({
+        slug: TAGS,
+        dbName: "labels",
+        fields: [text({ name: "label" })],
+      });
+      const survivor = defineCollection({
+        slug: "labels",
+        dbName: "other_labels",
+        fields: [relationship({ name: "tag", relationTo: TAGS })],
+      });
+      await generate(dialect, "initial", { collections: [labelled, survivor] });
+      const before = await migrationFiles();
+
+      const run = await generate(dialect, "drop_tags", {
+        collections: [survivor],
+      });
+
+      expect(run.exited).toBe("process.exit(1)");
+      expect(run.errors.join("\n")).toContain(
+        "Fields that point at it: labels.tag."
       );
       expect(await migrationFiles()).toEqual(before);
     });

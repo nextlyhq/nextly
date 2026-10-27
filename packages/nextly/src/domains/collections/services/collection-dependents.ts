@@ -77,6 +77,18 @@ export interface CollectionToDelete {
   readonly tables: readonly string[];
 }
 
+/** How a set of deletes is judged. */
+export interface DependentsOptions {
+  /**
+   * The collections whose fields go with the set, so they point at nothing
+   * afterwards and are no reason to refuse. Every collection in the set
+   * unless the caller knows better: a command that names a removed
+   * collection only by what its table reads as passes the slugs it knows,
+   * so a surviving collection of that name keeps its fields counted.
+   */
+  readonly fieldsGoWith?: readonly string[];
+}
+
 /** What depends on one collection. Empty lists mean nothing of that kind does. */
 export interface CollectionDependents {
   readonly fields: readonly FieldReference[];
@@ -263,18 +275,22 @@ function joinWords(words: readonly string[]): string {
  *
  * @param collections the collections being deleted, all in one operation
  * @param sources where the dependents are read from
+ * @param options whose fields go with the set
  */
 export async function findCollectionDependents(
   collections: readonly CollectionToDelete[],
-  sources: DependentsSources
+  sources: DependentsSources,
+  options: DependentsOptions = {}
 ): Promise<Map<string, CollectionDependents>> {
   const found = new Map<string, CollectionDependents>();
   if (collections.length === 0) return found;
 
   const records = await readDependentRecords(collections, sources);
   // Only those outside the operation count: a collection's own tables, and
-  // the tables of collections deleted with it, go together.
-  const goingToo = new Set(collections.map(collection => collection.slug));
+  // the tables and fields of collections deleted with it, go together.
+  const goingToo = new Set(
+    options.fieldsGoWith ?? collections.map(collection => collection.slug)
+  );
 
   for (const collection of collections) {
     const own = new Set(collection.tables);
@@ -469,9 +485,10 @@ function collectionDependentsRefusal(
  */
 export async function assertNothingDependsOn(
   collections: readonly CollectionToDelete[],
-  sources: DependentsSources
+  sources: DependentsSources,
+  options: DependentsOptions = {}
 ): Promise<void> {
-  const found = await findCollectionDependents(collections, sources);
+  const found = await findCollectionDependents(collections, sources, options);
   if (found.size > 0) {
     throw collectionDependentsRefusal(
       found,

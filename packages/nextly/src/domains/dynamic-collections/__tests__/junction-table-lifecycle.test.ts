@@ -650,7 +650,20 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
         `DROP TABLE IF EXISTS ${q(dialect, "dc_posts_locales")};`,
         `DROP TABLE IF EXISTS ${q(dialect, "dc_posts")}${dialect === "sqlite" ? "" : " CASCADE"};`,
       ]);
-      expect(migrationFileName).toMatch(/^\d+_drop_tags_posts\.sql$/);
+      expect(migrationFileName).toMatch(
+        /^\d+_drop_2_collections_[0-9a-f]{12}\.sql$/
+      );
+    });
+
+    it("names a drop file of many collections in a bounded name", () => {
+      const many = Array.from({ length: 40 }, (_, index) => ({
+        collectionName: `collection_with_a_long_name_${String(index)}`,
+        tableName: `dc_collection_with_a_long_name_${String(index)}`,
+      }));
+
+      const { migrationFileName } = service().generateDropTablesMigration(many);
+
+      expect(migrationFileName.length).toBeLessThan(64);
     });
 
     it("drops nothing extra for a collection with no many-to-many field", () => {

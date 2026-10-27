@@ -1914,6 +1914,22 @@ export class DynamicCollectionService extends BaseService {
     });
   }
 
+  /** The migration dropping one collection's tables (see the schema service). */
+  generateDropTableMigration(
+    collectionName: string,
+    tableName: string,
+    fields: FieldDefinition[] = []
+  ): {
+    migrationSQL: string;
+    migrationFileName: string;
+  } {
+    return this.schemaService.generateDropTableMigration(
+      collectionName,
+      tableName,
+      fields
+    );
+  }
+
   /** One migration dropping every table of collections deleted together (see the schema service). */
   generateDropTablesMigration(
     collections: ReadonlyArray<{

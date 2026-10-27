@@ -1105,13 +1105,22 @@ export class CollectionMetadataService extends BaseService {
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
   ): Promise<void> {
     // With the fields, so the collections' own many-to-many junctions go too.
-    const dropArtifacts = this.collectionService.generateDropTablesMigration(
-      ordered.map(({ slug, collection }) => ({
-        collectionName: slug,
-        tableName: collection.tableName,
-        fields: collection.fields ?? [],
-      }))
-    );
+    // A single collection's file is the one its delete has always written.
+    const [only] = ordered;
+    const dropArtifacts =
+      ordered.length === 1
+        ? this.collectionService.generateDropTableMigration(
+            only.slug,
+            only.collection.tableName,
+            only.collection.fields ?? []
+          )
+        : this.collectionService.generateDropTablesMigration(
+            ordered.map(({ slug, collection }) => ({
+              collectionName: slug,
+              tableName: collection.tableName,
+              fields: collection.fields ?? [],
+            }))
+          );
 
     await this.fileManager.saveDropMigration(
       dropArtifacts.migrationSQL,

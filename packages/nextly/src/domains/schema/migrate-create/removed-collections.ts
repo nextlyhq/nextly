@@ -120,7 +120,11 @@ export async function assertRemovedCollectionsUnused(input: {
       extensionSchema: () => input.extensionSchema(removed),
       // No database is read: see the module's note.
       recordedElements: () => Promise.resolve([]),
-    }
+    },
+    // No field goes with the drop: the removed collections are no longer
+    // configured, so none of their fields is among the owners, and a slug
+    // read off a removed table may be a surviving collection's.
+    { fieldsGoWith: [] }
   );
 }
 
