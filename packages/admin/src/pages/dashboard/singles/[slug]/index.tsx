@@ -49,6 +49,7 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 import { singleApi } from "@admin/services/singleApi";
@@ -302,9 +303,10 @@ export default function SingleEditPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see Home."). */}
           <AlertDescription>
-            Failed to load Single:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The Single couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
