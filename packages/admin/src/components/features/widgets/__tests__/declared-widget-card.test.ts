@@ -135,7 +135,14 @@ describe("a card core answers, as the frame draws it", () => {
   it("draws the empty state over a widget's own component", () => {
     const custom: DashboardWidget = { ...declared, archetype: "custom" };
     expect(resolveWidgetOutcome(custom, markedEmpty([])).state).toBe("empty");
-    expect(resolveWidgetOutcome(custom, list([])).state).toBe("self-drawn");
+    // Otherwise its own data reaches its component, which the frame draws
+    // inside itself (`answered`).
+    expect(
+      resolveWidgetOutcome(custom, {
+        ok: true,
+        result: { op: "data", data: [] },
+      }).state
+    ).toBe("answered");
   });
 
   it("puts the declared words in place of a display's own when the answer has nothing", () => {

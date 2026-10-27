@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -46,7 +47,8 @@ const ENTRIES = "ovt_entries";
 /** The batch's one instant: a Monday, mid-morning, so no row sits on midnight. */
 const NOW = new Date("2026-06-15T10:00:00.000Z");
 
-const admin: ReadCaller = { user: { id: "admin", roles: ["super-admin"] } };
+/** A reader the gate finds holding super-admin, seeded at each boot. */
+const admin: ReadCaller = { user: { id: "admin" } };
 
 /**
  * Rows on each side of every range's first instant, beside the batch's
@@ -109,6 +111,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const t = current;
+      await superAdminUser(t, "admin");
       const handler = t.getService("collectionsHandler") as unknown as {
         createEntry: (
           p: Record<string, unknown>,

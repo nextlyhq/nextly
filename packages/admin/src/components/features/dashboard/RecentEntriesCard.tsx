@@ -15,27 +15,30 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { TieredRows } from "../widgets/archetypes/tiered-rows";
+import { FrameState } from "../widgets/frame/card-state";
 import { useListCard } from "../widgets/frame/list-slot";
-import { CardEmpty, CardUnavailable } from "../widgets/frame/states";
 
 import { entryDetail, entryHref, rowLabelField } from "./recent-entries-model";
 
-/** The card's heading in its error state. */
-const TITLE = "Recent entries";
-
 export const RecentEntriesCard: React.FC<WidgetComponentProps> = props => {
-  const { now, read } = useListCard(props, TITLE);
+  const { now, read } = useListCard(props);
   const { query } = props;
   if ("node" in read) return read.node;
   const label = rowLabelField(query);
   // A card asked with no title field has no row to name: the collection publishes none to this
   // reader, so the card was never asked, and says so.
-  if (label === undefined) return <CardUnavailable />;
+  if (label === undefined) return <FrameState state={{ kind: "no-access" }} />;
   if (read.list.items.length === 0) {
     return (
-      <CardEmpty
-        title="No entries yet"
-        detail="Entries in this collection show here, most recently changed first."
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: {
+            title: "No entries yet",
+            detail:
+              "Entries in this collection show here, most recently changed first.",
+          },
+        }}
       />
     );
   }

@@ -210,15 +210,17 @@ export function collectionLabel(
 }
 
 /**
- * The title a card is drawn under: its widget's, naming the collection its Collection setting
- * sets it to, so two of a widget's cards for different collections can be told apart, by sight
- * and by the region's name alike. A card set to none is titled as its widget.
+ * The title a card is drawn under, and the subtitle beneath it. A card whose Collection setting
+ * names a collection is titled by its SUBJECT, that collection ("Posts"), with its widget's name
+ * as the subtitle ("Count"), so two of a widget's cards for different collections are told apart
+ * by sight and by the region's name alike, and read subject first. A card set to none is titled
+ * as its widget, with no subtitle.
  */
 export function titleAsAsked(
   widget: DashboardWidget,
   config: Record<string, unknown> | undefined,
   sources?: readonly PublishedContentSource[]
-): string {
+): { title: string; subtitle?: string } {
   const name = widget.settings?.find(
     setting => setting.type === "collection"
   )?.name;
@@ -227,8 +229,8 @@ export function titleAsAsked(
       ? undefined
       : effectiveWidgetSettings(widget.settings, config)[name];
   return typeof collection === "string"
-    ? `${widget.title}: ${collectionLabel(collection, sources)}`
-    : widget.title;
+    ? { title: collectionLabel(collection, sources), subtitle: widget.title }
+    : { title: widget.title };
 }
 
 /**

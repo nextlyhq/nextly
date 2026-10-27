@@ -116,6 +116,12 @@ export interface DocumentActionBindingsInput {
   /** Whether a colleague's claim withholds writing. */
   documentLocked?: boolean;
   /**
+   * Whether the user may change the document: create it, or update it. Without
+   * it the page offers nothing that writes its content, while publishing,
+   * unpublishing and deleting follow their own permissions.
+   */
+  canEdit?: boolean;
+  /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
    * Descriptions rather than rendered controls, so placement, ordering and
@@ -381,6 +387,7 @@ export function useDocumentActionBindings({
   collectionSlug,
   locale,
   documentLocked = false,
+  canEdit = true,
   contributedActions = [],
   onSubmit,
   onSaveDraft,
@@ -473,6 +480,7 @@ export function useDocumentActionBindings({
     status: effectiveStatus === "published" ? "published" : "draft",
     hasWorkingDraft: hasWorkingDraft === true,
     readingHistory: isReadingHistory,
+    canEdit,
     canPublish: canPublishDocument,
     canUnpublish: canUnpublishDocument,
     canDelete: onDelete !== undefined,

@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { diffDocumentVersions } from "../../../api/versions-access";
 import { defineCollection, relationship, text } from "../../../config";
 import {
@@ -24,7 +25,8 @@ afterEach(async () => {
   current = undefined;
 });
 
-const superAdmin = { id: "root", roles: ["super-admin"] };
+/** A caller the gate finds holding super-admin, seeded where a test boots. */
+const superAdmin = { id: "root" };
 
 function idOf(result: { data?: unknown }): string {
   return (result.data as { id: string }).id;
@@ -106,6 +108,7 @@ async function bootRestrictedAuthors(): Promise<TestNextly> {
 describe("version reference hydration (integration)", () => {
   it("resolves relationship ids in a diff to the targets' real labels", async () => {
     current = await boot();
+    await superAdminUser(current, superAdmin.id);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 

@@ -98,40 +98,29 @@ describe("registering declared widgets", () => {
     });
   });
 
-  it("keeps a widget drawn by its own component but offers it nowhere yet, saying so once", () => {
-    // 🔴 The admin does not yet hand a widget's own component the props its
-    // declaration types, so a published one would throw in its card. It is
-    // kept and checked like any other, and left out of what the admin reads.
+  it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-    expect(getWidget("acme/revenue")).toBeUndefined();
-    expect(declaredWidget("acme/revenue")).toMatchObject({
-      owner: SHOP,
-      declaration: revenue,
+    // The admin hands its component the props its declaration types, so it is
+    // offered like any declared widget: drawn by that component, its data
+    // built on the server.
+    expect(getWidget("acme/revenue")).toMatchObject({
+      archetype: "custom",
+      component: (revenue.display as { component: string }).component,
+      serverData: true,
     });
-    // Its author is told why the card never appears, once per process.
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatchObject({
-      kind: "widget-component-display-held",
-      widget: "acme/revenue",
-      plugin: SHOP,
-    });
-    // The control: a core display beside it is offered as declared.
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState] },
-    ]);
-    expect(getWidget("acme/orders-by-state")).toBeDefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("holds a widget drawn by its own component in production too, without the warning", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    try {
-      registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-      expect(getWidget("acme/revenue")).toBeUndefined();
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+  it("publishes hidesWhenEmpty only for a widget that declares it", () => {
+    registerWidgetDeclarations([
+      {
+        owner: SHOP,
+        declarations: [{ ...revenue, hidesWhenEmpty: true }, ordersByState],
+      },
+    ]);
+    expect(getWidget("acme/revenue")?.hidesWhenEmpty).toBe(true);
+    // The control: a widget that says nothing is not published as hiding.
+    expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {
