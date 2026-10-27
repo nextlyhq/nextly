@@ -406,8 +406,19 @@ const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 /** Credentials before a host in an address: `https://user:password@host`. */
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
 
-/** A `name=value` parameter in text: in a URL's query or in running words. */
-const TEXT_PARAMETER = /\b([A-Za-z_][\w.-]*)=([^\s&"'<>]*)/g;
+/**
+ * A named value in text, in each form an upstream message quotes one: a URL's
+ * `name=value`, a header's `Name: value`, JSON's `"name":"value"` (escaped
+ * too, when a body sits inside a message) and `name="value"`. Groups: the
+ * quote around the name, the name, the separator, the value, quoted or bare,
+ * and a bare value's `Bearer` or `Basic` scheme. A quoted value is taken
+ * whole, so a quote is never read as an empty value with the secret after it.
+ */
+const TEXT_PARAMETER =
+  /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/g;
+
+/** A value's quotes, kept around its redaction so JSON still reads as JSON. */
+const VALUE_QUOTES = /^(\\?["']?)[\s\S]*?(\1)$/;
 
 /**
  * Names that are credentials as text parameters, though not as fields: a
@@ -424,13 +435,35 @@ const CREDENTIAL_PARAMETER_ONLY_NAMES: ReadonlySet<string> = new Set([
  * its value redacted: `X-Amz-Signature=…`, `token=…`, `otp=…`, `key=…`. Judged
  * by the same names fields are, so the two can't come to disagree. The one
  * definition every log sanitiser uses.
+ *
+ * Any other parameter's value is searched in turn: `https:` reads as a name
+ * whose value runs on into the address, and a token in that address's query
+ * must still be found.
  */
 export function redactCredentialParameters(text: string): string {
-  return text.replace(TEXT_PARAMETER, (whole, name: string) =>
-    isCredentialName(name) ||
-    CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
-      ? `${name}=${REDACTED}`
-      : whole
+  return text.replace(
+    TEXT_PARAMETER,
+    (
+      _,
+      quote: string,
+      name: string,
+      separator: string,
+      value: string,
+      scheme: string | undefined
+    ) => {
+      const prefix = `${quote}${name}${quote}${separator}`;
+      if (
+        !isCredentialName(name) &&
+        !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
+      ) {
+        return `${prefix}${redactCredentialParameters(value)}`;
+      }
+      // The scheme says how a caller authenticated, which an operator needs;
+      // only what follows it is the credential.
+      if (scheme) return `${prefix}${scheme}${REDACTED}`;
+      const [, open = "", close = ""] = VALUE_QUOTES.exec(value) ?? [];
+      return `${prefix}${open}${REDACTED}${close}`;
+    }
   );
 }
 
@@ -446,11 +479,15 @@ const COOKIE_HEADER_IN_TEXT = /\b((?:set-)?cookie):[^\r\n]*/gi;
  * and the value of a parameter named like a credential or a session.
  */
 function redactCredentialsInText(text: string): string {
-  return text
-    .replace(CREDENTIAL_IN_TEXT, (_, scheme: string) => `${scheme} ${REDACTED}`)
-    .replace(URL_USERINFO, `$1${REDACTED}@`)
-    .replace(COOKIE_HEADER_IN_TEXT, `$1: ${REDACTED}`)
-    .replace(TEXT_PARAMETER, whole => redactCredentialParameters(whole));
+  return redactCredentialParameters(
+    text
+      .replace(
+        CREDENTIAL_IN_TEXT,
+        (_, scheme: string) => `${scheme} ${REDACTED}`
+      )
+      .replace(URL_USERINFO, `$1${REDACTED}@`)
+      .replace(COOKIE_HEADER_IN_TEXT, `$1: ${REDACTED}`)
+  );
 }
 
 /**

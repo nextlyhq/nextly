@@ -320,6 +320,30 @@ describe("credentials anywhere in a log value", () => {
     expect(out).not.toContain(value);
   });
 
+  it.each([
+    [
+      'upstream said {"refreshToken":"json-secret-1","page":2}',
+      "json-secret-1",
+    ],
+    ['upstream said {"otp": 482913, "page": 2}', "482913"],
+    [
+      "upstream said {'apiKey': 'single-secret-2', 'page': 2}",
+      "single-secret-2",
+    ],
+    [
+      'upstream said {\\"token\\":\\"escaped-secret-3\\",\\"page\\":2}',
+      "escaped-secret-3",
+    ],
+    ["Rejected with X-Api-Key: header-secret-4, page=2", "header-secret-4"],
+    ['retrying with token="quoted-secret-5" page=2', "quoted-secret-5"],
+    ["retrying with password = 'spaced-secret-6' page=2", "spaced-secret-6"],
+  ])("takes the value out of %s", (text, secret) => {
+    const out = receivedBy({ note: text, error: new Error(text) });
+    // POPULATION CONTROL: the parameter beside it remains.
+    expect(out).toMatch(/page\W*[=:]\W*2/);
+    expect(out).not.toContain(secret);
+  });
+
   it("keeps a map's entries apart when their keys redact alike", () => {
     const received: unknown[] = [];
     maskingServiceLogger({
