@@ -31,11 +31,17 @@ import { pdfDocument } from "../../services/upload-validation/__tests__/format-f
 const ORIGIN = "http://localhost";
 const PDF = pdfDocument("visitor");
 
-/** A GET of the admin's gated media routes, with no session and no key. */
-function visitorGet(path: string[]): Promise<Response> {
+/**
+ * A GET of the admin's gated media routes, with no session and no key unless
+ * `headers` carries one.
+ */
+function visitorGet(
+  path: string[],
+  headers: Record<string, string> = {}
+): Promise<Response> {
   return createMediaHandlers({ requireAuth: true }).GET(
     new Request(`${ORIGIN}/api/media/${path.join("/")}`, {
-      headers: { origin: ORIGIN },
+      headers: { origin: ORIGIN, ...headers },
     }),
     { params: Promise.resolve({ path }) }
   );
@@ -111,6 +117,13 @@ describe.each(getConfiguredTestDialects())(
         const res = await visitorGet([fileId]);
         expect(res.status).toBe(200);
         expect(JSON.stringify(await res.json())).toContain(fileId);
+      });
+
+      it("asks a request whose session is not valid to sign in again, as it is no visitor", async () => {
+        const res = await visitorGet([], {
+          cookie: "nextly_session=not-a-session",
+        });
+        expect(res.status).toBe(401);
       });
 
       it("lists and opens the file through a checked Direct API call naming nobody", async () => {
