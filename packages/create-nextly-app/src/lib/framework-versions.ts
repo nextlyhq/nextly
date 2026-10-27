@@ -100,40 +100,58 @@ const LABEL: Record<SupportedPackage, string> = {
 
 const major = (version: string): number => Number(version.split(".")[0]);
 
-/** The one step that brings `problem` into range, as a sentence and a command. */
-function fix(problem: FrameworkVersionProblem, pm: PackageManager): string {
-  const add = ADD_COMMAND[pm];
+/** What `fix` reads from a problem: the supported major and the version found. */
+function majorsOf(problem: FrameworkVersionProblem): {
+  supportedMajor: number;
+  foundMajor: number;
+} {
   const floor = lowestVersionIn(problem.supported) ?? problem.supported;
-  const supportedMajor = major(floor);
   const found =
     problem.installed ?? lowestVersionIn(problem.declared ?? "") ?? floor;
-  const label = LABEL[problem.name];
-  const isNext = problem.name === "next";
+  return { supportedMajor: major(floor), foundMajor: major(found) };
+}
 
-  if (problem.direction === "too-new") {
-    const install = isNext
+/** A version past the supported major: install that major, or wait for Nextly. */
+function tooNewFix(problem: FrameworkVersionProblem, add: string): string {
+  const { supportedMajor, foundMajor } = majorsOf(problem);
+  const label = LABEL[problem.name];
+  const install =
+    problem.name === "next"
       ? `next@${supportedMajor}`
       : `react@${supportedMajor} react-dom@${supportedMajor}`;
-    return (
-      `This release of Nextly supports ${label} up to the ${supportedMajor}.x line. ` +
-      `Install ${label} ${supportedMajor}, or wait for a Nextly release that supports ${label} ${major(found)}:\n` +
-      `    ${add} ${install}`
-    );
-  }
+  return (
+    `This release of Nextly supports ${label} up to the ${supportedMajor}.x line. ` +
+    `Install ${label} ${supportedMajor}, or wait for a Nextly release that supports ${label} ${foundMajor}:\n` +
+    `    ${add} ${install}`
+  );
+}
+
+/** A version below the supported floor: the codemod across a Next.js major, an install otherwise. */
+function tooOldFix(problem: FrameworkVersionProblem, add: string): string {
+  const { supportedMajor, foundMajor } = majorsOf(problem);
   // Across a major, Next.js's codemod moves the app and its React together
   // and rewrites the APIs the major changed; within the major a plain
   // install is enough. The codemod takes an exact version (or "major", a
   // dist tag), not a bare major, so it is given the reviewed release.
-  if (isNext && major(found) < supportedMajor) {
+  if (problem.name === "next" && foundMajor < supportedMajor) {
     return (
       `Upgrade Next.js to ${REVIEWED_VERSIONS.next} with its codemod:\n` +
       `    npx @next/codemod@latest upgrade ${REVIEWED_VERSIONS.next}`
     );
   }
-  const install = isNext
-    ? `next@${problem.supported}`
-    : `react@${SUPPORTED_RANGES.react} react-dom@${SUPPORTED_RANGES["react-dom"]}`;
-  return `Upgrade ${label} to ${problem.supported}:\n    ${add} ${install}`;
+  const install =
+    problem.name === "next"
+      ? `next@${problem.supported}`
+      : `react@${SUPPORTED_RANGES.react} react-dom@${SUPPORTED_RANGES["react-dom"]}`;
+  return `Upgrade ${LABEL[problem.name]} to ${problem.supported}:\n    ${add} ${install}`;
+}
+
+/** The one step that brings `problem` into range, as a sentence and a command. */
+function fix(problem: FrameworkVersionProblem, pm: PackageManager): string {
+  const add = ADD_COMMAND[pm];
+  return problem.direction === "too-new"
+    ? tooNewFix(problem, add)
+    : tooOldFix(problem, add);
 }
 
 /**
