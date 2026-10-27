@@ -9,6 +9,7 @@
  * so a new one cannot run beside the others unnoticed.
  */
 import { globSync, readFileSync } from "node:fs";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -30,9 +31,13 @@ interface Project {
 const projects = integrationProjects({
   include: ["src/**/*.integration.test.ts"],
 }) as Project[];
+// The paths the config lists, with `/` between parts on every platform:
+// `globSync` answers with the platform's own separator, `\` on Windows.
 const integrationFiles = globSync("src/**/*.integration.test.ts", {
   cwd: root,
-}).sort();
+})
+  .map(file => file.split(sep).join("/"))
+  .sort();
 const takesServerWideLock = integrationFiles.filter(file =>
   /GET_LOCK\(\s*['"]nextly:migrate['"]/.test(
     readFileSync(`${root}/${file}`, "utf8")
