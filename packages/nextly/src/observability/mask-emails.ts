@@ -71,7 +71,7 @@ function walk(
   serialised = false
 ): unknown {
   if (typeof value === "string") return rules.text(value);
-  if (value === null || typeof value !== "object") return value;
+  if (!isReference(value)) return value;
   const known = seen.get(value);
   if (known !== undefined) return known;
   // As JSON does, a value's `toJSON` is called once, and its result is not
@@ -82,6 +82,27 @@ function walk(
     const form = serialisedForm(value);
     if (form !== value) return walk(form, rules, seen, true);
   }
+  return copyByKind(value, rules, seen);
+}
+
+/**
+ * Whether `value` can carry a `toJSON` of its own: an object, or a function,
+ * since a JSON writer calls the method on a function as on an object.
+ */
+function isReference(value: unknown): value is object {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  );
+}
+
+/** A copy of `value` by what it is, once its `toJSON` has been asked. */
+function copyByKind(
+  value: object,
+  rules: LogCopyRules,
+  seen: WeakMap<object, unknown>
+): unknown {
+  // A function without a `toJSON` writes nothing, so it is kept as it is.
+  if (typeof value === "function") return value;
   if (value instanceof Error) return copyError(value, rules, seen);
   if (Array.isArray(value)) return copyList(value, rules, seen);
   if (isPlainObject(value)) return copyRecord(value, rules, seen);

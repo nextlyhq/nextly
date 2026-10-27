@@ -427,6 +427,25 @@ describe("credentials anywhere in a log value", () => {
     expect(JSON.stringify(received)).not.toContain("error-json-secret");
   });
 
+  it("takes them out of what a function's toJSON would write", () => {
+    const callback = Object.assign(() => undefined, {
+      toJSON: () => ({ token: "function-json-secret", step: "upload" }),
+    });
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", { callback });
+
+    // A JSON writer calls `toJSON` on a function too.
+    const written = JSON.stringify(received);
+    expect(written).not.toContain("function-json-secret");
+    // The control: the rest of what it writes remains.
+    expect(written).toContain("upload");
+  });
+
   it("takes a whole authorization header value out of text, any scheme", () => {
     const out = receivedBy({
       note: "Rejected Authorization: Token opaque-token-secret extra-part-secret",
