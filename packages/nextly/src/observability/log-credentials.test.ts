@@ -303,4 +303,40 @@ describe("credentials anywhere in a log value", () => {
     expect(out).not.toContain("set-cookie-secret");
     expect(out).not.toContain("sid-secret-value");
   });
+
+  it.each([
+    "otp=482913",
+    "pin=482913",
+    "passcode=482913",
+    "passwd=hunter2-pw",
+    "authorization=opaque-auth-value",
+    "key=AIzaSyKeyValue",
+    "X-Amz-Credential=AKIDvalue",
+  ])("takes the value of %s out of text", parameter => {
+    const [name, value] = parameter.split("=");
+    const out = receivedBy({ note: `retrying with ${parameter}&page=2` });
+    expect(out).toContain(`${name}=`);
+    expect(out).toContain("page=2");
+    expect(out).not.toContain(value);
+  });
+
+  it("keeps a map's entries apart when their keys redact alike", () => {
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", {
+      byCaller: new Map([
+        [`Bearer ${KEY}`, "first"],
+        [`Bearer ${KEY}x`, "second"],
+      ]),
+    });
+
+    const copied = (received[0] as { byCaller: Map<unknown, unknown> })
+      .byCaller;
+    expect(copied.size).toBe(2);
+    expect([...copied.values()]).toEqual(["first", "second"]);
+  });
 });

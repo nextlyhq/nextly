@@ -96,8 +96,10 @@ function copyMap(
   seen.set(value, copy);
   for (const [key, entry] of value) {
     const hide = typeof key === "string" && rules.hideField?.(key, entry);
+    const copiedKey = walk(key, rules, seen);
+    // Two keys that rewrite alike stay two entries, as two field names do.
     copy.set(
-      walk(key, rules, seen),
+      typeof copiedKey === "string" ? freeKey(copy, copiedKey) : copiedKey,
       hide ? rules.hidden : walk(entry, rules, seen)
     );
   }
@@ -195,10 +197,15 @@ function copyField(
  * `key`, or `key (2)`, `key (3)` and so on when it is taken: two names that
  * rewrite alike stay two fields rather than one overwriting the other.
  */
-function freeKey(copy: object, key: string): string {
-  if (!Object.hasOwn(copy, key)) return key;
+function freeKey(
+  copy: object | ReadonlyMap<unknown, unknown>,
+  key: string
+): string {
+  const taken = (name: string) =>
+    copy instanceof Map ? copy.has(name) : Object.hasOwn(copy, name);
+  if (!taken(key)) return key;
   let n = 2;
-  while (Object.hasOwn(copy, `${key} (${n})`)) n++;
+  while (taken(`${key} (${n})`)) n++;
   return `${key} (${n})`;
 }
 
@@ -336,6 +343,7 @@ const CREDENTIAL_NAME_PARTS: readonly string[] = [
   "csrf",
   "session",
   "passcode",
+  "signature",
 ];
 
 /**
@@ -358,6 +366,24 @@ const CREDENTIAL_WHOLE_NAMES: ReadonlySet<string> = new Set(["pin", "otp"]);
  */
 const TOKEN_COUNT_NAME = /(?:tokens|tokencount|tokenlimit|tokenusage)$/;
 
+/** A name lower-cased with `-`, `_` and spaces removed, as the rules read it. */
+function normalisedName(key: string): string {
+  return key.toLowerCase().replace(/[-_\s]/g, "");
+}
+
+/**
+ * Whether a name says what it holds is a credential: the one answer fields
+ * and text parameters share, so `otp` hides a field and an `otp=` alike.
+ */
+function isCredentialName(key: string): boolean {
+  const name = normalisedName(key);
+  return (
+    CREDENTIAL_WHOLE_NAMES.has(name) ||
+    CREDENTIAL_NAME_PARTS.some(part => name.includes(part)) ||
+    CREDENTIAL_KEY_NAME.test(name)
+  );
+}
+
 /**
  * Whether a field holds a credential, judged by its name. A flag never is
  * (`hasPassword: true`), and a number is kept only under a token count; a
@@ -365,13 +391,10 @@ const TOKEN_COUNT_NAME = /(?:tokens|tokencount|tokenlimit|tokenusage)$/;
  */
 function isCredentialField(key: string, value: unknown): boolean {
   if (typeof value === "boolean") return false;
-  const name = key.toLowerCase().replace(/[-_\s]/g, "");
-  if (typeof value === "number" && TOKEN_COUNT_NAME.test(name)) return false;
-  return (
-    CREDENTIAL_WHOLE_NAMES.has(name) ||
-    CREDENTIAL_NAME_PARTS.some(part => name.includes(part)) ||
-    CREDENTIAL_KEY_NAME.test(name)
-  );
+  if (typeof value === "number" && TOKEN_COUNT_NAME.test(normalisedName(key))) {
+    return false;
+  }
+  return isCredentialName(key);
 }
 
 /**
@@ -383,13 +406,33 @@ const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 /** Credentials before a host in an address: `https://user:password@host`. */
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
 
+/** A `name=value` parameter in text: in a URL's query or in running words. */
+const TEXT_PARAMETER = /\b([A-Za-z_][\w.-]*)=([^\s&"'<>]*)/g;
+
 /**
- * A parameter named like a credential, with its value, wherever it appears:
- * in a signed or tokenized URL's query (`X-Amz-Signature=…`, `token=…`) or in
- * running text. The one definition every log sanitiser uses.
+ * Names that are credentials as text parameters, though not as fields: a
+ * bare `key=` or `sig=` in a URL is typically an API key or a signature,
+ * while a field named `key` is usually an identifier such as a storage path.
  */
-export const CREDENTIAL_PARAMETER =
-  /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig)|[\w-]*(?:session|cookie|csrf)[\w-]*)=[^\s&"'<>]*/gi;
+const CREDENTIAL_PARAMETER_ONLY_NAMES: ReadonlySet<string> = new Set([
+  "key",
+  "sig",
+]);
+
+/**
+ * Every parameter in a piece of text whose name says it holds a credential,
+ * its value redacted: `X-Amz-Signature=…`, `token=…`, `otp=…`, `key=…`. Judged
+ * by the same names fields are, so the two can't come to disagree. The one
+ * definition every log sanitiser uses.
+ */
+export function redactCredentialParameters(text: string): string {
+  return text.replace(TEXT_PARAMETER, (whole, name: string) =>
+    isCredentialName(name) ||
+    CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
+      ? `${name}=${REDACTED}`
+      : whole
+  );
+}
 
 /**
  * A `Cookie` or `Set-Cookie` header quoted in text, to the end of its line:
@@ -407,7 +450,7 @@ function redactCredentialsInText(text: string): string {
     .replace(CREDENTIAL_IN_TEXT, (_, scheme: string) => `${scheme} ${REDACTED}`)
     .replace(URL_USERINFO, `$1${REDACTED}@`)
     .replace(COOKIE_HEADER_IN_TEXT, `$1: ${REDACTED}`)
-    .replace(CREDENTIAL_PARAMETER, `$1=${REDACTED}`);
+    .replace(TEXT_PARAMETER, whole => redactCredentialParameters(whole));
 }
 
 /**
