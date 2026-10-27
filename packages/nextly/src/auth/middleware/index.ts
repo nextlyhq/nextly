@@ -406,13 +406,18 @@ export async function requireAuthentication(
         "TOKEN_EXPIRED"
       );
     }
-    return createErrorResponse(
+    const refused = createErrorResponse(
       401,
       "Authentication required",
       "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
+    // A session cookie that is malformed, forged or revoked is a credential
+    // that is not valid, answered the same; only no cookie at all is none.
+    return sessionResult.reason === "no_token"
+      ? { ...refused, noCredential: true }
+      : refused;
   }
 
   // ErrorResponse → Bearer header was present but key is invalid — propagate
@@ -900,8 +905,9 @@ export async function requireCollectionAccess(
  * - refused by the target's rule, it is a 403. It is never answered as a
  *   missing entry, as a caller with no identity is not at the service.
  *
- * Anything else authentication refused (an expired session, a bad key) is
- * answered as it was.
+ * Anything else authentication refused, a credential that is not valid (an
+ * expired, malformed, forged or revoked session, or a bad key), is answered
+ * as it was: it is never judged as a visitor.
  */
 async function visitorAnswer(
   refused: ErrorResponse,
@@ -909,7 +915,7 @@ async function visitorAnswer(
   resource: string,
   operation: RouteOperation | undefined
 ): Promise<ErrorResponse | null> {
-  if (operation?.admitsVisitor !== true || refused.code !== "AUTH_REQUIRED") {
+  if (operation?.admitsVisitor !== true || refused.noCredential !== true) {
     return refused;
   }
   return withRuleLanguage(requestLanguage(operation), async () => {
