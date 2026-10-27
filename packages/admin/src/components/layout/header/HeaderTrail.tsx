@@ -148,12 +148,11 @@ export function HeaderTrail(): JSX.Element | null {
                 ) : null}
                 {step.label}
               </Link>
+              {/* The muted token at full strength: faded, it falls below the
+                  contrast the admin holds every text colour to. */}
               <span
                 aria-hidden="true"
-                className={cn(
-                  "text-muted-foreground/60",
-                  isList && NARROW_HIDDEN
-                )}
+                className={cn("text-muted-foreground", isList && NARROW_HIDDEN)}
               >
                 /
               </span>
