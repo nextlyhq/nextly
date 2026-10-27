@@ -104,6 +104,25 @@ beside a `null` `user`; a collection with no rule for the operation refuses them
 and a rule set to `true` admits them as it admits any visitor. See
 [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
 
+### A read rule that answers with a filter (experimental)
+
+A collection's `read` rule may return a filter, written as a list's `where` is, instead of
+`true`. The caller then reads only the entries the filter matches. The filter narrows what
+the grant allows and never widens it: a signed-in user or an API key still needs
+`read-<collection>`, a caller with no session reads the matching entries in place of the
+public default, and the rule's filter is added to whatever the caller asked for.
+
+This is not finished. In this release a list, its total, a count, and the group and
+timeseries reads made through the Direct API or a plugin service apply the filter, and so
+does a page the website resolves by its slug. Every other read refuses a caller whose rule
+answers with a filter, as it did before: a read by id, every REST route, and relationship
+population. The rule's type still says it returns a boolean.
+
+A rule's filter can't use `near` or `within` yet, nor the keys a list's `where` reserves
+for a request's own view: `_translated`, `_pendingChange` and `_inRelease`. A rule whose
+filter does is refused, and the refusal is logged once with the collection and the
+operation.
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection
@@ -192,8 +211,10 @@ see. This is the easiest way to expose data with Nextly.
 </Callout>
 
 Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
-Single rules never see a document: they answer yes or no before any document is read, so no
-rule can limit someone to their own entries (see [Limits](#limits)).
+Single rules never see a document: they answer before any document is read. Most answer yes or
+no. The one exception, experimental, is a collection's `read` rule that answers with a filter,
+which limits some reads to the entries it matches (see [A read rule that answers with a
+filter](#a-read-rule-that-answers-with-a-filter-experimental) and [Limits](#limits)).
 
 Forgetting the `user` is a different and much less dangerous mistake. The caller then has no
 session and holds no permissions, so a rule that checks them refuses the request rather than
@@ -210,9 +231,10 @@ code that genuinely needs to write a protected field says so with `overrideAcces
 ## Limits
 
 - **A grant covers a whole collection or Single.** Grants are per resource and action.
-  Neither a grant nor a code rule can limit a role to some of a collection's documents,
-  such as an author's own posts: a collection's or Single's rule answers yes or no before
-  any document is read, and is never given one.
+  A grant can't limit a role to some of a collection's documents, such as an author's own
+  posts, and a rule is never given a document. Only a collection's `read` rule that answers
+  with a filter limits some reads to the entries it matches, and that is experimental (see
+  [A read rule that answers with a filter](#a-read-rule-that-answers-with-a-filter-experimental)).
 - **Field-level rules are code.** The **Roles** screen assigns grants; it has no field-level
   permissions. A field's `access` is written in your config.
 - **Rules are code.** Access rules can't be set in the admin or in the Visual Schema

@@ -77,6 +77,8 @@ describe.each(getConfiguredTestDialects())(
     let readerRoleId: string;
     let superAdminId: string;
     let readerKey: string;
+    /** A read-only key the super-admin made. */
+    let superAdminReadOnlyKey: string;
     /** Reads Posts and nothing else. */
     let postsReader: { id: string; roleId: string };
     /** Reads Posts and Notes: the control for `postsReader`. */
@@ -330,6 +332,13 @@ describe.each(getConfiguredTestDialects())(
         roleBased: roleBased.key,
         keyEnds: Date.parse(roleBased.meta.expiresAt ?? ""),
       };
+      superAdminReadOnlyKey = (
+        await keys.createApiKey(superAdminId, {
+          name: "the owner's read-only key",
+          tokenType: "read-only",
+          expiresIn: "7d",
+        })
+      ).key;
       readerKey = (
         await keys.createApiKey(readerId, {
           name: "reads posts",
@@ -751,6 +760,38 @@ describe.each(getConfiguredTestDialects())(
         (await permissionsOf(await session(readerId, [readerRoleId])))
           .validUntil
       ).toBeNull();
+    });
+
+    it("answers an API key's permission list with the key's own, not its maker's", async () => {
+      const permissionsOf = async (headers: Record<string, string>) => {
+        const segments = ["me", "permissions"];
+        const res = await createDynamicHandlers().GET(
+          new Request(`${ORIGIN}/api/${segments.join("/")}`, {
+            headers: { origin: ORIGIN, ...headers },
+          }),
+          { params: Promise.resolve({ params: segments }) }
+        );
+        expect(res.status).toBe(200);
+        return (await res.json()) as {
+          permissions: string[];
+          isSuperAdmin: boolean;
+        };
+      };
+
+      // A read-only key made by a super-admin reads, and nothing more: it
+      // carries no super-admin authority and no write.
+      const key = await permissionsOf({
+        authorization: `Bearer ${superAdminReadOnlyKey}`,
+      });
+      expect(key.isSuperAdmin).toBe(false);
+      expect(key.permissions.length).toBeGreaterThan(0);
+      expect(key.permissions.filter(slug => !slug.startsWith("read-"))).toEqual(
+        []
+      );
+      // POPULATION CONTROL: the same maker's session is a super-admin.
+      expect(
+        (await permissionsOf(await session(superAdminId, []))).isSuperAdmin
+      ).toBe(true);
     });
 
     it("ends a key's answer with the key, and with its owner's role only where the key follows it", async () => {

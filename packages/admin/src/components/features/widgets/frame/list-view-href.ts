@@ -1,23 +1,17 @@
 /**
- * "More exist", under a list card that drew fewer rows than its answer held.
+ * The list view that holds a card's rows and the rest of them, under the card's own filter, sort
+ * and lifecycle: where a list card's "View all (N)" leads.
  *
- * For a list drawn from one collection it is a link to that collection's list view, carrying the
- * card's own filter and sort, so the reader lands on the rows the card was showing and the rest
- * of them. A list from anything else (a system or plugin source) says that more exist and links
- * nowhere: there is no one list view that would show the same rows.
+ * For a list drawn from one collection it is that collection's list view. A list from anything
+ * else (a system or plugin source) has no one list view that would show the same rows, so it has
+ * no address, and its footer says how many more there are without linking.
  *
- * @module components/features/widgets/archetypes/more-exist
+ * @module components/features/widgets/frame/list-view-href
  */
 
-import type { JSX } from "react";
-
-import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { cn } from "@admin/lib/utils";
 
-import { MORE_LINE_CLASS } from "../frame/geometry";
-
-import type { ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "../archetypes/types";
 
 type CardQuery = Parameters<ArchetypeBody>[1]["query"];
 
@@ -31,7 +25,7 @@ const COLLECTION_SOURCE = "collection:";
  * Reads the source id's own grammar, `<kind>:<target>`, for its one kind that names a
  * collection; the filter goes as the `where` the list view parses, the sort as its `sort`.
  */
-export function moreExistHref(query: CardQuery): string | undefined {
+export function listViewHref(query: CardQuery): string | undefined {
   const slug = collectionSlugOf(query?.source);
   if (slug === undefined) return undefined;
   const path = buildRoute(ROUTES.COLLECTION_ENTRIES, { slug });
@@ -83,41 +77,4 @@ function sortParam(sort: unknown): string | undefined {
 function statusParam(status: string | undefined): string | undefined {
   const scope = status ?? "published";
   return scope === "all" ? undefined : scope;
-}
-
-export function MoreExist({ query }: { query: CardQuery }): JSX.Element {
-  const href = moreExistHref(query);
-  return href ? (
-    <Link
-      href={href}
-      className={cn(
-        MORE_LINE_CLASS,
-        "font-medium text-primary hover:underline"
-      )}
-    >
-      More exist
-    </Link>
-  ) : (
-    <p className={cn(MORE_LINE_CLASS, "text-muted-foreground")}>More exist</p>
-  );
-}
-
-/**
- * A card's footer link to the list view holding its rows and the rest of them, under its filter
- * and sort: the same address "More exist" opens, offered whether or not more exist. Nothing for
- * a card that does not read one collection.
- */
-export function ViewAll({ query }: { query: CardQuery }): JSX.Element | null {
-  const href = moreExistHref(query);
-  return href ? (
-    <Link
-      href={href}
-      className={cn(
-        MORE_LINE_CLASS,
-        "font-medium text-primary hover:underline"
-      )}
-    >
-      View all
-    </Link>
-  ) : null;
 }

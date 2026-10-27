@@ -157,7 +157,7 @@ function matchDynamicRoute(pathname: string): {
  */
 const SLUG_ROUTE_ACCESS: Record<
   string,
-  { action: "read" | "create" | "update"; subject: AccessSubject }
+  { action: EntityAccess["action"]; subject: AccessSubject }
 > = {
   [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
@@ -168,13 +168,28 @@ const SLUG_ROUTE_ACCESS: Record<
   // it asks.
   [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
-  // Reading a document's history is a read of that document, and restoring
+  // A document's history is read in every language, as the server judges
+  // it, so a user who may read only some is not offered the page. Restoring
   // from it goes through the ordinary update path with its own check.
-  [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
+  [ROUTES.COLLECTION_ENTRY_VERSIONS]: {
+    action: "readHistory",
+    subject: "collection",
+  },
   [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
-  [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VERSIONS]: { action: "readHistory", subject: "single" },
+};
+
+/**
+ * The permission a route's request names: its action, and `read` for the
+ * history, which reads the document.
+ */
+const PERMISSION_OF: Record<EntityAccess["action"], string> = {
+  read: "read",
+  create: "create",
+  update: "update",
+  readHistory: "read",
 };
 
 function getSlugRouteAccess(
@@ -193,7 +208,7 @@ function getSlugRouteAccess(
     : undefined;
   if (!access || !slug) return undefined;
   return {
-    requiredPermission: `${access.action}-${slug}`,
+    requiredPermission: `${PERMISSION_OF[access.action]}-${slug}`,
     accessSubject: access.subject,
     entityAccess: { slug, action: access.action },
   };

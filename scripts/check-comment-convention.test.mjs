@@ -294,7 +294,9 @@ describe("the allowlist", () => {
   // exists; its entry remains, so the count above does not move.
   // 482 -> 481: one recorded offence in `check-comment-convention.mjs` itself, in
   // the scanner it no longer has, no longer exists; its entry remains.
-  const EXPECTED_TOTAL = 480;
+  // 480 -> 479: one recorded offence in `collection-dispatcher.ts` no longer
+  // exists; its entry remains.
+  const EXPECTED_TOTAL = 479;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
