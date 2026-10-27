@@ -3955,7 +3955,7 @@ service     principal                read       related     malformed-filter    
 service     principal-other          read       related     malformed-filter      .     .       .        .      .    .        .       .       R           .       .       .     .
 service     key-without-rows         read       related     malformed-filter      .     .       .        .      .    .        .       .       R           .       .       .     .
 service     user-naming-super-admin  read       related     malformed-filter      .     .       .        .      .    .        .       .       R           .       .       .     .
-service     visitor                  read       media       none                  401   .       .        .      .    .        .       .       A           A       .       .     .
+service     visitor                  read       media       none                  401   A       .        .      .    .        .       .       A           A       .       .     .
 service     user-with                read       media       none                  A     A       .        .      A    .        .       .       A           A       A       .     .
 service     user-without             read       media       none                  403   403     .        .      R    .        .       .       R           R       R       .     .
 service     custom-role              read       media       none                  A     A       .        .      A    .        .       .       A           A       A       .     .
@@ -5493,7 +5493,7 @@ public      visitor                  read       related     returns-filter      
 public      visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       related     returns-empty-in      .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       related     malformed-filter      .     .       .        .      .    .        .       .       R           .       .       .     .
-public      visitor                  read       media       none                  401   .       .        .      .    .        .       .       A           A       .       .     .
+public      visitor                  read       media       none                  401   A       .        .      .    .        .       .       A           A       .       .     .
 public      visitor                  read       users       none                  401   401     .        .      .    .        .       .       R           R       .       .     .
 public      visitor                  create     users       none                  401   .       .        .      .    .        .       .       .           .       .       .     .
 public      visitor                  update     users       none                  401   .       .        .      .    .        .       .       .           .       .       .     .
