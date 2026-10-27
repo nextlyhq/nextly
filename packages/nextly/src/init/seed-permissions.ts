@@ -20,6 +20,7 @@ import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
@@ -267,7 +268,15 @@ async function seedEverything(): Promise<void> {
   // whose permission is missing could be neither made nor listed, so a later
   // boot does it whole.
   if (publicRoleSeeded && permissionsSeeded) {
-    await seedingStep("public role's grants", seedPublicRoleGrants);
+    await seedingStep("public role's grants", () =>
+      seedPublicReadGrants(publicGrantSeeding())
+    );
+  } else if (publicRoleSeeded) {
+    // Taking back a plugin grant no enabled plugin declares any longer needs
+    // no permission made, so it is not left for a later boot.
+    await seedingStep("public role's undeclared plugin grants", () =>
+      withdrawUndeclaredPluginGrants(publicGrantSeeding())
+    );
   }
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
@@ -286,11 +295,12 @@ async function seedEverything(): Promise<void> {
   });
 }
 
-function seedPublicRoleGrants(): Promise<void> {
+/** What the Public role's grant steps need, from the registered services. */
+function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
   const adapter = getService("adapter");
   const logger = getService("logger");
   const grants = new RolePermissionService(adapter, logger);
-  return seedPublicReadGrants({
+  return {
     // Only once the Public role is made and recorded: before that, another
     // boot may still be moving a site's own role off the slug.
     publicRoleId: async () =>
@@ -343,7 +353,7 @@ function seedPublicRoleGrants(): Promise<void> {
       grants.withdrawRolePermissions(roleId, unwanted, pick),
     meta: getService("metaService"),
     logger,
-  });
+  };
 }
 
 /**

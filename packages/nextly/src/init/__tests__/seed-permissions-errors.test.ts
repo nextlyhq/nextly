@@ -16,6 +16,7 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
+const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 
 /** The registered adapter: one object per registration of the services. */
@@ -54,6 +55,7 @@ vi.mock("../../domains/auth/services/public-role", () => ({
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
@@ -279,6 +281,15 @@ describe("seedPermissionsAndRolePresets", () => {
 
     expect(seedPublicRole).toHaveBeenCalled();
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
+    // A plugin grant no enabled plugin declares is still taken back.
+    expect(withdrawUndeclaredPluginGrants).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes back undeclared plugin grants within the whole grant step when every permission is seeded", async () => {
+    await seedPermissionsAndRolePresets();
+
+    expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
+    expect(withdrawUndeclaredPluginGrants).not.toHaveBeenCalled();
   });
 
   it("writes nothing during a production build", async () => {
