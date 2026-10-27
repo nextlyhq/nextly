@@ -23,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { grantPublic } from "../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../config";
+import { account } from "../../direct-api/__tests__/checked-access-fixtures";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,6 +33,8 @@ import {
 import { createDynamicHandlers } from "../../routeHandler";
 import { createContentRoute } from "../../runtime/routing/content-route";
 import type { ContentEntry } from "../../runtime/routing/resolve-content";
+import { buildClaims } from "../jwt/claims";
+import { signAccessToken } from "../jwt/sign";
 
 const ORIGIN = "http://localhost";
 
@@ -48,16 +51,27 @@ const NOTICE = "rv_notice";
 
 type Method = "GET" | "POST";
 
-/** A REST request with no credential, as a visitor's browser sends it. */
+/**
+ * A REST request with no credential, as a visitor's browser sends it, or
+ * with the credential `headers` carry.
+ */
 function visit(
   method: Method,
   segments: string[],
-  { search = "", body }: { search?: string; body?: unknown } = {}
+  {
+    search = "",
+    body,
+    headers = {},
+  }: { search?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<Response> {
   const handlers = createDynamicHandlers();
   const req = new Request(`${ORIGIN}/api/${segments.join("/")}${search}`, {
     method,
-    headers: { origin: ORIGIN, "content-type": "application/json" },
+    headers: {
+      origin: ORIGIN,
+      "content-type": "application/json",
+      ...headers,
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return handlers[method](req, {
@@ -253,6 +267,109 @@ describe.each(getConfiguredTestDialects())(
         "versions",
       ]);
       expect(res.status).toBe(401);
+    });
+
+    // Only a request carrying no credential at all is a visitor. One whose
+    // credential is not valid is asked to sign in again before anything is
+    // decided, on a collection the Public role may read, so falling back to
+    // the visitor's answer would show as an allow.
+    describe("a credential that is not valid is not a visitor", () => {
+      const entries = () => ["collections", OPEN, "entries"];
+
+      async function keyOf(owner: string) {
+        const keys = t.getService("apiKeyService") as unknown as {
+          createApiKey(
+            owner: string,
+            input: {
+              name: string;
+              tokenType: "read-only";
+              expiresIn: "unlimited";
+            }
+          ): Promise<{ key: string; meta: { id: string } }>;
+          revokeApiKey(
+            id: string,
+            owner: string,
+            opts: { allUsers: boolean }
+          ): Promise<unknown>;
+        };
+        const made = await keys.createApiKey(owner, {
+          name: "visitor case key",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        return { keys, key: made.key, id: made.meta.id };
+      }
+
+      it("a key that names nothing", async () => {
+        const res = await visit("GET", entries(), {
+          headers: { authorization: "Bearer nx_not_a_key_at_all" },
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it("a revoked key", async () => {
+        const owner = await account(t, "rv-key-owner@example.com");
+        const { keys, key, id } = await keyOf(owner);
+        await keys.revokeApiKey(id, owner, { allUsers: true });
+        const res = await visit("GET", entries(), {
+          headers: { authorization: `Bearer ${key}` },
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it("a malformed session cookie", async () => {
+        const res = await visit("GET", entries(), {
+          headers: { cookie: "nextly_session=not-a-token" },
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it("a session cookie signed with another secret", async () => {
+        const token = await signAccessToken(
+          buildClaims({
+            userId: "forged",
+            email: "forged@example.com",
+            name: "forged",
+            image: null,
+            roleIds: [],
+            sessionEpoch: 0,
+          }),
+          "another-secret-that-is-at-least-32-characters-long",
+          900
+        );
+        const res = await visit("GET", entries(), {
+          headers: { cookie: `nextly_session=${token}` },
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it("an expired session cookie, which keeps its own code", async () => {
+        const owner = await account(t, "rv-expired@example.com");
+        const token = await signAccessToken(
+          buildClaims({
+            userId: owner,
+            email: "rv-expired@example.com",
+            name: "expired",
+            image: null,
+            roleIds: [],
+            sessionEpoch: 0,
+          }),
+          process.env.NEXTLY_SECRET ?? "",
+          -60
+        );
+        const res = await visit("GET", entries(), {
+          headers: { cookie: `nextly_session=${token}` },
+        });
+        expect(res.status).toBe(401);
+        expect(
+          ((await res.json()) as { error?: { code?: string } }).error?.code
+        ).toBe("TOKEN_EXPIRED");
+      });
+
+      it("the control: the same read with no credential is allowed", async () => {
+        const res = await visit("GET", entries());
+        expect(res.status).toBe(200);
+      });
     });
   }
 );
