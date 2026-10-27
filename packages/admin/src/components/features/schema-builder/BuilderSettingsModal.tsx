@@ -22,6 +22,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import type { BasicsField, BuilderConfig } from "./builder-config";
@@ -169,7 +170,7 @@ export function BuilderSettingsModal({
   readOnly = false,
   onCancel,
   onSubmit,
-}: Props) {
+}: Props): JSX.Element {
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     computeInitialValues(mode, config, initialValues)
   );

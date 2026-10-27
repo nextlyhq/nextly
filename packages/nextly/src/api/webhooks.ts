@@ -126,9 +126,10 @@ async function requireWebhookPermission(
 }
 
 /**
- * Throw the canonical FORBIDDEN error for session-only operations. Every 403
- * across the API ships the same sentence; the reason and the attempted action
- * live in `logContext` for operator triage.
+ * Refuse a session-only operation asked by an API key: only a signed-in
+ * person may manage webhooks. The refusal is about what kind of caller asked,
+ * not its permissions, so it says so; §13.8 keeps refusals for want of
+ * permission generic. The attempted action lives in `logContext`.
  */
 function denySessionOnly(
   action:
@@ -141,7 +142,8 @@ function denySessionOnly(
     | "rotate"
     | "expire-secrets"
 ): never {
-  throw NextlyError.forbidden({
+  throw NextlyError.personOnly({
+    doing: "manage webhooks",
     logContext: { reason: "session-only", action },
   });
 }

@@ -1,7 +1,7 @@
 /**
  * One declaration that gives a widget its data and its display.
  *
- * `defineWidget()` takes everything a widget is: who it is, the widths it
+ * `defineWidget()` takes everything a widget is: who it is, the sizes it
  * allows, its settings, where its data comes from and how it is drawn. The
  * compiler reads the settings once and hands their types to every reader --
  * the data function, the query core runs, and the widget's own component --
@@ -15,10 +15,11 @@
  */
 
 import type { UserContext } from "../../collections/services/collection-types";
+import type { WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetQuerySpec } from "../query";
 import type { WidgetScope } from "../resolved-sources";
+import type { DeclaredComponentProps } from "../result";
 import type { WidgetOp } from "../sources";
-import type { WidgetWidth } from "../widths";
 
 import type {
   CoreDisplay,
@@ -34,17 +35,6 @@ import type {
   WidgetSettings,
 } from "./setting-builders";
 import type { TransportableFields, TransportableValue } from "./transportable";
-
-/**
- * The five widths a card may take on the dashboard: core's own
- * (`quarter` … `full`), the words a stored placement and the admin use.
- *
- * 🔴 Core's type, re-exported rather than restated. A declaration once spelt
- * them `"1/4"` … `"full"`, a second vocabulary beside the arrangement's, so a
- * declared set had to be translated on its way to the layout, and a width
- * core adds or renames would have reached one spelling and not the other.
- */
-export type { WidgetWidth };
 
 /**
  * Reads a data function may make, already bound to the person asking.
@@ -89,6 +79,14 @@ export interface WidgetDataInput<Values> {
    * @experimental
    */
   scope: WidgetScope;
+  /**
+   * The batch's one instant: measure "since" and "until" from it rather than
+   * from `new Date()`, so every card on the dashboard, and every read this
+   * function makes, asks about the same days. This card's own copy.
+   *
+   * @experimental
+   */
+  now: Date;
 }
 
 /** A widget's own data function, run on the server for each card. */
@@ -181,7 +179,6 @@ declare const declared: unique symbol;
  */
 export interface WidgetDeclarationInput<
   Id extends string,
-  Widths extends readonly WidgetWidth[],
   S,
   Display extends WidgetDisplay,
   Data,
@@ -194,13 +191,27 @@ export interface WidgetDeclarationInput<
   /** One line, at most 80 characters, shown in the add panel. */
   description: string;
   category: string;
-  widths: Widths;
-  /** The starting width, one of `widths`. */
-  width: NoInfer<Widths[number]>;
+  /**
+   * The card's size in grid units (`{ w, h }`, twelve columns wide): the size
+   * a new card starts at, and the smallest and largest a person may resize
+   * it to.
+   *
+   * 🔴 The grid's own type, the one a stored placement, the site config and
+   * the admin say a size in, so a declared size reaches the layout as it is
+   * written, with nothing to translate.
+   */
+  size: WidgetSizeDeclaration;
   /** The permission a person needs to be offered this widget at all. */
   permission?: string;
   /** Whether a person may add it more than once. Once, unless it says so. */
   several?: boolean;
+  /**
+   * Whether the card leaves the dashboard while its answer is empty, by its
+   * `empty` rule or its display's own, rather than saying so. A card that
+   * failed, or whose source the reader may not see, is never hidden, and
+   * customise mode still shows it, marked.
+   */
+  hidesWhenEmpty?: boolean;
   /** The core display whose sketch the add panel borrows. */
   sketch?: CoreDisplay;
   settings?: S;
@@ -378,16 +389,15 @@ type ReadonlyDeep<T> = T extends object
  */
 type CheckedDeclaration<
   Id extends string,
-  Widths extends readonly WidgetWidth[],
   S,
   Display extends WidgetDisplay,
   Data,
   Op extends WidgetOp,
   Example,
 > = Display extends CoreDisplay
-  ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
+  ? WidgetDeclaration<Id, S, Display, Data, Op, Example>
   : [Example] extends [ReadonlyDeep<Data | QueryAnswer<Op>>]
-    ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
+    ? WidgetDeclaration<Id, S, Display, Data, Op, Example>
     : {
         // Stands in for the declaration, so the widget cannot be contributed,
         // put in the site config or given a component. Written inline, with
@@ -404,13 +414,12 @@ type CheckedDeclaration<
 /** A declared widget, carrying the types its readers need. */
 export type WidgetDeclaration<
   Id extends string,
-  Widths extends readonly WidgetWidth[],
   S,
   Display extends WidgetDisplay,
   Data,
   Op extends WidgetOp,
   Example = never,
-> = WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example> & {
+> = WidgetDeclarationInput<Id, S, Display, Data, Op, Example> & {
   readonly [widgetData]?: DataFor<Display, Data | QueryAnswer<Op>>;
   readonly [declared]: true;
 };
@@ -430,15 +439,14 @@ export type WidgetDeclaration<
  */
 export function defineWidget<
   const Id extends string,
-  const Widths extends readonly WidgetWidth[],
   const Display extends WidgetDisplay,
   S extends WidgetSettings & DependentSettings<S> = Record<never, never>,
   Data extends TransportableFields<Data> = never,
   Op extends WidgetOp = never,
   const Example = never,
 >(
-  declaration: WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example>
-): CheckedDeclaration<Id, Widths, S, Display, Data, Op, Example>;
+  declaration: WidgetDeclarationInput<Id, S, Display, Data, Op, Example>
+): CheckedDeclaration<Id, S, Display, Data, Op, Example>;
 // The implementation hands the declaration back as it came: every type above
 // is the compiler's reading of it, and nothing at run time changes. `object`,
 // because the declaration as written does not carry the `declared` mark the
@@ -464,17 +472,9 @@ export type WidgetData<W> = W extends { readonly [widgetData]?: infer D }
   ? D
   : never;
 
-/**
- * A card's current size, which changes as its width does.
- *
- * Not `WidgetSize`: that name is the published `"sm" | … | "full"` step of
- * the column grid, and a plugin reading both must not find one name meaning
- * two things.
- */
-export interface WidgetRenderSize {
-  width: WidgetWidth;
-  class: "small" | "medium" | "large";
-}
+// A card's size, declared beside the props the admin builds so both read one
+// shape, and published from here as it always was.
+export type { WidgetRenderSize } from "../result";
 
 /**
  * What a widget's own component is handed: its settings, its size and its
@@ -491,21 +491,14 @@ export interface WidgetRenderSize {
  * `W extends AnyWidget`, so a declaration refused by its own checks (see
  * `CheckedDeclaration`) cannot be given a component.
  */
-export interface WidgetProps<W extends AnyWidget> {
-  widgetId: string;
-  /** The card's id: one widget may sit on a dashboard more than once. */
-  placementId: string;
+export interface WidgetProps<W extends AnyWidget>
+  extends Omit<DeclaredComponentProps, "settings" | "data"> {
   settings: WidgetSettingValues<W>;
-  size: WidgetRenderSize;
   /**
    * The card's data, always present: the host draws loading, no permission
    * and error itself, and calls the component only once there is data.
    */
   data: WidgetData<W>;
-  /** True while a newer answer is on its way; `data` is the last one. */
-  refreshing: boolean;
-  /** Asks for the card's data again. */
-  retry: () => void;
 }
 
 /**

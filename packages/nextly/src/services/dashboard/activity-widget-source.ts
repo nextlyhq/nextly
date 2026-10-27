@@ -18,10 +18,7 @@
 
 import { container } from "../../di/container";
 import type { WidgetQuery } from "../../domains/widgets/query";
-import type {
-  WidgetResult,
-  WidgetResultField,
-} from "../../domains/widgets/result";
+import type { WidgetResult } from "../../domains/widgets/result";
 import { refuseUnconsumedQueryFields } from "../../domains/widgets/sources";
 import { ACTIVITY_SOURCE_ID } from "../../domains/widgets/system-source-ids";
 import { registerSystemSource } from "../../domains/widgets/system-sources";
@@ -34,6 +31,7 @@ import type {
 import { readActivitySubjects } from "./activity-subjects";
 import type { ReadCaller } from "./readable-resources";
 import { resolveReadableResources } from "./resolve-readable-resources";
+import { describeSelected, selectedNames } from "./selected-fields";
 
 export { ACTIVITY_SOURCE_ID };
 
@@ -83,6 +81,9 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   groupBy: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
+  range: "refused",
 };
 
 /**
@@ -99,33 +100,10 @@ function service(): ActivityLogService {
   return container.get<ActivityLogService>("activityLogService");
 }
 
-/** The selected names this source declares, in the order asked, or all of them. */
-function selected(select: readonly string[] | undefined): string[] {
-  const declared = ACTIVITY_FIELDS.map(field => field.name);
-  if (!select || select.length === 0) return declared;
-  return [...new Set(select)].filter(name => declared.includes(name));
-}
-
 /** One row of the feed, reduced to `names`. */
 function projected(row: ActivityLogEntry, names: readonly string[]) {
   const fields: Record<string, unknown> = { ...row };
   return Object.fromEntries(names.map(name => [name, fields[name]]));
-}
-
-/**
- * The columns to head the rows with, present only when the query chose them,
- * as the collection path and `system:releases` publish them.
- */
-function describeFields(
-  select: readonly string[] | undefined
-): WidgetResultField[] | undefined {
-  if (!select || select.length === 0) return undefined;
-  const declared = new Map(ACTIVITY_FIELDS.map(field => [field.name, field]));
-  const described = selected(select).flatMap(name => {
-    const field = declared.get(name);
-    return field ? [{ name, label: field.label, type: field.type }] : [];
-  });
-  return described.length > 0 ? described : undefined;
 }
 
 /**
@@ -146,8 +124,8 @@ async function resolveActivity(
     caller,
     ...(await readActivitySubjects()),
   });
-  const names = selected(query.select);
-  const fields = describeFields(query.select);
+  const names = selectedNames(ACTIVITY_FIELDS, query.select);
+  const fields = describeSelected(ACTIVITY_FIELDS, query.select);
   return {
     op: "list",
     items: activities.map(row => projected(row, names)),

@@ -93,7 +93,7 @@ vi.mock(
 // The language panel is where the withheld-write decision lands for locale
 // actions: a stand-in records what the editor actually handed it.
 vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
-  LanguagePanel: (props: { actionsDisabled?: boolean }) => {
+  DocumentLanguagePanel: (props: { actionsDisabled?: boolean }) => {
     languagePanelProps.current = props;
     return null;
   },
@@ -194,6 +194,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -223,6 +224,7 @@ describe("SingleForm — a published version replaces the document", () => {
       // which is what a disabled or paused read looks like.
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -241,6 +243,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: new Error("boom"),
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -270,6 +273,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -291,6 +295,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -314,6 +319,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -341,6 +347,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -455,6 +462,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },
@@ -471,6 +479,7 @@ describe("SingleForm — a published version replaces the document", () => {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "single", slug: "homepage", documentId: "d1" },

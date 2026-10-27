@@ -52,7 +52,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
 import { container } from "../di/container";
-import { isServicesRegistered } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -213,6 +213,8 @@ import type {
   RevokeApiKeyArgs,
   SendEmailArgs,
   SendTemplateEmailArgs,
+  QueueEmailArgs,
+  QueueTemplateEmailArgs,
   SetDefaultProviderArgs,
   SetRolePermissionsArgs,
   SubmitFormArgs,
@@ -1024,6 +1026,9 @@ export const nextly = {
     send: (args: SendEmailArgs) => requireNextly().email.send(args),
     sendWithTemplate: (args: SendTemplateEmailArgs) =>
       requireNextly().email.sendWithTemplate(args),
+    queue: (args: QueueEmailArgs) => requireNextly().email.queue(args),
+    queueWithTemplate: (args: QueueTemplateEmailArgs) =>
+      requireNextly().email.queueWithTemplate(args),
   },
 
   emailProviders: {

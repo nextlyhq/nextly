@@ -14,6 +14,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { useSettingsPreview } from "../useSettingsPreview";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -36,7 +37,7 @@ const WIDGET: DashboardWidget = {
   id: "core/recent",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [{ name: "limit", type: "number", label: "Rows", defaultValue: 5 }],
 };
@@ -155,5 +156,41 @@ describe("the settings sheet's preview", () => {
       [{ source: "collection:posts", op: "list", limit: 12 }],
     ]);
     expect(result.current.answerTier).toBeUndefined();
+  });
+
+  it("asks a cells card's cells under the changed values, and hands their answers back by key", async () => {
+    // 🔴 With no query of its own, a cells card asked nothing, and its preview
+    // stayed on its skeleton.
+    vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
+      Promise.resolve({
+        results: (body as { queries: unknown[] }).queries.map(() => ({
+          ok: true,
+          result: { op: "count", total: 4 },
+        })),
+      })
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const count = {
+      id: "core/count",
+      title: "Count",
+      archetype: "custom",
+      size: gridBounds(3),
+      settings: [
+        { name: "collection", type: "collection", label: "Collection" },
+      ],
+      cells: [{ key: "total", query: { op: "count" } }],
+    } as DashboardWidget;
+    const { result, rerender } = preview({}, { widget: count });
+    rerender({ draft: { collection: "pages" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() =>
+      expect(result.current.slotFor?.("total")).toMatchObject({ ok: true })
+    );
+    expect(sent()).toEqual([[{ op: "count", source: "collection:pages" }]]);
+    // Titled by its subject, with the widget's own name beneath it.
+    expect(result.current.definition.title).toBe("pages");
+    expect(result.current.subtitle).toBe("Count");
   });
 });

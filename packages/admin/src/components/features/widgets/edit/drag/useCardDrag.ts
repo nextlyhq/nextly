@@ -41,7 +41,7 @@ import {
   type RefObject,
 } from "react";
 
-import { drawnSpan, drawnWidth, type DashboardBand } from "../../sizes";
+import { drawnSize, drawnSpan, isOneColumn } from "../../sizes";
 import type { ArrangedWidget } from "../useDashboardArrangement";
 import type { DashboardFocus } from "../useDashboardFocus";
 
@@ -118,7 +118,9 @@ export const SILENT_DRAG: Announcements = {
 };
 
 /** What dnd-kit reads to a screen reader on a handle: how to drag from the keyboard. */
-export const DRAG_SCREEN_READER = { draggable: DRAG_INSTRUCTIONS };
+export const DRAG_SCREEN_READER: {
+  draggable: string;
+} = { draggable: DRAG_INSTRUCTIONS };
 
 /** The pointer's position on the page, from where the drag started and how far it has gone. */
 function pointerAt(event: DragMoveEvent): { x: number; y: number } | undefined {
@@ -153,14 +155,15 @@ export const chipAtPointer: Modifier = ({
 };
 
 /**
- * The cards as drawn, relative to the grid, each with the span it is drawn at in `band`; or
+ * The cards as drawn, relative to the grid, each with the span it is drawn at on a dashboard
+ * `dashboardWidth` wide; or
  * `undefined` if any card is not on the page, since positions counted without one would put
  * the dragged card somewhere else.
  */
 function measureCards(
   grid: HTMLElement,
   rows: readonly ArrangedWidget[],
-  band: DashboardBand
+  dashboardWidth: number
 ): Pick<DragInProgress, "cards" | "gridWidth" | "origin"> | undefined {
   const box = grid.getBoundingClientRect();
   // Every cell at once, by its placement: one query rather than one per card.
@@ -174,9 +177,11 @@ function measureCards(
     const cell = cells.get(row.placementId);
     if (cell === undefined) return undefined;
     const rect = cell.getBoundingClientRect();
+    const size = drawnSize(row.size, row.widget.size);
     cards.push({
       id: row.placementId,
-      span: drawnSpan(drawnWidth(row.width, row.allowedWidths), band),
+      span: drawnSpan(size.w, dashboardWidth),
+      rows: size.h,
       rect: {
         left: rect.left - box.left,
         top: rect.top - box.top,
@@ -368,7 +373,6 @@ function useCancelOnResize(
 
 export function useCardDrag({
   rows,
-  band,
   width,
   gridRef,
   say,
@@ -377,8 +381,6 @@ export function useCardDrag({
 }: {
   /** The cards drawn, in order. */
   rows: readonly ArrangedWidget[];
-  /** The dashboard's band, or `undefined` before it is measured. */
-  band: DashboardBand | undefined;
   /** The dashboard's width, or `undefined` before it is measured. */
   width: number | undefined;
   gridRef: RefObject<HTMLElement | null>;
@@ -389,8 +391,8 @@ export function useCardDrag({
   /** Asks for focus: a keyboard drag goes on from its card's menu once its handle is gone. */
   requestFocus: DashboardFocus["request"];
 }): CardDrag {
-  const oneColumn = band === "narrow";
-  const enabled = band !== undefined && !oneColumn;
+  const oneColumn = width !== undefined && isOneColumn(width);
+  const enabled = width !== undefined && !oneColumn;
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: ACTIVATION_DISTANCE_PX },
@@ -409,8 +411,8 @@ export function useCardDrag({
   const pickUp = useCallback(
     (placementId: string, by: DragInProgress["by"]): DragInProgress | null => {
       const grid = gridRef.current;
-      if (grid === null || band === undefined) return null;
-      const measured = measureCards(grid, rows, band);
+      if (grid === null || width === undefined) return null;
+      const measured = measureCards(grid, rows, width);
       const from = rows.findIndex(row => row.placementId === placementId);
       if (measured === undefined || from === -1) return null;
       return {
@@ -423,7 +425,7 @@ export function useCardDrag({
         atWidth: width,
       };
     },
-    [gridRef, band, width, rows]
+    [gridRef, width, rows]
   );
 
   const finish = useCallback(

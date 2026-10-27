@@ -61,7 +61,7 @@ export function SidebarNavigationItem({
   isActive: (href?: string) => boolean;
   isCollapsed: boolean;
   active?: boolean;
-}) {
+}): React.JSX.Element {
   const isItemActive = active !== undefined ? active : isActive(item.href);
   const Icon = item.icon;
   const hasSubItems = item.subItems && item.subItems.length > 0;
@@ -245,7 +245,7 @@ export function SidebarNavigation({
   items,
   isActive,
   hideLabels = [],
-}: SidebarNavigationProps) {
+}: SidebarNavigationProps): React.JSX.Element {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();

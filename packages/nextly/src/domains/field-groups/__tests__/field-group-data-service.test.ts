@@ -1,6 +1,10 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  clearFieldFunctions,
+  registerFieldFunctions,
+} from "../../../shared/lib/field-level-registry";
 import { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 
 import {
@@ -18,6 +22,12 @@ import {
   heroComponentMeta,
   ctaComponentMeta,
 } from "./field-group-test-helpers";
+
+/**
+ * Trusted server code: these cases are about how instances are stored, so
+ * every save is made with no field rules to judge.
+ */
+const TRUSTED = { overrideAccess: true } as const;
 
 type ComponentDataTestCtx = {
   service: FieldGroupDataService;
@@ -90,6 +100,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "About Us" } },
       });
@@ -125,6 +136,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "About Us", previewLine: "Computed" } },
       });
@@ -151,6 +163,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "New Title" } },
       });
@@ -167,6 +180,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { title: "Hello" }, // no seo
       });
@@ -180,6 +194,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: null },
       });
@@ -193,6 +208,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [{ name: "title", type: "text" }],
         data: { title: "Hello" },
       });
@@ -208,6 +224,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -255,6 +272,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -292,6 +310,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [{ id: "feat-a", title: "A" }],
@@ -310,6 +329,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -328,6 +348,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: { features: "not-an-array" },
       });
@@ -344,6 +365,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [
@@ -372,6 +394,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [
@@ -391,6 +414,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [{ heading: "Missing type" }],
@@ -431,6 +455,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [{ id: "hero-1", _componentType: "hero", heading: "New" }],
@@ -457,6 +482,7 @@ describe("FieldGroupDataService", () => {
         {
           parentId: "entry-1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [seoComponentField()],
           data: { seo: { metaTitle: "About" } },
         }
@@ -480,6 +506,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField(), virtualHero],
         data: {
           seo: { metaTitle: "About" },
@@ -505,6 +532,7 @@ describe("FieldGroupDataService", () => {
         {
           parentId: "entry-1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [seoComponentField(), virtualHero],
           data: {
             seo: { metaTitle: "About" },
@@ -1086,6 +1114,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "e1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [accountField()],
         data: { account: { email: "a@b.co", secret: "PlainText123" } },
       });
@@ -1115,6 +1144,7 @@ describe("FieldGroupDataService", () => {
         ctx.service.saveComponentData({
           parentId: "e1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [accountField()],
           data: { account: "oops" },
         })
@@ -1134,6 +1164,7 @@ describe("FieldGroupDataService", () => {
         ctx.service.saveComponentData({
           parentId: "e1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [accountField()],
           data: { account: {} },
         })
@@ -1190,6 +1221,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "e1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [accountField()],
         data: { account: { secret: "" } },
       });
@@ -1264,6 +1296,351 @@ describe("FieldGroupDataService", () => {
 
       expect(ctx.relationship.expandRelationships).toHaveBeenCalled();
       expect(other.expandRelationships).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("field rules on a save made as a caller", () => {
+    /** A checked caller, whose rules are judged; no rule here reads grants. */
+    const CHECKED = {
+      overrideAccess: false,
+      user: { id: "u1" },
+      grants: () => Promise.resolve({ permissions: [], roles: [] }),
+    };
+
+    afterEach(() => clearFieldFunctions());
+
+    it("does not store a field its create rule denies from the field's default", async () => {
+      ctx.registry.registerComponent("stamp", {
+        slug: "stamp",
+        tableName: "comp_stamp",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "stamped", type: "text", defaultValue: "from-default" },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "stamp", [
+        { name: "stamped", access: { create: () => false } },
+      ]);
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "stamp", type: "component", component: "stamp" }],
+        data: { stamp: { title: "t" } },
+      });
+
+      const row = ctx.adapter.insert.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(row.title).toBe("t");
+      expect(row.stamped ?? null).toBeNull();
+    });
+
+    it("does not show a create rule the id a new instance was sent with", async () => {
+      // The id is the client's: a new instance is stored under one of its own.
+      ctx.registry.registerComponent("gated", {
+        slug: "gated",
+        tableName: "comp_gated",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "code", type: "text" },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "gated", [
+        {
+          name: "code",
+          access: { create: ({ id }: { id?: string }) => id === "chosen" },
+        },
+      ]);
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [
+          {
+            name: "gated",
+            type: "component",
+            component: "gated",
+            repeatable: true,
+          },
+        ],
+        data: { gated: [{ id: "chosen", title: "t", code: "C" }] },
+      });
+
+      const row = ctx.adapter.insert.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(row.title).toBe("t");
+      expect(row.id).not.toBe("chosen");
+      expect(row.code ?? null).toBeNull();
+    });
+
+    it("keeps a denied child of a container column at its stored value", async () => {
+      // `meta` is one JSON column, written whole: a denied child removed from
+      // the update would be erased from the row.
+      ctx.registry.registerComponent("boxed", {
+        slug: "boxed",
+        tableName: "comp_boxed",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              { name: "public", type: "text" },
+              { name: "secret", type: "text" },
+            ],
+          },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "boxed", [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "public", type: "text" },
+            { name: "secret", type: "text", access: { update: () => false } },
+          ],
+        },
+      ]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "b-1",
+          _parent_id: "e1",
+          _order: 0,
+          meta: JSON.stringify({ public: "old", secret: "S" }),
+        },
+      ]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "boxed", type: "component", component: "boxed" }],
+        data: { boxed: { meta: { public: "new", secret: "forged" } } },
+      });
+
+      const meta = (
+        ctx.adapter.update.mock.calls[0][1] as Record<string, unknown>
+      ).meta;
+      expect(typeof meta === "string" ? JSON.parse(meta) : meta).toEqual({
+        public: "new",
+        secret: "S",
+      });
+    });
+
+    it("judges a nested field group a container's default brings in", async () => {
+      // `box` defaults to a value holding an `inner` instance, whose `secret`
+      // no create may set: the default must not carry it past that rule.
+      ctx.registry.registerComponent("innerg", {
+        slug: "innerg",
+        tableName: "comp_innerg",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "secret", type: "text" },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "innerg", [
+        { name: "secret", access: { create: () => false } },
+      ]);
+      ctx.registry.registerComponent("outerg", {
+        slug: "outerg",
+        tableName: "comp_outerg",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "box",
+            type: "group",
+            defaultValue: { inner: { heading: "h", secret: "from-default" } },
+            fields: [{ name: "inner", type: "component", component: "innerg" }],
+          },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "outer", type: "component", component: "outerg" }],
+        data: { outer: { title: "t" } },
+      });
+
+      const box = (
+        ctx.adapter.insert.mock.calls[0][1] as Record<string, unknown>
+      ).box;
+      const parsed = (typeof box === "string" ? JSON.parse(box) : box) as {
+        inner?: Record<string, unknown>;
+      };
+      expect(parsed.inner?.heading).toBe("h");
+      expect(parsed.inner).not.toHaveProperty("secret");
+    });
+
+    it("keeps a denied password in a container column as the stored hash", async () => {
+      const storedHash =
+        "$2b$12$storedhashstoredhashstoredhashstoredhashstoredhashstor";
+      ctx.registry.registerComponent("pw", {
+        slug: "pw",
+        tableName: "comp_pw",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              { name: "label", type: "text" },
+              { name: "pass", type: "password" },
+            ],
+          },
+        ],
+      });
+      registerFieldFunctions("fieldGroup", "pw", [
+        {
+          name: "meta",
+          type: "group",
+          fields: [
+            { name: "label", type: "text" },
+            { name: "pass", type: "password", access: { update: () => false } },
+          ],
+        },
+      ]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "p-1",
+          _parent_id: "e1",
+          _order: 0,
+          meta: JSON.stringify({ label: "old", pass: storedHash }),
+        },
+      ]);
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [{ name: "pw", type: "component", component: "pw" }],
+        data: { pw: { meta: { label: "new" } } },
+      });
+
+      const meta = (
+        ctx.adapter.update.mock.calls[0][1] as Record<string, unknown>
+      ).meta;
+      // Kept as stored, not hashed again: a hash of the hash would never
+      // verify the password it was made from.
+      expect(typeof meta === "string" ? JSON.parse(meta) : meta).toEqual({
+        label: "new",
+        pass: storedHash,
+      });
+    });
+
+    describe("a single field group's stored instance", () => {
+      /** A stored `owned` instance, and a rule writable only for `allowedId`. */
+      function storedOwned(allowedId: string) {
+        ctx.registry.registerComponent("owned", {
+          slug: "owned",
+          tableName: "comp_owned",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "code", type: "text" },
+          ],
+        });
+        registerFieldFunctions("fieldGroup", "owned", [
+          {
+            name: "code",
+            access: { update: ({ id }: { id?: string }) => id === allowedId },
+          },
+        ]);
+        ctx.adapter.select.mockResolvedValue([
+          { id: "real-1", _parent_id: "e1", _order: 0, code: "C0" },
+        ]);
+      }
+      const save = (data: Record<string, unknown>) =>
+        ctx.service.saveComponentData({
+          parentId: "e1",
+          parentTable: "dc_pages",
+          access: CHECKED,
+          fields: [{ name: "owned", type: "component", component: "owned" }],
+          data: { owned: data },
+        });
+      const written = () =>
+        ctx.adapter.update.mock.calls.map(
+          ([table, row]: unknown[]) =>
+            [table, (row as Record<string, unknown>).code] as const
+        );
+
+      it("is judged by the stored row's id, not an id the caller sends", async () => {
+        // Allowed only for an id the caller can name but the row does not have.
+        storedOwned("spoofed");
+        await save({ id: "spoofed", title: "t", code: "X" });
+        expect(written()).toEqual([["comp_owned", undefined]]);
+      });
+
+      it("tells a rule the stored row's id when the caller sends none", async () => {
+        storedOwned("real-1");
+        await save({ title: "t", code: "Y" });
+        expect(written()).toEqual([["comp_owned", "Y"]]);
+      });
+    });
+
+    it("does not update a stored block through a type it was not stored as", async () => {
+      ctx.registry.registerComponent("secure", {
+        slug: "secure",
+        tableName: "comp_secure",
+        fields: [{ name: "heading", type: "text" }],
+      });
+      ctx.registry.registerComponent("open", {
+        slug: "open",
+        tableName: "comp_open",
+        fields: [{ name: "heading", type: "text" }],
+      });
+      registerFieldFunctions("fieldGroup", "secure", [
+        { name: "heading", access: { update: () => false } },
+      ]);
+      ctx.adapter.select.mockImplementation(async (table: string) =>
+        table === "comp_secure"
+          ? [
+              {
+                id: "s-1",
+                _parent_id: "e1",
+                _order: 0,
+                _component_type: "secure",
+                heading: "Old",
+              },
+            ]
+          : []
+      );
+
+      await ctx.service.saveComponentData({
+        parentId: "e1",
+        parentTable: "dc_pages",
+        access: CHECKED,
+        fields: [
+          {
+            name: "zone",
+            type: "component",
+            components: ["secure", "open"],
+            repeatable: true,
+          },
+        ],
+        // The stored block's id, claiming the type whose rules allow it.
+        data: {
+          zone: [{ id: "s-1", _componentType: "open", heading: "Hacked" }],
+        },
+      });
+
+      const written = ctx.adapter.update.mock.calls.filter(
+        ([table, row]: unknown[]) =>
+          table === "comp_secure" &&
+          (row as Record<string, unknown>).heading === "Hacked"
+      );
+      expect(written).toEqual([]);
+      // The block is a new one of the type it claims.
+      expect(
+        ctx.adapter.insert.mock.calls.map(([table]: unknown[]) => table)
+      ).toEqual(["comp_open"]);
     });
   });
 });

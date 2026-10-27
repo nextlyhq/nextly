@@ -1,6 +1,6 @@
 "use client";
 /**
- * The dashboard's cards, drawn as ONE ordered list on a twelve-track grid.
+ * The dashboard's cards, drawn as ONE ordered list on a twelve-column grid.
  *
  * Lifted out of `WidgetGrid` so the grid component reads as what it
  * orchestrates -- permissions, the arrangement, the batch, the drag context --
@@ -14,19 +14,22 @@
  * wrapper is a separate element because a container query cannot be answered
  * by the element it styles.
  *
- * No dense packing: cards are laid out in list order, so the order a reader
- * arranged is the order they read, left to right and down.
+ * No dense packing: cards are laid out in list order, each spanning its `w`
+ * columns and `h` rows, so the order a reader arranged is the order they read,
+ * left to right and down. A short card beside a tall one can leave a gap below
+ * it; no later card is moved up to fill it.
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import type { RefObject } from "react";
+import type { GridSize } from "nextly/config";
+import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
+import { cn } from "@admin/lib/utils";
 import type {
   WidgetPlacement,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import {
@@ -34,6 +37,8 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
+import { resolveWidgetOutcome } from "../outcome";
+import { cardRowStyle, GRID_CLASS } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -112,7 +117,7 @@ export interface ArrangedGridProps {
   gridRef: RefObject<HTMLElement | null>;
   on: {
     move: (placementId: string, direction: MoveDirection) => void;
-    setWidth: (placementId: string, width: WidgetWidth) => void;
+    setSize: (placementId: string, size: GridSize) => void;
     remove: (placementId: string) => void;
     /** ABSENT before an arrangement has been read. */
     dismiss?: (placementId: string, title: string) => void;
@@ -134,7 +139,9 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+      // Two rows, so its sentence fits inside the grid's fixed row height.
+      style={cardRowStyle(2)}
+      className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
       {isEditing
         ? "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
@@ -209,6 +216,48 @@ function cellSettingsWrite(
   };
 }
 
+/**
+ * Whether a card is off the dashboard because its widget hides when empty and its answer is, by
+ * the outcome the renderer draws from (`resolveWidgetOutcome`), so the two cannot disagree.
+ */
+function hiddenWhileEmpty(
+  row: ArrangedWidget,
+  slots: Record<string, WidgetSlot>,
+  cellSlots: CellSlots
+): boolean {
+  if (row.widget.hidesWhenEmpty !== true) return false;
+  const outcome = resolveWidgetOutcome(
+    row.widget,
+    slots[row.placementId],
+    key => cellSlots[row.placementId]?.[key]
+  );
+  return outcome.state === "empty";
+}
+
+/**
+ * When the OLDEST answer on show arrived, or `undefined` before any has: the time the page's one
+ * freshness line is true of, since every card on show is at least that fresh. Only a card that
+ * asked and is drawn counts: a card hidden while its answer is empty is not on show.
+ */
+function oldestAnswer(
+  rows: readonly ArrangedWidget[],
+  answers: {
+    requested: ReadonlySet<string>;
+    slots: Record<string, WidgetSlot>;
+    cellSlots: CellSlots;
+    updatedAtFor: (placementId: string) => Date | null;
+  }
+): Date | undefined {
+  let oldest: Date | undefined;
+  for (const row of rows) {
+    if (!answers.requested.has(row.placementId)) continue;
+    if (hiddenWhileEmpty(row, answers.slots, answers.cellSlots)) continue;
+    const at = answers.updatedAtFor(row.placementId);
+    if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
+  }
+  return oldest;
+}
+
 export function ArrangedGrid({
   rows,
   placements,
@@ -228,7 +277,13 @@ export function ArrangedGrid({
   focus,
   gridRef,
   on,
-}: ArrangedGridProps) {
+}: ArrangedGridProps): JSX.Element {
+  const answeredAt = oldestAnswer(rows, {
+    requested,
+    slots,
+    cellSlots,
+    updatedAtFor,
+  });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -240,9 +295,13 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts. `relative` so the
-        // drop line is placed from the grid's own corner, where the drag measures from.
-        className="relative grid grid-cols-12 gap-[24px]"
+        // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
+        // counts. `relative` so the drop line is placed from the grid's own corner, where the
+        // drag measures from.
+        className={cn("relative", GRID_CLASS)}
+        // When the oldest answer on show arrived, for the page's one freshness line: no card
+        // says when its own data arrived.
+        data-answered-at={answeredAt?.toISOString()}
       >
         <span
           role="status"
@@ -260,8 +319,8 @@ export function ArrangedGrid({
             row={row}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            // At one column each card menu lists its widths in place, where a submenu has no room.
-            widthsInPlace={drag?.oneColumn === true}
+            // At one column each card menu lists its sizes in place, where a submenu has no room.
+            sizesInPlace={drag?.oneColumn === true}
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
@@ -293,7 +352,7 @@ export function ArrangedGrid({
             }}
             on={{
               move: direction => on.move(row.placementId, direction),
-              setWidth: width => on.setWidth(row.placementId, width),
+              setSize: size => on.setSize(row.placementId, size),
               remove: () => on.remove(row.placementId),
               ...(on.dismiss
                 ? {

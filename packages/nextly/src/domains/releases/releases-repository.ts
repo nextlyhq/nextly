@@ -1757,6 +1757,30 @@ export class ReleasesRepository {
   }
 
   /**
+   * Whether a listing would hold any release at all, reading one id rather
+   * than counting.
+   *
+   * The question a dashboard asks before offering a releases card on every
+   * load. The same where clause {@link findReleasePage} reads, built by the
+   * same {@link listingFor}, so it can never say "yes" where the list would
+   * be empty; only the projection and the bound differ.
+   *
+   * @experimental
+   */
+  async anyRelease(
+    query: Omit<ReleasePageQuery, "offset" | "limit">
+  ): Promise<boolean> {
+    const listing = this.listingFor(query);
+    if (listing === null) return false;
+    const rows = await this.db.select<Pick<ReleaseRow, "id">>(RELEASES, {
+      where: listing.where,
+      columns: ["id"],
+      limit: 1,
+    });
+    return rows.length > 0;
+  }
+
+  /**
    * Each of these days' releases, counted by state, with the first `perDay` of
    * them read in full.
    *

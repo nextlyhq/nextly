@@ -67,6 +67,5 @@ export function previewContainerStyle(
  * For a caller that compiled with {@link PREVIEW_VIEWPORT_CONTAINER} and has no
  * name of its own to pass.
  */
-export const PREVIEW_CONTAINER_STYLE = previewContainerStyle(
-  PREVIEW_VIEWPORT_CONTAINER
-);
+export const PREVIEW_CONTAINER_STYLE: ReturnType<typeof previewContainerStyle> =
+  previewContainerStyle(PREVIEW_VIEWPORT_CONTAINER);

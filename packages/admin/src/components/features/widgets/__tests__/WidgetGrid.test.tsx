@@ -4,7 +4,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
@@ -16,7 +16,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { coreDraws } from "../outcome";
-import { GRID_GAP_PX } from "../sizes";
+import { GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -286,6 +286,66 @@ describe("WidgetGrid — collection and gating", () => {
     expect(screen.queryByText("second body")).not.toBeInTheDocument();
   });
 
+  it("draws a throwing component's error once, and never remounts the component card beside it", async () => {
+    // 🔴 The grid hands each card its answer afresh on every render. Keyed on a
+    // new object each time, a component that threw was caught, re-rendered the
+    // grid by reporting the failure, met a "new" answer, drew and threw again
+    // until React stopped it ("Maximum update depth exceeded"), and every
+    // component card remounted whenever the grid re-rendered.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let draws = 0;
+    let mounts = 0;
+    const Throws = (): JSX.Element => {
+      draws += 1;
+      throw new Error("boom");
+    };
+    const Counts = (): JSX.Element => {
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <p>counted body</p>;
+    };
+    registerComponents({
+      "@acme/admin#Throws": Throws,
+      "@acme/admin#Counts": Counts,
+    });
+    mockBranding = brandingWithRegistered(
+      ["throws", "counts"].map(name => ({
+        id: `acme/${name}`,
+        title: name,
+        archetype: "custom",
+        size: { default: { w: 6, h: 3 } },
+        component: `@acme/admin#${name[0].toUpperCase()}${name.slice(1)}`,
+        serverData: true,
+      }))
+    );
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "data", data: 1 } },
+        { ok: true, result: { op: "data", data: 2 } },
+      ],
+    });
+
+    renderGrid();
+
+    const failed = await screen.findByRole("region", { name: "throws" });
+    await waitFor(() => expect(failed).toHaveAttribute("data-state", "error"));
+    expect(screen.getByText("counted body")).toBeInTheDocument();
+    // Settled, and stays settled: no further draws once the error is shown.
+    const drawn = draws;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(draws).toBe(drawn);
+    // React draws a throwing component again once before giving up on it; a
+    // loop draws it until the update limit.
+    expect(draws).toBeLessThanOrEqual(4);
+    expect(mounts).toBe(1);
+    expect(
+      errors.mock.calls.some(call =>
+        String(call[0]).includes("Maximum update depth")
+      )
+    ).toBe(false);
+  });
+
   it("renders a widget the app only REGISTERED, with no contribution beside it", () => {
     // The registry is what `registerWidget` writes to, and it is the store this
     // whole system is built around. A widget that reached it without also being
@@ -295,7 +355,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 3 } },
         query: { source: "collection:orders", op: "count" },
       },
     ]);
@@ -322,7 +382,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/posts",
         title: "Published posts",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 3 } },
         query: { source: "collection:posts", op: "count" },
       },
     ]);
@@ -369,12 +429,11 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
-  it("claims no freshness for a query that never ran", async () => {
+  it("gives the page a freshness only from the cards whose queries ran", async () => {
     // The widget declares a query, so `widget.query` is truthy -- but its
     // archetype is undrawable, so the grid deliberately left it out of the
-    // batch. Reading `widget.query` again to decide the card's freshness gave
-    // it an "Updated just now" for a request nothing ever sent, and marked it
-    // busy while an unrelated widget refetched.
+    // batch. No card says when its data arrived; the page's one line is told
+    // the oldest answer on show, from the cards that took part.
     mockBranding = brandingWith([
       {
         id: "acme/recent",
@@ -395,15 +454,20 @@ describe("WidgetGrid — collection and gating", () => {
 
     renderGrid();
 
-    // The metric card asked and answered, so it carries the batch's timestamp.
     await waitFor(() =>
       expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
     );
     const cells = screen.getAllByTestId(/^widget-cell-/);
     expect(cells).toHaveLength(2);
 
-    // Exactly one freshness line on the page: the widget that took part.
-    expect(screen.getAllByTestId("widget-card-freshness")).toHaveLength(1);
+    // No card says when its data arrived; the grid says when the oldest
+    // answer it shows did, for the page.
+    expect(document.querySelectorAll("time")).toHaveLength(0);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Dashboard widgets")).toHaveAttribute(
+        "data-answered-at"
+      )
+    );
   });
 
   it("DOES spend a query when a component can draw the result", async () => {
@@ -497,7 +561,7 @@ describe("WidgetGrid — collection and gating", () => {
           id: "shared",
           title: "Shared",
           archetype: "list",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           query: { source: "collection:posts", op: "list" },
         },
       ],
@@ -523,7 +587,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/recent",
         title: "Recent posts",
         archetype: "list",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         query: {
           source: "collection:posts",
           op: "list",
@@ -668,7 +732,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/posts",
         title: "Recent posts",
         archetype: "table",
-        defaultSize: "full",
+        size: { default: { w: 12, h: 3 } },
         query: {
           source: "collection:posts",
           op: "list",
@@ -727,7 +791,7 @@ describe("WidgetGrid — collection and gating", () => {
           id: "acme/registered",
           title: "Registered",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 3 } },
           query: { source: "collection:orders", op: "count" },
         },
       ],
@@ -764,7 +828,7 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/secret",
         title: "Secret",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 3 } },
         requiredPermission: "read-secrets",
         query: { source: "collection:secrets", op: "count" },
       },
@@ -791,7 +855,7 @@ describe("WidgetGrid — collection and gating", () => {
           id: "shared",
           title: "Shared",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 3 } },
           query: { source: "collection:posts", op: "count" },
         },
       ],
@@ -861,33 +925,45 @@ describe("WidgetGrid — collection and gating", () => {
 });
 
 describe("WidgetGrid — sizing", () => {
-  it("gives every cell a full-width base span whatever its size", () => {
+  /** A component-drawn widget declared `w` columns by `h` rows. */
+  const sized = (id: string, w: number, h = 3) => ({
+    id,
+    component: "@acme/admin#A",
+    size: { default: { w, h } },
+  });
+
+  it("gives every cell a full-width base span whatever its w", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-      { id: "medium", component: "@acme/admin#A", defaultSize: "md" },
-      { id: "large", component: "@acme/admin#A", defaultSize: "lg" },
-      { id: "xlarge", component: "@acme/admin#A", defaultSize: "xl" },
-      { id: "whole", component: "@acme/admin#A", defaultSize: "full" },
+      sized("w3", 3),
+      sized("w4", 4),
+      sized("w6", 6),
+      sized("w8", 8),
+      sized("w12", 12),
     ]);
     renderGrid();
-    for (const id of ["small", "medium", "large", "xlarge", "whole"]) {
+    for (const id of ["w3", "w4", "w6", "w8", "w12"]) {
       const cell = screen.getByTestId(`widget-cell-${id}`);
       expect(cell.className.split(" ")).toContain("col-span-12");
     }
   });
 
-  it("narrows a small widget only as the DASHBOARD widens, not the window", () => {
+  it("spans a card's w columns and h rows, its columns by the DASHBOARD's width, not the window", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-    ]);
+    mockBranding = brandingWith([sized("narrow", 3, 4), sized("wide", 8, 2)]);
     renderGrid();
-    expect(screen.getByTestId("widget-cell-small")).toHaveClass(
+    const narrow = screen.getByTestId("widget-cell-narrow");
+    expect(narrow).toHaveClass(
       "col-span-12",
       "@min-[640px]/dashboard:col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
+    expect(narrow.style.gridRow).toBe("span 4 / span 4");
+    const wide = screen.getByTestId("widget-cell-wide");
+    // Wider than six columns: the whole row in the middle band, so no 640 px class at all.
+    expect(wide).toHaveClass("@min-[1024px]/dashboard:col-span-8");
+    expect(wide.className).not.toMatch(/@min-\[640px\]/);
+    expect(wide.style.gridRow).toBe("span 2 / span 2");
     // The container those classes answer to is the dashboard's own, so a
     // dashboard narrowed by a sidebar draws the band that fits it.
     expect(
@@ -897,47 +973,15 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws its gap at the pixels a card's predicted width counts", () => {
-    // A card's first query is sized from a width predicted with GRID_GAP_PX. A gap in rem would
+  it("lays its cards on twelve columns in rows of 72 px, in order, with the gaps a card's predicted width counts", () => {
+    // A card's first query is sized from a width predicted with these gaps. A gap in rem would
     // follow the page's root font size and draw cards at another width than predicted.
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-    ]);
+    mockBranding = brandingWith([sized("one", 3)]);
     renderGrid();
-    expect(screen.getByLabelText("Dashboard widgets").className).toContain(
-      `gap-[${GRID_GAP_PX}px]`
-    );
-  });
-
-  it("honours the deprecated half alias without half-width phones", () => {
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "halved", component: "@acme/admin#A", size: "half" },
-    ]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-halved");
-    expect(cell).toHaveClass(
-      "col-span-12",
-      "@min-[1024px]/dashboard:col-span-6"
-    );
-    expect(cell.className.split(" ")).not.toContain("col-span-6");
-  });
-
-  it("prefers an explicit defaultSize over the deprecated alias", () => {
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      {
-        id: "both",
-        component: "@acme/admin#A",
-        size: "half",
-        defaultSize: "sm",
-      },
-    ]);
-    renderGrid();
-    expect(screen.getByTestId("widget-cell-both")).toHaveClass(
-      "@min-[1024px]/dashboard:col-span-3"
-    );
+    const grid = screen.getByLabelText("Dashboard widgets");
+    for (const cls of GRID_CLASS.split(" ")) expect(grid).toHaveClass(cls);
+    expect(grid.className).not.toMatch(/dense/);
   });
 });
 

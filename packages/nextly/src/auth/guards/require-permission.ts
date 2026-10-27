@@ -1,5 +1,4 @@
-import { permissionSlug } from "../../schemas/_zod/rbac";
-import type { AuthContext } from "../session/session-types";
+import { createJsonErrorResponse as answerRefusal } from "../middleware/error-response";
 
 export interface ErrorResponse {
   success: false;
@@ -22,18 +21,21 @@ export function createErrorResponse(
 }
 
 /**
- * Create a JSON Response from an ErrorResponse.
+ * Create a JSON Response from an ErrorResponse: the one error body every
+ * refusal is answered with, as the auth middleware answers it.
+ *
+ * These guards put what a caller should read in `message` and the HTTP
+ * reason in `error` (`"Missing API key"`, `"Unauthorized"`), the other way
+ * round from the middleware, so `message` is the one answered.
+ *
+ * Pass the `request` to answer with its own request id (`x-request-id`, or a
+ * proxy's); without it a new id is made.
  */
-export function createJsonErrorResponse(errResp: ErrorResponse): Response {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(errResp.headers || {}),
-  };
-
-  return new Response(JSON.stringify(errResp), {
-    status: errResp.statusCode,
-    headers,
-  });
+export function createJsonErrorResponse(
+  errResp: ErrorResponse,
+  request?: Request
+): Response {
+  return answerRefusal({ ...errResp, error: errResp.message }, request);
 }
 
 /**
@@ -47,36 +49,4 @@ export function isErrorResponse(value: unknown): value is ErrorResponse {
     (value as ErrorResponse).success === false &&
     "statusCode" in value
   );
-}
-
-/**
- * Check a single permission against an AuthContext.
- * For session auth: delegates to RBAC service.
- * For API key auth: checks pre-resolved permissions map.
- */
-export async function checkPermission(
-  context: AuthContext,
-  action: string,
-  resource: string,
-  deps: {
-    checkUserPermission?: (
-      userId: string,
-      action: string,
-      resource: string
-    ) => Promise<boolean>;
-  }
-): Promise<boolean> {
-  if (context.authMethod === "api-key") {
-    // API keys have pre-resolved permissions
-    const permSlug = permissionSlug(action, resource);
-    return context.permissions.get(permSlug) === true;
-  }
-
-  // Session auth -- use RBAC service
-  if (deps.checkUserPermission) {
-    return deps.checkUserPermission(context.userId, action, resource);
-  }
-
-  // Fallback: no RBAC service available (shouldn't happen in production)
-  return false;
 }

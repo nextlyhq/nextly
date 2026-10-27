@@ -1,19 +1,37 @@
 import { container } from "@nextly/di/container";
-import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
+import { readOrGenerateRequestId } from "../../api/request-id";
 import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../errors/error-codes";
+import { NextlyError } from "../../errors/nextly-error";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import { answerForRefusal, type GateVerdict } from "../access/gate-adapters";
+import {
+  refusalMessageFor,
+  type RefusalScope,
+} from "../access/refusal-message";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
+  routeGrantVerdict,
+  type RouteRules,
 } from "../access/route-gate-adapters";
 import {
   everyLanguage,
@@ -23,8 +41,9 @@ import {
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import { type GrantedPermission } from "../authenticated-scope";
+import type { GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
+import { startServicesForAuthentication } from "../session/session-standing";
 
 import { apiKeyRateLimitRefusal } from "./api-key-budget";
 import { createErrorResponse, type ErrorResponse } from "./error-response";
@@ -73,6 +92,65 @@ function getApiKeyService(): ApiKeyService | undefined {
     // DI container not initialized yet — safe to ignore
   }
   return undefined;
+}
+
+/**
+ * The key service, with the services started first when this process has not
+ * started them, through the same start the session check uses
+ * (`startServicesForAuthentication`).
+ *
+ * A key was presented, so a service that cannot be had is answered as a
+ * refusal rather than as "no key": falling through would treat a bearer token
+ * as unauthenticated. The refusal is the typed error's own status and generic
+ * message; why it happened goes to the log only, as a failed start can carry a
+ * driver's message naming hosts and credentials.
+ */
+async function startedApiKeyService(
+  req: Request
+): Promise<ApiKeyService | ErrorResponse> {
+  // A process whose key service is registered looks the key up with it, as
+  // the REST limit's own lookup does: the start is for a process that has
+  // none, and asking it of one already up only adds a wait to every request.
+  const registered = getApiKeyService();
+  if (registered) return registered;
+  let failure: NextlyError;
+  try {
+    await startServicesForAuthentication();
+    const service = getApiKeyService();
+    if (service) return service;
+    failure = NextlyError.serviceUnavailable({
+      logContext: {
+        reason: "api-key-read-before-nextly-initialised",
+        remedy:
+          "An API key was presented before Nextly was initialised in this " +
+          "process, and nothing loaded here can start it, so the key cannot " +
+          "be looked up. Call `await getNextly({ config })` before " +
+          "authenticating, or initialise Nextly in `instrumentation.ts` " +
+          "with `createRegister(config)`.",
+      },
+    });
+  } catch (error) {
+    // A typed error from the boot or its migrations gate already says what
+    // went wrong; anything else is a start that failed for a reason only the
+    // log may carry.
+    failure = NextlyError.is(error)
+      ? error
+      : NextlyError.serviceUnavailable({
+          cause: error instanceof Error ? error : undefined,
+          logContext: { reason: "api-key-services-failed-to-start" },
+        });
+  }
+  getNextlyLogger().error({
+    kind: "api-key-auth-unavailable",
+    ...failure.toLogJSON(readOrGenerateRequestId(req)),
+  });
+  return createErrorResponse(
+    failure.statusCode,
+    failure.publicMessage,
+    failure.publicMessage,
+    undefined,
+    failure.code
+  );
 }
 
 /**
@@ -126,6 +204,14 @@ export interface AuthContext {
   claims?: Record<string, unknown>;
 }
 
+/** Why a presented key was refused, as the server's log says it. */
+const KEY_REFUSED_BECAUSE: Readonly<Record<ApiKeyRefusalCause, string>> = {
+  unknown: "the API key is not one this site issued",
+  revoked: "the API key is revoked",
+  expired: "the API key has expired",
+  "creator-inactive": "the API key's creator is not active",
+};
+
 /**
  * API key authentication middleware.
  *
@@ -144,6 +230,11 @@ export interface AuthContext {
  *   has been exceeded. Includes `Retry-After` (seconds), `X-RateLimit-Limit`, and
  *   `X-RateLimit-Remaining` headers. Callers MUST propagate this via
  *   `createJsonErrorResponse()` so headers are forwarded to the client.
+ *
+ * - `ErrorResponse { statusCode: 503 }` — the services a key is looked up
+ *   through could not be started in this process. A cold process starts them
+ *   first, as a session check does, so this answers only a start that failed
+ *   or a process where nothing can start them.
  *
  * - `{ userId, permissions, roles }` — the key is valid and within rate limit.
  *   `permissions` is the resolved array of permission slugs for this key's token type.
@@ -177,29 +268,32 @@ export async function requireApiKeyAuth(req: Request): Promise<
   // budget when it resolved: its answer stands, so the key is neither looked
   // up again nor counted twice.
   const known = currentRestLimitGate(req)?.knownKey(rawKey);
-  const apiKeyService = getApiKeyService();
-  if (!apiKeyService) {
-    // Service unavailable during early bootstrap — key was attempted but cannot
-    // be validated. Return 503 rather than null so the caller does not silently
-    // treat a bearer token as "unauthenticated".
-    return createErrorResponse(
-      503,
-      "Service Unavailable",
-      "API key authentication service is not available"
-    );
-  }
+  // A key can only be judged from the database, so a process that has not
+  // started its services starts them here, as a session check does, rather
+  // than refusing the first keyed request a cold instance receives.
+  const apiKeyService = await startedApiKeyService(req);
+  if ("statusCode" in apiKeyService) return apiKeyService;
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
+  let cause: ApiKeyRefusalCause | undefined = known?.cause;
   const keyAuth = known
     ? known.resolved
-    : await apiKeyService.authenticateApiKey(rawKey);
+    : await apiKeyService.authenticateApiKey(rawKey, refused => {
+        cause = refused;
+      });
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
-    return createErrorResponse(
-      401,
-      "Invalid API key",
-      "The provided API key is invalid, expired, or revoked"
-    );
+    // Which way the key fails is for the server's log, not the caller.
+    return {
+      ...createErrorResponse(
+        401,
+        "Invalid API key",
+        "Authentication required."
+      ),
+      reason: cause
+        ? KEY_REFUSED_BECAUSE[cause]
+        : "the API key did not resolve",
+    };
   }
 
   // 4. Rate limit check — enforced after auth, before permission resolution.
@@ -301,10 +395,12 @@ export async function requireAuthentication(
   // silently instead of bouncing the user to login.
   if (apiKeyResult === null) {
     if (sessionResult.reason === "expired") {
+      // The code tells the admin to refresh; the message says no more than
+      // any other request needing sign-in is told.
       return createErrorResponse(
         401,
         "Session expired",
-        "Your session has expired, please refresh",
+        "Authentication required.",
         undefined,
         "TOKEN_EXPIRED"
       );
@@ -312,7 +408,7 @@ export async function requireAuthentication(
     return createErrorResponse(
       401,
       "Authentication required",
-      "You must be logged in to access this resource",
+      "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
@@ -368,32 +464,103 @@ export async function requirePermission(
  * before it can know which permission to ask for judges the caller it already
  * holds here, so the request is counted once.
  */
-export async function authorizeCaller(
+export function authorizeCaller(
   authResult: AuthContext,
   action: string,
-  resource: string
+  resource: string,
+  // Whether the request names one entry, so the refusal says "this post".
+  scope: RefusalScope = "all"
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  const verdict = await routeGateVerdict(
+  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+}
+
+/**
+ * {@link authorizeCaller} by the grant alone, its rule not read
+ * ({@link routeGrantVerdict}): for a publish or an unpublish of every
+ * language, whose rule the service asks in each language the change puts
+ * live. Refused as `authorizeCaller` refuses, a caller who may not read the
+ * entry it names answered as if it were missing.
+ */
+function authorizeCallerOnGrant(
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  return authorizeBy(routeGrantVerdict, authResult, action, resource, scope);
+}
+
+async function authorizeBy(
+  verdictOf: (
+    auth: AuthContext,
+    action: string,
+    resource: string,
+    rules: RouteRules
+  ) => Promise<GateVerdict>,
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  const verdict = await verdictOf(
     authResult,
     action,
     resource,
     getRBACService()
   );
-  // A caller whose access could not be read is not a caller without the
-  // permission: the read's error goes to the route's error handling, as it
-  // always has, rather than being answered as a refusal.
-  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${action} ${resource}`
+    // A caller naming one entry it may not read is answered exactly as if the
+    // entry did not exist, whatever it asked to do: a 403 would confirm the
+    // entry is there. A caller who may read it is told what it may not do.
+    const answer = await answerForRefusal(
+      verdict,
+      action,
+      scope === "one",
+      asked => routeGateVerdict(authResult, asked, resource, getRBACService())
     );
+    // A caller whose access could not be read is not a caller without the
+    // permission: the read's error goes to the route's error handling, as it
+    // always has, rather than being answered as a refusal.
+    if (answer.answer === "failed") throw answer.error;
+    if (answer.answer === "missing") {
+      return entryAnsweredAsMissing(action, resource);
+    }
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        await refusalMessageFor(action, resource, scope)
+      ),
+      // The one decision does not say whether the entity's own rule or a
+      // missing grant refused, so the reason names both rather than guess.
+      reason: `the access decision refused ${action} on ${resource}: its access rule, or no ${action}-${resource} grant`,
+    };
   }
   return authResult;
+}
+
+/**
+ * The answer a request naming one entry gets from a caller who may not read
+ * it: what a missing entry gets, `NOT_FOUND` in the generic words, so the two
+ * cannot be told apart. Which check refused goes to the log.
+ */
+function entryAnsweredAsMissing(
+  action: string,
+  resource: string
+): ErrorResponse {
+  return {
+    ...createErrorResponse(
+      NEXTLY_ERROR_STATUS.NOT_FOUND,
+      "Not Found",
+      genericPublicMessage("NOT_FOUND"),
+      undefined,
+      "NOT_FOUND"
+    ),
+    reason: `the caller may not read ${resource}, so the entry its ${action} names is answered as missing`,
+  };
 }
 
 /**
@@ -404,7 +571,8 @@ export async function authorizeCaller(
  */
 export async function requireAnyPermission(
   req: Request,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -412,7 +580,32 @@ export async function requireAnyPermission(
     return authResult;
   }
 
-  return authorizeCallerForAny(authResult, permissions);
+  return authorizeCallerForAny(authResult, permissions, target);
+}
+
+/**
+ * What a refusal names as refused, where it is not what the permissions
+ * asked for say: reading a permission may be granted by `read-roles`, and is
+ * still the reading of a permission.
+ */
+export interface RefusalTarget {
+  action: string;
+  resource: string;
+}
+
+/**
+ * What an any-of refusal names: the target given, else the one thing every
+ * alternative is about. Alternatives about different things name nothing.
+ */
+function anyOfTarget(
+  permissions: ReadonlyArray<{ action: string; resource: string }>,
+  target: RefusalTarget | undefined
+): RefusalTarget | undefined {
+  if (target) return target;
+  const [first] = permissions;
+  return first && permissions.every(p => p.resource === first.resource)
+    ? first
+    : undefined;
 }
 
 /**
@@ -421,7 +614,8 @@ export async function requireAnyPermission(
  */
 export async function authorizeCallerForAny(
   authResult: AuthContext,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   // Any one of the permissions will do, judged on the key's own grants or the
   // session's permissions, asked of the one decision.
@@ -431,11 +625,19 @@ export async function authorizeCallerForAny(
     getRBACService()
   );
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have the required permissions to access this resource`
-    );
+    const named = anyOfTarget(permissions, target);
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        named
+          ? await refusalMessageFor(named.action, named.resource)
+          : "You can't do that."
+      ),
+      reason: `the caller holds none of ${permissions
+        .map(p => `${p.action}-${p.resource}`)
+        .join(", ")}`,
+    };
   }
   return authResult;
 }
@@ -597,7 +799,9 @@ function requestedLanguage({
 }
 
 /** The languages the rule asked for a REST operation is told. */
-function requestLanguage(operation: RouteOperation | undefined): RuleLanguage {
+export function requestLanguage(
+  operation: RouteOperation | undefined
+): RuleLanguage {
   if (operation === undefined) return everyLanguage();
   const kind = OPERATION_LANGUAGES.get(operation.method);
   if (kind === undefined) return everyLanguage();
@@ -608,6 +812,14 @@ function requestLanguage(operation: RouteOperation | undefined): RuleLanguage {
 export interface RouteOperation {
   method: string;
   params: Readonly<Record<string, string>>;
+  /**
+   * The request names one entry or document: an entry its path names by id,
+   * or a Single's own document. It is refused about that one, and a caller
+   * who may not read it is answered as if it were missing. Set by the route,
+   * which knows what its path names; the parameters cannot say, since a
+   * query may carry an `entryId` that names nothing.
+   */
+  namesOne?: boolean;
 }
 
 /**
@@ -643,8 +855,135 @@ export async function requireCollectionAccess(
   // question `requirePermission` asks, about the collection or Single the
   // URL names.
   return withRuleLanguage(requestLanguage(operation), () =>
-    authorizeCaller(authResult, action, collectionSlug)
+    authorizeCaller(
+      authResult,
+      action,
+      collectionSlug,
+      // A route naming one entry is refused about that entry. Named by the
+      // route, never by a parameter: a query can carry an `entryId` too.
+      operation?.namesOne ? "one" : "all"
+    )
   );
+}
+
+/**
+ * The access check for a route that publishes or unpublishes every language
+ * of an entry or a Single: by the grant alone, since the service asks the
+ * rule once in each language the change puts live, which the route cannot
+ * know. Told every language here, a rule refusing a language that does not go
+ * live would refuse what the service allows.
+ */
+export async function requireLifecycleAccess(
+  req: Request,
+  action: "publish" | "unpublish",
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    const scope = operation?.namesOne ? "one" : "all";
+    const onGrant = await authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(onGrant)) return onGrant;
+    // A target with no lifecycle has nothing to publish, and the service
+    // tells a caller who may update so; one with a lifecycle still asks the
+    // lifecycle gate whoever the route admitted. So update admits too, and a
+    // caller neither admits is refused as the lifecycle grant refuses them.
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    return isErrorResponse(asUpdate) ? onGrant : asUpdate;
+  });
+}
+
+/** The action a write route admitted each caller on, where it accepts several. */
+const admittedActions = new WeakMap<
+  AuthContext,
+  "update" | "publish" | "unpublish"
+>();
+
+/**
+ * The action {@link requireCollectionWriteAccess} admitted `caller` on, or
+ * `undefined` where the route asked one action.
+ */
+export function admittedActionOf(caller: AuthContext): string | undefined {
+  return admittedActions.get(caller);
+}
+
+/**
+ * The access check for a write route a caller may reach on update, or on
+ * publish or unpublish alone. A write that changes only an entry's status is
+ * a publish or an unpublish, which the service judges by that gate, and the
+ * service asks update of any other write, so admitting a caller here on
+ * publish lets them edit nothing. Each action is asked in turn, its rule
+ * included; the first that admits the caller is recorded for the dispatch
+ * ({@link admittedActionOf}). A caller none admits is refused in the words
+ * of the action the write asks, which `actionAsked` reads from the request
+ * only then; without it, or where it names update, as update refuses them.
+ */
+export async function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation?: RouteOperation,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    // A route naming one entry is refused about it, as in requireCollectionAccess.
+    const scope = operation?.namesOne ? "one" : "all";
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(asUpdate)) {
+      admittedActions.set(asUpdate, "update");
+      return asUpdate;
+    }
+    // A write to every language (`?locale=*`) changes only the status, and
+    // its publish rule is asked by the service in each language it puts live;
+    // here, by the grant alone. Any other write's rule is asked here too.
+    const authorize =
+      operation?.params.locale === EVERY_LOCALE
+        ? authorizeCallerOnGrant
+        : authorizeCaller;
+    const refusals = new Map<"publish" | "unpublish", ErrorResponse>();
+    for (const action of ["publish", "unpublish"] as const) {
+      const answer = await authorize(authResult, action, collectionSlug, scope);
+      if (!isErrorResponse(answer)) {
+        admittedActions.set(answer, action);
+        return answer;
+      }
+      refusals.set(action, answer);
+    }
+    return refusalForActionAsked(asUpdate, refusals, actionAsked);
+  });
+}
+
+/**
+ * The refusal a write every action refused is answered with. A write that
+ * changes only the status asked to publish or unpublish, so it is told that,
+ * with the refusal that action's own check gave; any other write is told it
+ * may not edit.
+ */
+async function refusalForActionAsked(
+  asUpdate: ErrorResponse,
+  refusals: ReadonlyMap<"publish" | "unpublish", ErrorResponse>,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<ErrorResponse> {
+  const asked = actionAsked ? await actionAsked() : "update";
+  return asked === "update" ? asUpdate : (refusals.get(asked) ?? asUpdate);
 }
 
 /**

@@ -52,6 +52,8 @@ const serverEntries = [
   "src/api/auth-state.ts",
   "src/api/health.ts",
   "src/api/media-handlers.ts",
+  // The route serving local uploads Next.js has no static file for.
+  "src/api/uploads.ts",
   "src/api/collections-schema.ts",
   "src/api/collections-schema-detail.ts",
   "src/api/collections-schema-export.ts",
@@ -172,6 +174,11 @@ const clientEntries = [
   // client reaching the list through it would take more than the list, and one
   // writing its own copy would drift from the server.
   "src/domains/collections/query/reserved-filter-keys.ts",
+  // Needs attention's kinds and keys, as their own entry. The card reads the
+  // keys the `system:attention` source writes, and the source's module imports
+  // every domain it counts -- so the card reaching the vocabulary through it
+  // would take all of them, and one writing its own copy would drift.
+  "src/domains/widgets/attention-keys.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
@@ -195,8 +202,9 @@ const clientEntries = [
   "src/zod.ts",
 ];
 
-// Packages this build never bundles: each name and its subpaths.
-const NEVER_BUNDLE = [
+// Packages this build never bundles: each name and its subpaths. Exported for
+// tsdown.dts.config.ts, whose declarations must leave the same packages out.
+export const NEVER_BUNDLE = [
   // Database drivers — kept external (CJS native modules can't be bundled into ESM)
   "better-sqlite3",
   "pg",
@@ -230,8 +238,9 @@ const NEVER_BUNDLE = [
 ];
 
 // Combine all entries into a single build to avoid race conditions
-// with parallel builds and the clean option
-const allEntries = [...serverEntries, ...clientEntries];
+// with parallel builds. Exported for tsdown.dts.config.ts, which names one
+// declaration entry per entry here.
+export const allEntries = [...serverEntries, ...clientEntries];
 
 export default defineConfig({
   entry: allEntries,
@@ -246,13 +255,17 @@ export default defineConfig({
     neverBundle: id =>
       NEVER_BUNDLE.some(name => id === name || id.startsWith(`${name}/`)),
   },
-  // One bundled `.d.ts` per entry, beside its `.mjs`, emitted from the same
-  // build without type-checking: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // Declarations are not this build's: `tsc -p tsconfig.dts.json` writes them
+  // per file and tsdown.dts.config.ts bundles one `.d.mts` per entry beside
+  // its `.mjs`.
+  dts: false,
   outExtensions() {
     return { js: ".mjs", dts: ".d.mts" };
   },
-  clean: true,
+  // `build` empties `dist` before any producer runs. Cleaning here would
+  // delete the declarations the other producer writes into the same folder,
+  // on every rebuild under `dev`'s watch.
+  clean: false,
   plugins: [dropUnboundBuiltinImports],
   // No shims — output is native ESM (.mjs). A `require` shim throws "Dynamic
   // require of X is not supported" for Node builtins (events, net, etc.) when

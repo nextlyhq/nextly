@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type JSX } from "react";
 
 import { ImageSizeForm } from "@admin/components/features/settings/ImageSizeForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
@@ -13,7 +13,7 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { createImageSize, type ImageSize } from "@admin/services/imageSizesApi";
 
-export default function CreateImageSizePage() {
+export default function CreateImageSizePage(): JSX.Element {
   const [isPending, setIsPending] = useState(false);
 
   const handleSubmit = useCallback(async (data: Partial<ImageSize>) => {

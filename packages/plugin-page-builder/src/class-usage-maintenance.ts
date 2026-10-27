@@ -69,9 +69,9 @@ import {
   reconcileUsage,
   type ClassUsageSubject,
 } from "./class-usage-reconcile";
-import {
-  type ClassUsageScope,
-  type ClassUsageVariant,
+import type {
+  ClassUsageScope,
+  ClassUsageVariant,
 } from "./collections/class-usage-index";
 import { walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";

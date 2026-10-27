@@ -10,7 +10,7 @@
  * it, so `?duplicate=<id>` still opens a copy.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { replaceTo } from "@admin/lib/navigation";
@@ -45,7 +45,7 @@ export function emailHubPathFor(pathname: string): string | null {
   return null;
 }
 
-export default function EmailSettingsRedirect() {
+export default function EmailSettingsRedirect(): JSX.Element {
   // Decided once, from the URL the page was opened at. Reading the location
   // inside the effect would read the hub's URL on an effect's second run (as
   // development runs every effect twice) and send the reader on to Messages.

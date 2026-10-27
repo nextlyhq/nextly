@@ -34,8 +34,9 @@ export interface LifecycleDirection {
   /** The status every locale ends up in. */
   nextStatus: "published" | "draft";
   /**
-   * The access rule kind this transition is judged against, checked ON TOP of
-   * `update`. Publishing and withdrawing are separate capabilities: someone
+   * The access rule kind this transition is judged against, alone: it moves
+   * only the status, so no `update` is asked. Publishing and withdrawing are
+   * separate capabilities: someone
    * trusted to put content live is not automatically trusted to take the whole
    * site's translations of it down, and the reverse is likelier still.
    */

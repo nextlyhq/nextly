@@ -24,12 +24,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../../errors/nextly-error";
-import {
-  buildDynamicFieldGroupsMysql,
-  buildDynamicFieldGroupsPg,
-  buildDynamicFieldGroupsSqlite,
-} from "../../../schemas/dynamic-field-groups";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { MIGRATION_TARGET } from "../migration/manifest";
 
 /** Build the registry table for a dialect under an explicit name. */
@@ -37,23 +32,9 @@ export function buildFieldGroupRegistryTable(
   dialect: SupportedDialect,
   tableName: string
 ): unknown {
-  switch (dialect) {
-    case "postgresql":
-      return buildDynamicFieldGroupsPg(tableName);
-    case "mysql":
-      return buildDynamicFieldGroupsMysql(tableName);
-    case "sqlite":
-      return buildDynamicFieldGroupsSqlite(tableName);
-    default: {
-      const exhaustive: never = dialect;
-      throw NextlyError.internal({
-        logContext: {
-          reason: "cannot build the field-group registry for this dialect",
-          dialect: String(exhaustive),
-        },
-      });
-    }
-  }
+  // The loaded dialect's builder, so only that dialect's file is imported;
+  // `createAdapter` loads it, and the loader refuses an unsupported dialect.
+  return loadedDialect(dialect).builders.buildDynamicFieldGroups(tableName);
 }
 
 /**

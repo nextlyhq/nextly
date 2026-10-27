@@ -89,12 +89,14 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -785,11 +787,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
           actor: readAuthenticatedActor(),
-          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
-          // that re-check while field-level write access + response redaction
-          // still run for this user (overrideAccess stays false).
+          // Where route auth admitted the caller on update, `routeAuthorized`
+          // skips only that re-check while field-level write access + response
+          // redaction still run for this user (overrideAccess stays false). A
+          // caller admitted on publish or unpublish alone is judged here.
           overrideAccess: false,
-          routeAuthorized: !!user,
+          routeAuthorized: !!user && routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -815,11 +818,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
         overrideAccess: false,
-        // Route auth already ran the RBAC gate for `update`; attesting it skips
-        // only that re-check. The publish gate always runs.
-        routeAuthorized: !!user,
-        // The route authorized this POST as `update` against an API key's
-        // scope; the service judges the key's own `publish-{slug}` grant.
+        // The route admitted this POST on the `publish-{slug}` grant alone,
+        // so it attests no gate: a Single with nothing to publish is still
+        // asked update by the service.
+        routeAuthorized: false,
+        // The service judges an API key's own `publish-{slug}` grant and the
+        // rule, in each language the publish puts live.
         authenticatedScope: readAuthenticatedScope(),
       });
       const published = unwrapServiceResult<{
@@ -850,9 +854,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error(`Single "${slug}" not found`);
       }
       if (single.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be deleted. Code-first Singles must be removed from code.`
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "delete",
+          logContext: { reason: "single-locked-delete", slug },
+        });
       }
 
       // The storage drop and the registry delete are one operation, so they are issued as one. Held
@@ -973,11 +979,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
-      if (existing.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be modified via UI. Code-first Singles must be updated in code.`
-        );
-      }
+      refuseChangeDefinedInCode(existing, "Single", slug);
 
       const updateData: Record<string, unknown> = {};
       if (b.label !== undefined) updateData.label = b.label;
@@ -1088,11 +1090,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -1156,11 +1154,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const {
         fields,

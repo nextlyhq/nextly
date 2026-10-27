@@ -1,7 +1,13 @@
 "use client";
 
 import type { TableParams, ListResponse } from "@nextlyhq/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   createRole,
@@ -11,7 +17,12 @@ import {
   updateRole,
 } from "@admin/services/roleApi";
 import type { Role } from "@admin/types/entities";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
+import {
+  invalidateCurrentUserAccess,
+  withAccessRefresh,
+} from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 
 /**
@@ -81,7 +92,9 @@ const defaultParams: TableParams = {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useRoles(params?: TableParams) {
+export function useRoles(
+  params?: TableParams
+): UseQueryResult<ListResponse<Role>, Error> {
   return useQuery<ListResponse<Role>, Error>({
     queryKey: ["roles", params],
     queryFn: async () => {
@@ -136,7 +149,7 @@ export function useRoles(params?: TableParams) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useRole(roleId?: string) {
+export function useRole(roleId?: string): UseQueryResult<Role, Error> {
   return useQuery<Role, Error>({
     queryKey: ["roles", roleId],
     queryFn: async () => {
@@ -199,7 +212,14 @@ export function useRole(roleId?: string) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useCreateRole() {
+export function useCreateRole(): UseMutationResult<
+  {
+    id: string;
+  },
+  Error,
+  Partial<Role>,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<{ id: string }, Error, Partial<Role>>({
@@ -273,7 +293,17 @@ export function useCreateRole() {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdateRole() {
+export function useUpdateRole(): UseMutationResult<
+  void,
+  Error,
+  {
+    roleId: string;
+    updates: Partial<Role>;
+  },
+  {
+    previousRole: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -306,6 +336,12 @@ export function useUpdateRole() {
       if (context?.previousRole) {
         queryClient.setQueryData(["roles", roleId], context.previousRole);
       }
+    },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
     },
     onSettled: (_, __, { roleId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
@@ -365,7 +401,12 @@ export function useUpdateRole() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteRole() {
+export function useDeleteRole(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -375,6 +416,7 @@ export function useDeleteRole() {
     onSuccess: () => {
       // Invalidate all roles queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }
@@ -472,19 +514,27 @@ export function useDeleteRole() {
  * @see useDeleteRole - Single role deletion hook
  * @see useBulkDeleteUsers - Similar pattern for users
  */
-export function useBulkDeleteRoles() {
+export function useBulkDeleteRoles(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, void>({
-    mutationFn: async (roleId: string) => {
-      await deleteRole(roleId);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, void>({
+      mutationFn: async (roleId: string) => {
+        await deleteRole(roleId);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }
 
 /**
@@ -609,17 +659,25 @@ export function useBulkDeleteRoles() {
  * @see useUpdateRole - Single role update hook with optimistic updates
  * @see useBulkUpdateUsers - Similar pattern for users
  */
-export function useBulkUpdateRoles() {
+export function useBulkUpdateRoles(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  Partial<Role>
+> {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, Partial<Role>>({
-    mutationFn: async (roleId: string, updates: Partial<Role>) => {
-      await updateRole(roleId, updates);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, Partial<Role>>({
+      mutationFn: async (roleId: string, updates: Partial<Role>) => {
+        await updateRole(roleId, updates);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }

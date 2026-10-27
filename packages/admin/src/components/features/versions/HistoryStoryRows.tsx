@@ -23,6 +23,7 @@ import {
   User,
   UserRound,
 } from "lucide-react";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -59,7 +60,7 @@ const ACTOR_ICONS: Record<HistoryActorKind, typeof User> = {
 export type StoryShape = "publish" | "save" | "event";
 
 /** The kind's shape on the timeline. Decorative: the row says it in words. */
-export function StoryNode({ shape }: { shape: StoryShape }) {
+export function StoryNode({ shape }: { shape: StoryShape }): JSX.Element {
   return (
     <svg
       viewBox="0 0 16 16"
@@ -97,7 +98,7 @@ export function StoryNode({ shape }: { shape: StoryShape }) {
 }
 
 /** Who or what did it, with an icon for the kind. */
-export function StoryActorName({ actor }: { actor: StoryActor }) {
+export function StoryActorName({ actor }: { actor: StoryActor }): JSX.Element {
   const Icon = actor.kind ? ACTOR_ICONS[actor.kind] : User;
   const name =
     actor.kind === "release" ? `Release “${actor.name}”` : actor.name;
@@ -178,7 +179,7 @@ export interface VersionStoryRowProps {
 }
 
 /** One version, with the saves it shipped folded under it. */
-export function VersionStoryRow(props: VersionStoryRowProps) {
+export function VersionStoryRow(props: VersionStoryRowProps): JSX.Element {
   const { entry, selected, onSelect, onRename, nested = false } = props;
   const { version } = entry;
   const versionNo = version.versionNo ?? 0;
@@ -303,7 +304,7 @@ export function EventStoryRow({
 }: {
   entry: StoryEvent;
   partsLabel: PartsLabel;
-}) {
+}): JSX.Element {
   const { event } = entry;
   return (
     <div className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-1">
@@ -320,7 +321,7 @@ export function EventStoryRow({
 }
 
 /** Where retention removed older versions. */
-export function RemovalMark({ entry }: { entry: StoryRemoval }) {
+export function RemovalMark({ entry }: { entry: StoryRemoval }): JSX.Element {
   const count = removedCount(entry.event);
   return (
     <div className="my-2 ml-5 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">

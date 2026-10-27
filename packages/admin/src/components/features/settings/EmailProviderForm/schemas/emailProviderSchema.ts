@@ -453,7 +453,19 @@ export function buildProviderSchema(
   descriptor?: EmailProviderDescriptor,
   /** The stored configuration, so a legacy select choice stays valid. */
   stored?: Record<string, unknown>
-) {
+): z.ZodObject<{
+  configuration: z.ZodType<
+    Record<string, unknown>,
+    Record<string, unknown>,
+    z.core.$ZodTypeInternals<Record<string, unknown>, Record<string, unknown>>
+  >;
+  name: z.ZodString;
+  type: z.ZodString;
+  fromEmail: z.ZodString;
+  fromName: z.ZodString;
+  isDefault: z.ZodBoolean;
+  isActive: z.ZodBoolean;
+}> {
   return z.object({
     ...identitySchema,
     configuration: configurationSchema(descriptor, stored),

@@ -9,6 +9,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
@@ -30,6 +31,11 @@ export interface EntryFormActionsProps {
   isSubmitting?: boolean;
   /** Whether form has validation errors */
   isInvalid?: boolean;
+  /**
+   * Whether the caller may save in this mode (create, or update). Without it
+   * there is no Save or Create to offer, so none is drawn.
+   */
+  canSave?: boolean;
   /** Whether cancel button should be shown */
   showCancel?: boolean;
   /** Cancel button handler */
@@ -97,6 +103,7 @@ export function EntryFormActions({
   mode,
   isSubmitting = false,
   isInvalid = false,
+  canSave = true,
   showCancel = true,
   onCancel,
   formId = "entry-form",
@@ -105,7 +112,7 @@ export function EntryFormActions({
   previewLabel = "Preview",
   isLinkAvailable = false,
   shareDocument,
-}: EntryFormActionsProps) {
+}: EntryFormActionsProps): JSX.Element {
   const [shareOpen, setShareOpen] = useState(false);
   const submitLabel = mode === "create" ? `Create` : "Save Changes";
 
@@ -160,23 +167,25 @@ export function EntryFormActions({
           </div>
         )}
 
-        {/* Primary Action */}
-        <Button
-          size="md"
-          type="submit"
-          form={formId}
-          disabled={isSubmitting || isInvalid}
-          className="flex-1"
-        >
-          {isSubmitting ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {submittingLabel}
-            </>
-          ) : (
-            submitLabel
-          )}
-        </Button>
+        {/* Primary Action, only where the caller may save */}
+        {canSave && (
+          <Button
+            size="md"
+            type="submit"
+            form={formId}
+            disabled={isSubmitting || isInvalid}
+            className="flex-1"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {submittingLabel}
+              </>
+            ) : (
+              submitLabel
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );

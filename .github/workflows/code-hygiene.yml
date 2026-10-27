@@ -68,7 +68,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Resolution needs the store: an import is only "unresolved" once its
       # package is known to be absent, and workspace-to-workspace imports
@@ -82,7 +84,7 @@ jobs:
       # version are independent, and both are pinned.
       - name: Audit the changed files
         id: audit
-        uses: fallow-rs/fallow@ecf5a314fd3e10974acb4f5a7f867c433030522d # v3.17.0
+        uses: fallow-rs/fallow@1f5a08d9addde37d81aefcf10407600307da393b # v3.35.0
         with:
           command: audit
           config: .fallowrc.jsonc
@@ -382,7 +384,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

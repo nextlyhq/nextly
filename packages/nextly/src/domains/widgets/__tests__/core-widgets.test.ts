@@ -8,15 +8,23 @@
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
  */
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
+import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
 import {
+  chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
+import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
+import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { clearSources } from "../sources";
+import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
+import { clearSystemResolvers } from "../system-sources";
+import { TEAM_GATE } from "../team-gate";
 
 function card(id: string) {
   const found = CORE_WIDGETS.find(widget => widget.id === id);
@@ -26,6 +34,14 @@ function card(id: string) {
   if (!found) throw new Error(`no core widget with id "${id}"`);
   return found;
 }
+
+// As boot orders it: a card's settings are admitted against the filters its
+// source declares, so the sources a card names are registered first.
+beforeAll(() => {
+  clearSources();
+  clearSystemResolvers();
+  registerRecentEditsWidgetSource();
+});
 
 describe("core widget definitions", () => {
   /*
@@ -40,6 +56,17 @@ describe("core widget definitions", () => {
       // An assertion function: it THROWS with a named reason and returns
       // nothing, so the absence of a throw is the whole result.
       expect(() => validateWidgetDefinition(widget)).not.toThrow();
+    }
+  );
+
+  it.each(CORE_WIDGETS.map(widget => [widget.id, widget] as const))(
+    "%s is never sized below two rows",
+    (_id, widget) => {
+      // One row cannot hold the frame's padding, header and gap, so a card
+      // declared at one row draws a header with no body under it.
+      expect(sizeDeclarationProblems(widget.size)).toEqual([]);
+      const { min } = sizeBounds(widget.size);
+      expect(min.h).toBeGreaterThanOrEqual(2);
     }
   );
 
@@ -98,48 +125,59 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
-  it("offers the get-started card only while there is nothing to look at", () => {
-    // The card used to hide ITSELF: it was placed, given an order, and then
-    // rendered nothing once seeding was done -- so the arrangement reserved a
-    // slot for a card drawing nothing. The host now answers the part it can,
-    // and the declaration is where that is stated.
-    const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
-    expect(seed?.lifecycle).toBe("conditional");
-    // BOTH, and the pair is the point: `content:empty` alone left a reader who
-    // declined the offer still holding the slot, because declining does not
-    // create content.
-    expect(seed?.visibleWhen).toEqual(["content:empty", "seed:unanswered"]);
+  it("declares Get started visible by permission alone: first, full width, dismissible", () => {
+    // 🔴 No condition. Visibility is part of the token a layout write is
+    // checked against, so a card whose visibility followed its steps would
+    // turn a skip or a dismissal into a stale-scope refusal whenever a step
+    // changed between the read and the write. The layout read draws it or
+    // leaves it dormant instead.
+    const card = CORE_WIDGETS.find(w => w.id === "core/get-started");
+    expect(card).toBeDefined();
+    expect(card?.lifecycle ?? "always").toBe("always");
+    expect(card).not.toHaveProperty("visibleWhen");
+    expect(card?.dismissible).toBe(true);
+    // Full width only, and never shorter than its steps: a card does not scroll, so a reader
+    // may make it taller for the Singles they open, never short enough to cut a step off.
+    expect(card && sizeBounds(card.size)).toEqual({
+      default: { w: 12, h: 8 },
+      min: { w: 12, h: 8 },
+      max: { w: 12, h: 12 },
+    });
+    const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
+    expect(card?.defaultOrder).toBe(Math.min(...orders));
   });
 
-  it("offers the checklist only while setup is outstanding", () => {
-    // Same move as the card above, for the same reason: this one decided from
-    // `localStorage`, which answered a per-reader question per browser -- the
-    // same person on a second machine met a checklist they had finished.
-    const checklist = CORE_WIDGETS.find(
-      w => w.id === "core/onboarding-checklist"
-    );
-    expect(checklist?.lifecycle).toBe("conditional");
-    expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
+  it("no longer declares the two cards Get started replaced", () => {
+    const ids = CORE_WIDGETS.map(w => w.id);
+    expect(ids).not.toContain("core/seed-demo-content");
+    expect(ids).not.toContain("core/onboarding-checklist");
   });
 
-  it("offers the collections card only while there is a collection to list", () => {
-    // This one drew a get-started panel of its own when it had no counts -- a
-    // third pitch on a fresh dashboard already carrying the seed offer and the
-    // checklist, decided inside a permanent card where the host could not
-    // withdraw it. The host decides now, and from the same reader-scoped
-    // answer the other conditions use.
-    const collections = CORE_WIDGETS.find(w => w.id === "core/collections");
-    expect(collections?.lifecycle).toBe("conditional");
-    expect(collections?.visibleWhen).toBe("collections:present");
+  it("offers the Content card only while there is a collection or a Single to list", () => {
+    // One card for both: a reader with Singles and no collections still has
+    // something it lists, which `collections:present` alone would hide.
+    const content = CORE_WIDGETS.find(w => w.id === "core/content");
+    expect(content?.lifecycle).toBe("conditional");
+    expect(content?.visibleWhen).toBe("content:present");
   });
 
-  it("offers the singles card only while there is a single to list", () => {
-    // The card that returned NOTHING when the install had no singles, and so
-    // held an empty grid placement on every install that never used them --
-    // the reserved-slot defect the lifecycle was introduced to remove.
-    const singles = CORE_WIDGETS.find(w => w.id === "core/singles");
-    expect(singles?.lifecycle).toBe("conditional");
-    expect(singles?.visibleWhen).toBe("singles:present");
+  it("offers Create, Needs attention and Upcoming releases each on what it needs", () => {
+    const shownWhen = (id: string) => {
+      const declared = card(id);
+      expect(declared.lifecycle, id).toBe("conditional");
+      return declared.visibleWhen;
+    };
+    expect(shownWhen("core/quick-create")).toBe("create:available");
+    expect(shownWhen("core/needs-attention")).toBe("attention:readable");
+    expect(shownWhen("core/upcoming-releases")).toBe("releases:present");
+    // Its gate stays: the condition is about existence, the gate about access.
+    expect(card("core/upcoming-releases").requiredPermission).toBeDefined();
+  });
+
+  it("no longer declares the Collections and Singles cards Content replaced", () => {
+    const ids = CORE_WIDGETS.map(w => w.id);
+    expect(ids).not.toContain("core/collections");
+    expect(ids).not.toContain("core/singles");
   });
 
   it("keeps every OTHER core card permanent", () => {
@@ -154,41 +192,48 @@ describe("core widget definitions", () => {
       w => w.lifecycle === "conditional"
     ).map(w => w.id);
     expect(conditional).toEqual([
-      "core/seed-demo-content",
-      "core/onboarding-checklist",
-      "core/collections",
-      "core/singles",
+      "core/content",
+      "core/quick-create",
+      "core/needs-attention",
+      "core/upcoming-releases",
     ]);
   });
 
-  it("gates no card that predates the grid", () => {
+  it("gates only the team card among those that predate the grid, and the releases card", () => {
     const gated = CORE_WIDGETS.filter(
       widget => widget.requiredPermission !== undefined
     ).map(widget => widget.id);
 
-    expect(gated).toEqual(["core/upcoming-releases"]);
+    expect(gated).toEqual(["core/team", "core/upcoming-releases"]);
   });
 
-  /*
-   * 🔴 Asserted in THIS direction only, and the other one is false. Naming a
-   * component does not imply declining the grid's frame: `core/quick-create`
-   * names one and draws no heading, section or card of its own, so it wants
-   * `WidgetCard` around it and correctly omits `chrome`. The first version of
-   * this test asserted the converse and failed on that card -- which was the
-   * test being wrong, not the card.
-   *
-   * What does hold is that only a card supplying its own body may decline the
-   * frame. An archetype-drawn card with `chrome: "none"` would render its rows
-   * bare, with nothing naming what they are.
-   */
-  it("declines the grid's frame only where the card brings a body", () => {
+  it("offers the team card on the gate its source asks", () => {
+    // The same constant, not an equal copy: the declaration and the resolver
+    // cannot come to name different grants.
+    const team = card("core/team");
+    expect(team.requiredPermission).toBe(TEAM_GATE);
+    expect(team.query).toEqual({ source: TEAM_SOURCE_ID, op: "list" });
+  });
+
+  // Every card is drawn in the dashboard's one frame, which draws its header
+  // and every state, so no core widget may decline it -- by the same rule the
+  // registry refuses a plugin's that tries.
+  it("declines the grid's frame nowhere", () => {
     for (const widget of CORE_WIDGETS) {
-      if (widget.chrome !== "none") continue;
-      expect(
-        widget.component,
-        `${widget.id} declines chrome, so it must draw its own`
-      ).toBeDefined();
+      expect(chromeFieldProblem(widget), widget.id).toBeUndefined();
     }
+  });
+});
+
+describe("the content card", () => {
+  it("asks for every collection, not the default five", () => {
+    // An omitted limit is materialized as the default 5, which would cut a
+    // site's sixth collection from the card.
+    expect(card("core/content").query).toEqual({
+      source: CONTENT_SOURCE_ID,
+      op: "list",
+      limit: MAX_WIDGET_LIMIT,
+    });
   });
 });
 
@@ -215,5 +260,60 @@ describe("the team card's description", () => {
     const team = CORE_WIDGETS.find(widget => widget.id === "core/team");
     expect(team?.description).toBeDefined();
     expect(team?.description).not.toMatch(/\b(users|roles)\b/i);
+  });
+});
+
+describe("the default dashboard", () => {
+  // The agreed cards, in order, each at its agreed size and within its agreed
+  // bounds, in grid units: [id, default, min, max].
+  const AGREED = [
+    ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
+    ["core/quick-create", [4, 3], [4, 2], [12, 4]],
+    ["core/recently-edited", [6, 4], [4, 3], [12, 6]],
+    ["core/recent-activity", [6, 4], [4, 3], [12, 6]],
+    ["core/content", [12, 4], [6, 3], [12, 6]],
+    ["core/upcoming-releases", [4, 4], [4, 3], [8, 6]],
+    ["core/team", [4, 4], [3, 2], [6, 4]],
+  ] as const;
+
+  const unit = ([w, h]: readonly [number, number]) => ({ w, h });
+
+  it("orders the agreed cards as agreed", () => {
+    const ordered = CORE_WIDGETS.filter(w => AGREED.some(([id]) => id === w.id))
+      .slice()
+      .sort((a, b) => (a.defaultOrder ?? 0) - (b.defaultOrder ?? 0))
+      .map(w => w.id);
+    expect(ordered).toEqual(AGREED.map(([id]) => id));
+  });
+
+  it("gives each its agreed size, within its agreed bounds", () => {
+    // Read through `sizeBounds`, as every reader of a size reads it, so an end
+    // left to its default is checked as the grid will draw it.
+    for (const [id, dflt, min, max] of AGREED) {
+      expect([id, sizeBounds(card(id).size)]).toEqual([
+        id,
+        { default: unit(dflt), min: unit(min), max: unit(max) },
+      ]);
+    }
+  });
+
+  it("tiles: the cards that share a row of the default dashboard share a height", () => {
+    // 🔴 Laid out as the grid lays them, in order and twelve columns to a row,
+    // a card beside a taller one leaves a gap below it. The agreed sizes are
+    // chosen so no row of the default dashboard has one.
+    const rows: number[][] = [[]];
+    let used = 0;
+    for (const [id] of AGREED) {
+      const { w, h } = card(id).size.default;
+      if (used + w > 12) {
+        rows.push([]);
+        used = 0;
+      }
+      rows[rows.length - 1].push(h);
+      used += w;
+    }
+    for (const heights of rows) {
+      expect(new Set(heights).size).toBe(1);
+    }
   });
 });

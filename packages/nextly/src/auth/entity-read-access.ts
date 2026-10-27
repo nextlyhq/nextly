@@ -58,9 +58,8 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
       userId: caller.user.id,
       authMethod: "api-key",
       permissions: [...scope.permissions],
-      // The rows behind those slugs, where the scope carried them: what gives
-      // a rule each grant's earlier spelling for its deprecation release. A
-      // scope that held slugs alone hands a rule the slugs.
+      // The rows behind those slugs, where the scope carried them. A rule is
+      // handed each grant's stored slug either way.
       ...(scope.grants ? { grants: scopeGrants(scope) } : {}),
       // The key's OWN roles when authentication resolved them; a key judged
       // on its owner's roles is the same defect as one judged on its owner's
@@ -196,15 +195,61 @@ export function authorizationGroups(
 }
 
 /**
+ * The same order as {@link authorizationGroups}, for decisions that arrive one
+ * at a time rather than as a list known in advance: the first runs alone, as
+ * the warm-up, and then at most `AUTHORIZATION_CONCURRENCY` run at once, each
+ * waiting turn starting as one finishes.
+ *
+ * For a caller that learns what to authorize while it runs, such as a declared
+ * widget's data function reading collections nobody named beforehand, where
+ * grouping a list cannot apply. Each call hands back the decision's own
+ * promise, so a rejection still reaches only the caller that asked.
+ */
+export function authorizationScheduler(
+  concurrency: number = AUTHORIZATION_CONCURRENCY
+): <T>(decide: () => Promise<T>) => Promise<T> {
+  // The same guard as the grouping's, for the same reason.
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw NextlyError.internal({
+      logContext: {
+        concurrency,
+        reason: "authorization concurrency must be a positive integer",
+      },
+    });
+  }
+  let running = 0;
+  let warmed = false;
+  const waiting: Array<() => void> = [];
+  const startWaiting = () => {
+    while (running < (warmed ? concurrency : 1) && waiting.length > 0) {
+      running += 1;
+      waiting.shift()?.();
+    }
+  };
+  return <T>(decide: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      waiting.push(() => {
+        decide()
+          .then(resolve, reject)
+          .finally(() => {
+            running -= 1;
+            warmed = true;
+            startWaiting();
+          });
+      });
+      startWaiting();
+    });
+}
+
+/**
  * Which of `slugs` this caller may read, decided one entity at a time.
  *
  * The decision is {@link canReadEntity}'s, taken per entity, because that is
  * the only thing that agrees with what a row read will answer. Deriving the set
  * from permission SLUGS instead — filtering `read-{slug}` or `{slug}:read` —
- * looks equivalent and is not: `checkAccess` resolves a code-defined
- * `access.read` BEFORE it falls back to the stored grants, so a collection
- * authorized purely in code has no permission row to find, and one REFUSED in
- * code still has the row that a slug filter would admit it on.
+ * looks equivalent and is not: `checkAccess` asks a code-defined `access.read`
+ * after the stored grant, and a collection REFUSED in code still has the row
+ * that a slug filter would admit it on.
  *
  * Coarse only in WHAT it decides — whether an entity is in reach at all. The
  * per-row rules of whatever query follows still decide which documents come

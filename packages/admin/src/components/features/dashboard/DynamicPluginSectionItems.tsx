@@ -43,7 +43,7 @@ interface DynamicPluginSectionItemsProps {
 export function DynamicPluginSectionItems({
   placement,
   isActive,
-}: DynamicPluginSectionItemsProps) {
+}: DynamicPluginSectionItemsProps): React.JSX.Element | null {
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
   const pluginMetadata = branding?.plugins;

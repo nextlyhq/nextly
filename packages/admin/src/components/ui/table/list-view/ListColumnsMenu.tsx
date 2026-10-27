@@ -20,6 +20,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Columns, RotateCcw } from "@admin/components/icons";
 
@@ -41,7 +42,7 @@ export function ListColumnsMenu<Row extends object>({
   isColumnVisible,
   onToggleColumn,
   onReset,
-}: ListColumnsControl<Row>) {
+}: ListColumnsControl<Row>): JSX.Element {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

@@ -21,6 +21,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import type { Tag } from "@lezer/highlight";
 import { tags as t } from "@lezer/highlight";
+import type { Extension } from "@uiw/react-codemirror";
 
 import type { CodeConstruct } from "./code-palette";
 import { codeColor } from "./code-palette";
@@ -191,7 +192,7 @@ export const CODE_TAG_SPECS: readonly {
  * file records which lezer tags mean which construct and nothing about what a
  * construct is worth.
  */
-export const nextlyHighlightStyle = HighlightStyle.define([
+export const nextlyHighlightStyle: HighlightStyle = HighlightStyle.define([
   ...CODE_TAG_SPECS.map(spec => ({
     tag: spec.tag,
     ...(spec.construct === undefined
@@ -216,7 +217,8 @@ export const nextlyHighlightStyle = HighlightStyle.define([
  * takes precedence wherever both are present, and nothing has to switch
  * `basicSetup` off to get it.
  */
-export const nextlyHighlighting = syntaxHighlighting(nextlyHighlightStyle);
+export const nextlyHighlighting: Extension =
+  syntaxHighlighting(nextlyHighlightStyle);
 
 export interface EditorChromeOptions {
   /** Editor font size in px. Defaults to 12, the admin's code size. */
@@ -263,7 +265,7 @@ export function nextlyEditorChrome({
   padding,
   showGutter = false,
   dark = false,
-}: EditorChromeOptions = {}) {
+}: EditorChromeOptions = {}): Extension[] {
   return [
     EditorView.darkTheme.of(dark),
     EditorView.theme({
@@ -422,6 +424,10 @@ export function nextlyEditorChrome({
       // placeholder is pale in every mode. Same for the drop cursor, which the
       // view package draws in the foreground colour and which therefore
       // disappears against a dark background.
+      // The view package's placeholder is a fixed #888, under AA contrast on
+      // the admin's light surfaces; muted-foreground is the admin's own pale
+      // text, measured for both modes.
+      ".cm-placeholder": { color: "var(--nx-muted-foreground)" },
       ".cm-foldPlaceholder": {
         backgroundColor: "var(--nx-muted)",
         color: "var(--nx-muted-foreground)",

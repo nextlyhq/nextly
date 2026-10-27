@@ -47,6 +47,8 @@ const NEXTLY_DYNAMIC_PACKAGES = [
 ];
 
 const nextConfig: NextConfig = {
+  // Nextly does not support Cache Components yet; see the installation guide.
+  cacheComponents: false,
   // Two dev servers on this app cannot share a build directory, and separate
   // ports do not help: the collision is on disk, not on the network. The
   // browser suite runs its own server on its own port, so it points this

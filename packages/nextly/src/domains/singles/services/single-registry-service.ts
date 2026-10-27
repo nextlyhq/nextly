@@ -48,6 +48,10 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import {
+  moveWebhookRecording,
+  renameEntity,
+} from "../../entity-rename/rename-entity";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -304,6 +308,30 @@ export class SingleRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every Single's slug and label, read without the rest of its record: what
+   * a screen naming every Single needs.
+   */
+  async getAllLabels(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "label">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["label"]);
+    return records.map(({ slug, label }) => ({ slug, label }));
+  }
+
+  /**
+   * Every Single's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every Single's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
   async getAllSingles(
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
@@ -461,7 +489,13 @@ export class SingleRegistryService extends BaseRegistryService<
   /**
    * Update a Single's metadata.
    *
+   * A `slug` in `data` that differs from the current one renames the Single:
+   * the row and everything keyed by its slug move together (see
+   * `moveEntitySlug`). Its table keeps its name.
+   *
    * @throws NextlyError(NOT_FOUND) when no Single matches the slug.
+   * @throws NextlyError(CONFLICT) when a rename's new slug still holds the
+   *   history of an earlier Single.
    * @throws NextlyError(FORBIDDEN) when the Single is locked and the source isn't "code".
    */
   async updateSingle(
@@ -480,8 +514,11 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN — slug + source go to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single-locked",
           slug,
@@ -599,43 +636,64 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicSingleRecord>(
-        this.registryTableName,
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
-      );
+      // A slug different from the stored one is a rename, written with
+      // everything keyed by the old slug in one transaction.
+      const results =
+        targetSlug === slug
+          ? await this.adapter.update<DynamicSingleRecord>(
+              this.registryTableName,
+              updateData,
+              this.whereEq("slug", slug),
+              { returning: "*" }
+            )
+          : await this.renameSingleRow(
+              { id: existing.id, slug, tableName: existing.tableName },
+              targetSlug,
+              updateData
+            );
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
       }
 
+      // A rename carries the live recording decision to the new slug and
+      // drops the old slug's entry, so a Single created there later starts
+      // from the default rather than inheriting this one's choice.
+      if (targetSlug !== slug && !isConfigOwnedSource(existing.source)) {
+        // The decision the rename committed, read back from the row it wrote.
+        moveWebhookRecording(
+          { kind: "single", from: slug, to: targetSlug },
+          this.deserializeRecord(results[0]).webhooks?.record !== false
+        );
+      }
+
       // Mirror the stored change into the live policy so turning the switch
       // off takes effect on the next write rather than the next restart. Keyed
-      // on the slug the row is stored under (this method validates a rename but
-      // never writes it), and skipped for code-first sync so the entry keeps its
-      // `code` provenance — a `db` entry survives the reconcile that prunes
-      // removed code-first slugs, which would strand a stale opt-out.
+      // on the slug the row is stored under, the new one after a rename, and
+      // skipped for code-first sync so the entry keeps its `code` provenance —
+      // a `db` entry survives the reconcile that prunes removed code-first
+      // slugs, which would strand a stale opt-out.
       if (
         data.webhooks !== undefined &&
         !isConfigOwnedSource(options?.source)
       ) {
         setWebhookRecording(
           "single",
-          slug,
+          targetSlug,
           data.webhooks?.record !== false,
           "db"
         );
       }
 
-      this.logger.info("Single updated", { slug });
+      this.logger.info("Single updated", { slug, storedAs: targetSlug });
 
       // A stricter schema (a required field added, a rule tightened, the
       // lifecycle switched off) can leave a scheduled release holding this
       // Single with a hard problem: it is checked again once this is durable,
-      // and such a release stops now rather than at its instant.
-      if (judgedDifferently) await this.recheckReleasesHolding(slug);
+      // and such a release stops now rather than at its instant. Asked under
+      // the stored slug, which the release's members now name.
+      if (judgedDifferently) await this.recheckReleasesHolding(targetSlug);
 
       return this.deserializeRecord(results[0]);
     } catch (error) {
@@ -647,6 +705,66 @@ export class SingleRegistryService extends BaseRegistryService<
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Write a Single's row under its new slug and move what is keyed by the old
+   * one (history, markers, events, release members), in one transaction, so
+   * the registry and those tables commit together or neither does. Its
+   * permissions and webhook filters move with them (see `renameEntity`).
+   *
+   * Read back by the new slug inside the transaction: MySQL has no RETURNING,
+   * and re-reading by the old slug would find nothing once the row has moved.
+   * An empty result means no row held the old slug, and nothing was moved.
+   * The row is matched by the id read before the rename as well as the slug:
+   * a Single deleted and another registered under the slug since then is not
+   * the one asked for, and is treated as gone.
+   *
+   * The Single's document carries its slug too, in the system `slug` column
+   * every Single's table is created with, and a read returns it as stored. It
+   * moves in the same transaction while it still holds the old slug; a value
+   * set to anything else was chosen for the document, and stays.
+   */
+  private async renameSingleRow(
+    fetched: { id: string; slug: string; tableName: string },
+    to: string,
+    updateData: Record<string, unknown>
+  ): Promise<DynamicSingleRecord[]> {
+    const from = fetched.slug;
+    // Asked before the transaction: on PostgreSQL a statement against a
+    // missing table aborts the whole transaction. A Single whose table is not
+    // created yet holds no document to move.
+    const documentTable = (await this.adapter.listTables()).includes(
+      fetched.tableName
+    );
+    const row = await renameEntity(this.adapter, {
+      dialect: this.dialect,
+      move: { kind: "single", from, to },
+      writeRegistry: async tx => {
+        const written = await tx.updateCount(
+          this.registryTableName,
+          { ...updateData, slug: to },
+          {
+            and: [
+              { column: "slug", op: "=", value: from },
+              { column: "id", op: "=", value: fetched.id },
+            ],
+          }
+        );
+        if (written === 0) return null;
+        if (documentTable) {
+          await tx.update(
+            fetched.tableName,
+            { slug: to },
+            this.whereEq("slug", from)
+          );
+        }
+        return tx.selectOne<DynamicSingleRecord>(this.registryTableName, {
+          where: this.whereEq("slug", to),
+        });
+      },
+    });
+    return row ? [row] : [];
   }
 
   /**
@@ -680,9 +798,10 @@ export class SingleRegistryService extends BaseRegistryService<
     const existing = await this.getSingle(slug);
 
     if (!options?.force) {
-      // Generic FORBIDDEN per §13.8 — the policy explanation is operator-only.
-      // Public clients see "You don't have permission to perform this action."
-      throw NextlyError.forbidden({
+      // Refused in words that say a Single is not deleted from here, a fact
+      // about Singles and not about the caller's permissions (which §13.8
+      // keeps generic). The `force` hint stays operator-only, in logContext.
+      throw NextlyError.singleNotDeletable({
         logContext: {
           reason: "single-requires-force-delete",
           slug,

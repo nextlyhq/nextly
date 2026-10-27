@@ -29,6 +29,12 @@ const mockConnection = {
   connection: { config: {} },
 };
 
+// The connection `withSession` opens for itself, outside the pool
+const mockSessionConnection = {
+  query: vi.fn(),
+  destroy: vi.fn(),
+};
+
 // Mock pool with internal structure
 const mockPool = {
   getConnection: vi.fn().mockResolvedValue(mockConnection),
@@ -52,8 +58,10 @@ const mockPool = {
 vi.mock("mysql2/promise", () => ({
   default: {
     createPool: vi.fn(() => mockPool),
+    createConnection: vi.fn(async () => mockSessionConnection),
   },
   createPool: vi.fn(() => mockPool),
+  createConnection: vi.fn(async () => mockSessionConnection),
 }));
 
 // ============================================================
@@ -76,6 +84,9 @@ describe("@nextly/adapter-mysql", () => {
     mockPool.getConnection.mockResolvedValue(mockConnection);
     mockPool.query.mockImplementation(() => Promise.resolve([[], []]));
     mockPool.end.mockResolvedValue(undefined);
+    mockSessionConnection.query.mockImplementation(() =>
+      Promise.resolve([[], []])
+    );
   });
 
   // ============================================================
@@ -736,6 +747,170 @@ describe("@nextly/adapter-mysql", () => {
 
       expect(mockConnection.release).toHaveBeenCalledTimes(1);
       expect(mockConnection.destroy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================
+  // Sessions outside a transaction
+  // ============================================================
+
+  describe("withSession", () => {
+    it("puts a transaction's mode back when the strict SET fails after reaching the server", async () => {
+      // A SET the server applied but whose reply was lost leaves the connection strict; the
+      // mode read before it must still be put back, or the pool hands strict mode to later work.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) => {
+        if (statement === "SELECT @@SESSION.sql_mode AS mode") {
+          return Promise.resolve([[{ mode: "" }], []]);
+        }
+        // A server answers this read; on, as most servers start sessions.
+        if (statement === "SELECT @@SESSION.autocommit AS autocommit") {
+          return Promise.resolve([[{ autocommit: 1 }], []]);
+        }
+        if (statement.startsWith("SET SESSION sql_mode = TRIM")) {
+          return Promise.reject(new Error("connection lost"));
+        }
+        return answer?.(statement);
+      });
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
+
+      await expect(
+        adapter.transaction(async () => undefined, { strictSqlMode: true })
+      ).rejects.toThrow();
+
+      const restores = mockConnection.query.mock.calls.filter(
+        ([statement]) => statement === "SET SESSION sql_mode = ?"
+      );
+      expect(restores).toEqual([["SET SESSION sql_mode = ?", [""]]]);
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      expect(mockConnection.destroy).not.toHaveBeenCalled();
+      mockConnection.query.mockImplementation(answer);
+    });
+
+    it("is refused inside an open transaction, taking no connection", async () => {
+      const mysql = await import("mysql2/promise");
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      await expect(
+        adapter.transaction(async () => {
+          mockPool.getConnection.mockClear();
+          await adapter.withSession(async () => undefined);
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_SESSION_INSIDE_TRANSACTION" });
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+      expect(mysql.default.createConnection).not.toHaveBeenCalled();
+    });
+
+    it("opens a connection of its own with the pool's connection settings, never a pooled one", async () => {
+      const mysql = await import("mysql2/promise");
+      // A pooled connection can hold a transaction an earlier caller left open on a server whose
+      // sessions start with autocommit off; turning autocommit on there would commit it.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+        pool: { connectionTimeoutMs: 1234 },
+      });
+      await adapter.connect();
+      mockPool.getConnection.mockClear();
+
+      await adapter.withSession(async session => {
+        await session.execute("SELECT 1");
+      });
+
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+      expect(mysql.default.createConnection).toHaveBeenCalledTimes(1);
+      const [config] = vi.mocked(mysql.default.createConnection).mock
+        .calls[0] as unknown as [Record<string, unknown>];
+      expect(config).toMatchObject({
+        uri: "mysql://localhost:3306/test",
+        connectTimeout: 1234,
+        multipleStatements: false,
+      });
+      expect(config).not.toHaveProperty("connectionLimit");
+      expect(config).not.toHaveProperty("waitForConnections");
+    });
+
+    it("turns autocommit on before its statements, and closes the connection afterwards", async () => {
+      // With autocommit off, as some servers start sessions, a statement waits for a COMMIT
+      // nobody sends.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.withSession(async session => {
+        await session.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      const statements = mockSessionConnection.query.mock.calls.map(
+        ([statement]) => statement as string
+      );
+      const on = statements.indexOf("SET SESSION autocommit = 1");
+      const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
+      expect(on).toBeGreaterThanOrEqual(0);
+      expect(insert).toBeGreaterThan(on);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("is waited for by disconnect, which closes the pool only once the session has ended", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      let release: () => void = () => {};
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const session = adapter.withSession(async s => {
+        await gate;
+        await s.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      let closed = false;
+      const closing = adapter.disconnect().then(() => {
+        closed = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      expect(mockPool.end).not.toHaveBeenCalled();
+
+      release();
+      await session;
+      await closing;
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(mockPool.end).toHaveBeenCalledTimes(1);
+    });
+
+    it("is refused once disconnect has begun", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      const closing = adapter.disconnect();
+      await expect(adapter.withSession(async () => undefined)).rejects.toThrow(
+        /not connected/
+      );
+      await closing;
+    });
+
+    it("closes the connection when its work throws", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await expect(
+        adapter.withSession(async () => {
+          throw new Error("work failed");
+        })
+      ).rejects.toThrow("work failed");
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -71,6 +71,8 @@ export type {
   TransactionIsolationLevel,
   TransactionOptions,
   TransactionContext,
+  SessionOptions,
+  StatementSession,
 } from "./transaction";
 
 // ============================================================

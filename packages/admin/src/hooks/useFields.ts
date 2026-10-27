@@ -1,4 +1,176 @@
-export function useFields() {
+export function useFields(): (
+  | {
+      title: string;
+      items: (
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required: boolean;
+            unique: boolean;
+            private: boolean;
+            default: string;
+            options: {
+              variant: string;
+              format?: undefined;
+            };
+            validation: {
+              minLength: number;
+              maxLength: number;
+              regex: string;
+              min?: undefined;
+              max?: undefined;
+            };
+          }
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required: boolean;
+            unique: boolean;
+            private: boolean;
+            default: string;
+            validation: {
+              minLength: number;
+              maxLength: number;
+              regex?: undefined;
+              min?: undefined;
+              max?: undefined;
+            };
+            options?: undefined;
+          }
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required: boolean;
+            private: boolean;
+            default: string;
+            validation: {
+              minLength: number;
+              maxLength: number;
+              regex?: undefined;
+              min?: undefined;
+              max?: undefined;
+            };
+            unique?: undefined;
+            options?: undefined;
+          }
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            required: boolean;
+            description: string;
+            unique?: undefined;
+            private?: undefined;
+            default?: undefined;
+            options?: undefined;
+            validation?: undefined;
+          }
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required: boolean;
+            unique: boolean;
+            private: boolean;
+            default: number;
+            options: {
+              format: string;
+              variant?: undefined;
+            };
+            validation: {
+              min: number;
+              max: number;
+              minLength?: undefined;
+              maxLength?: undefined;
+              regex?: undefined;
+            };
+          }
+      )[];
+    }
+  | {
+      title: string;
+      items: {
+        icon: string;
+        name: string;
+        label: string;
+        type: string;
+        description: string;
+        required: boolean;
+        private: boolean;
+      }[];
+    }
+  | {
+      title: string;
+      items: (
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required?: undefined;
+            private?: undefined;
+            default?: undefined;
+          }
+        | {
+            icon: string;
+            name: string;
+            label: string;
+            type: string;
+            description: string;
+            required: boolean;
+            private: boolean;
+            default: boolean;
+          }
+      )[];
+    }
+  | {
+      title: string;
+      items: {
+        icon: string;
+        name: string;
+        label: string;
+        type: string;
+        description: string;
+        required: boolean;
+        private: boolean;
+        options: {
+          relationType: string;
+          target: string;
+          targetLabelField: string;
+        };
+      }[];
+    }
+  | {
+      title: string;
+      items: {
+        icon: string;
+        name: string;
+        label: string;
+        type: string;
+        description: string;
+        required: boolean;
+        unique: boolean;
+        private: boolean;
+        default: null;
+        options: {
+          format: string;
+        };
+      }[];
+    }
+)[] {
   const fields = [
     {
       title: "Basic Fields",

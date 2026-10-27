@@ -132,6 +132,28 @@ describe("the comment extractor", () => {
       commentText('const url = "https://example.com/pull-request";')
     ).toEqual([]);
   });
+
+  it("reads a JSX file as JSX, and a plain file as plain TypeScript", () => {
+    // Rendered text is data: `https://x` between tags holds `//` and is not a comment.
+    expect(
+      commentText("export const A = () => <span>https://x</span>;", {
+        jsx: true,
+      })
+    ).toEqual([]);
+    // The control: a comment inside markup IS one.
+    expect(
+      commentText("export const A = () => <div>{/* note */}</div>;", {
+        jsx: true,
+      })
+    ).toEqual(["/* note */"]);
+    // And the other direction: an angle-bracket cast is valid TypeScript and a syntax error in
+    // TSX, so a plain file read as JSX would be refused rather than read.
+    expect(
+      commentText("const el = <HTMLElement>document.body; // note", {
+        jsx: false,
+      })
+    ).toEqual(["// note"]);
+  });
 });
 
 describe("the file walk", () => {
@@ -255,7 +277,7 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 218;
+  const EXPECTED_ENTRIES = 217;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
@@ -270,7 +292,11 @@ describe("the allowlist", () => {
   // its test no longer exist, and both entries emptied (221 -> 219).
   // 485 -> 484: one recorded offence in `collection-entry-service.ts` no longer
   // exists; its entry remains, so the count above does not move.
-  const EXPECTED_TOTAL = 482;
+  // 482 -> 481: one recorded offence in `check-comment-convention.mjs` itself, in
+  // the scanner it no longer has, no longer exists; its entry remains.
+  // 480 -> 479: one recorded offence in `collection-dispatcher.ts` no longer
+  // exists; its entry remains.
+  const EXPECTED_TOTAL = 479;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

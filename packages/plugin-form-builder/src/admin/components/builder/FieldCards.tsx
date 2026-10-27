@@ -50,7 +50,7 @@ import type {
   FormFieldCatalogType,
 } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { type JSX, useCallback, useMemo, useRef, useState } from "react";
 
 import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
@@ -301,7 +301,7 @@ export function FieldCards({
   enabledTypes,
   disabledFieldTypes,
   onAddField,
-}: FieldCardsProps) {
+}: FieldCardsProps): JSX.Element {
   const {
     fields,
     notifications,

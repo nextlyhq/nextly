@@ -12,7 +12,7 @@ import {
   ShortcutProvider,
   useShortcuts,
 } from "@nextlyhq/ui";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type JSX } from "react";
 
 import { Home, Settings, Shield, Users } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
@@ -120,7 +120,7 @@ const navigationCommands: NavigationCommand[] = [
  * shell provider is an ancestor, and registering a shortcut there would throw. Nesting is free:
  * providers share one manager per target, so inside the shell this reuses the shell's.
  */
-export function CommandPalette() {
+export function CommandPalette(): JSX.Element {
   return (
     <ShortcutProvider>
       <CommandPaletteContent />

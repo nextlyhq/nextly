@@ -1,7 +1,7 @@
 "use client";
 
 import { Input } from "@nextlyhq/ui";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type JSX } from "react";
 import { useFormContext, type FieldValues, type Path } from "react-hook-form";
 
 import { PasswordVisibilityToggle } from "@admin/components/shared/auth/PasswordVisibilityToggle";
@@ -51,7 +51,7 @@ export function AuthPasswordInput<T extends FieldValues>({
   placeholder,
   itemClassName,
   children,
-}: AuthPasswordInputProps<T>) {
+}: AuthPasswordInputProps<T>): JSX.Element {
   const { control } = useFormContext<T>();
   const [visible, setVisible] = useState(false);
 

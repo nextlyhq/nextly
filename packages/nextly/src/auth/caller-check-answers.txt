@@ -389,12 +389,12 @@ service true user-with
   holds(manage):false
   holds():false
 service true user-without
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -403,12 +403,12 @@ service true user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
-  holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -419,10 +419,10 @@ service true user-without
   holds(manage):false
   holds():false
 service true user-partial
-  can(create,posts):true
+  can(create,posts):false
   can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
+  can(update,posts):false
+  can(delete,posts):false
   can(publish,posts):true
   can(unpublish,posts):true
   can(export,posts):false
@@ -433,10 +433,10 @@ service true user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
+  holds(create-posts):false
   holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
+  holds(update-posts):false
+  holds(delete-posts):false
   holds(publish-posts):true
   holds(unpublish-posts):true
   holds(export-posts):false
@@ -1109,12 +1109,12 @@ service returns-true user-with
   holds(manage):false
   holds():false
 service returns-true user-without
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -1123,12 +1123,12 @@ service returns-true user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
-  holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -1139,10 +1139,10 @@ service returns-true user-without
   holds(manage):false
   holds():false
 service returns-true user-partial
-  can(create,posts):true
+  can(create,posts):false
   can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
+  can(update,posts):false
+  can(delete,posts):false
   can(publish,posts):true
   can(unpublish,posts):true
   can(export,posts):false
@@ -1153,10 +1153,10 @@ service returns-true user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
+  holds(create-posts):false
   holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
+  holds(update-posts):false
+  holds(delete-posts):false
   holds(publish-posts):true
   holds(unpublish-posts):true
   holds(export-posts):false
@@ -1799,12 +1799,12 @@ service returns-false key-manage
   holds(manage):false
   holds():false
 service returns-null user-with
-  can(create,posts):null
-  can(read,posts):null
-  can(update,posts):null
-  can(delete,posts):null
-  can(publish,posts):null
-  can(unpublish,posts):null
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):true
@@ -1813,12 +1813,12 @@ service returns-null user-with
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):null
-  holds(read-posts):null
-  holds(update-posts):null
-  holds(delete-posts):null
-  holds(publish-posts):null
-  holds(unpublish-posts):null
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -1829,12 +1829,12 @@ service returns-null user-with
   holds(manage):false
   holds():false
 service returns-null user-without
-  can(create,posts):null
-  can(read,posts):null
-  can(update,posts):null
-  can(delete,posts):null
-  can(publish,posts):null
-  can(unpublish,posts):null
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -1843,12 +1843,12 @@ service returns-null user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):null
-  holds(read-posts):null
-  holds(update-posts):null
-  holds(delete-posts):null
-  holds(publish-posts):null
-  holds(unpublish-posts):null
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -1859,12 +1859,12 @@ service returns-null user-without
   holds(manage):false
   holds():false
 service returns-null user-partial
-  can(create,posts):null
-  can(read,posts):null
-  can(update,posts):null
-  can(delete,posts):null
-  can(publish,posts):null
-  can(unpublish,posts):null
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):false
@@ -1873,12 +1873,12 @@ service returns-null user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):null
-  holds(read-posts):null
-  holds(update-posts):null
-  holds(delete-posts):null
-  holds(publish-posts):null
-  holds(unpublish-posts):null
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -2159,12 +2159,12 @@ service returns-null key-manage
   holds(manage):false
   holds():false
 service returns-undefined user-with
-  can(create,posts):undefined
-  can(read,posts):undefined
-  can(update,posts):undefined
-  can(delete,posts):undefined
-  can(publish,posts):undefined
-  can(unpublish,posts):undefined
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):true
@@ -2173,12 +2173,12 @@ service returns-undefined user-with
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):undefined
-  holds(read-posts):undefined
-  holds(update-posts):undefined
-  holds(delete-posts):undefined
-  holds(publish-posts):undefined
-  holds(unpublish-posts):undefined
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -2189,12 +2189,12 @@ service returns-undefined user-with
   holds(manage):false
   holds():false
 service returns-undefined user-without
-  can(create,posts):undefined
-  can(read,posts):undefined
-  can(update,posts):undefined
-  can(delete,posts):undefined
-  can(publish,posts):undefined
-  can(unpublish,posts):undefined
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -2203,12 +2203,12 @@ service returns-undefined user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):undefined
-  holds(read-posts):undefined
-  holds(update-posts):undefined
-  holds(delete-posts):undefined
-  holds(publish-posts):undefined
-  holds(unpublish-posts):undefined
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -2219,12 +2219,12 @@ service returns-undefined user-without
   holds(manage):false
   holds():false
 service returns-undefined user-partial
-  can(create,posts):undefined
-  can(read,posts):undefined
-  can(update,posts):undefined
-  can(delete,posts):undefined
-  can(publish,posts):undefined
-  can(unpublish,posts):undefined
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):false
@@ -2233,12 +2233,12 @@ service returns-undefined user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):undefined
-  holds(read-posts):undefined
-  holds(update-posts):undefined
-  holds(delete-posts):undefined
-  holds(publish-posts):undefined
-  holds(unpublish-posts):undefined
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -2519,12 +2519,12 @@ service returns-undefined key-manage
   holds(manage):false
   holds():false
 service returns-truthy user-with
-  can(create,posts):"yes"
-  can(read,posts):"yes"
-  can(update,posts):"yes"
-  can(delete,posts):"yes"
-  can(publish,posts):"yes"
-  can(unpublish,posts):"yes"
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):true
@@ -2533,12 +2533,12 @@ service returns-truthy user-with
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):"yes"
-  holds(read-posts):"yes"
-  holds(update-posts):"yes"
-  holds(delete-posts):"yes"
-  holds(publish-posts):"yes"
-  holds(unpublish-posts):"yes"
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -2549,12 +2549,12 @@ service returns-truthy user-with
   holds(manage):false
   holds():false
 service returns-truthy user-without
-  can(create,posts):"yes"
-  can(read,posts):"yes"
-  can(update,posts):"yes"
-  can(delete,posts):"yes"
-  can(publish,posts):"yes"
-  can(unpublish,posts):"yes"
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -2563,12 +2563,12 @@ service returns-truthy user-without
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):"yes"
-  holds(read-posts):"yes"
-  holds(update-posts):"yes"
-  holds(delete-posts):"yes"
-  holds(publish-posts):"yes"
-  holds(unpublish-posts):"yes"
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):false
@@ -2579,12 +2579,12 @@ service returns-truthy user-without
   holds(manage):false
   holds():false
 service returns-truthy user-partial
-  can(create,posts):"yes"
-  can(read,posts):"yes"
-  can(update,posts):"yes"
-  can(delete,posts):"yes"
-  can(publish,posts):"yes"
-  can(unpublish,posts):"yes"
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):false
@@ -2593,12 +2593,12 @@ service returns-truthy user-partial
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):"yes"
-  holds(read-posts):"yes"
-  holds(update-posts):"yes"
-  holds(delete-posts):"yes"
-  holds(publish-posts):"yes"
-  holds(unpublish-posts):"yes"
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -3599,12 +3599,12 @@ service role-name key-manage
   holds(manage):false
   holds():false
 service permission-spelling user-with
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):true
@@ -3613,12 +3613,12 @@ service permission-spelling user-with
   can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
-  holds(create-posts):true
-  holds(read-posts):true
-  holds(update-posts):true
-  holds(delete-posts):true
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -3660,11 +3660,11 @@ service permission-spelling user-without
   holds():false
 service permission-spelling user-partial
   can(create,posts):false
-  can(read,posts):true
+  can(read,posts):false
   can(update,posts):false
   can(delete,posts):false
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):false
@@ -3674,11 +3674,11 @@ service permission-spelling user-partial
   can(manage,):false
   can(,posts):false
   holds(create-posts):false
-  holds(read-posts):true
+  holds(read-posts):false
   holds(update-posts):false
   holds(delete-posts):false
-  holds(publish-posts):true
-  holds(unpublish-posts):true
+  holds(publish-posts):false
+  holds(unpublish-posts):false
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -3749,12 +3749,12 @@ service permission-spelling super-admin-inherited
   holds(manage):false
   holds():false
 service permission-spelling key-with
-  can(create,posts):true
-  can(read,posts):true
-  can(update,posts):true
-  can(delete,posts):true
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
   can(manage,settings):true
@@ -3810,11 +3810,11 @@ service permission-spelling key-without
   holds():false
 service permission-spelling key-partial
   can(create,posts):false
-  can(read,posts):true
+  can(read,posts):false
   can(update,posts):false
   can(delete,posts):false
-  can(publish,posts):true
-  can(unpublish,posts):true
+  can(publish,posts):false
+  can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):false
   can(manage,settings):false
@@ -3870,7 +3870,7 @@ service permission-spelling key-slugs-only
   holds():false
 service permission-spelling key-made-by-super-admin
   can(create,posts):false
-  can(read,posts):true
+  can(read,posts):false
   can(update,posts):false
   can(delete,posts):false
   can(publish,posts):false
@@ -3900,7 +3900,7 @@ service permission-spelling key-made-by-super-admin
   holds():false
 service permission-spelling key-custom-slugs
   can(create,posts):false
-  can(read,posts):true
+  can(read,posts):false
   can(update,posts):false
   can(delete,posts):false
   can(publish,posts):false

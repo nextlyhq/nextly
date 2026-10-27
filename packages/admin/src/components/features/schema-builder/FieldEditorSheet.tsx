@@ -35,6 +35,7 @@ import {
   TabsTrigger,
 } from "@nextlyhq/ui";
 import { Trash2 } from "lucide-react";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { AdvancedTab } from "./field-editor-sheet/AdvancedTab";
@@ -80,7 +81,7 @@ export function FieldEditorSheet({
   onApply,
   onDelete,
   isInsideRepeatingAncestor = false,
-}: Props) {
+}: Props): JSX.Element {
   const [draft, setDraft] = useState<BuilderField>(field);
   const [tab, setTab] = useState<TabKey>("general");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);

@@ -1,7 +1,8 @@
 "use client";
 
-import { type EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, type Resolver, type SubmitHandler } from "react-hook-form";
 
@@ -11,7 +12,7 @@ import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { generateSlug } from "@admin/lib/fields";
 import { navigateTo } from "@admin/lib/navigation";
-import { type EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { BodyEditor } from "./BodyEditor";
 import { DataRail } from "./DataRail";
@@ -78,7 +79,7 @@ function ContentColumn({
   previewSubject: string;
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
-    "control" | "isPending" | "readOnly"
+    "control" | "isPending" | "readOnly" | "liquid"
   >;
 }) {
   const [subject, preheader, fromOverride] = form.watch([
@@ -115,6 +116,8 @@ function ContentColumn({
           isPending={isPending}
           isLayoutRow={isLayoutRow}
           ownsContent={owns}
+          completion={editor.completion}
+          liquid={!keptOnOldEngine}
         />
       </div>
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
@@ -122,6 +125,7 @@ function ContentColumn({
           control={form.control}
           isPending={isPending}
           readOnly={!owns}
+          liquid={!keptOnOldEngine}
           {...editor}
         />
       </div>
@@ -135,11 +139,10 @@ export function EmailTemplateForm({
   initialValues,
   isPending,
   onSubmit,
-}: EmailTemplateFormProps) {
+}: EmailTemplateFormProps): JSX.Element {
   const isEdit = mode === "edit";
   const slugTouchedRef = useRef(false);
-  const editorWrapRef = useRef<HTMLDivElement>(null);
-  const htmlEditorViewRef = useRef<EditorView | null>(null);
+  const bodyViewRef = useRef<EditorView | null>(null);
 
   const [editorTab, setEditorTab] = useState<"html" | "text">("html");
   const [sheet, setSheet] = useState<SheetPanel | null>(null);
@@ -238,8 +241,7 @@ export function EmailTemplateForm({
   const insertVariable = useVariableInsertion({
     form,
     editorTab,
-    editorWrapRef,
-    htmlEditorViewRef,
+    bodyViewRef,
   });
 
   const derived = useDerivedTemplateState({
@@ -253,6 +255,13 @@ export function EmailTemplateForm({
     layoutId,
     kind: currentKind,
   });
+
+  // What the editors complete: the declared variables, and the test data's
+  // shape for their properties.
+  const completion = useMemo(
+    () => ({ declared: variables ?? [], sample: derived.sampleData }),
+    [variables, derived.sampleData]
+  );
 
   const toggleSheet = (panel: SheetPanel) =>
     setSheet(current => (current === panel ? null : panel));
@@ -326,8 +335,8 @@ export function EmailTemplateForm({
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,
-                editorWrapRef,
-                htmlEditorViewRef,
+                bodyViewRef,
+                completion,
                 chips: (
                   <VariableChips
                     declared={variables ?? []}

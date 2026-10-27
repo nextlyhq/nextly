@@ -172,8 +172,10 @@ nested loops — depth in a document becomes multiplication in reads.
 Style values are **typed** (spacing as box-sides, colors, dimensions, …) and compiled to a
 single scoped `<style>` per page via a real CSS parser (never string concatenation).
 Colors may be raw values or design-token references (`{ token: "color.primary" }` →
-`var(--nx-color-primary)`). Breakpoints are desktop-first; per-breakpoint overrides are
-edited in the **Responsive** tab and visible at real device widths in the iframe canvas.
+`var(--nx-color-primary)`). Breakpoints are desktop-first. Style a block separately for each
+breakpoint: the Style tab edits the breakpoint the canvas is sized to, and the canvas resizes
+to each breakpoint's width. The canvas is not an iframe, so it is a breakpoint selector rather
+than a device preview: `vw`/`vh` sizes and hand-written `@media` rules follow the admin window.
 
 ## Extending — add your own block
 

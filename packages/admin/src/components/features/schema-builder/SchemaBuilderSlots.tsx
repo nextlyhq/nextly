@@ -10,6 +10,8 @@
  *
  * @module components/features/schema-builder/SchemaBuilderSlots
  */
+import type { JSX } from "react";
+
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
@@ -29,7 +31,7 @@ export function SchemaBuilderSlots<T extends SchemaBuilderSlotField>({
   setFields: (fields: T[]) => void;
   disabled?: boolean;
   context: "collection" | "single";
-}) {
+}): JSX.Element | null {
   const branding = useBranding();
   const slots = (branding.plugins ?? []).filter(p => p.schemaBuilderSlot);
   if (slots.length === 0) return null;

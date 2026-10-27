@@ -31,6 +31,8 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -41,6 +43,7 @@ import {
 } from "@admin/services/fieldGroupApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { ApiFieldGroup } from "@admin/types/entities";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -75,13 +78,31 @@ export const fieldGroupKeys = {
   all: () => ["field-groups"] as const,
 
   /** Base key for component list queries */
-  lists: () => [...fieldGroupKeys.all(), "list"] as const,
+  lists: (): readonly ["field-groups", "list"] =>
+    [...fieldGroupKeys.all(), "list"] as const,
 
   /**
    * Stable query key for paginated/filtered component lists.
    * Flattens params to prevent object reference issues.
    */
-  list: (params: TableParams) =>
+  list: (
+    params: TableParams
+  ): readonly [
+    "field-groups",
+    "list",
+    {
+      readonly page: number;
+      readonly pageSize: number;
+      readonly search: string;
+      // 🔴 Every filter the request carries has to be IN the key. `source` and `migrationStatus`
+      // are applied by the server, so two selections produce two different result sets — and a key
+      // that cannot tell them apart serves the previous selection's page from cache while the
+      // control shows the new one. Stringified for the same reason `sorting` is: the key is
+      // compared structurally, and a fresh object literal each render is a fresh key.
+      readonly filters: string;
+      readonly sorting: string;
+    },
+  ] =>
     [
       ...fieldGroupKeys.lists(),
       {
@@ -99,10 +120,12 @@ export const fieldGroupKeys = {
     ] as const,
 
   /** Base key for component detail queries */
-  details: () => [...fieldGroupKeys.all(), "detail"] as const,
+  details: (): readonly ["field-groups", "detail"] =>
+    [...fieldGroupKeys.all(), "detail"] as const,
 
   /** Query key for a single component by slug */
-  detail: (slug: string) => [...fieldGroupKeys.details(), slug] as const,
+  detail: (slug: string): readonly ["field-groups", "detail", string] =>
+    [...fieldGroupKeys.details(), slug] as const,
 };
 
 /**
@@ -155,7 +178,7 @@ export function useFieldGroups(
     UseQueryOptions<ListResponse<ApiFieldGroup>, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<ListResponse<ApiFieldGroup>, Error> {
   const effectiveParams = params || defaultParams;
   return useQuery<ListResponse<ApiFieldGroup>, Error>({
     queryKey: fieldGroupKeys.list(effectiveParams),
@@ -198,7 +221,7 @@ export function useFieldGroups(
 export function useFieldGroup(
   fieldGroupSlug?: string,
   options?: Omit<UseQueryOptions<ApiFieldGroup, Error>, "queryKey" | "queryFn">
-) {
+): UseQueryResult<ApiFieldGroup, Error> {
   return useQuery<ApiFieldGroup, Error>({
     queryKey: fieldGroupSlug
       ? fieldGroupKeys.detail(fieldGroupSlug)
@@ -248,7 +271,12 @@ export function useFieldGroup(
  * }
  * ```
  */
-export function useCreateFieldGroup() {
+export function useCreateFieldGroup(): UseMutationResult<
+  ApiFieldGroup,
+  Error,
+  CreateComponentPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<ApiFieldGroup, Error, CreateComponentPayload>({
@@ -298,7 +326,15 @@ export function useCreateFieldGroup() {
  * }
  * ```
  */
-export function useUpdateFieldGroup() {
+export function useUpdateFieldGroup(): UseMutationResult<
+  ApiFieldGroup,
+  Error,
+  {
+    fieldGroupSlug: string;
+    updates: UpdateComponentPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -356,7 +392,12 @@ export function useUpdateFieldGroup() {
  * }
  * ```
  */
-export function useDeleteFieldGroup() {
+export function useDeleteFieldGroup(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -423,7 +464,12 @@ export function useDeleteFieldGroup() {
  * }
  * ```
  */
-export function useBulkDeleteFieldGroups() {
+export function useBulkDeleteFieldGroups(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({

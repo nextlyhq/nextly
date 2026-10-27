@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { RangeField } from "@admin/components/shared/range-field";
 
@@ -234,7 +235,7 @@ export function ConditionRow({
   operatorsFor = operatorsForType,
   className = "grid grid-cols-1 gap-2 sm:grid-cols-3",
   onChange,
-}: ConditionRowProps) {
+}: ConditionRowProps): JSX.Element {
   const source = sources.find(entry => entry.name === condition?.field);
   const operators = operatorsFor(source?.type);
   // An operator the current source does not offer would render a Select with no

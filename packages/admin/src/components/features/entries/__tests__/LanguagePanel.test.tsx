@@ -615,6 +615,26 @@ describe("LanguagePanel", () => {
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
+  it("lets a user held from every action still open the other languages", () => {
+    // A user who may only read the document: every mutation is withheld,
+    // reading another language is not.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+      hasStatus: true,
+      actionsDisabled: true,
+      navigationDisabled: false,
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Start Arabic from another language" })
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
+  });
+
   it("hides publish-all when the action does not apply", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });

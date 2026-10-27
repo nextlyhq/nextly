@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+
+import { listedFiles } from "../../../../../scripts/tsc-cli.mjs";
 
 import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
 import type { PluginDefinition } from "../plugin-context";
@@ -179,9 +180,10 @@ describe("the map's check against the site's config", () => {
   });
 });
 
-// What the string is for: the site's compiler resolving it to the config. Checked with TypeScript's
-// own resolver under the Bundler resolution a Next.js site uses, against real files, since a
-// specifier only reads right if it also resolves.
+// What the string is for: the site's compiler resolving it to the config. Checked with the
+// TypeScript command line under the Bundler resolution a Next.js site uses, against real files,
+// since a specifier only reads right if it also resolves: the config is in the program a file
+// importing it loads only if the specifier reached it.
 describe("the config specifier, as the site's compiler resolves it", () => {
   it.each(["nextly.config.mts", "nextly.config.mjs", "nextly.config.ts"])(
     "resolves %s from the generated map's directory",
@@ -191,19 +193,28 @@ describe("the config specifier, as the site's compiler resolves it", () => {
         const mapDir = join(root, "src", "types", "generated");
         mkdirSync(mapDir, { recursive: true });
         writeFileSync(join(root, file), "export default {};\n");
-        const resolved = ts.resolveModuleName(
-          configImportSpecifier(mapDir, join(root, file)),
+        const specifier = configImportSpecifier(mapDir, join(root, file));
+        writeFileSync(
           join(mapDir, "nextly-component-map.ts"),
-          {
-            module: ts.ModuleKind.ESNext,
-            moduleResolution: ts.ModuleResolutionKind.Bundler,
-            allowJs: true,
-          },
-          ts.sys
-        ).resolvedModule;
-        // TypeScript's resolver reports paths with forward slashes on every platform, while
-        // `join` uses the platform separator, so both sides compare in the forward-slash form.
-        expect(resolved?.resolvedFileName).toBe(
+          `import config from ${JSON.stringify(specifier)};\nexport const read = config;\n`
+        );
+        const config = join(root, "tsconfig.json");
+        writeFileSync(
+          config,
+          JSON.stringify({
+            compilerOptions: {
+              module: "esnext",
+              moduleResolution: "bundler",
+              allowJs: true,
+              noEmit: true,
+              types: [],
+            },
+            files: ["src/types/generated/nextly-component-map.ts"],
+          })
+        );
+        // The listed paths have forward slashes on every platform, while `join` uses the
+        // platform separator, so both sides compare in the forward-slash form.
+        expect(listedFiles(config)).toContain(
           join(root, file).replaceAll("\\", "/")
         );
       } finally {

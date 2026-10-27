@@ -11,6 +11,7 @@
  * @module components/features/entries/PreviewShare/SharePreviewPanel
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { Copy, Link, Loader2, X } from "@admin/components/icons";
@@ -257,7 +258,7 @@ export interface SharePreviewPanelProps {
 export function SharePreviewPanel({
   document,
   onClose,
-}: SharePreviewPanelProps) {
+}: SharePreviewPanelProps): JSX.Element {
   const [lifetime, setLifetime] = useState<PreviewLinkLifetime>(
     DEFAULT_PREVIEW_LINK_LIFETIME
   );

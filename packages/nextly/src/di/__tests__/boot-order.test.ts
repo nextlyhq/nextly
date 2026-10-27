@@ -14,47 +14,103 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 // Read with node rather than through a `?raw` import: that is a bundler
 // feature with no type, and `check-types` compiles this file with plain tsc.
 const registerFile = fileURLToPath(new URL("../register.ts", import.meta.url));
-const registerAst = ts.createSourceFile(
-  registerFile,
-  readFileSync(registerFile, "utf8"),
-  ts.ScriptTarget.Latest,
-  true
-);
+const registerText = readFileSync(registerFile, "utf8");
+const registerAst = parseSource(registerText, registerFile);
 
 /**
- * Printed without comments, so a call that only survives in a comment — a
- * line commented out, or a sentence naming the call — is not found as code.
+ * `register.ts` between two offsets as code alone: every comment inside the
+ * range is blanked to spaces, so a call that only survives in a comment — a
+ * line commented out, or a sentence naming the call — is not found as code,
+ * and every offset still points at the same place.
  */
-const printer = ts.createPrinter({ removeComments: true });
+function codeBetween(start: number, end: number): string {
+  let code = registerText.slice(start, end);
+  for (const comment of registerAst.comments) {
+    if (comment.start < start || comment.end > end) continue;
+    code =
+      code.slice(0, comment.start - start) +
+      " ".repeat(comment.end - comment.start) +
+      code.slice(comment.end - start);
+  }
+  return code;
+}
 
 /** `register.ts` as code alone. */
-const registerSource = printer.printFile(registerAst);
+const registerSource = codeBetween(0, registerText.length);
 
 /**
- * The code of one top-level function in `register.ts`, exported or not.
+ * Every top-level function in `register.ts`, exported or not, by name.
  *
- * Taken from the parsed declaration rather than sliced between two matches in
- * the text, so it ends where the function ends: never inside the next
+ * Taken from the parsed declarations rather than sliced between two matches in
+ * the text, so each ends where its function ends: never inside the next
  * function's JSDoc, and never past a boundary a text search did not expect.
  */
+const topLevelFunctions = new Map(
+  registerAst.program.body.flatMap(statement => {
+    const declaration =
+      statement.type === "ExportNamedDeclaration"
+        ? statement.declaration
+        : statement;
+    return declaration?.type === "FunctionDeclaration" && declaration.id
+      ? [[declaration.id.name, declaration] as const]
+      : [];
+  })
+);
+
+/** The code of one top-level function in `register.ts`. */
 function bodyOf(name: string): string {
-  const declaration = registerAst.statements.find(
-    (statement): statement is ts.FunctionDeclaration =>
-      ts.isFunctionDeclaration(statement) && statement.name?.text === name
-  );
+  const declaration = topLevelFunctions.get(name);
   expect(declaration, `function ${name} in register.ts`).toBeDefined();
-  return printer.printNode(
-    ts.EmitHint.Unspecified,
-    declaration as ts.FunctionDeclaration,
-    registerAst
-  );
+  return declaration ? codeBetween(declaration.start, declaration.end) : "";
 }
+
+/**
+ * The reading itself, checked against the real file: each assertion below
+ * reads `register.ts` through the helpers above, so a helper that found the
+ * wrong text would make them pass or fail on the wrong code.
+ */
+describe("how register.ts is read", () => {
+  it("finds an exported function as well as an unexported one", () => {
+    expect(bodyOf("registerServices")).toMatch(
+      /^async function registerServices\(/
+    );
+    expect(bodyOf("registerServicesOnce")).toMatch(
+      /^async function registerServicesOnce\(/
+    );
+  });
+
+  it("ends each function where it ends, before the next one", () => {
+    const names = [...topLevelFunctions.keys()];
+    expect(names.length).toBeGreaterThan(10);
+    for (const name of names) {
+      const body = bodyOf(name);
+      for (const other of names) {
+        if (other === name) continue;
+        expect(body, `${name} reaching into ${other}`).not.toMatch(
+          new RegExp(`\\bfunction ${other}\\b`)
+        );
+      }
+    }
+  });
+
+  it("leaves comments out of the code", () => {
+    const comments = registerAst.comments.filter(
+      comment => comment.end - comment.start > 20
+    );
+    expect(comments.length).toBeGreaterThan(0);
+    for (const comment of comments) {
+      expect(registerSource).not.toContain(
+        registerText.slice(comment.start, comment.end)
+      );
+    }
+  });
+});
 
 describe("the boot sequence in registerServices", () => {
   /**

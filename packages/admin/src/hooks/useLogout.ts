@@ -19,7 +19,7 @@ import { useApi } from "./useApi";
  * `message` replaces the toast's text, for a sign-out the user did not ask for
  * directly — one that follows a change which ended their own sessions.
  */
-export function useLogout() {
+export function useLogout(): (opts?: { message?: string }) => Promise<void> {
   const { api } = useApi();
   const queryClient = useQueryClient();
 

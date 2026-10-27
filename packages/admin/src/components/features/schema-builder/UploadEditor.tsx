@@ -35,6 +35,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -67,7 +68,7 @@ export function UploadEditor({
   onMaxFileSizeChange,
   allowCreate,
   onAllowCreateChange,
-}: UploadEditorProps) {
+}: UploadEditorProps): JSX.Element {
   const [customMimeType, setCustomMimeType] = useState("");
 
   // Local state for file size with unit

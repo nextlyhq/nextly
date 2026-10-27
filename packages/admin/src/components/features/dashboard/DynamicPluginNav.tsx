@@ -110,7 +110,7 @@ interface PluginEntry {
 export function DynamicPluginNav({
   isActive,
   search = "",
-}: DynamicPluginNavProps) {
+}: DynamicPluginNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();

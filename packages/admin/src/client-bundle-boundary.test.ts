@@ -54,7 +54,7 @@ import {
   moduleSpecifierRefs,
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
 import { publishedEntries } from "../../ui/scripts/published-entries";
@@ -139,8 +139,10 @@ const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
   // only behind a `typeof process` guard. 4.0.7 read 2026-10-22: against 4.0.5 it changes only glob
   // parsing in `lib/parse.js` and `lib/scan.js`, and adds no import.
   "picomatch@4.0.7",
-  // Validation with no runtime dependencies, written to run in browsers.
-  "zod@4.6.2",
+  // Validation with no runtime dependencies, written to run in browsers. 4.6.7 read 2026-10-25:
+  // against 4.6.2 it imports nothing but itself and no Node built-in; the changes are its own
+  // check and schema logic.
+  "zod@4.6.7",
 ];
 
 /**
@@ -281,8 +283,14 @@ type Resolution =
  * is an unwalked subtree, and calling it clean is how a guard passes over the thing it exists to
  * find.
  */
-const asFile = (file: string | null, specifier: string): Resolution =>
-  file ? { kind: "file", file } : { kind: "unresolved", specifier };
+const asFile = (file: string | null, specifier: string): Resolution => {
+  if (!file) return { kind: "unresolved", specifier };
+  // A stylesheet or other asset a module imports by path ends the walk, as a workspace subpath to
+  // one does below: it carries no imports and reaches no driver, and it is not a module to parse.
+  return /\.(tsx?|mts|cts|jsx?|mjs|cjs)$/.test(file)
+    ? { kind: "file", file }
+    : { kind: "asset" };
+};
 
 /** The workspace package a specifier belongs to, longest name first. */
 function ownerOf(
@@ -399,6 +407,23 @@ export function packageNameOf(specifier: string): string {
 }
 
 /**
+ * Whether a resolved file is where every widget declaration is made.
+ *
+ * 🔴 A declaration holds server code (a data function, a query written from
+ * settings, a Needs attention count), so a browser bundle that reaches one
+ * carries that code. Every declaration is made by calling `defineWidget`, and
+ * every route to it -- `nextly`'s root entry, or the module itself -- resolves
+ * to this one file, so reaching it by value is reaching a declaration: a
+ * boundary no import spelling can step around. A type-only import, which is
+ * how a component reads its widget's props, is erased before this is asked.
+ */
+export function isWidgetDeclarationModule(file: string): boolean {
+  return file.endsWith(
+    "/packages/nextly/src/domains/widgets/declaration/define-widget.ts"
+  );
+}
+
+/**
  * Walk everything a set of client entries pulls into a browser bundle.
  *
  * Returns the chain that reached each piece of server-only code, because "something in the admin reaches
@@ -444,6 +469,14 @@ export function walkClientClosure(
       }
       return null;
     }
+    if (isWidgetDeclarationModule(next.file)) {
+      violations.push({
+        package: "nextly (defineWidget)",
+        kind: "widget declaration",
+        chain: chainTo(file),
+      });
+      return null;
+    }
     if (!parent.has(next.file)) parent.set(next.file, file);
     return next.file;
   };
@@ -482,19 +515,11 @@ export function walkClientClosure(
  * skips those, and a guard that skips files reports a clean tree it never read.
  */
 export function declaresUseClient(source: string, fileName: string): boolean {
-  const parsed = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
-  const first = parsed.statements[0];
-  return Boolean(
-    first &&
-      ts.isExpressionStatement(first) &&
-      ts.isStringLiteral(first.expression) &&
-      first.expression.text === "use client"
+  // The parser marks a prologue string as a directive, so this reads the directive the compiler
+  // sees, not any string that happens to open the file.
+  const [first] = parseSource(source, fileName).program.body;
+  return (
+    first?.type === "ExpressionStatement" && first.directive === "use client"
   );
 }
 
@@ -585,6 +610,37 @@ describe("what a browser bundle can reach", () => {
   });
 });
 
+describe("what a plugin's widget components can reach", () => {
+  const workspace = readWorkspace(PACKAGES, realIo);
+  const resolveSpecifier = makeResolver(ALIASES, workspace, realIo);
+  const plugin = `${REPO_ROOT}/packages/nextly/src/domains/widgets/declaration/__tests__/plugin`;
+
+  it("reaches none of its widgets' declarations, reading their types only", () => {
+    // The plugin fixture the declaration tests use: its components read their widgets' props from
+    // the declarations by type, so none of the server code they hold is in a bundle.
+    const result = walkClientClosure(
+      [`${plugin}/admin.ts`],
+      resolveSpecifier,
+      realIo
+    );
+    expect(result.unresolved).toEqual([]);
+    expect(describeViolations(result)).toEqual([]);
+  });
+
+  it("would refuse the declarations themselves, so the pass above is the rule's, not its silence", () => {
+    // The positive control: walked as a browser entry, the declarations module is refused for
+    // the server code it holds.
+    const result = walkClientClosure(
+      [`${plugin}/widgets.ts`],
+      resolveSpecifier,
+      realIo
+    );
+    expect(result.violations.map(violation => violation.kind)).toContain(
+      "widget declaration"
+    );
+  });
+});
+
 /**
  * Each piece of server-only code reached, with the shortest chain to it, read from the reaching
  * module back to the entry: the entry and the import path are what the person fixing it needs.
@@ -617,31 +673,25 @@ function describeViolations(result: ClosureResult): string[] {
  * so a list it cannot read fails the run instead of being read as empty.
  */
 export function readClientEntries(configSource: string): string[] {
-  const parsed = ts.createSourceFile(
-    "tsdown.config.ts",
-    configSource,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  );
-  for (const statement of parsed.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
+  const { program } = parseSource(configSource, "tsdown.config.ts");
+  for (const statement of program.body) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declaration of statement.declarations) {
       if (
-        !ts.isIdentifier(declaration.name) ||
-        declaration.name.text !== "clientEntries"
+        declaration.id.type !== "Identifier" ||
+        declaration.id.name !== "clientEntries"
       ) {
         continue;
       }
-      const list = declaration.initializer;
-      if (list === undefined || !ts.isArrayLiteralExpression(list))
-        return refuseClientEntries();
+      const list = declaration.init;
+      if (list?.type !== "ArrayExpression") return refuseClientEntries();
       const paths: string[] = [];
       for (const element of list.elements) {
-        // Narrowed one element at a time: a spread, a variable or a template is a list this
-        // cannot read as written, and is refused below like a missing one.
-        if (!ts.isStringLiteral(element)) return refuseClientEntries();
-        paths.push(element.text);
+        // Narrowed one element at a time: a spread, a variable, a hole or a template is a list
+        // this cannot read as written, and is refused below like a missing one.
+        if (element?.type !== "Literal" || typeof element.value !== "string")
+          return refuseClientEntries();
+        paths.push(element.value);
       }
       return paths;
     }
@@ -730,6 +780,52 @@ describe("the rule can fail", () => {
       ),
     };
   };
+
+  it("fails on a component that reaches a widget's declaration, wherever it imports it from", () => {
+    // A declaration's data function is server code; a component that value-imports its
+    // declarations carries it into the bundle, however many files lie between.
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/Card.tsx":
+        '"use client";\nimport { orders } from "./widgets";\nexport const Card = () => orders.id;',
+      "/repo/packages/admin/src/widgets.ts":
+        'import { defineWidget } from "@nextly/domains/widgets/declaration/define-widget";\nexport const orders = defineWidget({ id: "acme/orders" });',
+      "/repo/packages/nextly/src/domains/widgets/declaration/define-widget.ts":
+        "export const defineWidget = (d) => d;",
+    });
+    const { violations } = walkClientClosure(
+      ["/repo/packages/admin/src/Card.tsx"],
+      resolve,
+      io
+    );
+    expect(violations).toEqual([
+      {
+        package: "nextly (defineWidget)",
+        kind: "widget declaration",
+        chain: [
+          "/repo/packages/admin/src/widgets.ts",
+          "/repo/packages/admin/src/Card.tsx",
+        ],
+      },
+    ]);
+  });
+
+  it("passes a component that reads its widget's types only, as a component should", () => {
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/Card.tsx":
+        '"use client";\nimport type { orders } from "./widgets";\nimport type { WidgetProps } from "@nextly/domains/widgets/declaration/define-widget";\nexport type P = WidgetProps<typeof orders>;',
+      "/repo/packages/admin/src/widgets.ts":
+        'import { defineWidget } from "@nextly/domains/widgets/declaration/define-widget";\nexport const orders = defineWidget({ id: "acme/orders" });',
+      "/repo/packages/nextly/src/domains/widgets/declaration/define-widget.ts":
+        "export const defineWidget = (d) => d;",
+    });
+    const { violations, visited } = walkClientClosure(
+      ["/repo/packages/admin/src/Card.tsx"],
+      resolve,
+      io
+    );
+    expect(violations).toEqual([]);
+    expect(visited.has("/repo/packages/admin/src/widgets.ts")).toBe(false);
+  });
 
   it("fails on a driver several hops past the directive", () => {
     // 🔴 The case this whole file exists for, and the one the first version of it missed.
@@ -895,6 +991,28 @@ describe("the rule can fail", () => {
     );
     expect(result.violations).toEqual([]);
     expect(result.unresolved).toEqual([]);
+  });
+
+  it("ends the walk at a stylesheet a module imports by path", () => {
+    // A stylesheet is not a module, and the reader refuses text it cannot parse, so reaching one
+    // has to be an asset rather than the next file to walk. The CSS here would fail the parse.
+    const { io, resolve } = build({
+      "/repo/packages/admin/src/layout.tsx":
+        'import "../styles/globals.css";\nimport { x } from "@admin/x";',
+      "/repo/packages/admin/styles/globals.css":
+        "@layer base { a { color: red } }",
+      "/repo/packages/admin/src/x.ts": "export const x = 1;",
+    });
+    const result = walkClientClosure(
+      ["/repo/packages/admin/src/layout.tsx"],
+      resolve,
+      io
+    );
+    expect(result.unresolved).toEqual([]);
+    expect([...result.visited]).toEqual([
+      "/repo/packages/admin/src/layout.tsx",
+      "/repo/packages/admin/src/x.ts",
+    ]);
   });
 
   it("fails on a CommonJS load", () => {

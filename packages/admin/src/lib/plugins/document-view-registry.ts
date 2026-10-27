@@ -93,8 +93,13 @@ interface AddressableField<F extends object> {
  * The fields a document addresses at its top level: its own, plus those of any
  * UNNAMED group, which is presentation only and adds nothing to their paths. A
  * named group or a repeater moves its fields down a level, out of reach.
+ *
+ * Raw config can hold a cycle, an unnamed group that lays itself out directly
+ * or through another, so a group already open on its own path (`within`) is
+ * not walked again: without that, every caller recursed until the stack ran
+ * out.
  */
-function addressableFieldsWithin<F extends object>(
+export function addressableFieldsWithin<F extends object>(
   fields: readonly F[] | undefined,
   within: F[] = []
 ): AddressableField<F>[] {
@@ -104,6 +109,7 @@ function addressableFieldsWithin<F extends object>(
       field.type === "group" &&
       !("name" in field && typeof field.name === "string" && field.name !== "");
     if (!unnamedGroup) return [{ field, within }];
+    if (within.includes(field)) return [];
     const children = "fields" in field ? field.fields : undefined;
     // A group's children are declarations of the same kind as the group, so
     // they are read as the caller's field type.

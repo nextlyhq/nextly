@@ -15,6 +15,7 @@
  * development, so an author on a production site, or one whose answer has not
  * arrived yet, is never handed an instruction meant for a developer.
  */
+import type { JSX } from "react";
 import { useEffect } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -24,7 +25,7 @@ export function MissingDocumentViewComponent({
 }: {
   /** The component path the view was declared with. */
   path: string;
-}) {
+}): JSX.Element {
   const development = useBranding().devReload === true;
 
   // The detail goes to the console in every environment: it names the

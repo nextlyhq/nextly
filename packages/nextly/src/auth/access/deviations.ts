@@ -16,15 +16,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A signed-in user's declared rule decides alone, judged truthy, without
-  // the permission.
-  "rule-alone-for-people",
-  // A visitor with no rule is allowed every action but a publish or an
-  // unpublish, and a rule refuses a visitor only by answering `false`.
+  // A visitor's read that the target's rule does not refuse, with no rule or
+  // one answering `true`, is allowed, where the decision reads the Public
+  // role's permissions. Reads only: a visitor's write with no rule naming it
+  // is refused, as the decision refuses it.
   "visitor-public-default",
-  // A publish or an unpublish is judged on its own permission and rule, not
-  // on update's as well.
-  "lifecycle-judged-alone",
+  // A visitor's create, update or delete is allowed by a target rule that
+  // answers `true` alone, where the decision also reads the Public role's
+  // permissions.
+  "visitor-write-by-rule",
   // Without the access-control service, no rule is read, and a signed-in
   // user's grants are read only where a way in reads them without it: the
   // collection gate and relationship population judge them alone, while the
@@ -33,9 +33,6 @@ export const DEVIATIONS = [
   // A Single asked by a route that authorized no user falls through to the
   // visitor's answer, where a collection refuses.
   "single-route-authorized-visitor",
-  // A super-admin role named on a server-supplied `user` passes without a
-  // lookup.
-  "claimed-super-admin",
   // A key's permission is matched on its stored slug, so a scope carrying
   // slugs without grant rows is judged on the slugs.
   "key-slug-string-match",
@@ -49,9 +46,6 @@ export const DEVIATIONS = [
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
-  // `ctx.caller.can` hands back a signed-in user's rule answer as the rule
-  // gave it, `null` or a string included, rather than a yes or no.
-  "can-returns-raw-rule-value",
   // Without the access-control service, `ctx.caller.can` and a held
   // permission refuse a signed-in user, where a route reads their permission.
   "can-no-service-refuses-people",
@@ -59,7 +53,7 @@ export const DEVIATIONS = [
   // resource, a super-admin's included.
   "can-refuses-empty-action-or-resource",
   // A key holds a named permission by its stored slug alone: the target's
-  // rule is not read, nor, for a publish or an unpublish, update's.
+  // rule is not read.
   "holds-permission-key-skips-rules",
   // The schema list shows a collection to whoever holds its read permission,
   // without reading the collection's read rule.

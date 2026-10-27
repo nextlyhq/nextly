@@ -10,6 +10,7 @@
 
 import { Input } from "@nextlyhq/ui";
 import type { EmailFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -117,7 +118,7 @@ export function EmailInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: EmailInputProps<TFieldValues>) {
+}: EmailInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const defaultValue =
     typeof field.defaultValue === "function"

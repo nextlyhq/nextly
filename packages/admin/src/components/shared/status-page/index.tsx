@@ -100,7 +100,7 @@ export function StatusPage({
   label,
   title,
   description,
-}: StatusPageProps) {
+}: StatusPageProps): React.JSX.Element {
   return (
     <PageContainer className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)]">
       <div className="flex flex-col items-center text-center max-w-[500px] w-full px-6 py-12 rounded-lg bg-card border border-border">

@@ -30,12 +30,14 @@ const { clearWidgets, listWidgets, registerWidget } = await import(
   "../../domains/widgets/registry"
 );
 
-/** Reaches past adapter resolution and schema-registry init (both tolerant
- * of a minimal fake), through the widget wiring, then fails at
- * `publishStoredWebhookRecordingPolicies`'s first real adapter call. */
+/** Reaches past adapter resolution (which loads the dialect it reports) and
+ * schema-registry init (tolerant of a minimal fake), through the widget
+ * wiring, then fails at `publishStoredWebhookRecordingPolicies`'s first real
+ * adapter call. */
 const thinAdapter = {
   connect: () => undefined,
   getDrizzle: () => ({}),
+  getCapabilities: () => ({ dialect: "sqlite" }),
 };
 
 function boot(config: Record<string, unknown>): Promise<unknown> {
@@ -59,7 +61,7 @@ function seedPreviousBoot(): void {
       id: "stripe/revenue",
       title: "Revenue",
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
@@ -90,7 +92,15 @@ describe("widget-registry reset at boot", () => {
       listSources()
         .map(source => source.id)
         .sort()
-    ).toEqual(["system:activity", "system:releases", "system:versions"]);
+    ).toEqual([
+      "system:activity",
+      "system:attention",
+      "system:content",
+      "system:recent-edits",
+      "system:releases",
+      "system:team",
+      "system:versions",
+    ]);
     // The previous boot's widget is gone; core's own cards are what boot
     // itself writes, so the store is not empty afterwards and asserting that
     // it was would only have held while core declared no widget.

@@ -138,7 +138,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
 // entry is the only route to `/admin/plugins`, which is the installed-plugins
 // list; hiding it until a plugin exists leaves a new install unable to reach
 // that page at all.
-export const getFilteredMenuItems = (showBuilder: boolean) =>
+export const getFilteredMenuItems = (showBuilder: boolean): MainMenuItem[] =>
   MAIN_MENU_ITEMS.filter(item => {
     if (item.id === "builders" && !showBuilder) return false;
     return true;

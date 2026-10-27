@@ -14,6 +14,7 @@
  */
 
 import { Bell } from "lucide-react";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@admin/components/ui";
@@ -28,7 +29,9 @@ export interface NotificationBellProps {
   className?: string;
 }
 
-export function NotificationBell({ className }: NotificationBellProps) {
+export function NotificationBell({
+  className,
+}: NotificationBellProps): JSX.Element | null {
   const { isSuperAdmin, isLoading: permissionsLoading } =
     useCurrentUserPermissions();
   const [open, setOpen] = useState(false);

@@ -27,8 +27,11 @@ function valid(overrides: Record<string, unknown> = {}): unknown {
     title: "Orders by state",
     description: "How many orders sit in each state",
     category: "Shop",
-    widths: ["third", "half"],
-    width: "half",
+    size: {
+      default: { w: 4, h: 4 },
+      min: { w: 3, h: 3 },
+      max: { w: 6, h: 6 },
+    },
     settings: {
       collection: { type: "collection" },
       by: { type: "groupBy", of: "collection", defaultValue: "state" },
@@ -47,8 +50,7 @@ function validComponent(overrides: Record<string, unknown> = {}): unknown {
     title: "Revenue",
     description: "Takings per day",
     category: "Shop",
-    widths: ["full"],
-    width: "full",
+    size: { default: { w: 12, h: 4 } },
     data: { query: () => ({ collection: "orders", op: "count" }) },
     display: { component: "@acme/shop/admin#RevenueCard" },
     ...overrides,
@@ -87,19 +89,48 @@ describe("a widget declaration as startup receives it", () => {
     );
   });
 
-  it("refuses widths left out, empty, or holding something that is not a width", () => {
-    expect(problemsOf(without("widths"))[0]).toContain("widths");
-    expect(problemsOf(valid({ widths: [] }))[0]).toContain("widths");
-    // The retired fraction spelling is not a width: core's words are the only
-    // ones a declaration may use.
+  it("refuses a size left out, or one the grid cannot draw", () => {
+    expect(problemsOf(without("size"))).toEqual(["size is required"]);
+    // A named width is not a size: grid units are the only ones there are.
+    expect(problemsOf(valid({ size: "half" }))).toEqual([
+      "size must be { default: { w, h }, min?, max? }",
+    ]);
+    const sized = (size: unknown) => problemsOf(valid({ size }));
+    expect(sized({ default: { w: 13, h: 4 } })).toEqual([
+      "size.default.w must be a whole number from 1 to 12, got 13",
+    ]);
+    expect(sized({ default: { w: 4, h: 1.5 } })).toEqual([
+      "size.default.h must be a whole number from 2 to 12, got 1.5",
+    ]);
     expect(
-      problemsOf(valid({ widths: ["half", "1/2"], width: "half" }))[0]
-    ).toContain('"1/2"');
+      problemsOf(valid({ size: { default: { w: 4, h: 4 }, max: "full" } }))
+    ).toEqual(["size.max must be { w, h }"]);
   });
 
-  it("refuses a starting width the widget does not allow", () => {
-    expect(problemsOf(valid({ width: "full" }))).toEqual([
-      'width "full" is not one of the widths it allows (third, half)',
+  it("refuses a minimum above the default, or a default above the maximum", () => {
+    const sized = (min: unknown, max: unknown) =>
+      problemsOf(valid({ size: { default: { w: 4, h: 4 }, min, max } }));
+    // Larger in one direction is enough: the other is smaller in each case.
+    expect(sized({ w: 6, h: 2 }, undefined)).toEqual([
+      "size.min must not be larger than size.default",
+    ]);
+    expect(sized(undefined, { w: 6, h: 3 })).toEqual([
+      "size.default must not be larger than size.max",
+    ]);
+  });
+
+  it("names the removed width fields as fields a declaration does not have", () => {
+    // 🔴 No second vocabulary: a declaration still written with named widths
+    // is refused by name, beside the size it is missing, not read as one.
+    const named = {
+      ...(without("size") as Record<string, unknown>),
+      widths: ["half", "full"],
+      width: "half",
+    };
+    expect(problemsOf(named)).toEqual([
+      '"widths" is not a field of a widget declaration',
+      '"width" is not a field of a widget declaration',
+      "size is required",
     ]);
   });
 
@@ -131,6 +162,14 @@ describe("a widget declaration as startup receives it", () => {
   it("accepts a permission name, and refuses `several` that is not a boolean", () => {
     expect(problemsOf(valid({ permission: "read-orders" }))).toEqual([]);
     expect(problemsOf(valid({ several: "yes" }))[0]).toContain("several");
+  });
+
+  it("accepts hidesWhenEmpty as a boolean, and refuses anything else", () => {
+    expect(problemsOf(valid({ hidesWhenEmpty: true }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: false }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: "yes" }))).toEqual([
+      "hidesWhenEmpty must be true or false",
+    ]);
   });
 
   it("refuses a sketch that names no core display", () => {
@@ -233,8 +272,10 @@ describe("a widget declaration as startup receives it", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     // `JSON.stringify` throws on both; the fault must still be reported.
-    expect(problemsOf(valid({ width: 1n }))[0]).toContain("got 1n");
-    expect(problemsOf(valid({ width: circular }))[0]).toContain("width");
+    expect(problemsOf(valid({ permission: 1n }))[0]).toContain("got 1n");
+    expect(problemsOf(valid({ permission: circular }))[0]).toContain(
+      "permission"
+    );
   });
 
   it("refuses a description of more than one line or 80 characters", () => {
@@ -367,6 +408,22 @@ describe("a widget declaration as startup receives it", () => {
       ["without a label", { link: "collections/products/create" }],
       ["with an absolute link", { label: "Add", link: "https://x.test/a" }],
       ["with a link from the root", { label: "Add", link: "/admin/a" }],
+      // A browser resolves these before it navigates, so each would leave the
+      // admin from under its prefix.
+      ["with a parent segment", { label: "Add", link: "../logout" }],
+      [
+        "with a parent segment further in",
+        { label: "Add", link: "collections/../../account" },
+      ],
+      ["with an encoded parent segment", { label: "Add", link: "%2E%2e/x" }],
+      [
+        "with an encoded slash",
+        { label: "Add", link: "collections%2f..%2f..%2fx" },
+      ],
+      [
+        "with a segment that cannot be decoded",
+        { label: "Add", link: "collections/%e0%a4" },
+      ],
       [
         "with a permission that is not a permission name",
         { label: "Add", link: "collections/a", permission: "Add things" },
@@ -390,10 +447,16 @@ describe("a widget declaration as startup receives it", () => {
     // One restart per mistake is what reporting at startup is meant to save,
     // so three faults in one declaration are three problems, in field order.
     expect(
-      problemsOf(valid({ title: "", width: "full", sketch: "pie" }))
+      problemsOf(
+        valid({
+          title: "",
+          size: { default: { w: 8, h: 4 }, max: { w: 6, h: 6 } },
+          sketch: "pie",
+        })
+      )
     ).toEqual([
       "title must be a non-empty string",
-      'width "full" is not one of the widths it allows (third, half)',
+      "size.default must not be larger than size.max",
       'sketch must name one of core\'s displays (metric, table, list, bars, timeseries), got "pie"',
     ]);
   });
@@ -423,7 +486,7 @@ describe("startup with several declarations", () => {
         owner: 'plugin "@acme/shop"',
         declarations: [
           valid({ title: 3 }),
-          valid({ id: "acme/b", width: "full" }),
+          valid({ id: "acme/b", size: { default: { w: 0, h: 4 } } }),
         ],
       },
       {
@@ -459,7 +522,7 @@ describe("startup with several declarations", () => {
         owner: 'plugin "@acme/shop"',
         declarations: [
           valid({ title: 3 }),
-          valid({ id: "acme/b", width: "full" }),
+          valid({ id: "acme/b", size: { default: { w: 0, h: 4 } } }),
         ],
       },
       {

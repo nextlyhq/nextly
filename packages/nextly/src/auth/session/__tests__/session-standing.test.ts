@@ -6,7 +6,7 @@
  * trusting the constant: a cache that never expired, or one that read on every
  * call, would both pass a test that only looked at a single call.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 // Whether services are registered, and the boot-migration gate, as this file
 // sets them: the check may read the database only once both say it is ready.
@@ -14,7 +14,7 @@ const ready = vi.hoisted(() => ({
   registered: false,
   migrations: Promise.resolve() as Promise<void>,
 }));
-vi.mock("../../../di/register", () => ({
+vi.mock("../../../di/service-access", () => ({
   isServicesRegistered: () => ready.registered,
 }));
 vi.mock("../../../init/boot-migrations-gate", () => ({
@@ -37,6 +37,13 @@ import {
   watchTransaction,
   type SessionStanding,
 } from "../session-standing";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const ACTIVE: SessionStanding = { isActive: true, sessionEpoch: 0 };
 

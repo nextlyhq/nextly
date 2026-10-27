@@ -9,6 +9,7 @@ import {
   Skeleton,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
@@ -171,7 +172,7 @@ export function EmailProviderForm({
   descriptorsError,
   isPending,
   onSubmit,
-}: EmailProviderFormProps) {
+}: EmailProviderFormProps): JSX.Element {
   const isEdit = mode === "edit";
 
   // In edit mode the stored type wins, even before the catalog arrives, so the

@@ -1,7 +1,7 @@
 "use client";
 
 import { Input, Label } from "@nextlyhq/ui";
-import { useId } from "react";
+import { useId, type JSX } from "react";
 
 export interface ValidationNumberFieldProps {
   /** Visible name of the rule, e.g. "Min length". */
@@ -48,7 +48,7 @@ export function ValidationNumberField({
   disabled,
   counts = false,
   placeholder,
-}: ValidationNumberFieldProps) {
+}: ValidationNumberFieldProps): JSX.Element {
   const id = useId();
   const describedBy = description ? `${id}-description` : undefined;
 

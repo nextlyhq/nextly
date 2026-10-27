@@ -658,12 +658,19 @@ export function formatHandSealedPluginMigrationModule(
     "export default {",
     "  ...content,",
     "  checksum: migrationChecksum(content),",
-    "} satisfies PluginMigration;",
+    "} satisfies PluginMigration as PluginMigration;",
     "",
   ].join("\n");
 }
 
-/** The module file's content, generated — never hand-edited. */
+/**
+ * The module file's content, generated — never hand-edited.
+ *
+ * Its value is checked against `PluginMigration` and declared as it
+ * (`satisfies … as …`), here and in the hand-sealed module above: the module's
+ * declaration is then the type, written without inference, rather than the
+ * thousands-of-lines literal spelled out as one.
+ */
 export function formatPluginMigrationModule(module: PluginMigration): string {
   return [
     "/**",
@@ -676,7 +683,7 @@ export function formatPluginMigrationModule(module: PluginMigration): string {
       module,
       null,
       2
-    )} satisfies PluginMigration;`,
+    )} satisfies PluginMigration as PluginMigration;`,
     "",
   ].join("\n");
 }
@@ -709,9 +716,15 @@ export function formatPluginMigrationsIndex(
     " * generation; the runner sorts by module name anyway, so a hand reorder",
     " * changes nothing.",
     " */",
+    'import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";',
+    "",
     imports,
     "",
-    "export const migrations = [",
+    // Annotated, because a plugin's published declarations are written
+    // without a type checker (`isolatedDeclarations`), which cannot infer an
+    // array of imported bindings. Every module the list names declares
+    // itself `PluginMigration`, so the annotation is the inferred type.
+    "export const migrations: PluginMigration[] = [",
     `  ${list},`,
     "];",
     "",

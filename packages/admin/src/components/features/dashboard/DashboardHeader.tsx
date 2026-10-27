@@ -1,7 +1,9 @@
+import type { JSX } from "react";
+
 import { AlignLeft } from "@admin/components/icons";
 import { useSidebar } from "@admin/components/layout/sidebar";
 
-export function DashboardHeader() {
+export function DashboardHeader(): JSX.Element {
   const { toggleSidebar } = useSidebar();
 
   return (

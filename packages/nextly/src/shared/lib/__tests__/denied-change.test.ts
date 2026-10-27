@@ -12,7 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { declaredFieldNames, resolvePromotedDocument } from "../denied-change";
+import {
+  declaredFieldNames,
+  keepDeniedAtStored,
+  resolvePromotedDocument,
+} from "../denied-change";
 
 /** Removes the named top-level or nested paths, as the field rules would. */
 function denies(...paths: string[]) {
@@ -123,24 +127,85 @@ describe("resolvePromotedDocument", () => {
   });
 
   it("drops the CALLER's own denied edit back to live instead of refusing", async () => {
+    // Allowed on the caller's payload alone, which carries no `kind`, and
+    // denied once the pending change's `kind` is folded in: the caller's own
+    // input, which the publish may drop.
     const out = await resolve({
-      before: { guarded: "caller wrote this" },
-      live: { guarded: "live" },
+      before: { kind: "private", guarded: "caller wrote this" },
+      live: { kind: "private", guarded: "live" },
       callerSupplied: { guarded: "caller wrote this" },
-      applyRules: denies("guarded"),
+      applyRules: deniesGuardedWhilePrivate,
     });
-    expect(out).toEqual({ guarded: "live" });
+    expect(out).toEqual({ kind: "private", guarded: "live" });
+  });
+
+  it("does not credit the caller with a value the rules deny them", async () => {
+    // The field gate keeps a protected child of a group the caller sent at its
+    // stored value, so their payload carries it although they may not write
+    // it. Credited, the pending change's edit of it would be dropped to live
+    // while the publish consumes the draft.
+    await expect(
+      resolve({
+        before: { seo: { title: "caller", secret: "live" } },
+        live: { seo: { title: "old", secret: "live" } },
+        callerSupplied: { seo: { title: "caller", secret: "live" } },
+        pending: { seo: { title: "draft", secret: "pending" } },
+        applyRules: denies("seo.secret"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
+  });
+
+  it("judges a denied value the caller's group replaced as the PENDING change holds it", async () => {
+    // The caller's group carries the protected child at its live value, and
+    // the pending change left it alone: nothing the caller is denied changes.
+    const out = await resolve({
+      before: { seo: { title: "caller", secret: "live" } },
+      live: { seo: { title: "old", secret: "live" } },
+      callerSupplied: { seo: { title: "caller", secret: "live" } },
+      pending: { seo: { title: "draft", secret: "live" } },
+      applyRules: denies("seo.secret"),
+    });
+    expect(out).toEqual({ seo: { title: "caller", secret: "live" } });
+  });
+
+  it("refuses a protected value the pending change ADDS inside a group the caller replaced", async () => {
+    // Neither the promoted document nor live holds it, so only the pending
+    // change on its own names it.
+    await expect(
+      resolve({
+        before: { seo: { title: "caller" } },
+        live: { seo: { title: "old" } },
+        callerSupplied: { seo: { title: "caller" } },
+        pending: { seo: { title: "draft", secret: "pending" } },
+        applyRules: denies("seo.secret"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
   });
 
   it("still refuses a sibling the caller did NOT supply, inside the same container", async () => {
     // The removal is reported at the container, and its contents have two
     // authors: exempting the whole subtree loses the pending change's sibling.
+    // The rule reads the pending change's `kind`, so the caller's payload alone
+    // is allowed and the folded document is not.
     await expect(
       resolve({
-        before: { promo: { label: "caller", tagline: "draft" } },
-        live: { promo: { label: "live", tagline: "live tagline" } },
+        before: {
+          kind: "private",
+          promo: { label: "caller", tagline: "draft" },
+        },
+        live: {
+          kind: "private",
+          promo: { label: "live", tagline: "live tagline" },
+        },
         callerSupplied: { promo: { label: "caller" } },
-        applyRules: denies("promo"),
+        applyRules: document => {
+          if (document.kind === "private") delete document.promo;
+          return Promise.resolve();
+        },
       })
     ).rejects.toMatchObject({
       publicData: { errors: [{ path: "promo.tagline" }] },
@@ -329,5 +394,273 @@ describe("resolvePromotedDocument", () => {
       live: { title: "old", subtitle: "going away" },
     });
     expect(Object.prototype.hasOwnProperty.call(out, "subtitle")).toBe(false);
+  });
+});
+
+describe("keepDeniedAtStored", () => {
+  /** Removes `locked` from every row of `rows`, as a rule denying it would. */
+  const deniesLockedRows = (document: Record<string, unknown>) => {
+    const rows = document.rows;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      delete (row as Record<string, unknown>).locked;
+    }
+    return Promise.resolve();
+  };
+
+  it("keeps each denied value on its own row when the rows are reordered", async () => {
+    // A container written whole: the update swaps the rows and sends a
+    // forged `locked` on one. Each row keeps its own stored value.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "b", heading: "b2", locked: "forged" },
+          { id: "a", heading: "a2" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "b", heading: "b2", locked: "locked-b" },
+      { id: "a", heading: "a2", locked: "locked-a" },
+    ]);
+  });
+
+  it("gives a row repeating another's id no stored value", async () => {
+    // One id names one stored row: the first row sent with it is that row,
+    // and a later one repeating it is new, so it takes none of its values.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", heading: "a2" },
+          { id: "a", heading: "copy" },
+        ],
+      },
+      stored: { rows: [{ id: "a", heading: "a", locked: "locked-a" }] },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "a", heading: "copy" },
+    ]);
+  });
+
+  it("pairs rows sharing an id with stored rows sharing it, in order", async () => {
+    // A list already stored with a repeated id: the first row naming it is
+    // the first stored row with it, the second the second. Neither stored row
+    // is left over to be put back beside the rows sent.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", heading: "x" },
+          { id: "a", heading: "y" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-1" },
+          { id: "a", heading: "copy", locked: "locked-2" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "x", locked: "locked-1" },
+      { id: "a", heading: "y", locked: "locked-2" },
+    ]);
+  });
+
+  it("judges a row by its own siblings when the update repeats another's id", async () => {
+    // `child` may not change while its row is closed. The update sends the
+    // open row twice and the closed one without its child: the closed row is
+    // judged as the update leaves it, not with the siblings of whichever row
+    // sits at its index, so its child stays.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { id: "a", mode: "open" },
+          { id: "a", mode: "open" },
+          { id: "b", mode: "closed" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", mode: "open" },
+          { id: "b", mode: "closed", child: "keep" },
+        ],
+      },
+      applyRules: document => {
+        const rows = document.rows;
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const record = row as Record<string, unknown>;
+          if (record.mode === "closed") delete record.child;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", mode: "open" },
+      { id: "a", mode: "open" },
+      { id: "b", mode: "closed", child: "keep" },
+    ]);
+  });
+
+  it("gives a new row no stored value when the stored rows carry ids", async () => {
+    // A row without an id, added ahead of rows that keep theirs, is new: the
+    // stored row at its index is the one the next row names, not this one.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [
+          { heading: "new" },
+          { id: "a", heading: "a2" },
+          { id: "b", heading: "b2" },
+        ],
+      },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "new" },
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "b", heading: "b2", locked: "locked-b" },
+    ]);
+  });
+
+  it("judges a container with the siblings the update adds to it", async () => {
+    // `a` is writable only while `b` is not "x". The update writes the group
+    // whole with `b` set and `a` left out, which as the update leaves it the
+    // rule denies, so the stored `a` stays rather than being cleared.
+    const kept = await keepDeniedAtStored({
+      update: { g: { b: "x" } },
+      stored: { g: { a: "old" } },
+      applyRules: document => {
+        const group = document.g as Record<string, unknown> | undefined;
+        if (group?.b === "x") delete group.a;
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.g).toEqual({ b: "x", a: "old" });
+  });
+
+  it("keeps a branch the update leaves out when it holds a denied value", async () => {
+    // The group is written whole without `inner`, whose `locked` the writer
+    // may not change: leaving `inner` out would delete it.
+    const kept = await keepDeniedAtStored({
+      update: { g: { other: "x" } },
+      stored: { g: { other: "o", inner: { heading: "h", locked: "L" } } },
+      applyRules: document => {
+        const group = document.g as Record<string, unknown> | undefined;
+        const inner = group?.inner as Record<string, unknown> | undefined;
+        if (inner) delete inner.locked;
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.g).toEqual({
+      other: "x",
+      inner: { heading: "h", locked: "L" },
+    });
+  });
+
+  it("keeps a row the update leaves out when it holds a denied value", async () => {
+    // `b` holds a value the writer may not change, so leaving it out of a
+    // list written whole would delete it; `c` holds none, and goes.
+    const kept = await keepDeniedAtStored({
+      update: { rows: [{ id: "a", heading: "a2" }] },
+      stored: {
+        rows: [
+          { id: "a", heading: "a", locked: "locked-a" },
+          { id: "b", heading: "b", locked: "locked-b" },
+          { id: "c", heading: "c" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { id: "a", heading: "a2", locked: "locked-a" },
+      { id: "b", heading: "b", locked: "locked-b" },
+    ]);
+  });
+
+  it("judges a stored row with its own siblings when an id-less row is inserted ahead of it", async () => {
+    // `child` may be written only while its row's `mode` is open. The update
+    // inserts a new row first and closes `a`'s mode, leaving `child` out of a
+    // list written whole: judged with `a`'s own new mode, it is denied and
+    // stays, rather than judged with the inserted row's.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [{ heading: "new" }, { id: "a", mode: "closed" }],
+      },
+      stored: { rows: [{ id: "a", mode: "open", child: "keep" }] },
+      applyRules: document => {
+        const rows = document.rows;
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const record = row as Record<string, unknown>;
+          if (record.mode !== "open") delete record.child;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "new" },
+      { id: "a", mode: "closed", child: "keep" },
+    ]);
+  });
+
+  it("lets a write drop a row whose denied field holds nothing", async () => {
+    // `c` carries `locked` only as an empty value: there is nothing the writer
+    // may not change, so leaving `c` out removes it.
+    const kept = await keepDeniedAtStored({
+      update: { rows: [{ id: "a", heading: "a2" }] },
+      stored: {
+        rows: [
+          { id: "a", heading: "a" },
+          { id: "c", heading: "c", locked: null },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([{ id: "a", heading: "a2" }]);
+  });
+
+  it("pairs rows by position when they carry no id", async () => {
+    // The control: rows that cannot be told apart keep the value at their
+    // index, as they always have.
+    const kept = await keepDeniedAtStored({
+      update: {
+        rows: [{ heading: "x2" }, { heading: "y2", locked: "forged" }],
+      },
+      stored: {
+        rows: [
+          { heading: "x", locked: "locked-x" },
+          { heading: "y", locked: "locked-y" },
+        ],
+      },
+      applyRules: deniesLockedRows,
+    });
+
+    expect(kept.rows).toEqual([
+      { heading: "x2", locked: "locked-x" },
+      { heading: "y2", locked: "locked-y" },
+    ]);
   });
 });

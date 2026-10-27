@@ -19,7 +19,7 @@ export function readAuthenticatedActor(): RequestActor | undefined {
  *
  * An API key's scope is the one the route handler pinned for the dispatch,
  * whole: the same object every other gate sees, carrying the key's own grants,
- * roles and the rows a rule's `resource:action` spelling is derived from, so a
+ * roles and the rows a rule's permission list is built from, so a
  * service check (e.g. the publish/unpublish transition gate) judges the key on
  * those rather than the owner's RBAC.
  *
@@ -32,4 +32,14 @@ export function readAuthenticatedScope(): AuthenticatedScope | undefined {
   if (pinned) return pinned;
   const caller = currentRequestCaller();
   return caller ? { actorType: caller.actor.type, permissions: [] } : undefined;
+}
+
+/**
+ * Whether the route admitted the caller on `update` itself, so a service may
+ * skip that re-check. A write route may also admit a caller on publish or
+ * unpublish alone, and the service then asks its own gate for the write.
+ */
+export function routeAdmittedUpdate(): boolean {
+  const action = currentRequestCaller()?.routeAction;
+  return action === undefined || action === "update";
 }
