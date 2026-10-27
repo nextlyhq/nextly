@@ -26,20 +26,17 @@
  *
  * The suite drives `collectionService` — the same facade the Direct API, the
  * REST surface, plugin services and bulk funnel through — so the exact
- * product path is exercised. Each dialect seeds a collection carrying the
- * scalar number shapes (plain integer, decimal, float format) through the
- * Builder, whose raw FieldDefinitions are the only way to reach the UI's
- * float format; the hasMany shape runs on a second, code-first collection,
- * whose table the runtime creates as the JSON column the descriptor
- * declares.
+ * product path is exercised. Each dialect boots ONE code-first collection
+ * carrying all four number shapes (plain integer, hasMany, decimal, float
+ * format) on the harness's own throwaway database — a random name per boot,
+ * dropped at teardown, with the server environment snapshot restored — so
+ * no run shares tables, rows or process state with another.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createAdapter } from "../../../../database/factory";
 import { defineCollection, number, text } from "../../../../config";
-import { clearServices } from "../../../../di/register";
+import type { NumberFieldConfig } from "../../../../collections/fields/types/number";
 import { NextlyError } from "../../../../errors";
-import { seedBuilderCollection } from "../../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -47,15 +44,6 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../collection-service";
-
-type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
-
-/** Distinct slug per dialect: the server-backed dialects share a database. */
-const SLUG_SUFFIX: Record<TestDialect, string> = {
-  sqlite: "",
-  postgresql: "pg",
-  mysql: "my",
-};
 
 interface ValidationIssueShape {
   path: string;
@@ -66,124 +54,54 @@ interface ValidationIssueShape {
 describe.each(getConfiguredTestDialects())(
   "a whole-number field refuses a fraction (%s)",
   (dialect: TestDialect) => {
-    const SLUG = `wnf${SLUG_SUFFIX[dialect]}`;
+    const SLUG = "wnf";
     const TABLE = `dc_${SLUG}`;
-    /**
-     * The hasMany case runs on its own collection, declared code-first: the
-     * runtime auto-sync creates its physical table from the descriptor, whose
-     * hasMany number is a JSON column. The builder-seeded collection below
-     * cannot carry it — the Builder's generator still emits the legacy scalar
-     * column for a hasMany number (a recorded disagreement with the
-     * descriptor), so a list write would fail on PostgreSQL and MySQL before
-     * any whole-number question even arose.
-     */
-    const LIST_SLUG = `wnflist${SLUG_SUFFIX[dialect]}`;
-    const LIST_TABLE = `dc_${LIST_SLUG}`;
     const CONTEXT = { overrideAccess: true };
 
     let handle: TestNextly | undefined;
     let collections: CollectionService;
-    let bootAdapter: TestAdapter | undefined;
-    let cleanupAdapter: TestAdapter | undefined;
-
-    /**
-     * Best-effort fixture cleanup so reruns against the shared test database
-     * are idempotent (server-backed dialects only — SQLite boots in memory).
-     */
-    async function dropFixtures(): Promise<void> {
-      if (!cleanupAdapter) return;
-      for (const stmt of [
-        `DROP TABLE IF EXISTS ${TABLE}`,
-        `DROP TABLE IF EXISTS ${LIST_TABLE}`,
-        `DELETE FROM dynamic_collections WHERE slug IN ('${SLUG}', '${LIST_SLUG}')`,
-      ]) {
-        try {
-          await cleanupAdapter.executeQuery(stmt);
-        } catch {
-          // best-effort — a fresh database has no fixtures to drop.
-        }
-      }
-    }
 
     beforeAll(async () => {
-      if (dialect !== "sqlite") {
-        const url =
-          dialect === "postgresql"
-            ? process.env.TEST_POSTGRES_URL!
-            : process.env.TEST_MYSQL_URL!;
-        // env.ts validates DATABASE_URL against DB_DIALECT on first read, and
-        // createAdapter's pool-defaults layering reads env unconditionally —
-        // both must be set on process.env or the validation throws regardless
-        // of the url passed to createAdapter (same recipe as the m2m gates).
-        process.env.DB_DIALECT = dialect;
-        process.env.DATABASE_URL = url;
-        // A dedicated connection for cleanup, kept open across the file: the
-        // boot connection below is disconnected by handle.destroy().
-        cleanupAdapter = await createAdapter({
-          type: dialect,
-          url,
-        } as Parameters<typeof createAdapter>[0]);
-        await cleanupAdapter.executeQuery("SELECT 1");
-        await dropFixtures();
-        bootAdapter = await createAdapter({
-          type: dialect,
-          url,
-        } as Parameters<typeof createAdapter>[0]);
-        handle = await createTestNextly({
-          adapter: bootAdapter,
-          collections: [
-            defineCollection({
-              slug: LIST_SLUG,
-              fields: [
-                text({ name: "title" }),
-                number({ name: "scores", hasMany: true }),
-              ],
-            }),
-          ],
-        });
-      } else {
-        handle = await createTestNextly({
-          collections: [
-            defineCollection({
-              slug: LIST_SLUG,
-              fields: [
-                text({ name: "title" }),
-                number({ name: "scores", hasMany: true }),
-              ],
-            }),
-          ],
-        });
-      }
-
-      const adapter = handle.adapter;
-      await seedBuilderCollection(adapter, {
-        slug: SLUG,
-        status: true,
-        fields: [
-          { name: "title", type: "text" },
-          { name: "count", type: "number" },
-          {
-            name: "price",
-            type: "number",
-            dbType: "decimal",
-            precision: 10,
-            scale: 2,
-          },
-          { name: "measure", type: "number", options: { format: "float" } },
+      // One boot on the harness's own throwaway database: a random name this
+      // boot creates and destroy() drops, so no two runs — of this suite or
+      // any other — ever share tables, rows or environment state. The
+      // harness snapshots and restores the server environment itself.
+      //
+      // All four number shapes are declared code-first in one collection,
+      // and the runtime auto-sync creates every column from the same
+      // descriptor the validator reads: the hasMany list is a JSON column,
+      // and the float format reaches the declaration through the storage
+      // options the descriptor reads — the 2.5 acceptance case below is its
+      // own proof the column took the declaration.
+      handle = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            status: true,
+            fields: [
+              text({ name: "title" }),
+              number({ name: "quantity" }),
+              number({ name: "scores", hasMany: true }),
+              number({
+                name: "price",
+                dbType: "decimal",
+                precision: 10,
+                scale: 2,
+              }),
+              number({
+                name: "measure",
+                options: { format: "float" },
+              } as Omit<NumberFieldConfig, "type">),
+            ],
+          }),
         ],
       });
-
-      // Reset DI without disconnecting, then reboot on the SAME adapter so
-      // collectionService resolves the just-seeded collection.
-      clearServices();
-      handle = await createTestNextly({ adapter });
       collections = handle.getService("collectionService") as CollectionService;
     });
 
     afterAll(async () => {
-      await dropFixtures();
       await handle?.destroy();
-      await cleanupAdapter?.disconnect();
     });
 
     /** The error a refused write produced, or a failure naming the verb. */
@@ -200,7 +118,7 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * The write was refused as a 400 validation error naming the field. The
-     * issue's path names the value ("count", "scores[1]"); the message names
+     * issue's path names the value ("quantity", "scores[1]"); the message names
      * the field's label without the element index, as min/max already do.
      */
     function expectFractionRefusal(
@@ -235,11 +153,11 @@ describe.each(getConfiguredTestDialects())(
       const error = await refusalOf(
         collections.createEntry(
           SLUG,
-          { title: "frac-create", count: 2.5 },
+          { title: "frac-create", quantity: 2.5 },
           CONTEXT
         )
       );
-      expectFractionRefusal(error, "count");
+      expectFractionRefusal(error, "quantity");
 
       const listed = await collections.listEntries(SLUG, {}, CONTEXT);
       expect(
@@ -250,17 +168,17 @@ describe.each(getConfiguredTestDialects())(
     it("create accepts 2, unchanged", async () => {
       const entry = (await collections.createEntry(
         SLUG,
-        { title: "whole-create", count: 2 },
+        { title: "whole-create", quantity: 2 },
         CONTEXT
       )) as unknown as Record<string, unknown>;
-      expect(entry.count).toBe(2);
-      expect((await readEntry(entry.id as string)).count).toBe(2);
+      expect(entry.quantity).toBe(2);
+      expect((await readEntry(entry.id as string)).quantity).toBe(2);
     });
 
     it("update refuses 2.5 and leaves the stored value", async () => {
       const entry = (await collections.createEntry(
         SLUG,
-        { title: "update-target", count: 2 },
+        { title: "update-target", quantity: 2 },
         CONTEXT
       )) as unknown as Record<string, unknown>;
 
@@ -268,24 +186,26 @@ describe.each(getConfiguredTestDialects())(
         collections.updateEntry(
           SLUG,
           entry.id as string,
-          { count: 2.5 },
+          { quantity: 2.5 },
           CONTEXT
         )
       );
-      expectFractionRefusal(error, "count");
-      expect((await readEntry(entry.id as string)).count).toBe(2);
+      expectFractionRefusal(error, "quantity");
+      expect((await readEntry(entry.id as string)).quantity).toBe(2);
     });
 
     it("bulk create refuses 2.5 with the field named, and writes nothing", async () => {
       const result = await collections.createMany(
         SLUG,
-        [{ title: "frac-bulk", count: 2.5 }],
+        [{ title: "frac-bulk", quantity: 2.5 }],
         CONTEXT
       );
       expect(result.successful).toBe(0);
       expect(result.failed).toBe(1);
       expect(result.errors[0]?.index).toBe(0);
-      expect(result.errors[0]?.error).toContain("count must be a whole number");
+      expect(result.errors[0]?.error).toContain(
+        "quantity must be a whole number"
+      );
 
       const listed = await collections.listEntries(SLUG, {}, CONTEXT);
       expect(listed.data.filter(entry => entry.title === "frac-bulk")).toEqual(
@@ -296,25 +216,27 @@ describe.each(getConfiguredTestDialects())(
     it("bulk update refuses 2.5 and leaves the stored value", async () => {
       const entry = (await collections.createEntry(
         SLUG,
-        { title: "bulk-update-target", count: 2 },
+        { title: "bulk-update-target", quantity: 2 },
         CONTEXT
       )) as unknown as Record<string, unknown>;
 
       const result = await collections.updateMany(
         SLUG,
-        [{ id: entry.id as string, data: { count: 2.5 } }],
+        [{ id: entry.id as string, data: { quantity: 2.5 } }],
         CONTEXT
       );
       expect(result.failed).toBe(1);
       expect(result.errors[0]?.index).toBe(0);
-      expect(result.errors[0]?.error).toContain("count must be a whole number");
-      expect((await readEntry(entry.id as string)).count).toBe(2);
+      expect(result.errors[0]?.error).toContain(
+        "quantity must be a whole number"
+      );
+      expect((await readEntry(entry.id as string)).quantity).toBe(2);
     });
 
     it("a fractional hasMany element is refused with the field named", async () => {
       const error = await refusalOf(
         collections.createEntry(
-          LIST_SLUG,
+          SLUG,
           { title: "list-frac", scores: [1, 2.5] },
           CONTEXT
         )
@@ -322,7 +244,7 @@ describe.each(getConfiguredTestDialects())(
       expectFractionRefusal(error, "scores[1]", "scores");
 
       const whole = (await collections.createEntry(
-        LIST_SLUG,
+        SLUG,
         { title: "list-whole", scores: [1, 2] },
         CONTEXT
       )) as unknown as Record<string, unknown>;
@@ -360,13 +282,15 @@ describe.each(getConfiguredTestDialects())(
       const timestamp =
         dialect === "sqlite" ? String(Math.floor(Date.now() / 1000)) : "NOW()";
       await handle!.adapter.executeQuery(
-        `INSERT INTO ${TABLE} (id, title, slug, status, count, created_at, updated_at)
+        `INSERT INTO ${TABLE} (id, title, slug, status, quantity, created_at, updated_at)
          VALUES ('legacy-frac-1', 'legacy fraction', 'legacy-frac', 'draft', 2.5, ${timestamp}, ${timestamp})`
       );
 
       // The stored state, whatever the column made of it.
       const storedLegacyCount = dialect === "sqlite" ? 2.5 : 3;
-      expect((await readEntry("legacy-frac-1")).count).toBe(storedLegacyCount);
+      expect((await readEntry("legacy-frac-1")).quantity).toBe(
+        storedLegacyCount
+      );
 
       // Publishing the entry carries no number field in the patch, so the
       // stored value rides through unchanged.
@@ -377,8 +301,10 @@ describe.each(getConfiguredTestDialects())(
         CONTEXT
       )) as unknown as Record<string, unknown>;
       expect(published.status).toBe("published");
-      expect(published.count).toBe(storedLegacyCount);
-      expect((await readEntry("legacy-frac-1")).count).toBe(storedLegacyCount);
+      expect(published.quantity).toBe(storedLegacyCount);
+      expect((await readEntry("legacy-frac-1")).quantity).toBe(
+        storedLegacyCount
+      );
     });
   }
 );
