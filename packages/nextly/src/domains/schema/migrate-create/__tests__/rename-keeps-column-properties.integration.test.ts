@@ -78,6 +78,16 @@ const DIALECTS: {
 
 const quiet = createLogger({ quiet: true });
 
+/** What `decorate` gives a column beyond its schema. */
+interface DecorateOptions {
+  collation?: boolean;
+  check?: boolean;
+  /** SQLite's spelling of the collation clause. */
+  collationClause?: string;
+  /** The check's expression on PostgreSQL and MySQL. */
+  checkOf?: (column: string) => string;
+}
+
 for (const entry of DIALECTS) {
   const suite = entry.url === null ? describe.skip : describe;
 
@@ -171,10 +181,13 @@ for (const entry of DIALECTS) {
         table: string,
         column: string,
         type: string,
-        options: { collation?: boolean; check?: boolean } = {}
+        options: DecorateOptions = {}
       ): Promise<void> {
         const collation = options.collation !== false;
         const check = options.check !== false;
+        const checked =
+          options.checkOf ??
+          ((name: string) => `char_length(${q(name)}) <= 60`);
         if (dialect === "postgresql") {
           if (collation) {
             await exec(
@@ -185,7 +198,7 @@ for (const entry of DIALECTS) {
             `COMMENT ON COLUMN ${q(table)}.${q(column)} IS 'kept by the change'`
           );
           await exec(
-            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length(${q(column)}) <= 60)`
+            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (${checked(column)})`
           );
           return;
         }
@@ -211,7 +224,7 @@ for (const entry of DIALECTS) {
               " COMMENT 'kept by the change'"
           );
           await exec(
-            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (char_length(${q(column)}) <= 60)`
+            `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (${checked(column)})`
           );
           return;
         }
@@ -231,7 +244,7 @@ for (const entry of DIALECTS) {
         await exec(
           `ALTER TABLE ${q(table)} ADD COLUMN ${q(column)} ${type}` +
             (info.dflt === null ? "" : ` DEFAULT ${info.dflt}`) +
-            (collation ? " COLLATE NOCASE" : "") +
+            (collation ? (options.collationClause ?? " COLLATE NOCASE") : "") +
             (check ? ` CHECK (length(${q(column)}) <= 60)` : "")
         );
         for (const index of indexes) await exec(index.sql);
@@ -271,7 +284,7 @@ for (const entry of DIALECTS) {
 
       /** `posts`, built by a first migration, decorated, and holding one entry. */
       async function seededPosts(
-        options: { collation?: boolean; check?: boolean } = {}
+        options: DecorateOptions = {}
       ): Promise<TableDefinition> {
         await migrateCreate(heading("heading"));
         await migrate();
@@ -376,10 +389,17 @@ for (const entry of DIALECTS) {
         }
       );
 
-      it.skipIf(dialect !== "sqlite")(
-        "refuses a SQLite rebuild that would lose a collation, and leaves the table as it was",
-        async () => {
-          const before = await seededPosts({ check: false });
+      it.skipIf(dialect !== "sqlite").each([
+        { spelling: "spaced", collationClause: " COLLATE NOCASE" },
+        // SQLite reads a comment between the keyword and the name as the same clause.
+        {
+          spelling: "beside a comment",
+          collationClause: " COLLATE/*kept*/NOCASE",
+        },
+      ])(
+        "refuses a SQLite rebuild that would lose a collation written $spelling, and leaves the table as it was",
+        async ({ collationClause }) => {
+          const before = await seededPosts({ check: false, collationClause });
 
           await migrateCreate(heading("heading", { required: true }));
           await expect(migrate()).rejects.toThrow(
@@ -387,6 +407,27 @@ for (const entry of DIALECTS) {
           );
 
           expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
+      it.skipIf(dialect !== "mysql")(
+        "refuses to rewrite a MySQL check that names the renamed column inside a string",
+        async () => {
+          // Rewriting the quoted name everywhere would change the string too, and the check with it.
+          await seededPosts({
+            checkOf: column => `${q(column)} <> '${q(column)}'`,
+          });
+
+          await migrateCreate(heading("title2"));
+          await expect(migrate()).rejects.toThrow(
+            /cannot rename dc_posts.heading: a check names it inside a string/
+          );
+
+          const columns = (await definitionOf("dc_posts")).columns.map(
+            c => c.name
+          );
+          expect(columns).toContain("heading");
+          expect(columns).not.toContain("title2");
         }
       );
 
@@ -410,7 +451,7 @@ for (const entry of DIALECTS) {
           ],
           // Named apart from the column, so the index is the same one before and after the rename.
           indexes: [
-            { name: "app_notes_lookup", columns: [column], unique: false },
+            { name: "uq_app_notes_lookup", columns: [column], unique: true },
           ],
         };
         return { owned: [spec], contributed: new Map(), baselines: new Map() };

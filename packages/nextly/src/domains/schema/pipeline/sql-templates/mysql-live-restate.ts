@@ -121,7 +121,9 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  *
  * The checks are joined with GROUP_CONCAT, which cuts its result at `group_concat_max_len`. Rather
  * than run a statement cut short, the variable then holds a sentence saying so, which PREPARE
- * rejects.
+ * rejects; the same for a check whose clause names the column inside a string literal, which the
+ * author renames by hand. MySQL quotes about eighty characters of the rejected text in its error,
+ * so each sentence leads with what failed.
  */
 function renameKeepingChecks(
   op: Pick<RenameColumnOp, "tableName" | "fromColumn" | "toColumn">
@@ -146,8 +148,19 @@ function renameKeepingChecks(
   const statement =
     `CONCAT(${literal(`ALTER TABLE ${q(op.tableName)} `)}, CONCAT_WS(', ', ${drops}, ` +
     `${literal(`RENAME COLUMN ${q(op.fromColumn)} TO ${q(op.toColumn)}`)}, ${adds}))`;
+  // The column's name is replaced wherever the clause quotes it, so a string literal that happens
+  // to hold the quoted name would change too, and the check would then test something else. The
+  // literals are taken out to count the name outside them; a check that names the column inside
+  // one, or holds a quote the count cannot pair, is not rewritten.
+  const literalFree = `REGEXP_REPLACE(cc.CHECK_CLAUSE, ${literal("'[^']*'")}, '')`;
+  const namings = (text: string) =>
+    `(LENGTH(${text}) - LENGTH(REPLACE(${text}, ${from}, '')))`;
+  const unsafe =
+    `(SELECT COUNT(*) ${checksOnColumn} AND (${namings("cc.CHECK_CLAUSE")} <> ${namings(literalFree)} ` +
+    `OR INSTR(${literalFree}, ${literal("'")}) > 0)) > 0`;
   return runBuilt(
-    `IF(${tooLong}, ${literal(`the checks on ${op.tableName} are too long to restate around a rename`)}, ${statement})`
+    `IF(${tooLong}, ${literal(`the checks on ${op.tableName} are too long to restate around a rename`)}, ` +
+      `IF(${unsafe}, ${literal(`cannot rename ${op.tableName}.${op.fromColumn}: a check names it inside a string`)}, ${statement}))`
   );
 }
 

@@ -356,22 +356,21 @@ export function untrackedConstraintCounts(
 }
 
 /**
- * A SQL expression counting the `COLLATE` clauses in the live table's stored
- * CREATE statement — what a rebuild from `table` would silently lose. No
- * snapshot records a column's collation and no Nextly table declares one, so
- * every clause counts: a column made `COLLATE NOCASE` by hand would come back
- * comparing case by case, and its index with it. Counted from the statement as
- * the checks are, with whitespace folded first, so a clause on its own line
- * still counts; the word inside a string literal counts too, which refuses
- * rather than risks a false "none". Evaluated against the database, never
- * against a snapshot, for the reason `untrackedConstraintCounts` gives.
+ * A SQL expression counting the times `COLLATE` appears in the live table's
+ * stored CREATE statement — the collations a rebuild from `table` would
+ * silently lose. No snapshot records a column's collation and no Nextly table
+ * declares one, so every appearance counts: a column made `COLLATE NOCASE` by
+ * hand would come back comparing case by case, and its index with it. Matched
+ * as a bare substring, case-folded, so a clause SQLite still reads when a
+ * comment or no space sits beside it (`COLLATE/*c*\/NOCASE`) counts; the word
+ * inside a string literal or a longer name counts too, which refuses rather
+ * than risks a false "none". Evaluated against the database, never against a
+ * snapshot, for the reason `untrackedConstraintCounts` gives.
  */
 function untrackedCollationCount(table: TableSpec): string {
   const name = literalOf(table.name);
-  const folded =
-    "replace(replace(replace(' ' || upper(sql) || ' ', char(10), ' '), char(13), ' '), char(9), ' ')";
   return (
-    `COALESCE((SELECT (length(${folded}) - length(replace(${folded}, ' COLLATE ', ''))) / 9 ` +
+    `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'COLLATE', ''))) / 7 ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`
   );
 }

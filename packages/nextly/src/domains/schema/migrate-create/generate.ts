@@ -1700,22 +1700,31 @@ function applyRenameDecisions(
   if (renames.length === 0) return remaining;
 
   // An index the renamed column already carries is carried BY the rename: every dialect renames the
-  // column inside the index. The diff, seeing the collapsed add's index, asks to create it again
-  // under the same name, which MySQL refuses as a duplicate key and PostgreSQL skips with IF NOT
-  // EXISTS, so it is dropped here when the previous index is exactly it with the column renamed.
+  // column inside the index. The diff, seeing the collapsed add's index under the same name with a
+  // new column, plans to create it again — which MySQL refuses as a duplicate key and PostgreSQL
+  // skips with IF NOT EXISTS — and, for a name Nextly manages, to drop the old one first, which would
+  // leave the table with no index at all once the create is gone. When the new index is exactly the
+  // previous one with the column renamed, both are dropped from the plan and the rename keeps it.
   const carried = indexesCarriedByRenames(
     effectiveAccepts.map(d => d.candidate),
     previousSnapshot
   );
+  const keptByRename = new Set(
+    remaining.flatMap(op =>
+      op.type === "add_index" &&
+      carried.get(`${op.tableName}::${op.index.name}`) === indexShape(op.index)
+        ? [`${op.tableName}::${op.index.name}`]
+        : []
+    )
+  );
   const tail =
-    carried.size === 0
+    keptByRename.size === 0
       ? remaining
       : remaining.filter(
           op =>
             !(
-              op.type === "add_index" &&
-              carried.get(`${op.tableName}::${op.index.name}`) ===
-                indexShape(op.index)
+              (op.type === "add_index" || op.type === "drop_index") &&
+              keptByRename.has(`${op.tableName}::${op.index.name}`)
             )
         );
   return placeRenames(tail, renames);

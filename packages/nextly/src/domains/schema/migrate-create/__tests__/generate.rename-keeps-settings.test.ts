@@ -32,7 +32,8 @@ const posts = (fields: MinimalConfigEntity["fields"]): MinimalConfigEntity => ({
 function notes(
   dialect: SupportedDialect,
   column: string,
-  columnDefault: string
+  columnDefault: string,
+  index?: { name: string; unique: boolean }
 ): AppStreamTables {
   const spec: TableSpec = {
     name: "app_notes",
@@ -45,7 +46,7 @@ function notes(
         default: columnDefault,
       },
     ],
-    indexes: [],
+    indexes: index === undefined ? [] : [{ ...index, columns: [column] }],
   };
   return { owned: [spec], contributed: new Map(), baselines: new Map() };
 }
@@ -204,6 +205,28 @@ describe.each(DIALECTS)(
         );
       }
     });
+
+    it.each([
+      { name: "uq_app_notes_lookup", unique: true },
+      { name: "idx_app_notes_lookup", unique: false },
+    ])(
+      "keeps the index $name on the renamed column, neither dropping nor recreating it",
+      async index => {
+        await create({ appStream: notes(dialect, "label", "'draft'", index) });
+        const { up, down } = await create({
+          appStream: notes(dialect, "caption", "'draft'", index),
+        });
+
+        at(up, rename("app_notes", "label", "caption"));
+        // The rename moves the column inside the index on every dialect; a drop here with no
+        // create after it would leave the table without the index, or without its uniqueness.
+        for (const sql of [up, down]) {
+          expect(sql).not.toMatch(
+            new RegExp(`(DROP|CREATE)( UNIQUE)? INDEX[^;]*${index.name}`)
+          );
+        }
+      }
+    );
 
     it("writes only the rename when nothing else about the column changed", async () => {
       await create({
