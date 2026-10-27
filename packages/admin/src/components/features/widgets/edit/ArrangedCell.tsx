@@ -458,22 +458,49 @@ function CellSettings({
   );
 }
 
-export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
-  const { row, isEditing, data } = props;
-  /*
-   * Open state lives with the CELL rather than with the grid: the sheet belongs
-   * to one card, and hoisting it would make the grid track which of many is
-   * open for no benefit to either.
-   */
+/**
+ * The card's settings sheet: whether it is open, whether it opens on its first field, and the
+ * empty state's way into it.
+ *
+ * Open state lives with the CELL rather than with the grid: the sheet belongs to one card, and
+ * hoisting it would make the grid track which of many is open for no benefit to either. The
+ * first-field flag is set only by the empty state's action, which opens the sheet to ask for what
+ * the card is missing, and is reset when the sheet closes, so the menu's Settings opens it as
+ * before. That action is offered at rest, and only where the menu's Settings could save the
+ * settings now, so it never opens a sheet whose Done cannot keep anything.
+ */
+function useSettingsSheet(props: ArrangedCellProps, hasSettings: boolean) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Whether the sheet opens on its first field, as the empty state's action opens it to ask for
-  // what the card is missing; reset when it closes, so the menu's Settings opens it as before.
   const [focusFirstField, setFocusFirstField] = useState(false);
   const changeSettingsOpen = (open: boolean) => {
     setSettingsOpen(open);
     if (!open) setFocusFirstField(false);
   };
+  const offersFromEmpty =
+    !props.isEditing &&
+    props.settingsWrite !== undefined &&
+    hasSettings &&
+    !settingsBlocked(props.settingsWrite);
+  const openFromEmpty = offersFromEmpty
+    ? () => {
+        setFocusFirstField(true);
+        setSettingsOpen(true);
+      }
+    : undefined;
+  return {
+    settingsOpen,
+    setSettingsOpen,
+    focusFirstField,
+    changeSettingsOpen,
+    openFromEmpty,
+  };
+}
+
+export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
+  const { row, isEditing, data } = props;
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
+  const sheet = useSettingsSheet(props, hasSettings);
+  const { setSettingsOpen } = sheet;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
   const sources = useBranding().widgetSources;
   const heading = useMemo(
@@ -529,18 +556,6 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   // While customising, the card's header keeps the room its controls are drawn
   // over; at rest it holds the dismiss control and the menu.
   const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
-  // The empty state's way into the settings: at rest, and only where the menu's Settings could
-  // save them now, so the button never opens a sheet whose Done cannot keep anything.
-  const openSettingsFromEmpty =
-    !isEditing &&
-    props.settingsWrite !== undefined &&
-    hasSettings &&
-    !settingsBlocked(props.settingsWrite)
-      ? () => {
-          setFocusFirstField(true);
-          setSettingsOpen(true);
-        }
-      : undefined;
 
   return (
     <DraggableWidgetCell
@@ -561,9 +576,9 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       {hasSettings ? (
         <CellSettings
           {...{ row, widget, data, done }}
-          open={settingsOpen}
-          onOpenChange={changeSettingsOpen}
-          focusFirstField={focusFirstField}
+          open={sheet.settingsOpen}
+          onOpenChange={sheet.changeSettingsOpen}
+          focusFirstField={sheet.focusFirstField}
         />
       ) : null}
       <CardGrowContext.Provider value={setContentHeight}>
@@ -571,7 +586,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           {...{ widget, placement, headerAction, data, isEditing }}
           subtitle={heading.subtitle}
           quick={quick.inline}
-          onOpenSettings={openSettingsFromEmpty}
+          onOpenSettings={sheet.openFromEmpty}
         />
       </CardGrowContext.Provider>
     </DraggableWidgetCell>

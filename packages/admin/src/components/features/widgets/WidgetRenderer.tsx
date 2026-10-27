@@ -492,11 +492,16 @@ export function WidgetRenderer({
     });
   }
 
-  const drawn = cardForOutcome(outcome, {
-    isFetching,
-    onRetry,
-    onOpenSettings,
-  });
+  return framedCard(shared, outcome, { isFetching, onRetry, onOpenSettings });
+}
+
+/** A card the frame draws itself, in the state its outcome decides (`cardForOutcome`). */
+function framedCard(
+  shared: ReturnType<typeof sharedCardProps>,
+  outcome: FramedOutcome,
+  live: Parameters<typeof cardForOutcome>[1]
+): JSX.Element {
+  const drawn = cardForOutcome(outcome, live);
   return (
     <WidgetCard
       {...shared}
