@@ -369,6 +369,10 @@ describeEachDialect(
           for (const statement of sqliteTableRebuildStatements(drifted)) {
             await adapter.executeQuery(statement);
           }
+          // Still there before the reconcile runs, so finding it after means
+          // the reconcile's own rebuild kept it, not that it put a dropped
+          // one back.
+          expect(await contributedIndex()).toEqual(declaredIndex);
 
           expect((await run()).changed).toBe(true);
           const after = await users();
