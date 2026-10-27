@@ -20,10 +20,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 // No mutation hook is mocked here, deliberately. The button reaches its action
 // through the context seam, so whichever form supplied it — an entry's or a
 // Single's — is the same shape to this component.
-// Publishing every language is a publish; the caller holds the permission by
-// default so the render cases below stay about localization, not authorization.
-vi.mock("@admin/hooks/useCan", () => ({
-  useCan: (slug: string) => canFor(slug),
+// Publishing every language is answered by the server's cell for that
+// request, keyed here as `<request>:<slug>`; the caller may by default, so the
+// render cases below stay about localization, not authorization.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: (slug: string, request: string) =>
+    canFor(`${request}:${slug}`),
 }));
 
 const LOCALES = {
@@ -114,24 +116,26 @@ describe("PublishAllLanguagesButton", () => {
       screen.getByRole("button", { name: /publish all languages/i })
     );
     expect(singlePublish).toHaveBeenCalledTimes(1);
-    expect(canFor).toHaveBeenCalledWith("publish-homepage");
+    expect(canFor).toHaveBeenCalledWith("publishEveryLanguage:homepage");
   });
 
-  it("renders nothing for a caller without publish permission", () => {
-    // Otherwise an author holding only update-<slug> could publish every
-    // language from the sidebar, bypassing the header Publish gate.
+  it("renders nothing for a caller the server would refuse publishing every language", () => {
+    // Asked as that request is judged, in every language, not as a publish
+    // in the language on screen: a rule refusing one language refuses it.
     useBranding.mockReturnValue({ locales: LOCALES });
-    canFor.mockImplementation((slug: string) => slug !== "publish-pages");
+    canFor.mockImplementation(
+      (key: string) => key !== "publishEveryLanguage:pages"
+    );
 
     const { container } = renderButton();
 
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("checks the publish permission for this document's slug", () => {
+  it("asks about publishing every language of this document's collection", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     renderButton();
 
-    expect(canFor).toHaveBeenCalledWith("publish-pages");
+    expect(canFor).toHaveBeenCalledWith("publishEveryLanguage:pages");
   });
 });

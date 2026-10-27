@@ -17,7 +17,7 @@ describe("the widget declaration, from the package root", () => {
       type: "number",
       defaultValue: 5,
       min: 1,
-      max: 25,
+      max: 10,
     });
   });
 
