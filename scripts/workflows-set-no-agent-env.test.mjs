@@ -5,9 +5,10 @@
  * one at all. The names are read from the detector Next.js itself bundles, so a
  * name it learns in a later release is checked here without an edit.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -37,17 +38,15 @@ const fromPlayground = createRequire(new URL("../apps/playground/package.json", 
 const detector = readFileSync(join(dirname(fromPlayground.resolve("next/package.json")), "dist/compiled/@vercel/detect-agent/index.js"), "utf8");
 const { names: AGENT_VARIABLES, unnamed } = readsOf(detector);
 
-// Everything CI runs: every file under `.github` (workflows, local actions
-// and whatever they hold, its scripts) and every script under `scripts`,
-// where a step or an action's implementation could set one through
-// `GITHUB_ENV` without the workflow naming it. Not this file, which names them.
-const SCANNED = [".github", "scripts"];
-const files = SCANNED.flatMap(root =>
-  readdirSync(new URL(`../${root}/`, import.meta.url), { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => `${relative(fileURLToPath(new URL("../", import.meta.url)), join(entry.parentPath, entry.name))}`)
-    .filter(path => path !== "scripts/workflows-set-no-agent-env.test.mjs")
-);
+// Every tracked file in the repository, not only the ones CI is known to run:
+// a workflow, an action's implementation, a script, or a command a package
+// generates for a CI step could each set one through `GITHUB_ENV`, and no
+// list of what CI reaches stays complete. Binary files aside, and this file,
+// which names them.
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
+const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
+  .split("\0")
+  .filter(path => path && path !== "scripts/workflows-set-no-agent-env.test.mjs");
 
 describe("the variables that tell Next.js a coding agent is building", () => {
   it("are every one Next.js's own detector reads", () => {
@@ -69,13 +68,15 @@ describe("the variables that tell Next.js a coding agent is building", () => {
     expect(mentioned("env:\n  MY_CODEX_CI_FLAG: 1", names)).toEqual([]);
   });
 
-  it("are named by no workflow, local action or script CI runs", () => {
-    expect(files.filter(path => path.startsWith(".github/workflows/")).length).toBeGreaterThan(20);
-    expect(files.filter(path => path.startsWith(".github/actions/")).length).toBeGreaterThan(4);
-    expect(files.filter(path => path.startsWith("scripts/")).length).toBeGreaterThan(100);
-    const named = files.flatMap(path =>
-      mentioned(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"), AGENT_VARIABLES).map(name => `${path} ${name}`)
-    );
+  it("are named by no tracked file in the repository", () => {
+    for (const area of [".github/workflows/", ".github/actions/", "scripts/", "packages/create-nextly-app/src/"]) {
+      expect(files.filter(path => path.startsWith(area)).length, area).toBeGreaterThan(4);
+    }
+    const named = files.flatMap(path => {
+      const bytes = readFileSync(join(ROOT, path));
+      if (bytes.includes(0)) return [];
+      return mentioned(bytes.toString("utf8"), AGENT_VARIABLES).map(name => `${path} ${name}`);
+    });
     expect(named).toEqual([]);
   });
 });
