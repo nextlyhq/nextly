@@ -15,6 +15,7 @@ import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
 import {
+  chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
@@ -200,25 +201,12 @@ describe("core widget definitions", () => {
     expect(team.query).toEqual({ source: TEAM_SOURCE_ID, op: "list" });
   });
 
-  /*
-   * 🔴 Asserted in THIS direction only, and the other one is false. Naming a
-   * component does not imply declining the grid's frame: `core/quick-create`
-   * names one and draws no heading, section or card of its own, so it wants
-   * `WidgetCard` around it and correctly omits `chrome`. The first version of
-   * this test asserted the converse and failed on that card -- which was the
-   * test being wrong, not the card.
-   *
-   * What does hold is that only a card supplying its own body may decline the
-   * frame. An archetype-drawn card with `chrome: "none"` would render its rows
-   * bare, with nothing naming what they are.
-   */
-  it("declines the grid's frame only where the card brings a body", () => {
+  // Every card is drawn in the dashboard's one frame, which draws its header
+  // and every state, so no core widget may decline it -- by the same rule the
+  // registry refuses a plugin's that tries.
+  it("declines the grid's frame nowhere", () => {
     for (const widget of CORE_WIDGETS) {
-      if (widget.chrome !== "none") continue;
-      expect(
-        widget.component,
-        `${widget.id} declines chrome, so it must draw its own`
-      ).toBeDefined();
+      expect(chromeFieldProblem(widget), widget.id).toBeUndefined();
     }
   });
 });

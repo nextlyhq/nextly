@@ -32,7 +32,6 @@ import type {
   WidgetSize,
   WidgetQueryCell,
   WidgetStatCell,
-  WidgetChrome,
   WidgetDefinition,
   WidgetWidth,
 } from "nextly/config";
@@ -138,13 +137,11 @@ export interface DashboardWidget {
    */
   defaultOrder?: number;
   /**
-   * Whether the host frames this widget; `"card"` when unstated.
-   *
-   * `"none"` belongs to a widget that is already a designed surface -- core's
-   * dashboard sections carry their own heading and rules, so framing one draws
-   * a second heading around the first.
+   * Whether the card leaves the grid while its answer is empty, rather than drawing the empty
+   * state. Never while it failed or is not available to the reader, and never in customise mode,
+   * where it is shown marked so it can still be moved or removed.
    */
-  chrome?: WidgetChrome;
+  hidesWhenEmpty?: boolean;
   /**
    * Whether this reader may send the card away from the card itself.
    *

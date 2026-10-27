@@ -1,5 +1,5 @@
 /**
- * A card's menu at rest: its quick setting, offered at every size, and Settings.
+ * A card's menu at rest: its quick setting, offered at every size, Settings, and Refresh.
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -27,7 +27,7 @@ describe("a card's menu at rest", () => {
         title="Activity"
         quick={{ setting: RANGE, value: "30d", change }}
         onOpenSettings={vi.fn()}
-        disabled={false}
+        settingsDisabled={false}
       />
     );
     await userEvent.click(
@@ -48,7 +48,7 @@ describe("a card's menu at rest", () => {
       <CardMenu
         title="Activity"
         onOpenSettings={onOpenSettings}
-        disabled={false}
+        settingsDisabled={false}
       />
     );
     await userEvent.click(
@@ -58,10 +58,42 @@ describe("a card's menu at rest", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("cannot be opened while the card's settings cannot be saved", () => {
-    render(<CardMenu title="Activity" onOpenSettings={vi.fn()} disabled />);
-    expect(
-      screen.getByRole("button", { name: "Card menu for Activity" })
-    ).toBeDisabled();
+  it("keeps Refresh in reach while the card's settings cannot be saved", async () => {
+    // The menu is in the same place on every card, and a write in flight
+    // blocks only Settings, not asking again for the card's data.
+    const onRefresh = vi.fn();
+    render(
+      <CardMenu
+        title="Activity"
+        onOpenSettings={vi.fn()}
+        onRefresh={onRefresh}
+        settingsDisabled
+      />
+    );
+    const trigger = screen.getByRole("button", {
+      name: "Card menu for Activity",
+    });
+    expect(trigger).toBeEnabled();
+    await userEvent.click(trigger);
+    expect(screen.getByRole("menuitem", { name: /Settings/ })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
+    await userEvent.click(screen.getByRole("menuitem", { name: /Refresh/ }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no Refresh for a card that asks for no data", async () => {
+    render(
+      <CardMenu
+        title="Note"
+        onOpenSettings={vi.fn()}
+        settingsDisabled={false}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Card menu for Note" })
+    );
+    expect(screen.queryByRole("menuitem", { name: /Refresh/ })).toBeNull();
   });
 });

@@ -350,9 +350,10 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("no query")).toBeInTheDocument();
   });
 
-  it("hands the plugin component the card's Retry, which a framed card's error would offer", () => {
-    // A self-drawn card draws its own error, so without the callback it has no
-    // Retry to offer and stays failed until something else refetches.
+  it("hands the plugin component the card's Retry, for an error its own data reports", () => {
+    // A failed answer is the frame's, with the frame's Retry; an error the
+    // component reads from a good answer it reports, and the Retry it offers
+    // there is the same callback.
     const onRetry = vi.fn();
     registerComponent(
       "@acme/admin#Panel",
@@ -371,12 +372,30 @@ describe("WidgetRenderer — custom", () => {
           ...custom,
           query: { source: "collection:posts", op: "count" },
         }}
-        slot={{ ok: false, error: "down" }}
+        slot={countSlot(1)}
         onRetry={onRetry}
       />
     );
     screen.getByRole("button", { name: "again" }).click();
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the frame's Retry on a custom card whose answer failed", () => {
+    const onRetry = vi.fn();
+    registerComponent("@acme/admin#Panel", () => <div>never drawn</div>);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "down" }}
+        onRetry={onRetry}
+      />
+    );
+    screen.getByRole("button", { name: /^Retry/ }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("never drawn")).toBeNull();
   });
 
   it("marks a QUERIED custom card busy during a background refetch", () => {
@@ -435,7 +454,7 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("idle")).toBeInTheDocument();
   });
 
-  it("shows a queried custom card when its data landed", () => {
+  it("shows a queried custom card's own body when its data landed", () => {
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
     render(
       <WidgetRenderer
@@ -444,18 +463,18 @@ describe("WidgetRenderer — custom", () => {
           query: { source: "collection:posts", op: "count" },
         }}
         slot={countSlot(7)}
-        updatedAt={new Date()}
       />
     );
-    expect(screen.getByTestId("widget-card-freshness")).toBeInTheDocument();
+    expect(screen.getByText("acme body")).toBeInTheDocument();
+    expect(screen.getByRole("region")).toHaveAttribute("data-state", "ready");
   });
 
-  it("claims no freshness on a custom card whose slot was refused", () => {
-    // A self-drawn body is never REPLACED by an error, so the card's own
-    // `settled` gate -- which withholds the footer when `error` is set -- never
-    // fires for it. Without this the card printed "Updated just now" under a
-    // body the component drew from a failure.
-    registerComponent("@acme/admin#Panel", () => <div>could not load</div>);
+  it("draws a custom card's refused slot in the frame, and never reaches its component", () => {
+    // A failed answer is the frame's to draw, as for any card: the component
+    // used to be handed it and draw a state of its own inside a card that
+    // still said it was ready.
+    const component = vi.fn(() => <div>could not load</div>);
+    registerComponent("@acme/admin#Panel", component);
     render(
       <WidgetRenderer
         definition={{
@@ -463,14 +482,31 @@ describe("WidgetRenderer — custom", () => {
           query: { source: "collection:posts", op: "count" },
         }}
         slot={{ ok: false, error: "Source unavailable." }}
-        updatedAt={new Date()}
+        onRetry={() => {}}
       />
     );
-    expect(
-      screen.queryByTestId("widget-card-freshness")
-    ).not.toBeInTheDocument();
-    // The plugin's own body still stands: a refusal is its to draw, not ours.
-    expect(screen.getByText("could not load")).toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      "Source unavailable."
+    );
+    expect(screen.getByRole("region")).toHaveAttribute("data-state", "error");
+    expect(component).not.toHaveBeenCalled();
+    expect(screen.queryByText("could not load")).not.toBeInTheDocument();
+  });
+
+  it("draws a custom card's unavailable slot as the one no-access state", () => {
+    const component = vi.fn(() => <div>acme body</div>);
+    registerComponent("@acme/admin#Panel", component);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "Not available.", code: "unavailable" }}
+      />
+    );
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
+    expect(component).not.toHaveBeenCalled();
   });
 
   it("never marks a custom body busy for a batch it did not participate in", () => {
@@ -484,33 +520,18 @@ describe("WidgetRenderer — custom", () => {
 });
 
 describe("WidgetRenderer — freshness", () => {
-  it("shows when the data landed on a card that has data", () => {
-    render(
-      <WidgetRenderer
-        definition={metric}
-        slot={countSlot(3)}
-        updatedAt={new Date()}
-      />
-    );
-    expect(screen.getByTestId("widget-card-freshness")).toHaveTextContent(
-      /updated just now/i
-    );
-  });
-
-  it("says nothing about freshness on a slot that failed", () => {
-    render(
-      <WidgetRenderer
-        definition={metric}
-        slot={{ ok: false, error: "Source unavailable." }}
-        updatedAt={new Date()}
-      />
-    );
-    expect(
-      screen.queryByTestId("widget-card-freshness")
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
-      "Source unavailable."
-    );
+  it("says nothing about when the data landed, on a card with data or a failed one", () => {
+    for (const slot of [
+      countSlot(3),
+      { ok: false as const, error: "Source unavailable." },
+    ]) {
+      const { container, unmount } = render(
+        <WidgetRenderer definition={metric} slot={slot} />
+      );
+      expect(container.querySelector("time")).toBeNull();
+      expect(container.textContent).not.toMatch(/updated/i);
+      unmount();
+    }
   });
 });
 
@@ -568,70 +589,24 @@ describe("WidgetRenderer — archetypes not built yet", () => {
   });
 });
 
-describe("WidgetRenderer — chrome", () => {
-  const Section = () => (
-    <section aria-labelledby="own-heading">
-      <h4 id="own-heading">Team</h4>
-      <p>body</p>
-    </section>
-  );
-
-  const bare: DashboardWidget = {
-    id: "core/team",
-    title: "Team",
-    archetype: "custom",
-    size: "lg",
-    component: "core#TeamSummary",
-    chrome: "none",
-  };
-
-  it("draws an unframed widget with no card around it", () => {
-    // The widget already IS a surface: it carries its own heading and rules.
-    // Framed, the card's title renders ABOVE the section's own -- two headings
-    // saying "Team", one inside the other.
-    registerComponent("@t/x#Section", Section);
-    render(
-      <WidgetRenderer
-        definition={{ ...bare, component: "@t/x#Section" }}
-        slot={undefined}
-      />
-    );
-
-    expect(screen.getByRole("heading", { name: "Team" })).toBeInTheDocument();
-    expect(screen.queryByTestId("widget-card-body")).not.toBeInTheDocument();
-  });
-
-  it("still frames a custom widget that says nothing about chrome", () => {
-    // The control, and the compatibility bound: every custom widget shipping
-    // today omits `chrome` and must keep the card it has. A renderer that
-    // unframed everything would satisfy the assertion above.
-    registerComponent("@t/x#Section", Section);
+describe("WidgetRenderer — every card is framed", () => {
+  it("frames a custom widget's own component, under the card's one title", () => {
+    // No widget declines the frame: the frame draws the header and every state,
+    // and a component draws only its body.
+    registerComponent("@t/x#Body", () => <p>body</p>);
     render(
       <WidgetRenderer
         definition={{
-          ...bare,
-          component: "@t/x#Section",
-          chrome: undefined,
+          id: "acme/team",
+          title: "Team",
+          archetype: "custom",
+          size: "lg",
+          component: "@t/x#Body",
         }}
         slot={undefined}
       />
     );
-
-    expect(screen.getByTestId("widget-card-body")).toBeInTheDocument();
-  });
-
-  it("renders literally nothing when an unframed component draws nothing", () => {
-    // What lets the grid collapse the cell. Anything wrapped around the slot
-    // here -- a div, a class -- fills the cell and reinstates the blank row
-    // that core's self-hiding sections never produced before they were widgets.
-    registerComponent("@t/x#Nothing", () => null);
-    const { container } = render(
-      <WidgetRenderer
-        definition={{ ...bare, component: "@t/x#Nothing" }}
-        slot={undefined}
-      />
-    );
-
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByTestId("widget-card-body")).toHaveTextContent("body");
+    expect(screen.getAllByRole("heading", { name: "Team" })).toHaveLength(1);
   });
 });
