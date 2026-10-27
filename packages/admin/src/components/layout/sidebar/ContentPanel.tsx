@@ -28,7 +28,7 @@ import {
 } from "@admin/lib/sidebar-landing";
 import { cn } from "@admin/lib/utils";
 
-import type { ContentSection } from "./lib/content-rail";
+import { contentPanelView, type ContentSection } from "./lib/content-rail";
 import { SidebarSearch } from "./SidebarSearch";
 
 import { SidebarMenu } from "./index";
@@ -70,67 +70,28 @@ export function ContentPanel({
 
   // Matches come from the same search the lists draw with, so a count here can
   // never disagree with what a list shows.
-  const matches: Record<ContentSection, number> = {
-    collections: searchSidebarCollections(collections.items, search).length,
-    singles: searchSidebarSingles(singles.items, search).length,
-  };
-  const available: Record<ContentSection, boolean> = {
-    collections: hasCollections,
-    singles: hasSingles,
-  };
-  // With one kind to list there is nothing to choose between, so the control
-  // goes and that kind's list shows alone.
-  const shown: ContentSection = available[part]
-    ? part
-    : hasCollections
-      ? "collections"
-      : "singles";
-  const other: ContentSection =
-    shown === "collections" ? "singles" : "collections";
-  const showControl = hasCollections && hasSingles;
-  const otherHasMatches = showControl && search !== "" && matches[other] > 0;
-  const shownIsEmpty =
-    search !== "" &&
-    matches[shown] === 0 &&
-    !(shown === "collections" ? collections.isLoading : singles.isLoading);
+  const { shown, other, showControl, otherHasMatches, shownIsEmpty } =
+    contentPanelView({
+      part,
+      search,
+      available: { collections: hasCollections, singles: hasSingles },
+      matches: {
+        collections: searchSidebarCollections(collections.items, search).length,
+        singles: searchSidebarSingles(singles.items, search).length,
+      },
+      loading: {
+        collections: collections.isLoading,
+        singles: singles.isLoading,
+      },
+    });
 
   return (
     <div className="space-y-4 px-4 py-6">
       {showControl ? (
-        <nav
-          aria-label="Content type"
-          className="mx-2 flex rounded-md bg-muted p-1"
-        >
-          {(["collections", "singles"] as const).map(id => {
-            const current = id === shown;
-            const dot = id === other && otherHasMatches;
-            return (
-              <Link
-                key={id}
-                href={PART[id].href}
-                aria-current={current ? "page" : undefined}
-                className={cn(
-                  "relative flex h-11 flex-1 items-center justify-center rounded-sm text-sm transition-colors lg:h-8",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  current
-                    ? "bg-background font-semibold text-foreground shadow-sm"
-                    : "font-medium text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {PART[id].label}
-                {dot ? (
-                  <>
-                    <span
-                      aria-hidden="true"
-                      className="absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground"
-                    />
-                    <span className="sr-only">, has matches</span>
-                  </>
-                ) : null}
-              </Link>
-            );
-          })}
-        </nav>
+        <ContentTypeControl
+          shown={shown}
+          dotOn={otherHasMatches ? other : null}
+        />
       ) : null}
 
       <SidebarSearch
@@ -163,5 +124,53 @@ export function ContentPanel({
         </SidebarMenu>
       )}
     </div>
+  );
+}
+
+/**
+ * The segmented control: one link per part, the showing one current, and a dot
+ * on the part named by `dotOn` saying it has matches too.
+ */
+function ContentTypeControl({
+  shown,
+  dotOn,
+}: {
+  shown: ContentSection;
+  dotOn: ContentSection | null;
+}): JSX.Element {
+  return (
+    <nav
+      aria-label="Content type"
+      className="mx-2 flex rounded-md bg-muted p-1"
+    >
+      {(["collections", "singles"] as const).map(id => {
+        const current = id === shown;
+        return (
+          <Link
+            key={id}
+            href={PART[id].href}
+            aria-current={current ? "page" : undefined}
+            className={cn(
+              "relative flex h-11 flex-1 items-center justify-center rounded-sm text-sm transition-colors lg:h-8",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              current
+                ? "bg-background font-semibold text-foreground shadow-sm"
+                : "font-medium text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {PART[id].label}
+            {id === dotOn ? (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground"
+                />
+                <span className="sr-only">, has matches</span>
+              </>
+            ) : null}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

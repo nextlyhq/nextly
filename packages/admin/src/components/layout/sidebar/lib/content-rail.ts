@@ -12,7 +12,7 @@
 export const CONTENT_RAIL_ID = "content";
 
 /** The sections the Content item covers, in the order its control shows them. */
-export const CONTENT_SECTIONS = ["collections", "singles"] as const;
+const CONTENT_SECTIONS = ["collections", "singles"] as const;
 
 export type ContentSection = (typeof CONTENT_SECTIONS)[number];
 
@@ -38,4 +38,62 @@ export function panelSectionIds(
   return railIds.flatMap(id =>
     id === CONTENT_RAIL_ID ? CONTENT_SECTIONS.filter(s => available[s]) : [id]
   );
+}
+
+/** What the Content panel shows for one search. */
+export interface ContentPanelView {
+  /** The part whose list shows. */
+  shown: ContentSection;
+  /** The part that isn't showing. */
+  other: ContentSection;
+  /** Whether there are two parts to switch between. */
+  showControl: boolean;
+  /** Whether the part that isn't showing has matches for the search. */
+  otherHasMatches: boolean;
+  /** Whether the search found nothing in the part that shows. */
+  shownIsEmpty: boolean;
+}
+
+/**
+ * Decides what the Content panel shows, from what each part holds.
+ *
+ * A pure function so the panel only draws: every choice it makes about which
+ * part shows and what the search says lives here.
+ */
+export function contentPanelView({
+  part,
+  search,
+  available,
+  matches,
+  loading,
+}: {
+  /** The part the route asks for. */
+  part: ContentSection;
+  search: string;
+  /** Whether the reader has anything of each kind to list. */
+  available: Readonly<Record<ContentSection, boolean>>;
+  /** How many of each kind match the search. */
+  matches: Readonly<Record<ContentSection, number>>;
+  /** Whether each kind's list is still loading. */
+  loading: Readonly<Record<ContentSection, boolean>>;
+}): ContentPanelView {
+  // With one kind to list there is nothing to choose between, so the control
+  // goes and that kind's list shows alone.
+  const shown: ContentSection = available[part]
+    ? part
+    : available.collections
+      ? "collections"
+      : "singles";
+  const other: ContentSection =
+    shown === "collections" ? "singles" : "collections";
+  const showControl = available.collections && available.singles;
+  const searching = search !== "";
+  return {
+    shown,
+    other,
+    showControl,
+    otherHasMatches: showControl && searching && matches[other] > 0,
+    // A list still loading has not found nothing yet.
+    shownIsEmpty: searching && matches[shown] === 0 && !loading[shown],
+  };
 }
