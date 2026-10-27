@@ -42,6 +42,7 @@ import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
+import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 // Import validation conditionally - only in server environments
@@ -1152,17 +1153,36 @@ function toTitleCase(str: string): string {
  * carried into the union every reader shares, where an index-signature member
  * would widen property access for all of them.
  */
-function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+function asDeclaredFields(
+  fields: readonly AuthorableFieldConfig[]
+): FieldConfig[] {
   return fields as FieldConfig[];
 }
 
-export type CollectionConfigInput = Omit<CollectionConfig, "fields"> & {
-  fields: AuthorableFieldConfig[];
+/**
+ * A collection as `defineCollection` takes it.
+ *
+ * `Fields` is the declared fields as written, so a read rule's filter is
+ * typed by their names (see `CollectionRuleFilter`); `ReadAnswer` is what the
+ * read rule answers, inferred so each key of a filter it returns is checked.
+ * Both default to what they were before they were inferred, so a config
+ * annotated with this type reads as it did.
+ */
+export type CollectionConfigInput<
+  Fields extends readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
+  ReadAnswer = boolean,
+> = Omit<CollectionConfig, "fields" | "access"> & {
+  fields: Fields;
+  access?: Omit<CollectionAccessControl, "read"> & {
+    read?: CollectionFilterRuleInput<Fields, ReadAnswer>;
+  };
 };
 
-export function defineCollection(
-  config: CollectionConfigInput
-): CollectionConfig {
+export function defineCollection<
+  const Fields extends
+    readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
+  ReadAnswer = boolean,
+>(config: CollectionConfigInput<Fields, ReadAnswer>): CollectionConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================

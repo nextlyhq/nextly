@@ -83,10 +83,15 @@ import type {
  * // Multiple values (tags)
  * text({ name: 'tags', hasMany: true, minRows: 1, maxRows: 10 })
  * ```
+ *
+ * The factory of every field a rule's filter may name keeps the name as
+ * written, so `defineCollection` can type a read rule's filter by the
+ * collection's fields. A name the checker cannot know, such as one built at
+ * runtime, is `string`, and the filter is untyped.
  */
-export const text = (
-  config: Omit<TextFieldConfig, "type">
-): TextFieldConfig => ({
+export const text = <const Name extends string>(
+  config: Omit<TextFieldConfig, "type"> & { name: Name }
+): TextFieldConfig & { name: Name } => ({
   ...config,
   type: "text",
 });
@@ -109,9 +114,9 @@ export const text = (
  * textarea({ name: 'bio', admin: { rows: 5, resize: 'none' } })
  * ```
  */
-export const textarea = (
-  config: Omit<TextareaFieldConfig, "type">
-): TextareaFieldConfig => ({
+export const textarea = <const Name extends string>(
+  config: Omit<TextareaFieldConfig, "type"> & { name: Name }
+): TextareaFieldConfig & { name: Name } => ({
   ...config,
   type: "textarea",
 });
@@ -161,9 +166,9 @@ export const richText = (
  * email({ name: 'contactEmail', label: 'Contact Email' })
  * ```
  */
-export const email = (
-  config: Omit<EmailFieldConfig, "type">
-): EmailFieldConfig => ({
+export const email = <const Name extends string>(
+  config: Omit<EmailFieldConfig, "type"> & { name: Name }
+): EmailFieldConfig & { name: Name } => ({
   ...config,
   type: "email",
 });
@@ -219,9 +224,9 @@ export const password = (
  * })
  * ```
  */
-export const code = (
-  config: Omit<CodeFieldConfig, "type">
-): CodeFieldConfig => ({
+export const code = <const Name extends string>(
+  config: Omit<CodeFieldConfig, "type"> & { name: Name }
+): CodeFieldConfig & { name: Name } => ({
   ...config,
   type: "code",
 });
@@ -248,9 +253,9 @@ export const code = (
  * number({ name: 'amount', min: 0, dbType: 'decimal', scale: 2 })
  * ```
  */
-export const number = (
-  config: Omit<NumberFieldConfig, "type">
-): NumberFieldConfig => ({
+export const number = <const Name extends string>(
+  config: Omit<NumberFieldConfig, "type"> & { name: Name }
+): NumberFieldConfig & { name: Name } => ({
   ...config,
   type: "number",
 });
@@ -276,9 +281,9 @@ export const number = (
  * checkbox({ name: 'featured', label: 'Featured Post' })
  * ```
  */
-export const checkbox = (
-  config: Omit<CheckboxFieldConfig, "type">
-): CheckboxFieldConfig => ({
+export const checkbox = <const Name extends string>(
+  config: Omit<CheckboxFieldConfig, "type"> & { name: Name }
+): CheckboxFieldConfig & { name: Name } => ({
   ...config,
   type: "checkbox",
 });
@@ -310,9 +315,9 @@ export const checkbox = (
  * })
  * ```
  */
-export const date = (
-  config: Omit<DateFieldConfig, "type">
-): DateFieldConfig => ({
+export const date = <const Name extends string>(
+  config: Omit<DateFieldConfig, "type"> & { name: Name }
+): DateFieldConfig & { name: Name } => ({
   ...config,
   type: "date",
 });
@@ -351,9 +356,9 @@ export const date = (
  * })
  * ```
  */
-export const select = (
-  config: Omit<SelectFieldConfig, "type">
-): SelectFieldConfig => ({
+export const select = <const Name extends string>(
+  config: Omit<SelectFieldConfig, "type"> & { name: Name }
+): SelectFieldConfig & { name: Name } => ({
   ...config,
   type: "select",
 });
@@ -383,9 +388,9 @@ export const select = (
  * })
  * ```
  */
-export const radio = (
-  config: Omit<RadioFieldConfig, "type">
-): RadioFieldConfig => ({
+export const radio = <const Name extends string>(
+  config: Omit<RadioFieldConfig, "type"> & { name: Name }
+): RadioFieldConfig & { name: Name } => ({
   ...config,
   type: "radio",
 });
@@ -423,9 +428,9 @@ export const radio = (
  * })
  * ```
  */
-export const upload = (
-  config: Omit<UploadFieldConfig, "type">
-): UploadFieldConfig => ({
+export const upload = <const Name extends string>(
+  config: Omit<UploadFieldConfig, "type"> & { name: Name }
+): UploadFieldConfig & { name: Name } => ({
   ...config,
   type: "upload",
 });
@@ -463,9 +468,9 @@ export const upload = (
  * })
  * ```
  */
-export const relationship = (
-  config: Omit<RelationshipFieldConfig, "type">
-): RelationshipFieldConfig => ({
+export const relationship = <const Name extends string>(
+  config: Omit<RelationshipFieldConfig, "type"> & { name: Name }
+): RelationshipFieldConfig & { name: Name } => ({
   ...config,
   type: "relationship",
 });
