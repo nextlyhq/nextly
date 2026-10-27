@@ -893,7 +893,7 @@ function registerProbeWidgets(): void {
         id,
         title: id,
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         content: id,
         requiredPermission: `${action}-${slug}`,
       },

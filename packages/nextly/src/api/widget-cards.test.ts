@@ -40,7 +40,7 @@ const declarations: Record<string, unknown> = {
     owner: "plugin @acme/shop",
     declaration: {
       id: "acme/orders",
-      widths: ["full"],
+      size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
       data: ordersFunction,
       display: "metric",
@@ -52,7 +52,7 @@ const declarations: Record<string, unknown> = {
     owner: "plugin @acme/shop",
     declaration: {
       id: "acme/secret",
-      widths: ["full"],
+      size: { default: { w: 12, h: 3 } },
       data: async () => ({ total: 1 }),
       display: "metric",
     },
@@ -62,7 +62,7 @@ const declarations: Record<string, unknown> = {
     collections: { orders: "shop_orders" },
     declaration: {
       id: "acme/recent",
-      widths: ["full"],
+      size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
       data: {
         query: ({ settings }: { settings: { items: number } }) => ({
@@ -81,7 +81,7 @@ const declarations: Record<string, unknown> = {
     owner: "plugin @acme/shop",
     declaration: {
       id: "acme/shifty",
-      widths: ["full"],
+      size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
       data: {
         query: ({ settings }: { settings: { items: number } }) => ({
@@ -106,7 +106,8 @@ beforeEach(() => {
         {
           id: "c-orders",
           widgetId: "acme/orders",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
           config: { items: 3 },
         },
@@ -116,7 +117,8 @@ beforeEach(() => {
         {
           id: "c-recent",
           widgetId: "acme/recent",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
           config: { items: 2 },
         },
@@ -126,14 +128,15 @@ beforeEach(() => {
         {
           id: "c-shifty",
           widgetId: "acme/shifty",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
           config: { items: 9 },
         },
       ],
       [
         "c-gone",
-        { id: "c-gone", widgetId: "acme/gone", width: "full", removed: false },
+        { id: "c-gone", widgetId: "acme/gone", w: 12, h: 3, removed: false },
       ],
     ]) as never,
     // The widgets this caller could place: the layout write's own gate.

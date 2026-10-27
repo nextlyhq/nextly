@@ -23,6 +23,7 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
 
@@ -30,7 +31,6 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
   DashboardWidget,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "./archetypes/types";
@@ -211,8 +211,8 @@ export interface WidgetRendererProps {
   placement?: {
     id: string;
     settings: Record<string, unknown>;
-    /** The width the card is drawn at, for the size a declared component is handed. */
-    width?: WidgetWidth;
+    /** The size the card is drawn at, for the size a declared component is handed. */
+    size?: GridSize;
   };
 }
 

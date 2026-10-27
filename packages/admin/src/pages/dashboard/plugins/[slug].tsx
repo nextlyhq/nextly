@@ -4,6 +4,7 @@ import { Badge } from "@nextlyhq/ui";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 
+import { sizeName } from "@admin/components/features/widgets/sizes";
 import {
   BookOpen,
   ExternalLink,
@@ -540,7 +541,10 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       icon: LayoutDashboard,
       items: (plugin.widgets ?? []).map(widget => ({
         primary: widget.id,
-        secondary: widget.size ? `${widget.size} width` : undefined,
+        // The size a new card starts at, named as the card menu names it.
+        secondary: widget.size
+          ? `starts at ${sizeName(widget.size.default)}`
+          : undefined,
       })),
     },
     {

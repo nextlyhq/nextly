@@ -84,8 +84,7 @@ const shop = definePlugin({
           title: "Open orders",
           description: "Orders waiting to be sent",
           category: "Shop",
-          widths: ["half", "full"],
-          width: "full",
+          size: { default: { w: 12, h: 3 }, min: { w: 6, h: 3 } },
           permission: `read-${ORDERS}`,
           settings: { items: settings.items({ default: 5 }) },
           data: async ({ settings: values, services, signal }) => {
@@ -114,8 +113,7 @@ const shop = definePlugin({
           title: "Notes and orders",
           description: "Orders beside the notes desk",
           category: "Shop",
-          widths: ["full"],
-          width: "full",
+          size: { default: { w: 12, h: 3 } },
           permission: `read-${NOTES}`,
           data: async ({ services }) => ({
             // Options a plain JavaScript caller may pass anyway. None of them
@@ -133,8 +131,7 @@ const shop = definePlugin({
           title: "Slow",
           description: "Answers only when given up",
           category: "Shop",
-          widths: ["full"],
-          width: "full",
+          size: { default: { w: 12, h: 3 } },
           permission: `read-${ORDERS}`,
           data: async ({ signal }) => untilGivenUp(signal),
           display: "metric",
@@ -273,7 +270,7 @@ async function placeFor(
   await new WidgetLayoutService(handle!.adapter, silent).saveLayout(
     "user",
     userId,
-    cards.map(card => ({ ...card, width: "full", removed: false })),
+    cards.map(card => ({ ...card, w: 12, h: 3, removed: false })),
     0
   );
 }
