@@ -55,7 +55,6 @@ import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
-import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import {
@@ -107,6 +106,12 @@ export interface UseUpdateEntryOptions<
    * rollback, and query cancellation target the query the editor is showing.
    */
   draft?: boolean;
+  /**
+   * Whether the editor's read asks every language's translation state, as
+   * the editor decides it (`useAsksTranslationStatus`). Part of the cache
+   * identity for the same reason `draft` is. Defaults to false.
+   */
+  translationStatus?: boolean;
   /**
    * The entry's fields, for the labels a refusal over out-of-date shared
    * fields names them by; their names are used without them.
@@ -244,6 +249,7 @@ export function useUpdateEntry<
   locale,
   fallbackLocale,
   draft,
+  translationStatus = false,
   fields,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
@@ -267,7 +273,6 @@ export function useUpdateEntry<
     }, [queryClient, collectionSlug, entryId]),
   });
   const { enabled: localizationEnabled } = useLocalization();
-  const asksTranslationStatus = useAsksTranslationStatus(collectionSlug);
 
   // The optimistic cache is keyed by the same per-view dimensions useEntry reads
   // with, built through the shared `detailScoped` helper so the two can never
@@ -279,7 +284,7 @@ export function useUpdateEntry<
   const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
     locale,
     fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
-    translationStatus: asksTranslationStatus,
+    translationStatus,
     draft,
   });
 

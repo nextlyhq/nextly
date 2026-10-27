@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { updateSpy, onScreen } = vi.hoisted(() => ({
   updateSpy: vi.fn(),
-  onScreen: { localizationEnabled: false, asksTranslationStatus: false },
+  onScreen: { localizationEnabled: false },
 }));
 
 vi.mock("@admin/services/entryApi", async importOriginal => {
@@ -24,12 +24,6 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: onScreen.localizationEnabled }),
-}));
-
-// Whether the editor's read asks every language's translation state, as the
-// shared hook answers it for the read and the save alike.
-vi.mock("@admin/hooks/useCanRequest", () => ({
-  useAsksTranslationStatus: () => onScreen.asksTranslationStatus,
 }));
 
 vi.mock("@admin/components/ui", () => ({
@@ -58,7 +52,6 @@ describe("useUpdateEntry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     onScreen.localizationEnabled = false;
-    onScreen.asksTranslationStatus = false;
   });
 
   it("seeds the server response into the detail query the editor reads", async () => {
@@ -149,7 +142,6 @@ describe("useUpdateEntry", () => {
     // the document without `translationStatus`; the save writes to that same
     // entry, not to one keyed as if the state were asked.
     onScreen.localizationEnabled = true;
-    onScreen.asksTranslationStatus = false;
     const client = makeClient();
     const key = entryKeys.detailScoped("posts", "e1", {
       locale: "de",
@@ -167,6 +159,8 @@ describe("useUpdateEntry", () => {
           entryId: "e1",
           locale: "de",
           draft: false,
+          // As the editor decides it for this user.
+          translationStatus: false,
           showToast: false,
         }),
       { wrapper: makeWrapper(client) }
