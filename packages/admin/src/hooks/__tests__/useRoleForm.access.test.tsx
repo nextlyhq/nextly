@@ -40,6 +40,7 @@ vi.mock("../../services/roleApi", () => ({
     updateRole: vi.fn(async () => undefined),
     updateRolePermissions: vi.fn(async () => undefined),
     createRole: vi.fn(async () => undefined),
+    fetchRoles: vi.fn(async () => ({ items: [] })),
   },
 }));
 
@@ -187,5 +188,45 @@ describe("useRoleForm", () => {
     });
 
     expect(roleApi.updateRole).not.toHaveBeenCalled();
+  });
+
+  it("offers every role but the Public role to build on", async () => {
+    const base = { subtitle: "", description: "", permissions: [] };
+    vi.mocked(roleApi.fetchRoles).mockResolvedValue({
+      items: [
+        {
+          ...base,
+          id: "role-author",
+          roleName: "Author",
+          name: "Author",
+          slug: "author",
+          type: "Custom",
+          assignable: true,
+        },
+        {
+          ...base,
+          id: "role-public",
+          roleName: "Public",
+          name: "Public",
+          slug: "public",
+          type: "System",
+          assignable: false,
+        },
+      ],
+      meta: {
+        total: 2,
+        page: 1,
+        limit: 2,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      },
+    });
+    const { result } = await editingRole();
+
+    // The positive control: the list has loaded the role it can offer.
+    await waitFor(() =>
+      expect(result.current.allRoles.map(r => r.name)).toEqual(["Author"])
+    );
   });
 });

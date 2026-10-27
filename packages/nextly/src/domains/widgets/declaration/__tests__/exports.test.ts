@@ -17,14 +17,15 @@ describe("the widget declaration, from the package root", () => {
       type: "number",
       defaultValue: 5,
       min: 1,
-      max: 25,
+      max: 10,
     });
   });
 
   it("does not publish the startup and server-side internals", () => {
     // Checked at startup and run on the server; neither is an author's to call.
     for (const internal of [
-      "registerWidgetDeclarations",
+      "registerDashboardWidgets",
+      "CORE_OWNER",
       "buildCardQuery",
       "resolveCardSettings",
       "assertWidgetDeclarations",

@@ -88,6 +88,11 @@ const EVERY_ENTITY: Record<string, CollectionCapabilities> = new Proxy(
       canDelete: true,
       canPublish: true,
       canUnpublish: true,
+      canReadTranslations: true,
+      canReadHistory: true,
+      canPublishEveryLanguage: true,
+      canUpdateInDefaultLanguage: true,
+      canDuplicate: true,
     }),
   }
 );
@@ -120,6 +125,16 @@ const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
 });
 
 /**
+ * A cell of the server's answer, refused where the answer has none. An older
+ * server answers no cell for a request judged in other languages, and the
+ * action's own cell, judged in one language, cannot stand for it: it could
+ * offer what that server refuses.
+ */
+function cellOf(cell: boolean | undefined): boolean {
+  return cell ?? false;
+}
+
+/**
  * What the user may do with each collection and Single, as the server's
  * answer states it. No answer yet means nothing is known, so nothing is
  * offered: the map stays empty rather than guessed from permission slugs,
@@ -132,11 +147,20 @@ function collectionsFrom(
   for (const [slug, entity] of Object.entries(answer?.entities ?? {})) {
     collections[slug] = {
       canRead: entity.read,
-      canCreate: entity.create ?? false,
+      // Every create the admin sends names no language, so the server writes
+      // it in the default one: that is the create answered here, for the
+      // list's New, the create page and the quick-create modal alike.
+      canCreate: cellOf(entity.createInDefaultLanguage),
       canUpdate: entity.update,
-      canDelete: entity.delete ?? false,
+      canDelete: cellOf(entity.delete),
       canPublish: entity.publish,
       canUnpublish: entity.unpublish,
+      // Each request judged in other languages, as the server judges it.
+      canReadTranslations: cellOf(entity.readTranslations),
+      canReadHistory: cellOf(entity.readHistory),
+      canPublishEveryLanguage: cellOf(entity.publishEveryLanguage),
+      canUpdateInDefaultLanguage: cellOf(entity.updateInDefaultLanguage),
+      canDuplicate: cellOf(entity.duplicate),
     };
   }
   return collections;
@@ -224,8 +248,36 @@ const CAPABILITY_OF_ACTION = {
   unpublish: "canUnpublish",
 } as const satisfies Record<string, keyof CollectionCapabilities>;
 
+/**
+ * The capability flag each request judged in other languages is answered by.
+ * Not permission slugs: these are asked by name, never parsed from a slug.
+ */
+const CAPABILITY_OF_REQUEST = {
+  readTranslations: "canReadTranslations",
+  readHistory: "canReadHistory",
+  publishEveryLanguage: "canPublishEveryLanguage",
+  updateInDefaultLanguage: "canUpdateInDefaultLanguage",
+  duplicate: "canDuplicate",
+} as const satisfies Record<string, keyof CollectionCapabilities>;
+
+/** What `canAccessCollection` answers: an action, or a request judged in other languages. */
+export type CollectionAccess =
+  | keyof typeof CAPABILITY_OF_ACTION
+  | keyof typeof CAPABILITY_OF_REQUEST;
+
 /** An action the server's answer about collections and Singles covers. */
 type EntityAction = keyof typeof CAPABILITY_OF_ACTION;
+
+function isEntityAction(access: CollectionAccess): access is EntityAction {
+  return Object.hasOwn(CAPABILITY_OF_ACTION, access);
+}
+
+/** The capability flag that answers `access`. */
+function flagOf(access: CollectionAccess): keyof CollectionCapabilities {
+  return isEntityAction(access)
+    ? CAPABILITY_OF_ACTION[access]
+    : CAPABILITY_OF_REQUEST[access];
+}
 
 /**
  * The action and resource a permission slug (`<action>-<resource>`) names,
@@ -263,6 +315,13 @@ type AnswerState = {
    * assignment it was given for ends.
    */
   hasAnswer: boolean;
+  /**
+   * Whether the answer on screen belongs to another language, the one the
+   * screen moved from, kept while this language's is asked so the page stays
+   * mounted. It is not an answer for the language on screen: `hasAnswer` is
+   * false, so nothing is allowed on its word.
+   */
+  isPlaceholder: boolean;
 };
 
 /** What {@link useCurrentUserPermissions} returns. */
@@ -283,7 +342,7 @@ type CurrentUserPermissions = AnswerState & {
   hasPermission: (slug: string) => boolean;
   canAccessCollection: (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
+    action: CollectionAccess
   ) => boolean;
   /**
    * Whether the user may do what a permission slug names: an action on a
@@ -292,6 +351,32 @@ type CurrentUserPermissions = AnswerState & {
    */
   can: (permission: string) => boolean;
 };
+
+/**
+ * The capabilities answer last received in any language that still holds,
+ * kept on screen while another language's is asked: a placeholder, which
+ * grants nothing (see `isPlaceholder`). Taken from the cache rather than from
+ * the component asking, since one mounted during the switch (an editor mounted
+ * again for the document in the new language) has no previous answer of its
+ * own. An answer a change has invalidated may no longer describe the caller's
+ * access, so it is never one: the page waits instead.
+ */
+function latestAnswerHeld<T>(client: QueryClient): T | undefined {
+  let latest: { data: T; at: number } | undefined;
+  for (const query of client
+    .getQueryCache()
+    .findAll({ queryKey: CURRENT_USER_CAPABILITIES_KEY })) {
+    const { data, dataUpdatedAt, isInvalidated } = query.state;
+    if (
+      data !== undefined &&
+      !isInvalidated &&
+      (latest === undefined || dataUpdatedAt > latest.at)
+    ) {
+      latest = { data: data as T, at: dataUpdatedAt };
+    }
+  }
+  return latest?.data;
+}
 
 /** Whether the content answer has failed and has never answered. */
 function contentUnanswered(
@@ -345,6 +430,7 @@ type DeadlineStep =
 interface DeadlineState {
   ends: readonly number[];
   validUntil: number | null;
+  permissionsValidUntil: number | null;
   answeredAt: number;
   permissionsAnsweredAt: number;
   askedAt: number | null;
@@ -373,12 +459,20 @@ function passedEndStep(state: DeadlineState): DeadlineStep | null {
 
 /**
  * The next end to come, or, for an answer the server gave after its own end,
- * a check at most once a second, whichever is sooner.
+ * a check at most once a second, whichever is sooner. Either answer may be
+ * that answer: each names its end from its own read of the roles.
  */
-function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
+function waitingStep({
+  ends,
+  validUntil,
+  permissionsValidUntil,
+  now,
+}: DeadlineState): DeadlineStep {
   const next = Math.min(...ends.filter(end => end > now));
-  const recheck =
-    validUntil !== null && validUntil <= now ? now + MIN_RECHECK_MS : Infinity;
+  const givenAfterItsEnd = [validUntil, permissionsValidUntil].some(
+    end => end !== null && end <= now
+  );
+  const recheck = givenAfterItsEnd ? now + MIN_RECHECK_MS : Infinity;
   if (recheck < next) {
     return { kind: "wait", at: recheck, since: now, atEnd: false };
   }
@@ -391,6 +485,62 @@ function waitingStep({ ends, validUntil, now }: DeadlineState): DeadlineStep {
 interface NamedEnd {
   end: number;
   namedAt: number;
+}
+
+/**
+ * One answer's word on when the access it was read under ends: the soonest
+ * end of a role assignment, or null, and when that answer was asked.
+ */
+interface EndSource {
+  validUntil: number | null;
+  answeredAt: number;
+}
+
+/**
+ * The ends known once `sources` have answered, from the ends known before.
+ *
+ * Both answers state the same thing, the soonest end of the caller's role
+ * assignments, each from its own read. An end is kept once it has passed,
+ * and until then while every answer newer than the one that named it names
+ * it too: a newer answer that does not says no such end remains, the
+ * assignment having been removed or extended. Each answer's own end is added
+ * where it is not known yet. Exported so a test can drive it directly.
+ */
+export function namedEndsAfter(
+  ends: readonly NamedEnd[],
+  sources: readonly EndSource[],
+  now: number
+): readonly NamedEnd[] {
+  let named = ends.filter(
+    ({ end, namedAt }) =>
+      end <= now ||
+      sources.every(
+        ({ validUntil, answeredAt }) =>
+          validUntil === end || answeredAt <= namedAt
+      )
+  );
+  for (const { validUntil, answeredAt } of sources) {
+    if (validUntil !== null && !named.some(({ end }) => end === validUntil)) {
+      named = [...named, { end: validUntil, namedAt: answeredAt }];
+    }
+  }
+  return named;
+}
+
+/**
+ * Whether two lists name the same ends from the same answers, in order.
+ * Compared by value: an end one answer drops and another still names is kept
+ * as a new entry of the same end, and comparing entries by identity would set
+ * the list again on every render.
+ */
+function sameEnds(a: readonly NamedEnd[], b: readonly NamedEnd[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (named, index) =>
+        named.end === b[index]?.end && named.namedAt === b[index]?.namedAt
+    )
+  );
 }
 
 /**
@@ -424,7 +574,7 @@ function latestPassed(ends: readonly number[], now: number): number | null {
 function answerState(
   query: Pick<
     UseQueryResult<{ askedAt?: number }>,
-    "data" | "error" | "isFetching" | "isPending"
+    "data" | "error" | "isFetching" | "isPending" | "isPlaceholderData"
   >,
   endedAt: number | null,
   invalidated: boolean
@@ -439,7 +589,13 @@ function answerState(
       query.isPending ||
       (unusable && (query.isFetching || query.error === null)),
     error: query.error,
-    hasAnswer: query.data !== undefined && !unusable,
+    hasAnswer:
+      query.data !== undefined && !unusable && !query.isPlaceholderData,
+    // Only another language's answer is kept on screen, and only while it
+    // holds: one that no longer does (this language's own, or the one moved
+    // from once a change invalidates it) may have stopped holding because
+    // access changed, and is waited on rather than kept.
+    isPlaceholder: query.isPlaceholderData && !unusable,
   };
 }
 
@@ -530,6 +686,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         )
       ),
     enabled: isPrivateRoute,
+    // The language moved from keeps the page mounted while the new one is
+    // asked; it counts as no answer (see `isPlaceholder`).
+    placeholderData: () => latestAnswerHeld(queryClient),
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
     // A failed answer is asked again on the schedule below and on focus, not
@@ -578,6 +737,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // the admin offering what an ended role allowed.
   const validUntil = answer.data?.validUntil ?? null;
   const answeredAt = askedAtOf(answer.data);
+  // The permission list names the same end, from its own read of the roles.
+  const permissionsValidUntil = data?.validUntil ?? null;
+  const permissionsAnsweredAt = askedAtOf(data);
   // Every end an answer has named, kept apart from the answer that named it:
   // an answer given after an end can drop it (with null, once the ending
   // assignment is gone) before that end's timer has run, and the other
@@ -590,27 +752,28 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // from the cache, retires nothing. Kept in the render that first sees it,
   // so no ordering of responses and timers can lose one.
   const [ends, setEnds] = useState<readonly NamedEnd[]>([]);
-  const namedEnds = useMemo(() => {
-    const now = Date.now();
-    const kept = ends.filter(
-      ({ end, namedAt }) =>
-        end === validUntil || end <= now || answeredAt <= namedAt
-    );
-    return validUntil === null || kept.some(({ end }) => end === validUntil)
-      ? kept
-      : [...kept, { end: validUntil, namedAt: answeredAt }];
-  }, [ends, validUntil, answeredAt]);
-  if (
-    namedEnds.length !== ends.length ||
-    namedEnds.some((named, index) => named !== ends[index])
-  ) {
+  const namedEnds = useMemo(
+    () =>
+      namedEndsAfter(
+        ends,
+        [
+          { validUntil, answeredAt },
+          {
+            validUntil: permissionsValidUntil,
+            answeredAt: permissionsAnsweredAt,
+          },
+        ],
+        Date.now()
+      ),
+    [ends, validUntil, answeredAt, permissionsValidUntil, permissionsAnsweredAt]
+  );
+  if (!sameEnds(namedEnds, ends)) {
     setEnds(namedEnds);
   }
   const knownEnds = useMemo(() => namedEnds.map(({ end }) => end), [namedEnds]);
   // The latest end that has passed, read at render, so an answer already past
   // its end when this mounts never counts, not even until a timer fires.
   const endedAt = latestPassed(knownEnds, Date.now());
-  const permissionsAnsweredAt = askedAtOf(data);
   const [, setEndsReached] = useState(0);
   useEffect(() => {
     // `since`: the moment the step was due. Another caller that asked after it
@@ -635,6 +798,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     const step = nextDeadlineStep({
       ends: knownEnds,
       validUntil,
+      permissionsValidUntil,
       answeredAt,
       permissionsAnsweredAt,
       askedAt: deadlineAsks.get(queryClient) ?? null,
@@ -671,6 +835,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   }, [
     knownEnds,
     validUntil,
+    permissionsValidUntil,
     answeredAt,
     permissionsAnsweredAt,
     refetch,
@@ -723,11 +888,11 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
    */
   const canAccessCollection = (
     collectionSlug: string,
-    action: "read" | "create" | "update" | "delete" | "publish" | "unpublish"
+    action: CollectionAccess
   ): boolean => {
     const entity = capabilities.collections[collectionSlug];
     if (!entity) return false;
-    return entity[CAPABILITY_OF_ACTION[action]];
+    return entity[flagOf(action)];
   };
 
   /**

@@ -20,7 +20,7 @@
  */
 
 import type { CanonicalWidget } from "./canonical";
-import { CORE_WIDGETS, type CoreWidgetId } from "./core-widgets";
+import { CORE_WIDGET_IDS, type CoreWidgetId } from "./core-widgets";
 
 /** The groups a widget can be listed in, in the panel's order. */
 export const ADD_PANEL_GROUPS = [
@@ -53,8 +53,9 @@ const CORE_GROUPS = {
 } as const satisfies Record<CoreWidgetId, AddPanelGroup>;
 
 /** A built-in's place in core's own order, for Overview's first rows. */
-const CORE_ORDER = new Map(
-  CORE_WIDGETS.map((widget, index) => [widget.id, index])
+// Keyed by any widget id: the panel asks it of every widget, core's or not.
+const CORE_ORDER = new Map<string, number>(
+  CORE_WIDGET_IDS.map((id, index) => [id, index])
 );
 
 /** What the add panel shows about a widget beside its name. */
