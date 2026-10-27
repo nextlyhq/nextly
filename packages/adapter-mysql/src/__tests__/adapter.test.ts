@@ -41,7 +41,8 @@ const mockPool = {
   query: vi.fn(),
   end: vi.fn().mockResolvedValue(undefined),
   // The callback pool under the promise wrapper, as mysql2 gives it: the
-  // adapter bounds the wait in its `getConnection`, and reads its queues.
+  // adapter bounds the wait in its `getConnection`, reads its queues, and
+  // pins the session time zone through its `connection` event.
   pool: {
     _allConnections: { length: 5 },
     _freeConnections: { length: 3 },
@@ -50,6 +51,7 @@ const mockPool = {
     config: {},
     getConnection: vi.fn(),
     once: vi.fn(),
+    on: vi.fn(),
     removeListener: vi.fn(),
   },
 };
@@ -334,6 +336,66 @@ describe("@nextly/adapter-mysql", () => {
           charset: "utf8mb4",
         })
       );
+    });
+
+    it("pins the session time zone when each pooled connection opens", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+
+      await adapter.connect();
+
+      // The pin rides mysql2's `connection` event on the callback pool, which
+      // the promise wrapper does not re-emit — reached, like the queue the
+      // pool wait bounds, through `pool.pool`.
+      expect(mockPool.pool.on).toHaveBeenCalledWith(
+        "connection",
+        expect.any(Function)
+      );
+      const pin = mockPool.pool.on.mock.calls.find(
+        ([event]) => event === "connection"
+      )![1];
+
+      const query = vi.fn((_sql: string, cb: (error: Error | null) => void) =>
+        cb(null)
+      );
+      const destroy = vi.fn();
+      pin({ query, destroy });
+      expect(query).toHaveBeenCalledWith(
+        "SET SESSION time_zone = '+00:00'",
+        expect.any(Function)
+      );
+      // A pinned session goes back to the pool untouched.
+      expect(destroy).not.toHaveBeenCalled();
+
+      // A session the pin could not reach must never be pooled: whatever
+      // zone it answers in would serve shifted values.
+      const failing = vi.fn((_sql: string, cb: (error: Error | null) => void) =>
+        cb(new Error("gone"))
+      );
+      pin({ query: failing, destroy });
+      expect(destroy).toHaveBeenCalled();
+    });
+
+    it("aligns a non-UTC driver zone to the pinned UTC session", async () => {
+      const mysql = await import("mysql2/promise");
+      const warn = vi.fn();
+
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+        timezone: "+05:30",
+        logger: { warn },
+      });
+
+      await adapter.connect();
+
+      // The session is pinned to UTC; a driver parsing in +05:30 beside it
+      // would shift every value a round-trip fails to cancel. Aligned, not
+      // refused, and the caller is told the shift they configured is gone.
+      expect(mysql.default.createPool).toHaveBeenCalledWith(
+        expect.objectContaining({ timezone: "Z" })
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("+05:30"));
     });
   });
 
