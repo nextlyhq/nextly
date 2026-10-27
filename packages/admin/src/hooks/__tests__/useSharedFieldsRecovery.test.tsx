@@ -5,6 +5,11 @@
  * taken as the pending change, takes the live values, has the form show them,
  * then reloads. Any other error is left to the caller to report.
  */
+import {
+  onlineManager,
+  QueryClient,
+  QueryObserver,
+} from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +43,7 @@ import type { HookWarning } from "@admin/lib/mutation-warnings";
 
 import {
   type RefusedForm,
+  reloadDocument,
   takenMessage,
   useSharedFieldsRecovery,
 } from "../useSharedFieldsRecovery";
@@ -68,7 +74,8 @@ function renderRecovery(
         (await args.save?.(values)) as
           | { warnings?: readonly HookWarning[] }
           | undefined,
-      onTaken: args.onTaken ?? vi.fn(),
+      // Whatever the stand-in does, answered as a reload is.
+      onTaken: async () => args.onTaken?.(),
     })
   );
   return { recover: rendered.result.current, unmount: rendered.unmount };
@@ -84,8 +91,8 @@ function formHolding(
       order.push("read");
       return values;
     }),
-    adoptTaken: vi.fn((fields: readonly string[]) => {
-      order.push(`adopt ${fields.join(",")}`);
+    saved: vi.fn(() => {
+      order.push("saved");
     }),
     // A mock of the generic gate, typed as the port's: the mock itself only
     // sees `unknown`, which is all the recovery hands back through it.
@@ -169,8 +176,8 @@ describe("useSharedFieldsRecovery", () => {
       "hold",
       "read",
       "save",
+      "saved",
       "take",
-      "adopt articleCount",
       "reload",
       "release",
     ]);
@@ -228,16 +235,7 @@ describe("useSharedFieldsRecovery", () => {
     [
       "succeeds",
       () => undefined,
-      [
-        "hold",
-        "taking",
-        "read",
-        "adopt articleCount",
-        "taken",
-        "reload",
-        "release",
-        "done",
-      ],
+      ["hold", "taking", "read", "saved", "taken", "reload", "release", "done"],
     ],
     [
       "fails",
@@ -349,7 +347,7 @@ describe("useSharedFieldsRecovery", () => {
           locale,
           fields: [{ name: "articleCount", label: "Article Count" }],
           save: async () => undefined,
-          onTaken: vi.fn(),
+          onTaken: async () => undefined,
         }),
       { initialProps: { locale: "es" } }
     );
@@ -370,7 +368,7 @@ describe("useSharedFieldsRecovery", () => {
     expect(english).not.toBe(spanish);
   });
 
-  it("doesn't show the live values in a form the editor has moved to another language", async () => {
+  it("takes into the language it was refused for, even once the editor has moved to another", async () => {
     let arrive: (answer: unknown) => void = () => {};
     take.mockImplementation(
       () =>
@@ -410,9 +408,8 @@ describe("useSharedFieldsRecovery", () => {
     });
     await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
 
-    // Spanish's live values are not written into the English form.
-    expect(form.adoptTaken).not.toHaveBeenCalled();
-    // The take itself named Spanish and stands; the reload shows it.
+    // The take names Spanish, the language it was refused for, and stands;
+    // the form then starts afresh from whatever is on screen.
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
       "es"
@@ -469,8 +466,8 @@ describe("useSharedFieldsRecovery", () => {
       "hold",
       "read",
       "save",
+      "saved",
       "take",
-      "adopt articleCount",
       "reload",
       "reloaded",
       "release",
@@ -541,5 +538,398 @@ describe("takenMessage", () => {
     expect(takenMessage({ taken: [], outOfDate: [] }, "Spanish", label)).toBe(
       "Spanish was already up to date."
     );
+  });
+});
+
+describe("a recovery whose reload fails", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** A click on a toast's action, whose default would close the toast. */
+  const click = () => ({ preventDefault: vi.fn() });
+
+  /** The toast offering the reload again, once it has been offered. */
+  function reloadOffer():
+    | { onClick: (event: ReturnType<typeof click>) => void }
+    | undefined {
+    const call = toast.error.mock.calls.find(
+      ([message]) =>
+        message ===
+        "The live values were taken and saved, but the editor couldn't load them."
+    ) as
+      | [
+          string,
+          {
+            action: {
+              label: string;
+              onClick: (event: ReturnType<typeof click>) => void;
+            };
+          },
+        ]
+      | undefined;
+    return call?.[1].action;
+  }
+
+  it("keeps the form held and offers a reload, then releases it once a reload succeeds", async () => {
+    take.mockResolvedValue({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    const order: string[] = [];
+    const reload = vi
+      .fn<() => unknown>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("still offline"))
+      .mockResolvedValue(undefined);
+    const { recover } = renderRecovery({
+      onTaken: () => {
+        order.push("reload");
+        return reload();
+      },
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 }, order)
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    // Held: the form is not released while it lacks the live values. What did
+    // commit is still said.
+    expect(order).not.toContain("release");
+    expect(toast.success).toHaveBeenCalledWith(
+      "Spanish now uses the live Article Count. Its earlier value is in History."
+    );
+
+    // A reload that fails again leaves it held, and offers it again.
+    const firstOffer = reloadOffer();
+    toast.error.mockClear();
+    const retry = click();
+    firstOffer?.onClick(retry);
+    // Kept open, now saying the reload is under way.
+    expect(retry.preventDefault).toHaveBeenCalled();
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(order).not.toContain("release");
+
+    // One that succeeds releases the form, and the offer goes.
+    reloadOffer()?.onClick(click());
+    await vi.waitFor(() => expect(order).toContain("release"));
+    expect(reload).toHaveBeenCalledTimes(3);
+    const shown = (toast.loading.mock.calls[0] as unknown[])[1] as {
+      id: string;
+    };
+    expect(toast.dismiss).toHaveBeenLastCalledWith(shown.id);
+  });
+
+  it("offers the reload in a toast that can't be swiped away, kept across a language switch and gone with the editor", async () => {
+    take.mockResolvedValue({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    const rendered = renderHook(
+      ({ locale }: { locale: string }) =>
+        useSharedFieldsRecovery({
+          scope: { kind: "collection", slug: "authors", entryId: "e1" },
+          locale,
+          fields: [{ name: "articleCount", label: "Article Count" }],
+          save: async () => undefined,
+          onTaken: () => Promise.reject(new Error("offline")),
+        }),
+      { initialProps: { locale: "es" } }
+    );
+    rendered.result.current(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 })
+    );
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+
+    const [, offered] = toast.error.mock.calls.find(
+      ([message]) =>
+        message ===
+        "The live values were taken and saved, but the editor couldn't load them."
+    ) as [string, { id: string; dismissible?: boolean }];
+    expect(offered.dismissible).toBe(false);
+
+    // The same form stays held in the other language, so the offer stays.
+    rendered.rerender({ locale: "en" });
+    expect(toast.dismiss).not.toHaveBeenCalledWith(offered.id);
+    // The editor goes, and its hold with it.
+    rendered.unmount();
+    expect(toast.dismiss).toHaveBeenCalledWith(offered.id);
+  });
+
+  /** A recovery on a document the test can move, whose reload fails. */
+  function failingRecovery(reload: () => Promise<unknown>) {
+    take.mockResolvedValue({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    const order: string[] = [];
+    const rendered = renderHook(
+      ({ entryId, locale }: { entryId: string | null; locale: string }) =>
+        useSharedFieldsRecovery({
+          // No id while a document loads.
+          scope:
+            entryId === null
+              ? null
+              : { kind: "collection", slug: "authors", entryId },
+          locale,
+          fields: [{ name: "articleCount", label: "Article Count" }],
+          save: async () => undefined,
+          onTaken: reload,
+        }),
+      {
+        initialProps: { entryId: "e1", locale: "es" } as {
+          entryId: string | null;
+          locale: string;
+        },
+      }
+    );
+    rendered.result.current(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 }, order)
+    );
+    actionOf(toast.error.mock.calls[0])();
+    return { order, rendered };
+  }
+
+  it("runs one reload at a time, however often Reload is clicked", async () => {
+    let finish: (ok: boolean) => void = () => {};
+    const reload = vi
+      .fn<() => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            finish = ok => (ok ? resolve(undefined) : reject(new Error("x")));
+          })
+      );
+    const { order } = failingRecovery(reload);
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+
+    const offer = reloadOffer();
+    offer?.onClick(click());
+    offer?.onClick(click());
+    expect(reload).toHaveBeenCalledTimes(2);
+
+    finish(true);
+    await vi.waitFor(() => expect(order).toContain("release"));
+  });
+
+  it("offers nothing more once the editor has gone, if a reload in flight then fails", async () => {
+    let fail: () => void = () => {};
+    const reload = vi
+      .fn<() => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = () => reject(new Error("offline"));
+          })
+      );
+    const { rendered } = failingRecovery(reload);
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    reloadOffer()?.onClick(click());
+
+    rendered.unmount();
+    toast.error.mockClear();
+    fail();
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(reloadOffer()).toBeUndefined();
+  });
+
+  it("releases the form, and drops the offer, when the editor moves to another document", async () => {
+    const { order, rendered } = failingRecovery(() =>
+      Promise.reject(new Error("offline"))
+    );
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    const [, offered] = toast.error.mock.calls.find(
+      ([message]) =>
+        message ===
+        "The live values were taken and saved, but the editor couldn't load them."
+    ) as [string, { id: string }];
+
+    // Another language of the same document: the same form, still held.
+    rendered.rerender({ entryId: "e1", locale: "en" });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(order).not.toContain("release");
+    expect(toast.dismiss).not.toHaveBeenCalledWith(offered.id);
+
+    // Another document: the form shows it afresh, so nothing is held for
+    // the one the live values were taken into.
+    rendered.rerender({ entryId: "e2", locale: "en" });
+    await vi.waitFor(() => expect(order).toContain("release"));
+    expect(toast.dismiss).toHaveBeenCalledWith(offered.id);
+  });
+
+  it("keeps its hold through a moment with no document, and lets go quietly on a move to another", async () => {
+    const { order, rendered } = failingRecovery(() =>
+      Promise.reject(new Error("offline"))
+    );
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+
+    // Another language still loading: no document for a moment.
+    rendered.rerender({ entryId: null, locale: "en" });
+    rendered.rerender({ entryId: "e1", locale: "en" });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(order).not.toContain("release");
+
+    // Another document: let go, with nothing to report as a failure.
+    toast.error.mockClear();
+    rendered.rerender({ entryId: "e2", locale: "en" });
+    await vi.waitFor(() => expect(order).toContain("release"));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("leaves a running take's hold alone when a second take is refused at the gate", async () => {
+    take.mockResolvedValue({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    const order: string[] = [];
+    let reloads = 0;
+    let firstReload: (ok: boolean) => void = () => {};
+    const { recover } = renderRecovery({
+      onTaken: () => {
+        reloads += 1;
+        if (reloads > 1) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          firstReload = ok =>
+            ok ? resolve(undefined) : reject(new Error("x"));
+        });
+      },
+    });
+    // A form whose gate admits one recovery at a time, as the editor's does.
+    let busy = false;
+    const form = formHolding({ articleCount: 3 }, order);
+    form.run = (async (work: () => Promise<unknown>) => {
+      if (busy) throw new Error("A save is already in progress.");
+      busy = true;
+      order.push("hold");
+      try {
+        return await work();
+      } finally {
+        busy = false;
+        order.push("release");
+      }
+    }) as RefusedForm["run"];
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+    const takeAction = actionOf(toast.error.mock.calls[0]);
+
+    takeAction();
+    await vi.waitFor(() => expect(reloads).toBe(1));
+    // A second click while the first is mid-reload: refused at the gate.
+    takeAction();
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("A save is already in progress.")
+    );
+
+    // The first's reload fails: it still holds the form, and offers Reload.
+    firstReload(false);
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    expect(order.filter(step => step === "release")).toHaveLength(0);
+  });
+
+  it("still holds the form when the editor comes back to the document before its reload fails", async () => {
+    let failFirst: () => void = () => {};
+    const reload = vi
+      .fn<() => Promise<unknown>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            failFirst = () => reject(new Error("offline"));
+          })
+      )
+      .mockRejectedValue(new Error("offline"));
+    const { order, rendered } = failingRecovery(reload);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // Away to another document and back while the reload is in flight.
+    rendered.rerender({ entryId: "e2", locale: "es" });
+    rendered.rerender({ entryId: "e1", locale: "es" });
+    failFirst();
+
+    // Back on the document the live values were taken into, which still
+    // lacks them: held, with Reload offered.
+    await vi.waitFor(() => expect(reloadOffer()).toBeDefined());
+    expect(order).not.toContain("release");
+  });
+});
+
+describe("reloadDocument", () => {
+  function observed(queryFn: () => Promise<unknown>) {
+    const client = new QueryClient();
+    const observer = new QueryObserver(client, {
+      queryKey: ["doc"],
+      queryFn,
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    return { client, unsubscribe };
+  }
+
+  it("rejects when the document's refetch fails", async () => {
+    let fail = false;
+    const { client, unsubscribe } = observed(async () => {
+      if (fail) throw new Error("offline");
+      return { id: "e1" };
+    });
+    await vi.waitFor(() =>
+      expect(client.getQueryData(["doc"])).toEqual({ id: "e1" })
+    );
+    fail = true;
+
+    await expect(reloadDocument(client, ["doc"])).rejects.toThrow(
+      "couldn't be reloaded"
+    );
+    unsubscribe();
+  });
+
+  it("rejects when the refetch is paused offline, which otherwise answers as if it ran", async () => {
+    const { client, unsubscribe } = observed(async () => ({ id: "e1" }));
+    await vi.waitFor(() =>
+      expect(client.getQueryData(["doc"])).toEqual({ id: "e1" })
+    );
+    onlineManager.setOnline(false);
+    try {
+      await expect(reloadDocument(client, ["doc"])).rejects.toThrow(
+        "couldn't be reloaded"
+      );
+    } finally {
+      onlineManager.setOnline(true);
+      unsubscribe();
+    }
+  });
+
+  it("answers once the document is back", async () => {
+    let version = 1;
+    const { client, unsubscribe } = observed(async () => ({ version }));
+    await vi.waitFor(() =>
+      expect(client.getQueryData(["doc"])).toEqual({ version: 1 })
+    );
+    version = 2;
+
+    await reloadDocument(client, ["doc"]);
+    expect(client.getQueryData(["doc"])).toEqual({ version: 2 });
+    unsubscribe();
   });
 });

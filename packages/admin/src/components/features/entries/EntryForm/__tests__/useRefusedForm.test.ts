@@ -5,7 +5,7 @@
  */
 import { act, renderHook } from "@testing-library/react";
 import type { UseFormReturn } from "react-hook-form";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { useRefusedForm } from "../useRefusedForm";
 
@@ -18,15 +18,20 @@ function formWhoseSubmitRejects(): UseFormReturn<Record<string, unknown>> {
 }
 
 describe("useRefusedForm", () => {
+  /** The gate an editor hands the recovery, recording what it was asked. */
+  function gate() {
+    return {
+      writesHeld: () => false,
+      latch: { current: false },
+      resetToDocument: vi.fn(),
+      saved: vi.fn(),
+    };
+  }
+
   it("rejects, and releases the hold, when the form's own submit rejects", async () => {
-    const latch = { current: false };
-    const ownSave = { current: { inFlight: false } };
+    const editor = gate();
     const { result } = renderHook(() =>
-      useRefusedForm(formWhoseSubmitRejects(), values => values, {
-        writesHeld: () => false,
-        latch,
-        ownSave,
-      })
+      useRefusedForm(formWhoseSubmitRejects(), values => values, editor)
     );
 
     let outcome: Promise<unknown> | undefined;
@@ -38,19 +43,51 @@ describe("useRefusedForm", () => {
           (error: unknown) => error
         );
     });
-    // Held while it runs: the form, the editor's latch and its own-save mark.
+    // Held while it runs: the form and the editor's latch.
     expect(result.current.recovering).toBe(true);
-    expect(latch.current).toBe(true);
-    expect(ownSave.current.inFlight).toBe(true);
+    expect(editor.latch.current).toBe(true);
 
     let settled: unknown;
     await act(async () => {
       settled = await outcome;
     });
     expect(settled).toEqual(new Error("The resolver threw."));
-    // And released, so a later save finds the editor free, not busy.
+    // And released, so a later save finds the editor free, not busy. The
+    // form keeps what it holds: nothing was saved or taken.
     expect(result.current.recovering).toBe(false);
-    expect(latch.current).toBe(false);
-    expect(ownSave.current.inFlight).toBe(false);
+    expect(editor.latch.current).toBe(false);
+    expect(editor.resetToDocument).not.toHaveBeenCalled();
+  });
+
+  it("starts the form afresh from the document on screen once the recovery has run, then releases it", async () => {
+    const editor = gate();
+    const { result } = renderHook(() =>
+      useRefusedForm(formWhoseSubmitRejects(), values => values, editor)
+    );
+    let heldAtReset: boolean | undefined;
+    editor.resetToDocument.mockImplementation(() => {
+      heldAtReset = editor.latch.current;
+    });
+
+    await act(async () => {
+      await result.current.refusedForm.run(async () => "done");
+    });
+
+    expect(editor.resetToDocument).toHaveBeenCalledTimes(1);
+    // Reset while still held, so nothing can be typed between the two.
+    expect(heldAtReset).toBe(true);
+    expect(editor.latch.current).toBe(false);
+    expect(result.current.recovering).toBe(false);
+  });
+
+  it("hands the editor word of the recovery's save", () => {
+    const editor = gate();
+    const { result } = renderHook(() =>
+      useRefusedForm(formWhoseSubmitRejects(), values => values, editor)
+    );
+
+    result.current.refusedForm.saved();
+
+    expect(editor.saved).toHaveBeenCalledTimes(1);
   });
 });

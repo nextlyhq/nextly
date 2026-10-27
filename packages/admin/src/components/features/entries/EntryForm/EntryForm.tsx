@@ -350,6 +350,8 @@ export function EntryForm({
     locale,
     readDraft,
     writesHeld: () => writesHeldNow.current,
+    // A refused publish's recovery saves the form too: counted as a save.
+    onRecoverySaved: () => setSavedCount(n => n + 1),
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves

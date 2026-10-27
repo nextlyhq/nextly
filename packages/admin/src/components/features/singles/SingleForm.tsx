@@ -565,11 +565,15 @@ export function SingleForm({
   // the version on screen are known; read when a recovery runs.
   const writesHeldNow = useRef(false);
 
+  // How many times this form has saved: see the preview pane below. A
+  // refused publish's recovery saves the form too, and counts.
+  const [savedCount, setSavedCount] = useState(0);
+
   // The form as a refused publish's way out reaches it: saved as the pending
-  // change the way a status-less save sends it, given the live values it
-  // takes when the Single carrying them arrives, and run inside this form's
-  // own write gate.
-  const { refusedForm, adoptArrived, recovering } = useRefusedForm(
+  // change the way a status-less save sends it, run inside this form's own
+  // write gate, then started afresh from the Single that carries the live
+  // values it takes.
+  const { refusedForm, recovering } = useRefusedForm(
     form,
     values =>
       withoutPlaceholders(
@@ -579,7 +583,8 @@ export function SingleForm({
     {
       writesHeld: () => writesHeldNow.current,
       latch: submissionLatch,
-      ownSave,
+      resetToDocument: () => form.reset(defaultValuesRef.current),
+      saved: () => setSavedCount(n => n + 1),
     }
   );
 
@@ -587,9 +592,10 @@ export function SingleForm({
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
     if (lastResetKeyRef.current === resetKey) {
-      // Taking the live values keeps the Single's key, so there is no reset
-      // to follow; the fields taken still have to show what arrived.
-      adoptArrived(defaultValuesRef.current);
+      // The same key can carry newer content: a pending-change save, or the
+      // live values a refused publish's recovery takes, keep it. A form
+      // holding nothing unsaved has nothing to lose, so it takes that content.
+      if (!form.formState.isDirty) form.reset(defaultValuesRef.current);
       return;
     }
     const place = JSON.stringify([document.id, locale ?? null]);
@@ -600,8 +606,7 @@ export function SingleForm({
       sameDocument &&
       (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
-    adoptArrived(defaultValuesRef.current);
-  }, [document, locale, form, adoptArrived]);
+  }, [document, locale, form]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -622,7 +627,7 @@ export function SingleForm({
    * both stand still while its content changes underneath them. Counting saves
    * is the only signal to that write available on this side of the wire.
    */
-  const [savedCount, setSavedCount] = useState(0);
+  // `savedCount` itself is declared above, with the recovery that counts too.
 
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection

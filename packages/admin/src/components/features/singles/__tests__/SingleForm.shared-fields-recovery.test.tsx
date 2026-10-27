@@ -44,8 +44,10 @@ const { useDocumentLock, autosaveOffer } = vi.hoisted(() => ({
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
-  useAutosaveRecovery: () => ({
-    offer: autosaveOffer.current,
+  // As the hook does: an offer is withdrawn once a save lands, which the
+  // editor reports through `savedCount` (see the hook's own tests).
+  useAutosaveRecovery: ({ savedCount = 0 }: { savedCount?: number }) => ({
+    offer: savedCount > 0 ? null : autosaveOffer.current,
     isResolved: true,
     dismiss: () => {},
     restore: () => {},
@@ -180,7 +182,7 @@ describe("a Single's form, for a publish refused over shared values", () => {
     expect(values).not.toHaveProperty("status");
   });
 
-  it("shows the live value of a taken field, keeps every other edit, and saves the live value next", async () => {
+  it("starts the form afresh from the reloaded Single, so it shows the live value and saves it next", async () => {
     const user = userEvent.setup();
     const onSubmit = refusedOnce();
     const { rerenderWith } = renderSingle(onSubmit);
@@ -195,28 +197,24 @@ describe("a Single's form, for a publish refused over shared values", () => {
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 
-    act(() => {
-      refusedFormOf(onSubmit)?.adoptTaken(["heroTitle"]);
-    });
-    // Typed while the live values were being taken: newer than anything the
-    // reloaded Single carries.
-    await user.clear(tagline);
-    await user.type(tagline, "Later");
-    // The reloaded Single: the live heading taken into the change, the same
-    // identity as the one on screen, and the tagline as it was saved, before
-    // the edit above.
-    act(() => {
-      rerenderWith({
-        ...first,
-        heroTitle: "Live",
-        tagline: "Mine",
-      } as unknown as SingleDocumentData);
+    // The reloaded Single: the saved change with the live heading taken into
+    // it, under the same key as the one on screen, which the Single's own
+    // reset would leave alone. Handed over as React Query does, a task after
+    // the reload settles.
+    await refusedFormOf(onSubmit)?.run(async () => {
+      setTimeout(() => {
+        act(() => {
+          rerenderWith({
+            ...first,
+            heroTitle: "Live",
+            tagline: "Mine",
+          } as unknown as SingleDocumentData);
+        });
+      }, 0);
     });
 
-    // Only the field taken is reset; a reset of the whole form would put the
-    // saved "Mine" back over the edit made since.
-    expect(heading).toHaveValue("Live");
-    expect(tagline).toHaveValue("Later");
+    await waitFor(() => expect(heading).toHaveValue("Live"));
+    expect(tagline).toHaveValue("Mine");
 
     await user.click(
       screen.getByRole("button", { name: "Save from the view" })
@@ -224,10 +222,32 @@ describe("a Single's form, for a publish refused over shared values", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
     expect(onSubmit.mock.calls[1]?.[0]).toMatchObject({
       heroTitle: "Live",
-      tagline: "Later",
+      tagline: "Mine",
     });
   });
+  it("takes the live values that arrive after the recovery, under the same key, into its clean form", async () => {
+    const onSubmit = refusedOnce();
+    const { rerenderWith } = renderSingle(onSubmit);
+    const heading = screen.getByLabelText("Hero heading");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Save from the view" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 
+    // The recovery finishes and starts the form afresh before the merged
+    // Single settles; it arrives a little later, under the same key.
+    await act(async () => {
+      await refusedFormOf(onSubmit)?.run(async () => undefined);
+    });
+    act(() => {
+      rerenderWith({
+        ...first,
+        heroTitle: "Live",
+      } as unknown as SingleDocumentData);
+    });
+
+    expect(heading).toHaveValue("Live");
+  });
   it("won't run the recovery once another author holds the Single", async () => {
     const user = userEvent.setup();
     const onSubmit = refusedOnce();
@@ -305,6 +325,9 @@ describe("a Single's form, for a publish refused over shared values", () => {
         finish.resolve = resolve;
         finish.reject = reject;
       });
+      // Its rejection reaches the recovery once it runs the work; marked as
+      // handled here, since it may be rejected before then.
+      held.catch(() => undefined);
       let running: Promise<unknown> | undefined;
       act(() => {
         running = refusedFormOf(onSubmit)
@@ -360,6 +383,29 @@ describe("a Single's form, for a publish refused over shared values", () => {
       await running;
     });
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+  });
+
+  it("withdraws an autosave recovery point the recovery's save made stale, so Restore can't bring the old values back", async () => {
+    autosaveOffer.current = { savedAt: new Date(), snapshot: {} };
+    const onSubmit = refusedOnce();
+    const { container } = render(
+      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      { wrapper: Providers }
+    );
+    const formBefore = container.querySelector("form");
+    fireEvent.submit(formBefore as HTMLFormElement);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+
+    await act(async () => {
+      await refusedFormOf(onSubmit)?.run(async () => {
+        refusedFormOf(onSubmit)?.saved();
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+    // The same editor throughout, never remounted, so its claim stands.
+    expect(container.querySelector("form")).toBe(formBefore);
   });
 });
 

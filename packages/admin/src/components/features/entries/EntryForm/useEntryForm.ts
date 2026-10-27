@@ -174,6 +174,11 @@ export interface UseEntryFormOptions {
    * writes are never held.
    */
   writesHeld?: () => boolean;
+  /**
+   * Called when a refused publish's recovery has saved the form as the
+   * pending change, which the host counts as one of its own saves.
+   */
+  onRecoverySaved?: () => void;
 }
 
 /**
@@ -389,10 +394,8 @@ function getSingularLabel(collection: EntryFormCollection): string {
 interface EntryIdentity {
   id: unknown;
   version: string | null;
-  /** The language and read it was loaded for. */
+  /** The language and read it was loaded for, and a working draft's overlay. */
   place: string;
-  /** Whether it shows a working draft's overlay. */
-  overlay: boolean;
 }
 
 function entryIdentity(
@@ -403,16 +406,17 @@ function entryIdentity(
   return {
     id: entry.id,
     version: typeof entry.updatedAt === "string" ? entry.updatedAt : null,
-    place: JSON.stringify([locale ?? null, readDraft ?? null]),
-    overlay: entry._isWorkingDraft === true,
+    place: JSON.stringify([
+      locale ?? null,
+      readDraft ?? null,
+      entry._isWorkingDraft === true,
+    ]),
   };
 }
 
 /**
- * How far an arriving entry resets the form. A different entry, language or
- * read starts it again; so does a working-draft overlay coming or going, unless
- * this author's own write is in flight (a refused publish's recovery, whose
- * save creates the first working draft); so does a new version, unless it is
+ * How far an arriving entry resets the form. A different entry, language, read
+ * or working-draft overlay starts it again; so does a new version, unless it is
  * this author's own save coming back (while the save is in flight, or matching
  * the version it stored). The same identity again — a save's own optimistic
  * copy or rollback, or newer content a working-draft save left the version of
@@ -425,7 +429,6 @@ function resetDecision(
 ): "keep-unsaved" | "full" {
   if (last === undefined) return "full";
   if (last.id !== next.id || last.place !== next.place) return "full";
-  if (last.overlay !== next.overlay && !ownSave.inFlight) return "full";
   if (last.version === next.version) return "keep-unsaved";
   const ownEcho =
     ownSave.inFlight ||
@@ -480,6 +483,7 @@ export function useEntryForm({
   locale,
   readDraft,
   writesHeld,
+  onRecoverySaved,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -565,10 +569,15 @@ export function useEntryForm({
   //
   const submissionLatch = useRef(false);
 
+  // The entry as last handed over, for the recovery to start the form afresh
+  // from once its reloaded entry is on screen.
+  const latestDefaults = useRef(defaultValues);
+  latestDefaults.current = defaultValues;
+
   // The form as a refused publish's way out reaches it: saved as the pending
-  // change the way a status-less save sends it, and given the live values it
-  // takes when the entry carrying them arrives.
-  const { refusedForm, adoptArrived, recovering } = useRefusedForm(
+  // change the way a status-less save sends it, then started afresh from the
+  // entry that carries the live values it takes.
+  const { refusedForm, recovering } = useRefusedForm(
     form,
     values =>
       withoutPlaceholders(
@@ -578,7 +587,8 @@ export function useEntryForm({
     {
       writesHeld: writesHeld ?? writesNeverHeld,
       latch: submissionLatch,
-      ownSave,
+      resetToDocument: () => form.reset(latestDefaults.current),
+      saved: () => onRecoverySaved?.(),
     }
   );
 
@@ -591,10 +601,8 @@ export function useEntryForm({
       defaultValues,
       decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
     );
-    // A reset keeping unsaved values keeps a taken field's stale one.
-    adoptArrived(defaultValues);
     setAwaitingEntry(false);
-  }, [entry, mode, defaultValues, form, locale, readDraft, adoptArrived]);
+  }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({

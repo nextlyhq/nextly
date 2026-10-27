@@ -26,6 +26,7 @@
  * @module hooks/useSharedFieldsRecovery
  */
 
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
 import { toast } from "@admin/components/ui";
@@ -95,19 +96,20 @@ export interface RefusedForm {
    * refuse them, which the form then shows.
    */
   pendingChangeNow: () => Promise<Record<string, unknown>>;
-  /**
-   * Show the live values of these fields once the reloaded document arrives,
-   * keeping every other edit.
-   */
-  adoptTaken: (fields: readonly string[]) => void;
+  /** Tell the editor its form was saved as the pending change. */
+  saved: () => void;
   /**
    * Run the recovery inside the editor's own write gate: refused, without
    * running, while the editor's writes are held (the document is someone
    * else's, or a past version is on screen) or a save is in flight; and
    * while it runs, the editor's own saves and publishes are held in turn.
+   * Once it has run, the form starts afresh from the document on screen.
    */
   run: <T>(work: () => Promise<T>) => Promise<T>;
 }
+
+/** How a recovery's hold ends when the editor moves to another document. */
+const LET_GO = new Error("The editor moved to another document.");
 
 /** The refusal toast of one document in one language. */
 function refusalToastId(scope: VersionScope, locale?: string): string {
@@ -142,9 +144,9 @@ export function useSharedFieldsRecovery(args: {
   ) => Promise<{ warnings?: readonly HookWarning[] } | undefined>;
   /**
    * Reload the editor once the live values are taken, answering when the
-   * reloaded document has arrived.
+   * reloaded document has arrived and rejecting when it couldn't be loaded.
    */
-  onTaken: () => unknown;
+  onTaken: () => Promise<unknown>;
 }): (error: unknown, form: RefusedForm) => boolean {
   const { scope, locale, fields, save, onTaken } = args;
   const { getLocale, defaultLocale } = useLocalization();
@@ -152,20 +154,46 @@ export function useSharedFieldsRecovery(args: {
   // the scope object, which callers build afresh on every render.
   const toastId = scope ? refusalToastId(scope, locale) : null;
 
-  // The document and language the editor shows now. An action taken before
-  // the editor moved keeps running: dismissing its toast does not stop a
-  // request already in flight, and the form it holds is a live reference to
-  // whatever is on screen, not to the document it was refused for.
-  const onScreen = useRef(toastId);
-
   // The toast's action saves this editor's form; once the editor shows
   // another document or language, or none, that form is not the refused one.
   useEffect(() => {
-    onScreen.current = toastId;
     return () => {
       if (toastId) toast.dismiss(toastId);
     };
   }, [toastId]);
+
+  // The recoveries still holding the form, by their toast: the document each
+  // was for, and what lets it go. Kept across a move to another language in
+  // place, since the same form stays held, and across a moment with no
+  // document while one loads. Let go when the editor shows another document,
+  // which the form then starts afresh from, or goes, taking the form with it.
+  const holding = useRef(
+    new Map<string, { document: string; letGo: () => void }>()
+  );
+  const documentKey = scope ? JSON.stringify(scope) : null;
+  // The document the editor shows now, known or not.
+  const shownDocument = useRef(documentKey);
+  useEffect(() => {
+    if (documentKey !== null) shownDocument.current = documentKey;
+    if (documentKey === null) return;
+    for (const [id, hold] of holding.current) {
+      if (hold.document === documentKey) continue;
+      toast.dismiss(id);
+      hold.letGo();
+      holding.current.delete(id);
+    }
+  }, [documentKey]);
+  useEffect(() => {
+    const held = holding.current;
+    return () => {
+      for (const [id, hold] of held) {
+        toast.dismiss(id);
+        hold.letGo();
+      }
+      // A reload still in flight offers nothing more.
+      held.clear();
+    };
+  }, []);
 
   return useCallback(
     (error: unknown, form: RefusedForm) => {
@@ -186,28 +214,104 @@ export function useSharedFieldsRecovery(args: {
       // Said while the recovery holds the editor, from the action through to
       // the reloaded document: the editor's fields are read-only meanwhile.
       const taking = `${refusedFor}:taking`;
+      // The form is released only once the reloaded document is in it: a
+      // release before would leave the value the take replaced on screen,
+      // for the next Publish to send. So a reload that fails holds the form,
+      // and says what happened, until a reload succeeds.
+      // The document the recovery was refused for, and takes into.
+      const forDocument = JSON.stringify(scope);
+      const reloaded = async (): Promise<void> => {
+        try {
+          await onTaken();
+          return;
+        } catch {
+          // Offered again below, as often as it fails.
+        }
+        // Let go already, by a move to another document or the editor
+        // going: nothing is left to reload into, unless the editor has come
+        // back to this document, which still lacks the live values.
+        if (
+          !holding.current.has(taking) &&
+          shownDocument.current !== forDocument
+        ) {
+          throw LET_GO;
+        }
+        // Short of the editor leaving this document, the only way out is a
+        // reload by the recovery itself that succeeds: nothing else the editor
+        // receives proves the live values are in it, since a take keeps the
+        // document's version.
+        await new Promise<void>((resolve, reject) => {
+          holding.current.set(taking, {
+            document: forDocument,
+            // Ends the recovery without starting the form afresh: no reload
+            // succeeded, and the form now shows another document anyway.
+            letGo: () => reject(LET_GO),
+          });
+          // One reload at a time: a second, finishing after the first has
+          // released the form, would offer a reload nothing holds any more.
+          let reloading = false;
+          const offer = () => {
+            // Only while this recovery still holds the form.
+            if (!holding.current.has(taking)) return;
+            toast.error(
+              "The live values were taken and saved, but the editor couldn't load them.",
+              {
+                id: taking,
+                description:
+                  "It stays read-only until it has them, so the next publish can't send the old values.",
+                duration: Number.POSITIVE_INFINITY,
+                // Not closed by a swipe or a close button: its Reload is the
+                // hold's only way out.
+                dismissible: false,
+                action: {
+                  label: "Reload",
+                  onClick: event => {
+                    // Kept: the toast now says the reload is under way, and
+                    // the action would otherwise close it.
+                    event.preventDefault();
+                    if (reloading) return;
+                    reloading = true;
+                    toast.loading("Loading the live values…", { id: taking });
+                    onTaken().then(
+                      () => {
+                        reloading = false;
+                        resolve();
+                      },
+                      () => {
+                        reloading = false;
+                        offer();
+                      }
+                    );
+                  },
+                },
+              }
+            );
+          };
+          offer();
+        });
+      };
       const take = async () => {
+        // Whether this call got through the gate and holds the form: a call
+        // the gate refused leaves another's hold and toast alone.
+        let holds = false;
         try {
           // The whole sequence inside the editor's write gate, through to
           // the reloaded document: a Publish between the take and the reload
           // would still send the value the take replaced.
           await form.run(async () => {
+            holds = true;
+            holding.current.set(taking, {
+              document: forDocument,
+              letGo: () => undefined,
+            });
             toast.loading("Taking the live values…", { id: taking });
             // Read now, not when refused: edits made since are part of it.
             const saved = await save(await form.pendingChangeNow());
+            form.saved();
             const { item } = await versionApi.takeLiveSharedValues(
               scope,
               locale
             );
-            // Before the reload, so the document it brings is the one the
-            // form takes the live values from. Only while the editor still
-            // shows the document and language this was refused for: moving to
-            // a language already loaded keeps the same form, and showing this
-            // language's live values in it would overwrite the other one's
-            // edits. The take itself named its own document and language, so
-            // it stands either way, and the reload below brings it to
-            // whatever is on screen.
-            if (onScreen.current === refusedFor) form.adoptTaken(item.taken);
             // Said once both have committed, before the reload, so a reload
             // that fails can't hide that they did. The save committed even
             // when a hook after it failed: the author hears about both, on
@@ -216,14 +320,19 @@ export function useSharedFieldsRecovery(args: {
               takenMessage(item, language, labelOf),
               saved?.warnings
             );
-            await onTaken();
+            await reloaded();
           });
         } catch (failure) {
+          // Let go by a move: nothing failed that the author must hear of.
+          if (failure === LET_GO) return;
           toast.error(
             apiErrorMessage(failure, "The live values couldn't be taken.")
           );
         } finally {
-          toast.dismiss(taking);
+          if (holds) {
+            holding.current.delete(taking);
+            toast.dismiss(taking);
+          }
         }
       };
 
@@ -246,6 +355,30 @@ export function useSharedFieldsRecovery(args: {
     },
     [scope, locale, fields, save, onTaken, getLocale, defaultLocale]
   );
+}
+
+/**
+ * Reload an editor's document after the live values are taken: answers once
+ * it is back, and rejects when it isn't, which React Query's own answer
+ * doesn't say. The recovery holds the form until it answers.
+ */
+export async function reloadDocument(
+  queryClient: QueryClient,
+  queryKey: QueryKey
+): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey });
+  // Judged by what the editor's reads now hold, not by the refetch's answer:
+  // a refetch that failed answers all the same, and one paused while offline
+  // answers as if it had run. The document is back only when every read of
+  // it the editor has open fetched.
+  const notBack = queryClient
+    .getQueryCache()
+    .findAll({ queryKey, type: "active" })
+    .some(
+      query =>
+        query.state.status === "error" || query.state.fetchStatus === "paused"
+    );
+  if (notBack) throw new Error("The document couldn't be reloaded.");
 }
 
 /** What the success toast says the take did. */

@@ -121,26 +121,36 @@ describe("the entry form, for a publish refused over shared values", () => {
     });
   });
 
-  it("shows the live value of a taken field, keeps every other edit, and publishes the live value next", async () => {
+  it("starts the form afresh from the reloaded entry, so it shows the live value and publishes it next", async () => {
     const { result, rerender } = render();
-    // The refused publish carried a stale nickname; the bio is the author's own
-    // unsaved edit, which the take leaves alone.
+    // The refused publish carried a stale nickname; the bio is the author's
+    // own edit. Both are in the pending change the recovery saves.
     act(() => {
       result.current.form.setValue("nickname", "Stale", { shouldDirty: true });
       result.current.form.setValue("bio", "Mine", { shouldDirty: true });
     });
 
-    act(() => {
-      updateOptions.current?.refusedForm?.adoptTaken(["nickname"]);
+    let reloaded: Promise<void> | undefined;
+    await updateOptions.current?.refusedForm?.run(async () => {
+      // The reloaded entry: the saved change with the live nickname taken
+      // into it, at the same version, which an arriving entry alone would
+      // treat as unsaved work to keep over.
+      reloaded = reloadBrings(rerender, {
+        ...stored,
+        nickname: "Live",
+        bio: "Mine",
+      });
     });
-    // The reloaded entry: the live nickname taken into the change, the same
-    // entry identity as the one on screen.
-    act(() => {
-      rerender({ entry: { ...stored, nickname: "Live" } });
-    });
+    await reloaded;
 
-    expect(result.current.form.getValues("nickname")).toBe("Live");
-    expect(result.current.form.getValues("bio")).toBe("Mine");
+    // The form is the reloaded entry, with nothing left unsaved.
+    expect(result.current.form.getValues()).toMatchObject({
+      nickname: "Live",
+      bio: "Mine",
+    });
+    await vi.waitFor(() =>
+      expect(result.current.form.formState.isDirty).toBe(false)
+    );
 
     update.mockResolvedValue({ item: { ...stored, nickname: "Live" } });
     await act(async () => {
@@ -152,7 +162,6 @@ describe("the entry form, for a publish refused over shared values", () => {
       status: "published",
     });
   });
-
   it("won't run the recovery while the host holds the document's writes", async () => {
     render({ writesHeld: () => true });
     const work = vi.fn(async () => undefined);
@@ -211,51 +220,6 @@ describe("the entry form, for a publish refused over shared values", () => {
     await running;
   });
 
-  it("leaves a language switched to before the reload as that language's document has it", () => {
-    const { result, rerender } = render();
-    act(() => {
-      result.current.form.setValue("nickname", "Stale", { shouldDirty: true });
-    });
-    act(() => {
-      updateOptions.current?.refusedForm?.adoptTaken(["nickname"]);
-    });
-    // The editor moves to Spanish before the reloaded English entry arrives.
-    act(() => {
-      rerender({
-        entry: { ...stored, nickname: "Apodo" },
-        locale: "es",
-      });
-    });
-
-    expect(result.current.form.getValues("nickname")).toBe("Apodo");
-    expect(result.current.form.formState.dirtyFields).not.toHaveProperty(
-      "nickname"
-    );
-  });
-
-  it("keeps a value written into the form during a recovery that creates the entry's first working draft", async () => {
-    // Published, with no pending change of its own yet.
-    const { result, rerender } = render();
-    let reloaded: Promise<void> | undefined;
-    await updateOptions.current?.refusedForm?.run(async () => {
-      // A write that reaches the form without a read-only input, as a field
-      // committing on exit does, while the recovery saves and takes.
-      act(() => {
-        result.current.form.setValue("bio", "Committed during the recovery", {
-          shouldDirty: true,
-        });
-      });
-      // The reloaded entry now carries the working draft the recovery's save
-      // created: the same entry and version, the overlay turned on.
-      reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
-    });
-    await reloaded;
-
-    expect(result.current.form.getValues("bio")).toBe(
-      "Committed during the recovery"
-    );
-  });
-
   it("holds the form until the recovery's reloaded entry has reached it", async () => {
     const { result, rerender } = render();
     let heldWhenItArrived: boolean | undefined;
@@ -310,26 +274,31 @@ describe("the entry form, for a publish refused over shared values", () => {
     await vi.waitFor(() => expect(result.current.recovering).toBe(false));
   });
 
-  it("goes back to judging the overlay once the recovery's reload has arrived", async () => {
+  it("stays held when a document arrives other than through the recovery's own reload", async () => {
+    // A take keeps the document's version, so nothing that merely arrives
+    // proves the live values are in it: only the recovery's reload does.
     const { result, rerender } = render();
-    let reloaded: Promise<void> | undefined;
-    await updateOptions.current?.refusedForm?.run(async () => {
-      reloaded = reloadBrings(rerender, { ...stored, _isWorkingDraft: true });
+    let reloadDone: () => void = () => {};
+    const reload = new Promise<void>(resolve => {
+      reloadDone = resolve;
     });
-    await reloaded;
-    // An edit made afterwards, then the working draft goes away from under
-    // it, as someone else's discard takes it: that is no write of this
-    // editor's, and the form starts again from what is stored.
+    let running: Promise<unknown> | undefined;
     act(() => {
-      result.current.form.setValue("bio", "Typed after the recovery", {
-        shouldDirty: true,
-      });
+      running = updateOptions.current?.refusedForm?.run(() => reload);
     });
     act(() => {
-      rerender({ entry: { ...stored, _isWorkingDraft: false } });
+      rerender({ entry: { ...stored, _isWorkingDraft: true } });
     });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    expect(result.current.recovering).toBe(true);
 
-    expect(result.current.form.getValues("bio")).toBe(stored.bio);
+    await act(async () => {
+      reloadDone();
+      await running;
+    });
+    expect(result.current.recovering).toBe(false);
   });
 
   it("resets for a later update after a recovery whose reload changed nothing on screen", async () => {

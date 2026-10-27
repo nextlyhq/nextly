@@ -83,7 +83,7 @@ describe("a publish refused over out-of-date shared fields", () => {
         articleCount: 3,
         bio: "Typed after the refusal",
       })),
-      adoptTaken: vi.fn(),
+      saved: vi.fn(),
       // The editor's write gate, open: the work runs as handed over.
       run: <T,>(work: () => Promise<T>) => work(),
     };
@@ -119,9 +119,7 @@ describe("a publish refused over out-of-date shared fields", () => {
       { articleCount: 3, bio: "Typed after the refusal" },
       { locale: "es", fallbackLocale: undefined },
     ]);
-    // The fields taken are the ones the form then shows the live values of.
-    await vi.waitFor(() =>
-      expect(form.adoptTaken).toHaveBeenCalledWith(["articleCount"])
-    );
+    // And the editor hears that its form was saved.
+    await vi.waitFor(() => expect(form.saved).toHaveBeenCalledTimes(1));
   });
 });

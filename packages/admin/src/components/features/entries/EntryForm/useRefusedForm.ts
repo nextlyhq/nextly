@@ -5,15 +5,14 @@
  * The refusal's action runs later than the refusal, and the author may keep
  * editing in between, so what it saves is read from the form when it runs,
  * through the form's own checks and the same payload a save of the pending
- * change sends. Once the live values are taken into the change, the reloaded
- * document has the same identity as the one on screen, so neither editor
- * resets to it in full: the fields taken are set to it here, when it
- * arrives, and every other edit stays. From the action until that document
- * has arrived the form is held read-only, so nothing typed can race it.
+ * change sends. From the action until the reloaded document is on screen
+ * the form is held read-only, so nothing typed can race it; then it starts
+ * afresh from that document, as when it first loads. Everything it held is in
+ * the pending change it saved, and the fields taken now carry the live values.
  *
  * @module components/features/entries/EntryForm/useRefusedForm
  */
-import { type RefObject, useCallback, useMemo, useRef, useState } from "react";
+import { type RefObject, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
@@ -57,20 +56,18 @@ export function useRefusedForm(
      */
     latch: RefObject<boolean>;
     /**
-     * The editor's own-save marker. The recovery's write is this editor's
-     * own, so the document it brings back keeps whatever reached the form
-     * meanwhile without passing a read-only field, such as a field that
-     * commits on exit; even one that now carries the first working draft.
+     * Start the form afresh from the document on screen, as when it first
+     * loads. Called once the recovery's reloaded document is there.
      */
-    ownSave: RefObject<{ inFlight: boolean }>;
+    resetToDocument: () => void;
+    /**
+     * Count the recovery's save as one of the editor's own: an autosave
+     * recovery point is gone with it, as it is after any save.
+     */
+    saved: () => void;
   }
 ): {
   refusedForm: RefusedForm;
-  /**
-   * Called with each document's values as they arrive, after the editor's own
-   * reset: sets the fields taken, if any are waiting, to those values.
-   */
-  adoptArrived: (arrived: Record<string, unknown>) => void;
   /**
    * Whether a recovery is running, from the action through to its reloaded
    * document: the editor's fields are read-only meanwhile.
@@ -84,8 +81,6 @@ export function useRefusedForm(
   // Read when the recovery runs, for the same reason.
   const gateNow = useRef(gate);
   gateNow.current = gate;
-  // The fields taken, until the document that carries them arrives.
-  const awaiting = useRef<readonly string[] | null>(null);
   // Edits made while a recovery runs would race it: the save reads the form
   // once, and the fields taken are set over whatever was typed into them
   // since. So the form is held, as a document someone else holds is.
@@ -115,17 +110,16 @@ export function useRefusedForm(
             // or it holds the editor's latch for good.
             .catch(reject);
         }),
-      adoptTaken: fields => {
-        if (fields.length > 0) awaiting.current = fields;
+      saved: () => {
+        gateNow.current.saved();
       },
       run: async work => {
         // The same gate the editor's own saves pass: the recovery saves and
         // takes into the pending change, which is a write like any other.
-        const { writesHeld, latch, ownSave } = gateNow.current;
+        const { writesHeld, latch } = gateNow.current;
         if (writesHeld()) throw new Error(HELD);
         if (latch.current) throw new Error(BUSY);
         latch.current = true;
-        ownSave.current.inFlight = true;
         setRecovering(true);
         try {
           // The hold on screen before the recovery reads the form: a field
@@ -135,12 +129,11 @@ export function useRefusedForm(
           const done = await work();
           // The reload it awaited has settled, but the editor is handed the
           // reloaded document a task later: the form stays held until then,
-          // so nothing typed can meet the fields it takes.
+          // and then starts afresh from it.
           await nextTask();
+          gateNow.current.resetToDocument();
           return done;
         } finally {
-          // Cleared with the hold, once the reloaded document is on screen.
-          ownSave.current.inFlight = false;
           latch.current = false;
           setRecovering(false);
         }
@@ -149,26 +142,7 @@ export function useRefusedForm(
     [form]
   );
 
-  const adoptArrived = useCallback(
-    (arrived: Record<string, unknown>) => {
-      const fields = awaiting.current;
-      if (!fields) return;
-      awaiting.current = null;
-      for (const name of fields) {
-        // A field the form doesn't hold, one the editor can't see, has
-        // nothing on screen to bring up to date. `setValue` rather than
-        // `resetField`, which skips a field with no input mounted, such as
-        // one on a tab never opened; marking it dirty against the arrived
-        // values clears it as unsaved once the two agree.
-        if (name in arrived) {
-          form.setValue(name, arrived[name], { shouldDirty: true });
-        }
-      }
-    },
-    [form]
-  );
-
-  return { refusedForm, adoptArrived, recovering };
+  return { refusedForm, recovering };
 }
 
 /**

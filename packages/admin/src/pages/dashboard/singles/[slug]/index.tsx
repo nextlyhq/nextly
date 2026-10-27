@@ -49,6 +49,7 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   type RefusedForm,
+  reloadDocument,
   useSharedFieldsRecovery,
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
@@ -489,11 +490,10 @@ function useSingleSaveFailure(args: {
     ),
     // Answers once the reloaded document is back, which the recovery waits
     // for before letting the editor save again.
-    onTaken: useCallback(() => {
-      return queryClient.invalidateQueries({
-        queryKey: singleDocumentKeys.detail(slug),
-      });
-    }, [queryClient, slug]),
+    onTaken: useCallback(
+      () => reloadDocument(queryClient, singleDocumentKeys.detail(slug)),
+      [queryClient, slug]
+    ),
   });
   return useCallback(
     (error: unknown, form: RefusedForm) => {

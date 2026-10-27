@@ -58,6 +58,7 @@ import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   type RefusedForm,
+  reloadDocument,
   useSharedFieldsRecovery,
 } from "@admin/hooks/useSharedFieldsRecovery";
 import {
@@ -283,11 +284,11 @@ export function useUpdateEntry<
     ),
     // Answers once the reloaded document is back, which the recovery waits
     // for before letting the editor save again.
-    onTaken: useCallback(() => {
-      return queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-    }, [queryClient, collectionSlug, entryId]),
+    onTaken: useCallback(
+      () =>
+        reloadDocument(queryClient, entryKeys.detail(collectionSlug, entryId)),
+      [queryClient, collectionSlug, entryId]
+    ),
   });
   const { enabled: localizationEnabled } = useLocalization();
 
