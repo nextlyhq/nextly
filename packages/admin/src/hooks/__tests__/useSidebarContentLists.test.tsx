@@ -15,6 +15,19 @@ import { describe, expect, it, vi } from "vitest";
 
 const fetchSingles = vi.hoisted(() => vi.fn());
 vi.mock("@admin/services/singleApi", () => ({ singleApi: { fetchSingles } }));
+const collectionsResult = vi.hoisted(() => ({
+  current: {
+    data: { items: [] as unknown[], meta: { hasNext: false } },
+    isLoading: false,
+  },
+}));
+vi.mock("@admin/hooks/queries", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
+  useCollections: () => ({ ...collectionsResult.current, error: null }),
+}));
+vi.mock("@admin/context/providers/BrandingProvider", () => ({
+  useBranding: () => ({}),
+}));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
     // A Single's read permission sits in the same per-slug map as a
@@ -23,7 +36,10 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   }),
 }));
 
-import { useSidebarSingleList } from "../useSidebarContentLists";
+import {
+  useSidebarCollectionList,
+  useSidebarSingleList,
+} from "../useSidebarContentLists";
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
@@ -98,5 +114,26 @@ describe("the sidebar's Singles list", () => {
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(fetchSingles).toHaveBeenCalledTimes(2);
     expect(result.current.isComplete).toBe(false);
+  });
+});
+
+describe("the sidebar's collections list", () => {
+  it("isn't complete while the server says more collections exist", () => {
+    collectionsResult.current = {
+      data: { items: [], meta: { hasNext: true } },
+      isLoading: false,
+    };
+    const { result } = renderHook(() => useSidebarCollectionList(), {
+      wrapper,
+    });
+    expect(result.current.isComplete).toBe(false);
+
+    // POPULATION CONTROL: with every collection in one page, it is.
+    collectionsResult.current = {
+      data: { items: [], meta: { hasNext: false } },
+      isLoading: false,
+    };
+    const second = renderHook(() => useSidebarCollectionList(), { wrapper });
+    expect(second.result.current.isComplete).toBe(true);
   });
 });

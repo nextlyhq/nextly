@@ -47,8 +47,9 @@ export function useSidebarCollectionList() {
     items,
     data: query.data,
     isLoading: query.isLoading,
-    // One request answers for every collection, so arriving is completing.
-    isComplete: !query.isLoading,
+    // The sidebar reads one page of collections; a search can only say
+    // nothing matched when that page is all there is.
+    isComplete: !query.isLoading && query.data?.meta?.hasNext !== true,
     error: query.error,
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
@@ -56,7 +57,16 @@ export function useSidebarCollectionList() {
 }
 
 /** The Singles the sidebar lists, before any search, with their pins. */
-export function useSidebarSingleList() {
+export function useSidebarSingleList({
+  enabled = true,
+}: {
+  /**
+   * Whether to walk the pages at all. A reader that only needs Singles once a
+   * search asks for them leaves this off until then, so opening Collections
+   * doesn't page through every Single.
+   */
+  enabled?: boolean;
+} = {}) {
   // Walk the paginated singles endpoint until `meta.hasNext` is false so the
   // sidebar can render every single regardless of count.
   const {
@@ -81,6 +91,7 @@ export function useSidebarSingleList() {
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) =>
       lastPage.meta.hasNext ? allPages.length : undefined,
+    enabled,
   });
 
   // Guard against a persistent-error retry loop: when `fetchNextPage` fails,
@@ -89,13 +100,24 @@ export function useSidebarSingleList() {
   // successful page). Without the `isFetchNextPageError` check the effect
   // would immediately re-fire and hammer the endpoint forever.
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
+    if (
+      enabled &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError
+    ) {
       // Joins a request already on its way rather than restarting it: the
       // Content panel and the Singles list each read this list, and both
       // effects can ask for the same next page in one commit.
       void fetchNextPage({ cancelRefetch: false });
     }
-  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+  }, [
+    enabled,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  ]);
 
   const allSingles: ApiSingle[] = useMemo(
     () => singlesPages?.pages.flatMap(p => p.items) ?? [],
@@ -117,7 +139,7 @@ export function useSidebarSingleList() {
     // Whether every page has arrived. The list draws from the first page on,
     // but a search that matched nothing may only say so once this is true: the
     // match may be on a page still on its way, or on one that failed.
-    isComplete: !isLoading && !hasNextPage,
+    isComplete: enabled && !isLoading && !hasNextPage,
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
   };

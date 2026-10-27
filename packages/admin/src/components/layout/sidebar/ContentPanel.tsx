@@ -73,7 +73,12 @@ export function ContentPanel({
   isActive,
 }: ContentPanelProps): JSX.Element {
   const collections = useSidebarCollectionList();
-  const singles = useSidebarSingleList();
+  // Singles are walked once they can show: as the part on screen, or as the
+  // other part's matches for a search. Opening Collections alone asks for none.
+  const singles = useSidebarSingleList({
+    enabled:
+      hasSingles && (part === "singles" || !hasCollections || search !== ""),
+  });
 
   // Matches come from the same search the lists draw with, so a count here can
   // never disagree with what a list shows.

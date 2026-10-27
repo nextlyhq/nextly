@@ -34,6 +34,7 @@ import {
   contentSectionToOpen,
   panelSectionIds,
   railItemOf,
+  sectionShown,
 } from "./lib/content-rail";
 import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
 import {
@@ -280,6 +281,15 @@ export function DualSidebar({
 
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
+  // Which content kinds the reader can see now, read by every content decision
+  // below so none can answer from a different pair.
+  const contentAvailable = {
+    collections: hasCollectionsSection,
+    singles: hasSinglesSection,
+  };
+  // What the sidebar shows for the selection, which may give way to the other
+  // content kind once the lists settle.
+  const shownMain = sectionShown(selectedMain, contentAvailable);
 
   // One search for both content kinds: it carries over when the Content panel
   // switches between Collections and Singles.
@@ -295,12 +305,7 @@ export function DualSidebar({
       setSelectedMain(id);
       return;
     }
-    setSelectedMain(
-      contentSectionToOpen(selectedMain, {
-        collections: hasCollectionsSection,
-        singles: hasSinglesSection,
-      })
-    );
+    setSelectedMain(contentSectionToOpen(selectedMain, contentAvailable));
   };
 
   // Follows the route: a navigation selects the section it lands in. Adjusted during render
@@ -349,11 +354,8 @@ export function DualSidebar({
       capabilities.canManageSettings,
       contentItemHref({
         panelShown: !suppressedChrome.has("subSidebar"),
-        current: selectedMain,
-        available: {
-          collections: hasCollectionsSection,
-          singles: hasSinglesSection,
-        },
+        current: shownMain,
+        available: contentAvailable,
       })
     );
 
@@ -412,7 +414,7 @@ export function DualSidebar({
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
           {visibleMenuItems.map(item => {
             const Icon = item.icon;
-            const isSelected = railItemOf(selectedMain) === item.id;
+            const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);
             /*
              * On mobile a category normally stays put and opens the panel
@@ -484,15 +486,15 @@ export function DualSidebar({
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel
         isMobile={Boolean(isMobile)}
-        selectedMain={selectedMain}
+        selectedMain={shownMain}
         visibleMenuItemIds={panelSectionIds(
           visibleMenuItems.map(item => item.id),
-          { collections: hasCollectionsSection, singles: hasSinglesSection }
+          contentAvailable
         )}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel={standaloneLabel}
         content={{
-          selectedMain,
+          selectedMain: shownMain,
           standaloneLabel,
           contentSearch,
           onContentSearchChange: setContentSearch,

@@ -14,6 +14,7 @@ import {
   contentItemHref,
   contentSectionToOpen,
   panelSectionIds,
+  sectionShown,
   railItemOf,
 } from "../lib/content-rail";
 import { getFilteredMenuItems } from "../sidebar-types";
@@ -103,5 +104,25 @@ describe("where the Content item goes", () => {
         available: { collections: false, singles: true },
       })
     ).toBe(ROUTES.SINGLES);
+  });
+});
+
+describe("the section the sidebar shows", () => {
+  it("gives way to Singles when Collections turns out to be empty", () => {
+    expect(
+      sectionShown("collections", { collections: false, singles: true })
+    ).toBe("singles");
+  });
+
+  it("keeps a content section the reader can see", () => {
+    const both = { collections: true, singles: true };
+    expect(sectionShown("singles", both)).toBe("singles");
+    expect(sectionShown("collections", both)).toBe("collections");
+  });
+
+  it("keeps any other section as selected", () => {
+    expect(
+      sectionShown("settings", { collections: false, singles: true })
+    ).toBe("settings");
   });
 });

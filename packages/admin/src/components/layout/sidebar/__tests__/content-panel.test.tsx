@@ -20,6 +20,7 @@ const lists = vi.hoisted(() => ({
   collections: [] as FixtureCollection[],
   singles: [] as FixtureSingle[],
   singlesComplete: true,
+  singleListOptions: [] as unknown[],
 }));
 
 vi.mock("@admin/hooks/useSidebarContentLists", () => ({
@@ -32,13 +33,16 @@ vi.mock("@admin/hooks/useSidebarContentLists", () => ({
     isPinned: () => false,
     togglePin: () => {},
   }),
-  useSidebarSingleList: () => ({
-    items: lists.singles,
-    isLoading: false,
-    isComplete: lists.singlesComplete,
-    isPinned: () => false,
-    togglePin: () => {},
-  }),
+  useSidebarSingleList: (options?: unknown) => (
+    lists.singleListOptions.push(options),
+    {
+      items: lists.singles,
+      isLoading: false,
+      isComplete: lists.singlesComplete,
+      isPinned: () => false,
+      togglePin: () => {},
+    }
+  ),
 }));
 vi.mock("@admin/hooks/queries/useSingles", () => ({
   useSingles: () => ({ data: { items: [] } }),
@@ -202,5 +206,27 @@ describe("ContentPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "No Singles match “pricing”."
     );
+  });
+
+  it("leaves the Singles walk off until a search or the Singles part needs it", () => {
+    // The panel's own call is each render's first; the Singles list, when it
+    // shows, reads the list after it.
+    const panelAsked = (props: Parameters<typeof renderPanel>[0]) => {
+      lists.singleListOptions = [];
+      const view = renderPanel(props);
+      const asked = lists.singleListOptions[0];
+      view.unmount();
+      return asked;
+    };
+
+    expect(panelAsked({ part: "collections", search: "" })).toEqual({
+      enabled: false,
+    });
+    expect(panelAsked({ part: "collections", search: "home" })).toEqual({
+      enabled: true,
+    });
+    expect(panelAsked({ part: "singles", search: "" })).toEqual({
+      enabled: true,
+    });
   });
 });

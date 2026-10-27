@@ -54,6 +54,21 @@ export function contentSectionToOpen(
 }
 
 /**
+ * The section the sidebar shows for a selection: a content section is read
+ * against what the reader can see now, so one chosen before the lists settled
+ * (Collections, while a Singles-only reader's collections were still loading)
+ * gives way to the kind there is. Any other section shows as selected.
+ */
+export function sectionShown<S extends string>(
+  selected: S,
+  available: Readonly<Record<ContentSection, boolean>>
+): S | ContentSection {
+  return isContentSection(selected)
+    ? contentSectionToOpen(selected, available)
+    : selected;
+}
+
+/**
  * Where the Content item goes when selected: nowhere while it has a panel to
  * open, and to the part it would have opened when the panel is suppressed.
  */
