@@ -686,18 +686,26 @@ export default function EditEntryPage({
               <PluginSlot path={beforeEditPath} props={editInjectionProps} />
             </div>
           )}
-          {/* FULL WIDTH and first, matching the historical-version banner: this
-            is a standing fact about the whole document, and a bar constrained
-            to the content measure reads as a note about the fields under it.
-            It does not touch the per-language staleness markers in the language
-            panel — those answer a different question, and a stale translation
-            inside a scheduled release is exactly where an editor needs both. */}
-          <ScheduledReleaseBanner
-            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
-            onDefaultLocale={!isNonDefaultLocale}
-          />
           {release.dialog}
           <EntryForm
+            /* A standing fact about the whole document, so a band across the
+             editor's column directly under its header, read before the fields.
+             Inside the editor rather than above it: the editor's row pulls up
+             over the page's top inset, and a banner placed before it slid
+             under the sticky header. It does not touch the per-language
+             staleness markers in the language panel — those answer a different
+             question, and a stale translation inside a scheduled release is
+             exactly where an editor needs both. */
+            documentBanner={
+              <ScheduledReleaseBanner
+                document={{
+                  scopeKind: "collection",
+                  scopeSlug: slug,
+                  entryId: id,
+                }}
+                onDefaultLocale={!isNonDefaultLocale}
+              />
+            }
             collection={collection as unknown as EntryFormCollection}
             entry={entry}
             mode="edit"

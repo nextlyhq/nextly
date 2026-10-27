@@ -182,6 +182,14 @@ export interface SingleFormProps {
    * which an author cannot tell from a feature that does not exist.
    */
   documentActions?: readonly ContributedAction[];
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn in
+   * the editor's column directly under the header. Given here rather than
+   * placed above the form by the page: the editor's row pulls itself up over
+   * the page's top inset, so anything placed before it slides under the
+   * sticky header.
+   */
+  documentBanner?: React.ReactNode;
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -462,6 +470,7 @@ export function SingleForm({
   sourceValues,
   className,
   documentActions,
+  documentBanner,
   documentView,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
@@ -1187,6 +1196,8 @@ export function SingleForm({
                                   isRailCollapsed={railCollapsed}
                                   lockSlug
                                 />
+
+                                {documentBanner}
 
                                 {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky
