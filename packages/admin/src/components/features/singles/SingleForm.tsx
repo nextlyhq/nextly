@@ -572,7 +572,11 @@ export function SingleForm({
         schema.fields,
         mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
       ),
-    { writesHeld: () => writesHeldNow.current, latch: submissionLatch }
+    {
+      writesHeld: () => writesHeldNow.current,
+      latch: submissionLatch,
+      ownSave,
+    }
   );
 
   useEffect(() => {

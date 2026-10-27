@@ -384,8 +384,10 @@ function getSingularLabel(collection: EntryFormCollection): string {
 interface EntryIdentity {
   id: unknown;
   version: string | null;
-  /** The language and read it was loaded for, and a working draft's overlay. */
+  /** The language and read it was loaded for. */
   place: string;
+  /** Whether it shows a working draft's overlay. */
+  overlay: boolean;
 }
 
 function entryIdentity(
@@ -396,17 +398,16 @@ function entryIdentity(
   return {
     id: entry.id,
     version: typeof entry.updatedAt === "string" ? entry.updatedAt : null,
-    place: JSON.stringify([
-      locale ?? null,
-      readDraft ?? null,
-      entry._isWorkingDraft === true,
-    ]),
+    place: JSON.stringify([locale ?? null, readDraft ?? null]),
+    overlay: entry._isWorkingDraft === true,
   };
 }
 
 /**
- * How far an arriving entry resets the form. A different entry, language, read
- * or working-draft overlay starts it again; so does a new version, unless it is
+ * How far an arriving entry resets the form. A different entry, language or
+ * read starts it again; so does a working-draft overlay coming or going, unless
+ * this author's own write is in flight (a recovery that saves the pending
+ * change creates the first working draft); so does a new version, unless it is
  * this author's own save coming back (while the save is in flight, or matching
  * the version it stored). The same identity again — a save's own optimistic
  * copy or rollback, or newer content a working-draft save left the version of
@@ -419,6 +420,7 @@ function resetDecision(
 ): "keep-unsaved" | "full" {
   if (last === undefined) return "full";
   if (last.id !== next.id || last.place !== next.place) return "full";
+  if (last.overlay !== next.overlay && !ownSave.inFlight) return "full";
   if (last.version === next.version) return "keep-unsaved";
   const ownEcho =
     ownSave.inFlight ||
@@ -568,7 +570,11 @@ export function useEntryForm({
         fields,
         mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
       ),
-    { writesHeld: writesHeld ?? writesNeverHeld, latch: submissionLatch }
+    {
+      writesHeld: writesHeld ?? writesNeverHeld,
+      latch: submissionLatch,
+      ownSave,
+    }
   );
 
   useEffect(() => {

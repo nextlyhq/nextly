@@ -41,6 +41,13 @@ export function useRefusedForm(
      * flight. The recovery takes it too, so the two never overlap.
      */
     latch: RefObject<boolean>;
+    /**
+     * The editor's own-save marker: while it reads in flight, a document
+     * that arrives is taken as this editor's own write coming back, and the
+     * edits made meanwhile are kept. The recovery writes too, and its write
+     * comes back as the reloaded document.
+     */
+    ownSave: RefObject<{ inFlight: boolean }>;
   }
 ): {
   refusedForm: RefusedForm;
@@ -59,25 +66,34 @@ export function useRefusedForm(
   gateNow.current = gate;
   // The fields taken, until the document that carries them arrives.
   const awaiting = useRef<readonly string[] | null>(null);
+  // Where a recovery's write is: running, then returning once the recovery
+  // has finished, until the next document arrives, which is that write. The
+  // own-save marker stays in flight through both.
+  const recoveryWrite = useRef<"none" | "running" | "returning">("none");
 
   const refusedForm = useMemo<RefusedForm>(
     () => ({
       pendingChangeNow: () =>
         new Promise((resolve, reject) => {
-          void form.handleSubmit(
-            values => {
-              try {
-                resolve(toPayload.current(values));
-              } catch (error) {
-                reject(
-                  error instanceof Error ? error : new Error(String(error))
-                );
+          form
+            .handleSubmit(
+              values => {
+                try {
+                  resolve(toPayload.current(values));
+                } catch (error) {
+                  reject(
+                    error instanceof Error ? error : new Error(String(error))
+                  );
+                }
+              },
+              () => {
+                reject(new Error(INVALID));
               }
-            },
-            () => {
-              reject(new Error(INVALID));
-            }
-          )();
+            )()
+            // The submit itself can reject, a resolver that throws, and then
+            // neither callback runs: the recovery has to settle all the same,
+            // or it holds the editor's latch for good.
+            .catch(reject);
         }),
       adoptTaken: fields => {
         if (fields.length > 0) awaiting.current = fields;
@@ -85,12 +101,25 @@ export function useRefusedForm(
       run: async work => {
         // The same gate the editor's own saves pass: the recovery saves and
         // takes into the pending change, which is a write like any other.
-        const { writesHeld, latch } = gateNow.current;
+        const { writesHeld, latch, ownSave } = gateNow.current;
         if (writesHeld()) throw new Error(HELD);
         if (latch.current) throw new Error(BUSY);
         latch.current = true;
+        // Its write is this editor's own: the document it brings back, even
+        // one that now carries the first working draft, keeps the edits made
+        // while it ran rather than resetting over them.
+        ownSave.current.inFlight = true;
+        recoveryWrite.current = "running";
         try {
-          return await work();
+          const done = await work();
+          // The reload it awaited may reach the form only after this.
+          recoveryWrite.current = "returning";
+          return done;
+        } catch (error) {
+          // Nothing comes back for it: the next document isn't its write.
+          recoveryWrite.current = "none";
+          ownSave.current.inFlight = false;
+          throw error;
         } finally {
           latch.current = false;
         }
@@ -101,6 +130,13 @@ export function useRefusedForm(
 
   const adoptArrived = useCallback(
     (arrived: Record<string, unknown>) => {
+      // The recovery's write has come back, and the editor's reset has
+      // already judged it as its own: the marker is clear for what follows.
+      // A document arriving while it still runs is not yet that write.
+      if (recoveryWrite.current === "returning") {
+        recoveryWrite.current = "none";
+        gateNow.current.ownSave.current.inFlight = false;
+      }
       const fields = awaiting.current;
       if (!fields) return;
       awaiting.current = null;

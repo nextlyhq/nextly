@@ -214,4 +214,49 @@ describe("the entry form, for a publish refused over shared values", () => {
       "nickname"
     );
   });
+
+  it("keeps an edit made during a recovery that creates the entry's first working draft", async () => {
+    // Published, with no pending change of its own yet.
+    const { result, rerender } = render();
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.run(async () => {
+        // Typed while the recovery saves and takes.
+        result.current.form.setValue("bio", "Typed during the recovery", {
+          shouldDirty: true,
+        });
+      });
+    });
+    // The reloaded entry now carries the working draft the recovery created:
+    // the same entry and the same version, with the overlay flag turned on.
+    act(() => {
+      rerender({ entry: { ...stored, _isWorkingDraft: true } });
+    });
+
+    expect(result.current.form.getValues("bio")).toBe(
+      "Typed during the recovery"
+    );
+  });
+
+  it("goes back to judging the overlay once the recovery's reload has arrived", async () => {
+    const { result, rerender } = render();
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.run(async () => {});
+    });
+    act(() => {
+      rerender({ entry: { ...stored, _isWorkingDraft: true } });
+    });
+    // An edit made afterwards, then the working draft goes away from under
+    // it, as someone else's discard takes it: that is no write of this
+    // editor's, and the form starts again from what is stored.
+    act(() => {
+      result.current.form.setValue("bio", "Typed after the recovery", {
+        shouldDirty: true,
+      });
+    });
+    act(() => {
+      rerender({ entry: { ...stored, _isWorkingDraft: false } });
+    });
+
+    expect(result.current.form.getValues("bio")).toBe(stored.bio);
+  });
 });
