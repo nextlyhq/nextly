@@ -16,6 +16,10 @@
  * placeholder is only used when no archive exists, so it shadows none: its
  * page is a 404 at build, and since the route is request-time, an archive
  * created later with that slug renders like any other.
+ *
+ * The placeholder's render reads nothing from the database (see
+ * `isArchivePlaceholder`), so the build depends only on the page's shape, not
+ * on what the database holds or whether it can be read at build time.
  */
 const PLACEHOLDER_SLUG = "__none__";
 
@@ -23,4 +27,9 @@ export function archiveStaticParams(slugs: string[]): { slug: string }[] {
   return (slugs.length > 0 ? slugs : [PLACEHOLDER_SLUG]).map(slug => ({
     slug,
   }));
+}
+
+/** Whether a slug is the placeholder, whose render reads nothing else. */
+export function isArchivePlaceholder(slug: string): boolean {
+  return slug === PLACEHOLDER_SLUG;
 }
