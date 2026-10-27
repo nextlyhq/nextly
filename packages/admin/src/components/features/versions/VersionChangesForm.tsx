@@ -23,6 +23,7 @@ import { cn } from "@admin/lib/utils";
 import { FieldDiffNode } from "./diff/FieldDiffNode";
 import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
 import type { NoChanges, VersionChanges } from "./version-changes";
+import { useHoldsWithheld } from "./withheld-fields-context";
 
 /** What the editor says when no authored field changed. */
 const NO_CHANGES_IN_EDITOR: Record<NoChanges, string> = {
@@ -36,15 +37,25 @@ export function changeAnchorId(name: string): string {
   return `version-change-${name}`;
 }
 
-/** One stretch of the form: a changed field, or a run of unchanged ones. */
+/**
+ * One stretch of the form: a changed field, a field that holds something
+ * held back from the reader, or a run of unchanged ones.
+ */
 type Stretch =
   | { kind: "changed"; name: string }
+  | { kind: "withheld"; field: FieldConfig }
   | { kind: "unchanged"; fields: FieldConfig[] };
 
-/** The form's fields split into changed ones and runs of unchanged ones. */
+/**
+ * The form's fields split into changed ones, held-back ones and runs of
+ * unchanged ones. A held-back field is not a change the comparison can show,
+ * but neither is it unchanged: whether it changed is exactly what the reader
+ * may not learn, so it stands on its own rather than folding with the rest.
+ */
 function stretchesOf(
   fields: readonly FieldConfig[],
-  changes: VersionChanges
+  changes: VersionChanges,
+  holdsWithheld: (name: string) => boolean
 ): Stretch[] {
   const stretches: Stretch[] = [];
   for (const field of fields) {
@@ -54,6 +65,10 @@ function stretchesOf(
         : undefined;
     if (name !== undefined && changes.byField.has(name)) {
       stretches.push({ kind: "changed", name });
+      continue;
+    }
+    if (name !== undefined && holdsWithheld(name)) {
+      stretches.push({ kind: "withheld", field });
       continue;
     }
     const last = stretches.at(-1);
@@ -123,7 +138,7 @@ export function VersionChangesForm({
     )
   );
   const outside = order.filter(name => !inLayout.has(name));
-  const stretches = stretchesOf(fields, changes);
+  const stretches = stretchesOf(fields, changes, useHoldsWithheld());
   const unchangedCount = stretches.reduce(
     (count, stretch) =>
       stretch.kind === "unchanged" ? count + stretch.fields.length : count,
@@ -147,6 +162,15 @@ export function VersionChangesForm({
             name={stretch.name}
             changes={changes}
             current={current === stretch.name}
+          />
+        ) : stretch.kind === "withheld" ? (
+          // Through the editor's own renderer, which says in the field's
+          // place that it is hidden: always in view, whatever the fold.
+          <ReadOnlyDocumentForm
+            key={`withheld-${index}`}
+            fields={[stretch.field]}
+            values={values}
+            mode="edit"
           />
         ) : showUnchanged ? (
           <ReadOnlyDocumentForm

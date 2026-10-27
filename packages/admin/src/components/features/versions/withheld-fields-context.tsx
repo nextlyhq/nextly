@@ -55,6 +55,22 @@ export function useWithheldFields(): (
 }
 
 /**
+ * Whether anything at or below a field was held back from the reader: the
+ * field itself, or a field inside it (`meta.secret` for `meta`). A view that
+ * folds unchanged fields away asks this, so a field that says something is
+ * hidden is never folded or counted as one that did not change.
+ */
+export function useHoldsWithheld(): (fieldPath: string) => boolean {
+  const withheld = useContext(WithheldFieldsContext);
+  return fieldPath => {
+    if (fieldPath === "") return false;
+    if (withheld.has(fieldPath)) return true;
+    const below = `${fieldPath}.`;
+    return [...withheld].some(path => path.startsWith(below));
+  };
+}
+
+/**
  * Whether this field's value was held back from the reader. Answered by the
  * field's full path, so only the row that lost the field is told it did.
  */

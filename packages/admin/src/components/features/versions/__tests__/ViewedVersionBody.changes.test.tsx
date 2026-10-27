@@ -96,18 +96,24 @@ const viewing: ViewedVersion = {
   about: null,
 };
 
-function renderVersion() {
+function renderVersion(
+  override: {
+    withheld?: readonly string[];
+    fields?: FieldConfig[];
+  } = {}
+) {
+  const shown = { ...viewing, withheld: override.withheld ?? viewing.withheld };
   return render(
     <DocumentHistoryContext.Provider
       value={{
-        viewing,
+        viewing: shown,
         setViewing: () => {},
         restore: null,
         setRestore: () => {},
       }}
     >
       <ViewedVersionBody
-        fields={fields}
+        fields={override.fields ?? fields}
         values={viewing.snapshot as Record<string, unknown>}
         actionsDisabled={false}
       >
@@ -164,6 +170,60 @@ describe("ViewedVersionBody — a past version with its changes marked", () => {
     expect(
       screen.getByRole("button", { name: "Hide 2 unchanged fields" })
     ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps a field held back from the reader in view, never folded or counted among the unchanged", async () => {
+    // The comparison names a held-back field hidden rather than changed:
+    // folded with the unchanged ones it would read as one of them.
+    diffMock.mockResolvedValue({
+      ...diff,
+      incomplete: true,
+      fields: [
+        node("title", "changed"),
+        node("excerpt", "unchanged"),
+        node("body", "changed"),
+        {
+          kind: "hidden",
+          reason: "no-access",
+          name: "slug",
+          label: "Slug",
+          type: "text",
+          status: "unchanged",
+        },
+      ],
+    } satisfies VersionDiff);
+    renderVersion({ withheld: ["slug"] });
+
+    // Counted out of the fold: only the excerpt is unchanged.
+    expect(
+      await screen.findByRole("button", { name: "Show 1 unchanged field" })
+    ).toBeInTheDocument();
+    // And drawn without asking, on its own, through the editor's own
+    // renderer, which says it is hidden in its place; the unchanged excerpt
+    // stays folded. (The whole form is drawn once while the comparison loads.)
+    expect(unchangedShown.current.at(-1)).toEqual(["slug"]);
+    expect(unchangedShown.current).not.toContainEqual(["excerpt"]);
+  });
+
+  it("keeps a group in view when a field inside it was held back", async () => {
+    renderVersion({
+      withheld: ["meta.secret"],
+      fields: [
+        { name: "excerpt", type: "text" },
+        { name: "body", type: "text" },
+        {
+          name: "meta",
+          type: "group",
+          fields: [{ name: "secret", type: "text" }],
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Show 1 unchanged field" })
+    ).toBeInTheDocument();
+    expect(unchangedShown.current.at(-1)).toEqual(["meta"]);
+    expect(unchangedShown.current).not.toContainEqual(["excerpt"]);
   });
 
   it("moves to the next change in reading order, and puts focus there", async () => {
