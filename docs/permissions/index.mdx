@@ -27,20 +27,15 @@ everything.
 ## Collection access
 
 Grants say what a role may do. When a collection declares an `access` rule for an
-operation, that rule is the whole answer for a signed-in user: the grant is not checked
-beside it, so a rule that returns `true` admits someone whose role lacks the grant. So
-for staff and API keys, make the rule check the permission itself, then add your own
-condition, and it only ever narrows what the Roles screen grants. A rule that also admits
-plugin-defined people checks for them in a separate branch, since they hold no
-permissions (see the end of this section):
+operation, that rule only narrows the grant: a signed-in user or an API key needs the
+grant first, and the rule then lets them through only by returning `true`. A rule that
+returns `true` never admits someone whose role lacks the grant, so a rule adds your own
+condition and need not check the permission itself; it only ever narrows what the Roles
+screen grants. Plugin-defined people hold no grants and are judged by the rule alone (see
+the end of this section):
 
 ```ts
-import type { AccessControlFunction } from "nextly";
 import { defineCollection, relationship, text } from "nextly/config";
-
-/** The caller holds this operation's permission on this collection. */
-const permitted: AccessControlFunction = ({ permissions, target, operation }) =>
-  permissions.includes(`${operation}-${target.slug}`);
 
 export const Posts = defineCollection({
   slug: "posts",
@@ -50,9 +45,8 @@ export const Posts = defineCollection({
   ],
   access: {
     read: true,
-    create: permitted,
-    // Narrowed: the permission, and not while a content freeze is on.
-    update: args => permitted(args) && process.env.CONTENT_FREEZE !== "on",
+    // Narrowed: the role's update-posts, and not while a content freeze is on.
+    update: () => process.env.CONTENT_FREEZE !== "on",
   },
 });
 ```
@@ -62,17 +56,17 @@ A rule is given the caller's `permissions` spelled as the Roles screen spells th
 permission check refuses them. A super-admin is admitted before any collection or Single
 rule runs; field rules still apply to them.
 
-Rules were once given the other spelling, `posts:update`. For one release the list still
-carries it, after the Roles screen's, so a rule written that way keeps working; Nextly logs
-a warning, once per rule, naming the spelling to use instead. It stops being accepted in a
-later release.
+Rules were once given the other spelling, `posts:update`. That spelling is no longer in
+the list, so a rule checking it does not allow; check `update-posts`, as the Roles screen
+spells it.
 
 **Don't check a role's name in a rule.** `roles.includes("editor")` refuses a role an admin
 created that holds `update-posts`, and every API key whose roles carry none of the names you
 listed, while the Roles screen says both may act. The role's permissions are what the admin
 manages, so a rule that reads them stays in step with that screen.
 
-`true` means anyone, including callers with no session, for reads and writes alike.
+`true` admits every caller with no session, for reads and writes alike, and every signed-in
+user or API key holding the grant.
 
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
@@ -101,8 +95,8 @@ defineCollection({
 
 Publishing and unpublishing always need a signed-in user, whatever the rule says.
 
-An **API key** must hold the permission in its own grants, and then satisfy the rule if there
-is one.
+A signed-in user must hold the permission through their roles, and an **API key** in its own
+grants, and then satisfy the rule if there is one.
 
 A plugin-defined signed-in person, such as a shop's customer, is different: they
 hold no grants, so a rule is the only way in. A rule sees them as `principal`
@@ -116,10 +110,9 @@ A populated relationship is read with the same check as reading the related coll
 directly. Reading `posts` at a depth that populates `author` returns the author only to a
 caller who could read that `users` row by name:
 
-- **The related collection declares `access.read`:** that rule decides, for signed-in users
-  and visitors alike. No per-collection grant is needed.
-- **It declares no read rule:** a signed-in user needs `read-<collection>`, as they would to
-  read it directly.
+- **A signed-in user** needs `read-<collection>`, as they would to read it directly, and then
+  the collection's read rule if it declares one.
+- **A visitor** is judged by the collection's read rule where it declares one.
 - **An API key** always needs `read-<collection>` in its own grants, and then the collection's
   rule if it has one. A key granted only `read-posts` does not see populated authors.
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or

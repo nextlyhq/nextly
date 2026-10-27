@@ -18,6 +18,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -60,6 +61,12 @@ async function boot(options: {
     singles: (options.singles ?? []).map(defineSingle),
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read on every
+  // collection and single here and the code rules decide which they may read.
+  await userWhoMay(t, admin.user.id, "read", [
+    ...(options.collections ?? []).map(collection => collection.slug),
+    ...(options.singles ?? []).map(single => single.slug),
+  ]);
   // The same call the layout endpoint makes before resolving anything. Boot
   // does not publish the sources, and both halves read them.
   await refreshCollectionWidgets();

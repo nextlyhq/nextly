@@ -83,6 +83,9 @@ import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+
+import { refuseLinkingPublicRole } from "./public-role";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -380,10 +383,9 @@ function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
  * Distinct rows, keyed on the slug — the identity a grant is stored under.
  *
  * A key's grants are kept as rows, not slugs: the slug (`read-posts`) is what
- * every check compares and what a rule is handed, and for one release a rule
- * is also handed the earlier `posts:read` spelling, made from the row's
- * `action` and `resource`. A stored slug cannot be decomposed back into those
- * parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
+ * every check compares and what a rule is handed, and the row also names
+ * the `action` and `resource` it grants. A stored slug cannot be decomposed
+ * back into those parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
  * explicitly supported by `RolePermissionService`, so splitting on the hyphen
  * would invent a resource that no row names.
  */
@@ -647,6 +649,14 @@ export class ApiKeyService extends BaseService {
           logContext: { tokenType },
         });
       }
+      // The Public role is what visitors hold, never a key's.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [roleId],
+        "assign",
+        { userId }
+      );
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);
@@ -863,10 +873,10 @@ export class ApiKeyService extends BaseService {
   /**
    * The key's grants, as the rows they were resolved from.
    *
-   * Rows rather than slugs, because a rule judging the key on its own scope is
-   * handed, for one release, each grant's earlier `resource:action` spelling
-   * beside the stored slug its coarse permission check tests, and only the
-   * row has the parts to make it.
+   * Rows rather than slugs, because a slug cannot be split back into the
+   * action and resource it grants, and the scope keeps both for whatever
+   * asks of the key. A rule judging the key is handed each grant's stored
+   * slug, the one its coarse permission check tests.
    *
    * Returns a COPY. The cached arrays are shared by every request this key
    * makes for the TTL, and the scope built from them is handed to plugin route

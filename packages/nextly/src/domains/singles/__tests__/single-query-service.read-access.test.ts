@@ -98,7 +98,7 @@ describe("SingleQueryService.get — the read gate", () => {
     const result = await service.get("site-settings", { user: editor });
 
     expect(result.success).toBe(false);
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
   });
 
   it("allows a caller the gate admits", async () => {

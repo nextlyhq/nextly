@@ -18,8 +18,10 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { aboutSubject } from "../../auth/access/deviations";
 import {
   routeGateCapabilities,
+  sentParams,
   type GateCaller,
 } from "../../auth/access/route-gate-adapters";
 import {
@@ -27,9 +29,14 @@ import {
   currentRequestCaller,
 } from "../../auth/caller-scope";
 import { getRBACService } from "../../auth/code-access";
+import {
+  authorizationGroups,
+  readableEntities,
+} from "../../auth/entity-read-access";
 import { requestLanguage } from "../../auth/middleware";
 import { container } from "../../di/container";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import type { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
@@ -41,6 +48,7 @@ import {
 } from "../../services/lib/permissions";
 import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
@@ -50,6 +58,44 @@ import {
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
+
+import { readAccessCallerForDispatch } from "./read-access-caller";
+
+/**
+ * The collections and Singles the caller may read, of those registered: the
+ * entities the capabilities answer may name.
+ *
+ * Decided by `readableEntities`, the decision the collection and Single lists
+ * are scoped by (their allowlist is that decision over the same registries),
+ * so the answer names exactly what those lists show the same caller and no
+ * entity the caller may not know exists. Each entity is asked as its own
+ * subject, so a deviation that shapes the answer is said of the entity it
+ * shaped, and in the order `readableEntities` takes a set — one, then
+ * bounded groups at once — so an install's rules are not waited on one
+ * after another. The route admits only an authenticated caller; were none
+ * read here, nothing is named rather than everything.
+ */
+async function readableEntityKinds(
+  kinds: ReadonlyMap<string, "collection" | "single">
+): Promise<Map<string, "collection" | "single">> {
+  const reader = readAuthenticatedUser();
+  if (!reader) return new Map();
+  const caller = readAccessCallerForDispatch(reader);
+  const allowed = new Set<string>();
+  for (const group of authorizationGroups([...kinds.keys()])) {
+    const decided = await Promise.all(
+      group.map(slug =>
+        aboutSubject(permissionSlug("read", slug), () =>
+          readableEntities([slug], caller)
+        )
+      )
+    );
+    for (const readable of decided) {
+      for (const slug of readable) allowed.add(slug);
+    }
+  }
+  return new Map([...kinds].filter(([slug]) => allowed.has(slug)));
+}
 
 type UsersService = ServiceContainer["users"];
 
@@ -64,6 +110,25 @@ function capabilitiesCaller(userId: string): GateCaller {
   const actor = currentRequestCaller()?.actor;
   const keyId = actor?.type === "apiKey" ? actor.id : undefined;
   return { userId, key: scope, ...(keyId === undefined ? {} : { keyId }) };
+}
+
+/**
+ * The collections with a Draft/Published lifecycle, for the cells whose
+ * request publishes as well where one exists. Unreadable, every collection is
+ * taken to have one: such a cell then asks the publish check too, and answers
+ * no where it cannot tell, never yes.
+ */
+async function collectionsWithLifecycle(): Promise<(slug: string) => boolean> {
+  const everyCollection = () => true;
+  if (!container.has("collectionRegistryService")) return everyCollection;
+  try {
+    const slugs = await container
+      .get<CollectionRegistryService>("collectionRegistryService")
+      .getSlugsWithStatus();
+    return slug => slugs.has(slug);
+  } catch {
+    return everyCollection;
+  }
 }
 
 /**
@@ -218,11 +283,17 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   getCurrentUserPermissions: {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
-      const [permissionPairs, superAdmin, roleSlugs] = await Promise.all([
-        listEffectivePermissions(userId),
-        isSuperAdmin(userId),
-        listRoleSlugsForUser(userId),
-      ]);
+      // The soonest end of the role assignments comes from the same
+      // request-scoped read of the user's roles the permissions do, so the
+      // list and its end describe one moment.
+      const [permissionPairs, superAdmin, roleSlugs, roles] = await Promise.all(
+        [
+          listEffectivePermissions(userId),
+          isSuperAdmin(userId),
+          listRoleSlugsForUser(userId),
+          resolveUserRoles(userId),
+        ]
+      );
       // Convert "resource:action" → "action-resource" slug format
       // (e.g. "users:read" → "read-users").
       const permissions = permissionPairs.map(pair => {
@@ -233,6 +304,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         permissions,
         isSuperAdmin: superAdmin,
         roles: roleSlugs,
+        // When this list stops holding, in epoch ms, or null: the soonest
+        // end of a role assignment it was read under.
+        validUntil: roles.validUntil ?? null,
       });
     },
   },
@@ -247,10 +321,13 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
       const caller = capabilitiesCaller(userId);
-      const [{ kinds, degraded }, validUntil] = await Promise.all([
-        registeredContentSnapshot(),
-        capabilitiesValidUntil(caller),
-      ]);
+      const [{ kinds, degraded }, validUntil, hasLifecycle] = await Promise.all(
+        [
+          registeredContentSnapshot(),
+          capabilitiesValidUntil(caller),
+          collectionsWithLifecycle(),
+        ]
+      );
       // The answer states what the caller may do with EVERY entity, so a
       // registry that could not be enumerated leaves a floor rather than the
       // whole list. Handing that over as the answer would have the admin hide
@@ -268,13 +345,22 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // Only `locale` is read from the query: the other language controls
       // belong to operations that carry an entry, and reading them would let
       // a caller widen the framing through a parameter this route does not
-      // offer.
-      const asked = { locale: p.locale ?? "" };
+      // offer. A cell whose request sends more, or no language, is framed by
+      // what that request sends (`sentParams`), never by the query.
+      const locale = p.locale ?? "";
       const capabilities = await routeGateCapabilities(
         caller,
-        kinds,
+        // Only the entities the caller may read are named: the answer is
+        // sent to every signed-in caller, and naming the rest would tell
+        // each one every collection and Single the install has.
+        await readableEntityKinds(kinds),
         getRBACService(),
-        operation => requestLanguage({ method: operation, params: asked })
+        (operation, sent) =>
+          requestLanguage({
+            method: operation,
+            params: sentParams(sent, locale),
+          }),
+        hasLifecycle
       );
       return respondData(
         {

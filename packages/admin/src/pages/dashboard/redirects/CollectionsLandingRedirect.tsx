@@ -17,15 +17,16 @@
  * install showing 404 looked broken.
  */
 
-import { useEffect, type JSX } from "react";
+import type { JSX } from "react";
 
 import { EmptyEntitiesState } from "@admin/components/features/dashboard/EmptyEntitiesState";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
-import { navigateTo } from "@admin/lib/navigation";
 import { pickCollectionsLandingTarget } from "@admin/lib/sidebar-landing";
+
+import { LandingOutcome } from "./LandingOutcome";
 
 // Same key as DynamicCollectionNav — they MUST share the pinned set.
 const PINNED_COLLECTIONS_STORAGE_KEY = "nextly:sidebar:pinned-collections";
@@ -49,15 +50,12 @@ export default function CollectionsLandingRedirect(): JSX.Element {
   });
   const targetSlug = target?.name;
 
-  useEffect(() => {
-    if (!isLoading && targetSlug) {
-      navigateTo(`/admin/collections/${targetSlug}`);
-    }
-  }, [isLoading, targetSlug]);
-
-  if (isLoading || targetSlug) {
-    return <div className="h-32" aria-hidden="true" />;
-  }
-
-  return <EmptyEntitiesState type="collection" />;
+  return (
+    <LandingOutcome
+      listLoading={isLoading}
+      target={targetSlug ? `/admin/collections/${targetSlug}` : undefined}
+      subject="collections"
+      empty={<EmptyEntitiesState type="collection" />}
+    />
+  );
 }

@@ -28,7 +28,7 @@ This is what makes local development work without setting up any cloud credentia
 
 ### How local uploads are served
 
-Next.js serves files in `public/` as static assets, but `next start` reads that folder once, when it starts, and serves only the files that were there. A file uploaded after a production server started is not among them. To serve those too, add a route at `src/app/uploads/[...path]/route.ts`:
+Next.js serves files in `public/` as static assets, but `next start` reads that folder once, when it starts, and serves only the files that were there. A file uploaded after a production server started is not among them. So a new project ships a route at `src/app/uploads/[...path]/route.ts`:
 
 ```typescript title="src/app/uploads/[...path]/route.ts"
 import { createUploadsHandlers } from "nextly/api/uploads";
@@ -55,7 +55,7 @@ Files Next.js serves itself, under `next dev` or once a production server restar
 
 If you change `baseUrl`, move the route folder to match: for `baseUrl: "/media"`, put it at `src/app/media/[...path]/route.ts`. With an absolute `baseUrl` on another host, the route has nothing to serve.
 
-> **Note:** Projects don't ship this file yet, so add it yourself: in an app without a `src/` folder, at `app/uploads/[...path]/route.ts`, importing your `nextly.config` by a relative path if you have no `@nextly-config` alias. Without it, a production server answers 404 for an upload until it restarts, and logs a warning naming the file the first time it happens.
+> **Note:** A project created before this route existed doesn't have it. Add the file above (in an app without a `src/` folder, at `app/uploads/[...path]/route.ts`, importing your `nextly.config` by a relative path if you have no `@nextly-config` alias). Until you do, a production server answers 404 for an upload until it restarts, and logs a warning naming the file the first time it happens.
 
 > **Warning:** Local disk storage needs a disk that persists, on one server. It doesn't survive serverless restarts. If you deploy to Vercel, AWS Lambda, Cloudflare Workers, or any platform with ephemeral filesystems, switch to a cloud adapter before going to production.
 

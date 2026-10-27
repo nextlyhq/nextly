@@ -59,6 +59,7 @@ import type { PermissionSeedService } from "../domains/auth/services/permission-
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import { resealQueuedMessagesAtBoot } from "../domains/email/queued-send";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
@@ -934,7 +935,10 @@ async function registerServicesOnce(
   // needed. Building them from `transformedConfig.collections` here was the
   // defect: a Builder-authored collection has no config entry at all, so one
   // of the framework's two schema modes had no queryable source.
-  resetWidgetRegistries(transformedConfig.plugins ?? []);
+  resetWidgetRegistries(
+    transformedConfig.plugins ?? [],
+    transformedConfig.admin?.dashboard
+  );
 
   // Before any step that writes to the database or the registry: the Builder
   // reconcile and the code-first sync below would otherwise add a refused
@@ -1114,6 +1118,10 @@ async function registerServicesOnce(
   // sealed again under the current one, so the retired secret can go once
   // the app has started with both.
   await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+  // Held queued messages too, for the same reason: one sealed under a secret
+  // since rotated is sealed again under the current one while the previous
+  // can still open it, so a message outlives any number of rotations.
+  await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.

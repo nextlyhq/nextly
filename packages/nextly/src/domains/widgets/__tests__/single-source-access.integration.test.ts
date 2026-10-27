@@ -11,6 +11,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -67,6 +68,9 @@ async function boot(): Promise<TestNextly> {
     data: { siteName: "Acme", tagline: "Hello" },
     overrideAccess: true,
   });
+  // A code rule only narrows the permission, so the editor holds read on both
+  // singles and each single's read rule decides.
+  await userWhoMay(t, editor.user.id, "read", [SETTINGS, PRIVATE]);
   // What the layout and query endpoints do before resolving anything: publish
   // the sources and the cards derived from them from the live registries.
   await refreshCollectionWidgets();
@@ -125,6 +129,9 @@ describe("a single: query against a real instance", () => {
   it("refuses a reader the single's code rule refuses", async () => {
     // The security property, observed rather than restated: the read path
     // evaluates the rule, and the executor adds nothing that could get past it.
+    // The read answers the refused reader as if the Single were missing; the
+    // card fails on that answer rather than drawing it as an empty list, and
+    // the failure is the gate's own refusal, its reason kept for the log.
     current = await boot();
 
     await expect(
@@ -136,7 +143,14 @@ describe("a single: query against a real instance", () => {
         }),
         editor
       )
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      logContext: {
+        reason: expect.stringContaining(
+          `the caller may not read single "${PRIVATE}"`
+        ),
+      },
+    });
   });
 
   it("derives no card per single, whose Singles the Content card lists, and keeps their sources", async () => {

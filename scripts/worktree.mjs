@@ -422,7 +422,31 @@ export function provisionDatabases(
 }
 
 /**
- * Drop the slot's databases.
+ * The integration suite's per-worker databases for a slot's database on one
+ * container: `<name>_pool<n>`, which its global setup creates for a run on more
+ * than one worker (`packages/nextly/src/__tests__/worker-database-guard.ts`).
+ * A run that ends normally drops them; one killed mid-way leaves them, so a
+ * removal has to look. Matched by an anchored pattern, never `LIKE`, where `_`
+ * is a wildcard and slot 7's query would also find slot 70's.
+ */
+function workerDatabasesOf(engine, container, name, run) {
+  const pattern = `^${name}_pool[0-9]+$`;
+  const listed = engine === "postgres"
+    ? run("docker", ["exec", container, "psql", "-U", "postgres", "-tAc",
+        `SELECT datname FROM pg_database WHERE datname ~ '${pattern}'`],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+    : run("docker", ["exec", container, "mysql", "-uroot", "-proot", "-Nse",
+        `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME REGEXP '${pattern}'`],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  // Checked again here, so only a name of exactly that shape is ever put into
+  // a DROP statement, whatever the server answered.
+  const shape = new RegExp(pattern);
+  return String(listed).split("\n").map(line => line.trim()).filter(line => shape.test(line));
+}
+
+/**
+ * Drop the slot's databases: its own, and any per-worker databases an
+ * integration run left beside it.
  *
  * Slot 0's database is shared by the primary checkout and every unallocated
  * one, so it is never a removal's to drop. Returning null rather than guarding
@@ -432,23 +456,25 @@ export function databaseToDrop(slot) {
   return slot === 0 ? null : databaseFor(slot);
 }
 
-export function dropDatabases(slot, { run = execFileSync } = {}) {
+export function dropDatabases(slot, { run = execFileSync, isRunning = containerRunning } = {}) {
   const name = databaseToDrop(slot);
   if (name === null) {
     return [{ container: "(all)", state: "kept", detail: "slot 0 is the shared default" }];
   }
   const results = [];
   for (const { container, engine } of TEST_DATABASES) {
-    if (!containerRunning(container)) {
+    if (!isRunning(container)) {
       results.push({ container, state: "skipped", detail: "container not running" });
       continue;
     }
     try {
-      const drop = engine === "postgres"
-        ? `DROP DATABASE IF EXISTS ${name}`
-        : `DROP DATABASE IF EXISTS \`${name}\``;
-      run("docker", sqlArgs(engine, container, drop), { stdio: ["ignore", "ignore", "pipe"] });
-      results.push({ container, state: "dropped", detail: name });
+      for (const each of [...workerDatabasesOf(engine, container, name, run), name]) {
+        const drop = engine === "postgres"
+          ? `DROP DATABASE IF EXISTS ${each}`
+          : `DROP DATABASE IF EXISTS \`${each}\``;
+        run("docker", sqlArgs(engine, container, drop), { stdio: ["ignore", "ignore", "pipe"] });
+        results.push({ container, state: "dropped", detail: each });
+      }
     } catch (error) {
       // Postgres refuses to drop a database with a live connection, which is
       // the ordinary case when a test run is still finishing. Treating that as

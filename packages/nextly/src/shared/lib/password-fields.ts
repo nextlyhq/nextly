@@ -15,7 +15,10 @@
  */
 
 import { hashPassword } from "../../auth/password";
+import { extractFieldGroupReferences } from "../../domains/field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { hiddenColumnNames } from "../../domains/schema/extension/active-schema";
+import { NextlyError } from "../../errors";
 import { systemColumnNames } from "../../lib/system-columns";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
@@ -80,8 +83,308 @@ function openContainer(
 }
 
 /**
- * Hash every provided password-field value in `data` in place, descending
- * into `group` / `repeater` containers.
+ * Where the walk below may follow a field-group reference: the fields of the
+ * field group a slug names, and whether to follow one placed directly on the
+ * entry.
+ *
+ * A field group held INLINE, inside a group, a repeater or another field
+ * group's container, is stored in that container's value, so its passwords
+ * sit there too and only this walk reaches them. One placed directly on the
+ * entry is stored in its own table, and hashed and withheld by the save and
+ * the read that handle that table; an entry-level walk leaves it alone, or a
+ * hash would be hashed again. A snapshot holds every instance inline, so it
+ * follows both (`direct`).
+ */
+export interface FieldGroupReach {
+  /** The fields of the field group `slug` names, or `undefined` when unknown. */
+  fieldsOf(slug: string): readonly NamedField[] | undefined;
+  /** Follow a field group placed directly on the entry as well. */
+  direct?: boolean;
+  /**
+   * Whether a field of the entry holds a value per language, keyed by code:
+   * a read of every translation returns each translated field that way, so
+   * the walk descends into each language's value in turn.
+   */
+  keyedByLanguage?: (field: NamedField) => boolean;
+}
+
+/**
+ * The reach of fields that hold no field group inline. A walk given it that
+ * meets one anyway treats it as unknown: a write refuses and a read withholds
+ * it, so a caller that wrongly passes this fails visibly, never by leaking.
+ */
+export const NO_FIELD_GROUPS: FieldGroupReach = { fieldsOf: () => undefined };
+
+/**
+ * An instance the walk meets but cannot read: one whose field group it has no
+ * fields for. Returns whether to withhold that instance from the value.
+ */
+type OnUnknown = (slug: string | undefined) => boolean;
+
+/** What one walk does at each level, and with an instance it cannot read. */
+interface PasswordWalk {
+  reach: FieldGroupReach;
+  /**
+   * The fields declared directly at one level of the value: the entry, a
+   * container row, or an inline field-group instance.
+   */
+  level: (
+    level: Record<string, unknown>,
+    fields: readonly NamedField[]
+  ) => void;
+  onUnknown: OnUnknown;
+  /**
+   * An untyped row of a dynamic zone: judged by every candidate's fields at
+   * once, which over-strips rather than leaks, or treated as unknown where
+   * guessing its schema would damage it.
+   */
+  untypedZoneRows: "union" | "unknown";
+}
+
+/**
+ * Visit every level of `value` that can hold a password, at any depth: the
+ * value itself, through layout containers, groups and repeaters (held as
+ * JSON text on SQLite, and written back in that shape), and through the field
+ * groups they hold inline.
+ *
+ * The one traversal password handling has: the write's hash, the read's
+ * strip and a snapshot's strip are each this walk with a different `level`,
+ * so they cannot disagree about where a password can be. Bounded by the data,
+ * which is finite, rather than by the schema, which may reference itself.
+ */
+function walkPasswordLevels(
+  value: unknown,
+  fields: readonly NamedField[],
+  walk: PasswordWalk,
+  atEntry = true,
+  open: WeakSet<object> = new WeakSet()
+): void {
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const row of value) walkPasswordLevels(row, fields, walk, atEntry);
+    return;
+  }
+  const level = value as Record<string, unknown>;
+  walk.level(level, fields);
+  for (const field of fields) walkLevelField(level, field, walk, atEntry, open);
+}
+
+/** {@link walkPasswordLevels} through one field of a level. */
+function walkLevelField(
+  level: Record<string, unknown>,
+  field: NamedField,
+  walk: PasswordWalk,
+  atEntry: boolean,
+  open: WeakSet<object>
+): void {
+  if (!field.name) {
+    // A layout container keeps its fields on this level. `open` holds the
+    // ones open on this path, so one that reaches itself terminates.
+    if (!field.fields || open.has(field)) return;
+    open.add(field);
+    walkPasswordLevels(level, field.fields, walk, atEntry, open);
+    open.delete(field);
+    return;
+  }
+  if (!(field.name in level)) return;
+  if (atEntry && walk.reach.keyedByLanguage?.(field) === true) {
+    walkEachLanguage(level, field.name, field, walk);
+  } else {
+    walkNamedField(level, field.name, field, walk, atEntry);
+  }
+}
+
+/** {@link walkPasswordLevels} through the value one named field holds. */
+function walkNamedField(
+  level: Record<string, unknown>,
+  name: string,
+  field: NamedField,
+  walk: PasswordWalk,
+  atEntry: boolean
+): void {
+  // A container first: a reference rewritten into one (`expandComponentFields`)
+  // keeps the slug it named, and its fields already say what it holds.
+  if (field.fields && (field.type === "group" || field.type === "repeater")) {
+    walkContainer(level, name, field.type, field.fields, walk);
+    return;
+  }
+  const { single, many } = extractFieldGroupReferences(field);
+  if (single !== undefined || many !== undefined) {
+    if (atEntry && walk.reach.direct !== true) return;
+    walkFieldGroupValue(level, name, { single, many }, walk);
+  }
+}
+
+/** {@link walkPasswordLevels} through the rows of one group or repeater. */
+function walkContainer(
+  level: Record<string, unknown>,
+  name: string,
+  type: string,
+  fields: readonly NamedField[],
+  walk: PasswordWalk
+): void {
+  const opened = openContainer(level[name], type);
+  if (!opened) return;
+  for (const row of opened.rows) walkPasswordLevels(row, fields, walk, false);
+  level[name] = opened.serialize();
+}
+
+/**
+ * {@link walkNamedField} for a field holding one value per language: each
+ * language's value walked as the field's own, and written back, or left out
+ * where the walk withheld it.
+ */
+function walkEachLanguage(
+  level: Record<string, unknown>,
+  name: string,
+  field: NamedField,
+  walk: PasswordWalk
+): void {
+  const byLanguage = level[name];
+  if (
+    byLanguage === null ||
+    typeof byLanguage !== "object" ||
+    Array.isArray(byLanguage)
+  ) {
+    walkNamedField(level, name, field, walk, true);
+    return;
+  }
+  const values = byLanguage as Record<string, unknown>;
+  for (const code of Object.keys(values)) {
+    const holder: Record<string, unknown> = { [name]: values[code] };
+    walkNamedField(holder, name, field, walk, true);
+    if (name in holder) values[code] = holder[name];
+    else delete values[code];
+  }
+}
+
+/**
+ * {@link walkPasswordLevels} through the instances one field-group field
+ * holds: one object, or a list of them. An instance the walk cannot read is
+ * withheld where `onUnknown` says so: a list keeps the rest, and a single
+ * instance leaves the field.
+ */
+function walkFieldGroupValue(
+  holder: Record<string, unknown>,
+  name: string,
+  references: { single?: string; many?: string[] },
+  walk: PasswordWalk
+): void {
+  rewriteValue(holder, name, value => {
+    const isList = Array.isArray(value);
+    const rows = isList ? (value as unknown[]) : [value];
+    const kept = rows.filter(row => keepsInstance(row, references, walk));
+    if (isList) return kept;
+    return kept.length === 0 ? WITHHELD : kept[0];
+  });
+}
+
+/** What {@link rewriteValue} is told to leave out of the holder. */
+const WITHHELD = Symbol("withheld");
+
+/**
+ * Rewrite one value of `holder` through `rewrite`, parsing it first where it
+ * is held as JSON text and writing it back in that shape; a value that is not
+ * valid JSON is left alone.
+ */
+function rewriteValue(
+  holder: Record<string, unknown>,
+  name: string,
+  rewrite: (value: unknown) => unknown
+): void {
+  const wasString = typeof holder[name] === "string";
+  let value: unknown = holder[name];
+  if (wasString) {
+    try {
+      value = JSON.parse(value as string);
+    } catch {
+      return;
+    }
+  }
+  const next = rewrite(value);
+  if (next === WITHHELD) {
+    delete holder[name];
+    return;
+  }
+  holder[name] = wasString ? JSON.stringify(next) : next;
+}
+
+/**
+ * Walk one instance a field-group field holds, and say whether it stays:
+ * anything that is not an instance stays as it is, and one whose fields are
+ * not known stays only where `onUnknown` does not withhold it.
+ */
+function keepsInstance(
+  row: unknown,
+  references: { single?: string; many?: string[] },
+  walk: PasswordWalk
+): boolean {
+  if (row === null || typeof row !== "object" || Array.isArray(row)) {
+    return true;
+  }
+  const instance = row as Record<string, unknown>;
+  const fields = instanceFields(instance, references, walk);
+  if (fields === undefined) {
+    return !walk.onUnknown(references.single ?? readFieldGroupType(instance));
+  }
+  walkPasswordLevels(instance, fields, walk, false);
+  return true;
+}
+
+/**
+ * The fields one instance is judged by: its field group's, or for a dynamic
+ * zone's row the field group its type names. `undefined` when they are not
+ * known.
+ */
+function instanceFields(
+  instance: Record<string, unknown>,
+  { single, many }: { single?: string; many?: string[] },
+  walk: PasswordWalk
+): readonly NamedField[] | undefined {
+  const typed = readFieldGroupType(instance);
+  // A snapshot (`direct`) is the server's own record of an instance, and
+  // tags it with the field group it held when captured, which the field
+  // may have been pointed away from since: it is read by that one. A live
+  // value's tag is the writer's to set, so there it names only one of the
+  // field's own field groups.
+  if (walk.reach.direct === true && typed !== undefined) {
+    return walk.reach.fieldsOf(typed);
+  }
+  if (single !== undefined) return walk.reach.fieldsOf(single);
+  const candidates = many ?? [];
+  if (typed !== undefined) {
+    return candidates.includes(typed) ? walk.reach.fieldsOf(typed) : undefined;
+  }
+  if (walk.untypedZoneRows === "unknown") return undefined;
+  const union: NamedField[] = [];
+  for (const slug of candidates) {
+    const found = walk.reach.fieldsOf(slug);
+    if (found === undefined) return undefined;
+    union.push(...found);
+  }
+  return union;
+}
+
+/** The password fields declared directly among `fields`, by name. */
+function passwordNames(fields: readonly NamedField[]): string[] {
+  return fields.flatMap(field =>
+    field.type === "password" && field.name ? [field.name] : []
+  );
+}
+
+/** A write cannot hash what it cannot read, so it refuses rather than store it. */
+const refuseUnknown: OnUnknown = slug => {
+  throw NextlyError.internal({
+    logContext: {
+      reason: "password-field-group-unresolved",
+      fieldGroup: slug ?? null,
+    },
+  });
+};
+
+/**
+ * Hash every provided password-field value in `data` in place, at every depth
+ * (see {@link walkPasswordLevels}).
  *
  * Semantics per value:
  * - non-empty string → replaced with its bcrypt hash (always; pre-hashed
@@ -98,66 +401,257 @@ function openContainer(
  */
 export async function hashPasswordFieldValues(
   data: Record<string, unknown>,
-  fields: NamedField[],
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
   keep?: ReadonlySet<string>
 ): Promise<void> {
-  for (const field of fields) {
-    if (!field.name || !(field.name in data)) continue;
-
-    if (field.fields && (field.type === "group" || field.type === "repeater")) {
-      const opened = openContainer(data[field.name], field.type);
-      if (opened) {
-        for (const row of opened.rows) {
-          await hashPasswordFieldValues(row, field.fields, keep);
-        }
-        data[field.name] = opened.serialize();
+  const toHash = (value: unknown): value is string =>
+    typeof value === "string" && value.trim() !== "" && !keep?.has(value);
+  // Hashing is asynchronous and the walk is not: it writes a JSON-text
+  // container back as it leaves it. So the values are read first, from a
+  // copy, hashed, and only then put in place by a second walk, while each
+  // container it rewrites is still open. Each occurrence gets a hash of its
+  // own, with its own salt, so two fields holding one password store
+  // different hashes and don't show that they match.
+  const plain: string[] = [];
+  walkPasswordLevels(detachForReading(data), fields, {
+    reach,
+    onUnknown: refuseUnknown,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (toHash(value)) plain.push(value);
       }
-      continue;
-    }
-
-    if (field.type !== "password") continue;
-
-    const value = data[field.name];
-    if (value === null) continue;
-
-    if (typeof value !== "string" || value.trim() === "") {
-      delete data[field.name];
-      continue;
-    }
-
-    if (keep?.has(value)) continue;
-    data[field.name] = await hashPassword(value);
+    },
+  });
+  const hashed = new Map<string, string[]>();
+  for (const value of plain) {
+    const hash = await hashPassword(value);
+    const queue = hashed.get(value);
+    if (queue) queue.push(hash);
+    else hashed.set(value, [hash]);
   }
+  walkPasswordLevels(data, fields, {
+    reach,
+    onUnknown: refuseUnknown,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        if (!(name in level)) continue;
+        const value = level[name];
+        if (value === null) continue;
+        if (typeof value !== "string" || value.trim() === "") {
+          delete level[name];
+        } else if (toHash(value)) {
+          level[name] = hashed.get(value)?.shift();
+        }
+      }
+    },
+  });
 }
 
 /**
  * Remove password-field values from an entry about to be serialized to a
- * client, descending into containers. Stored hashes are write-only:
- * exposing them enables offline cracking, and the plaintext must never
- * round-trip through the admin.
+ * client, at every depth (see {@link walkPasswordLevels}). Stored hashes are
+ * write-only: exposing them enables offline cracking, and the plaintext must
+ * never round-trip through the admin.
+ *
+ * An inline field-group instance whose fields are not known is withheld: what
+ * it holds cannot be told apart from a password.
  */
 export function stripPasswordFieldValues(
   entry: Record<string, unknown>,
-  fields: NamedField[]
+  fields: readonly NamedField[],
+  reach: FieldGroupReach
 ): void {
-  for (const field of fields) {
-    if (!field.name || !(field.name in entry)) continue;
+  walkPasswordLevels(entry, fields, {
+    reach,
+    onUnknown: () => true,
+    untypedZoneRows: "union",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) delete level[name];
+    },
+  });
+}
 
-    if (field.fields && (field.type === "group" || field.type === "repeater")) {
-      const opened = openContainer(entry[field.name], field.type);
-      if (opened) {
-        for (const row of opened.rows) {
-          stripPasswordFieldValues(row, field.fields);
-        }
-        entry[field.name] = opened.serialize();
+/**
+ * Strip password values out of a snapshot, which holds every field-group
+ * instance inline, through every reference (see {@link walkPasswordLevels}).
+ * `onUnknown` is told the slug of an instance whose fields are not known;
+ * absence is missing information, never permission, so the default refuses.
+ */
+export function stripSnapshotPasswords(
+  snapshot: unknown,
+  fields: readonly NamedField[],
+  fieldsOf: (slug: string) => readonly NamedField[] | undefined,
+  onUnknown: (slug: string) => void
+): void {
+  walkPasswordLevels(snapshot, fields, {
+    reach: { fieldsOf, direct: true },
+    onUnknown: slug => {
+      onUnknown(slug ?? "");
+      return false;
+    },
+    untypedZoneRows: "union",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) delete level[name];
+    },
+  });
+}
+
+/**
+ * The password values `data` holds at every depth, as stored: the hashes a
+ * write may put back where a rule denied changing them.
+ */
+export function storedPasswordValues(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach
+): Set<string> {
+  const found = new Set<string>();
+  walkPasswordLevels(detachForReading(data), fields, {
+    reach,
+    onUnknown: () => false,
+    untypedZoneRows: "union",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (typeof value === "string" && value !== "") found.add(value);
       }
-      continue;
-    }
+    },
+  });
+  return found;
+}
 
-    if (field.type === "password") {
-      delete entry[field.name];
+/**
+ * Read a stored value's passwords for {@link storedPlainPasswords} and
+ * {@link hashStoredPlainPasswords}: each one `isHashed` doesn't recognise, in
+ * the order the walk meets them. A blank value is not a password, as a write
+ * reads one. An instance of a field group `reach` has no fields for, or an
+ * untyped zone row, is left as it is, since its passwords cannot be told
+ * from its other values.
+ */
+function visitStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean,
+  visit: (level: Record<string, unknown>, name: string, value: string) => void
+): void {
+  walkPasswordLevels(data, fields, {
+    reach,
+    onUnknown: () => false,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (typeof value !== "string" || value.trim() === "") continue;
+        if (!isHashed(value)) visit(level, name, value);
+      }
+    },
+  });
+}
+
+/**
+ * The passwords `data` holds as given, at every depth: one entry for each
+ * value `isHashed` does not recognise as a hash. What
+ * {@link hashStoredPlainPasswords} would hash, without changing anything.
+ */
+export function storedPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): string[] {
+  const found: string[] = [];
+  visitStoredPlainPasswords(
+    detachForReading(data),
+    fields,
+    reach,
+    isHashed,
+    (_level, _name, value) => found.push(value)
+  );
+  return found;
+}
+
+/**
+ * Hash in place each password {@link storedPlainPasswords} finds in `data`, so
+ * it still verifies, and return how many. Each occurrence gets a hash, and a
+ * salt, of its own. A container held as JSON text is written back as text.
+ */
+export async function hashStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): Promise<number> {
+  // Hashing is asynchronous and the walk is not, so the values are read
+  // first and hashed, then put in place by a second walk, as
+  // `hashPasswordFieldValues` does.
+  const plain = storedPlainPasswords(data, fields, reach, isHashed);
+  if (plain.length === 0) return 0;
+  const hashes: string[] = [];
+  for (const value of plain) hashes.push(await hashPassword(value));
+  let next = 0;
+  visitStoredPlainPasswords(data, fields, reach, isHashed, (level, name) => {
+    level[name] = hashes[next++];
+  });
+  return plain.length;
+}
+
+/** A copy to walk, so reading what a value holds never rewrites it. */
+function detachForReading(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return structuredClone(data);
+}
+
+/**
+ * Whether `fields` declare a password at any depth, through the field groups
+ * `reach` follows: lets a read skip the strip for the common case with none.
+ */
+export function reachesPasswordField(
+  fields: readonly NamedField[],
+  reach: FieldGroupReach
+): boolean {
+  return reachesFrom(fields, reach, new Set(), true);
+}
+
+/**
+ * {@link reachesPasswordField} at one level, following field groups where the
+ * walk does: one placed directly on the entry is left to its own read, as the
+ * walk leaves it, and one held inline that `reach` has no fields for counts,
+ * since the strip withholds it and so has to run.
+ */
+function reachesFrom(
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  seen: ReadonlySet<string>,
+  atEntry: boolean
+): boolean {
+  return fields.some(field => {
+    if (field.type === "password") return true;
+    // A layout container keeps its fields on this level; a group or
+    // repeater holds a level of its own.
+    if (
+      field.fields &&
+      reachesFrom(field.fields, reach, seen, atEntry && !field.name)
+    ) {
+      return true;
     }
-  }
+    const { single, many } = extractFieldGroupReferences(field);
+    if (atEntry && reach.direct !== true) return false;
+    const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
+    return slugs.some(slug => {
+      if (seen.has(slug)) return false;
+      const inner = reach.fieldsOf(slug);
+      return (
+        inner === undefined ||
+        reachesFrom(inner, reach, new Set([...seen, slug]), false)
+      );
+    });
+  });
 }
 
 /**

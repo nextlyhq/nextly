@@ -26,11 +26,12 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { DREW_NOTHING } from "./draw-failures";
 import { drawsFrom } from "./frame/tier";
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { queryForTier } from "./tier-query";
 import { useCardRetries } from "./useCardRetries";
-import { sourcedQuery } from "./widget-as-asked";
+import { askableQuery } from "./widget-as-asked";
 
 /**
  * One card in the batch: which placement asked, and what it is asking.
@@ -131,7 +132,7 @@ function unsourcedCellSlots(
 ): CellSlots {
   const unsourced = cards.flatMap(card =>
     (card.widget.cells ?? [])
-      .filter(cell => !sourcedQuery(cell.query))
+      .filter(cell => !askableQuery(cell.query))
       .map(cell => [card.placementId, cell.key] as const)
   );
   if (unsourced.length === 0) return cellSlots;
@@ -151,7 +152,7 @@ function unsourcedSlots(
   slots: Record<string, WidgetSlot>
 ): Record<string, WidgetSlot> {
   const unsourced = cards.filter(
-    card => card.widget.query !== undefined && !sourcedQuery(card.widget.query)
+    card => card.widget.query !== undefined && !askableQuery(card.widget.query)
   );
   if (unsourced.length === 0) return slots;
   // Prototype-free, as the slot map it extends: placement ids are keys.
@@ -167,7 +168,7 @@ function worthAsking(widget: DashboardWidget): boolean {
   // A card core answers on the server is asked for as a card, with no query.
   if (widget.serverData === true) return true;
   // A query its card's Collection setting has not given a source asks nothing.
-  if (widget.query !== undefined && !sourcedQuery(widget.query)) return false;
+  if (widget.query !== undefined && !askableQuery(widget.query)) return false;
   // A `stats` card asks through its CELLS, so it has no top-level query and the
   // original test declared every one of them not worth asking -- which is the
   // shape that would have shipped a card whose numbers never load.
@@ -210,7 +211,7 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
   const { widget } = card;
   if (widget.serverData === true) return [cardAskFor(card)];
   if (widget.cells?.length) return cellAsks(card);
-  return sourcedQuery(widget.query) ? [queryAskFor(card, widget.query)] : [];
+  return askableQuery(widget.query) ? [queryAskFor(card, widget.query)] : [];
 }
 
 /** Whether a card at `tier` draws `cell`: every cell, for a card drawn with no tier. */
@@ -241,7 +242,7 @@ function cellAsks(card: BatchCard): WidgetQueryRequest[] {
   const { placementId, widget, tier } = card;
   return (widget.cells ?? []).flatMap(cell => {
     // A cell its card's Collection setting has not given a source asks nothing.
-    if (!sourcedQuery(cell.query)) return [];
+    if (!askableQuery(cell.query)) return [];
     const declared = declaredQueryOf(card.declaredCells, cell.key);
     return [
       {
@@ -271,7 +272,7 @@ function queryAskFor(card: BatchCard, query: WidgetQuery): WidgetQueryRequest {
   // Keyed by the declared question and sent as the settings ask it; see `declaredQuery`.
   // A declared query with no source (a widget offered per collection) keys
   // nothing: the card is keyed by what it asks.
-  const declared = sourcedQuery(card.declaredQuery)
+  const declared = askableQuery(card.declaredQuery)
     ? card.declaredQuery
     : query;
   return {
@@ -320,7 +321,18 @@ function byCard(
   return [...cards.values()];
 }
 
-export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
+/** No card's component has failed to draw. */
+const NO_DRAW_FAILURES: ReadonlySet<string> = new Set();
+
+/**
+ * `drawFailed` is the placements whose own component threw drawing a fine
+ * answer (`draw-failures`): the answer cannot say so, so they are counted as
+ * failed from here.
+ */
+export function useWidgetBatch(
+  cards: BatchCard[],
+  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES
+): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
   // visual arrangement CHANGES every time a card moves — and every drag or
@@ -411,21 +423,25 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
             card.widget.serverData === true ||
             (card.widget.query ?? card.widget.cells?.length)
         )
-        .map(card =>
-          widgetOutcome(
+        .map(card => {
+          const outcome = widgetOutcome(
             card.widget,
             slots[card.placementId],
             cellSlots[card.placementId],
             card.tier
-          )
-        )
+          );
+          return outcome.state === "answered" &&
+            drawFailed.has(card.placementId)
+            ? ({ state: "failed", message: DREW_NOTHING } as const)
+            : outcome;
+        })
         // An unavailable card is neither updated nor failed, so it is left out of the
         // announcement rather than counted as "updated" beside a card that says otherwise.
         .filter(
           outcome =>
             outcome.state !== "self-drawn" && outcome.state !== "unavailable"
         ),
-    [cards, slots, cellSlots]
+    [cards, slots, cellSlots, drawFailed]
   );
 
   return {

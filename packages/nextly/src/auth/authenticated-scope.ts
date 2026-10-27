@@ -26,12 +26,10 @@ import type { RequestActorType } from "./request-actor";
  *
  * A permission is spelled one way wherever a developer reads or writes it:
  * the STORED slug (`read-posts`), which the database, the admin's permission
- * matrix, a route's `requiredPermission` and every access rule use. For one
- * release a rule is also handed the earlier rule spelling (`posts:read`),
- * which is made from the row's action and resource.
+ * matrix, a route's `requiredPermission` and every access rule use.
  *
- * The row carries what both are made of, so both are DERIVED from it rather
- * than stored beside each other. Storing them side by side is what let a
+ * The row carries the slug with the action and resource it grants, so every
+ * view of a grant is DERIVED from it rather than stored beside it. Storing them side by side is what let a
  * handler narrow one and leave the other holding the grant it had just given
  * up — the field gate reads the rule's list and has no coarse check standing
  * in front of it, so the narrowing was silently undone.
@@ -208,9 +206,7 @@ export function narrowScope(
  * disagreement decides an answer here, so it is refused here.
  *
  * `undefined` when the scope carries no rows. A rule is then handed the stored
- * slugs alone: such a scope never had the parts the earlier spelling is
- * composed of, and splitting a slug on its hyphen would invent a resource no
- * permission row names.
+ * slugs alone, which is what it is handed from the rows too.
  */
 export function scopeGrants(
   scope: AuthenticatedScope

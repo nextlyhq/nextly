@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import type { PluginContext } from "../../../plugins/plugin-context";
 import {
@@ -124,6 +125,9 @@ async function boot(plugins: unknown[]): Promise<TestNextly> {
     plugins: plugins as never,
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read on notes
+  // for the resolver to count them as.
+  await userWhoMay(t, admin.user.id, "read", [NOTES]);
   return t;
 }
 

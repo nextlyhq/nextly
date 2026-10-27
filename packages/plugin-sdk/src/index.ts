@@ -17,6 +17,22 @@
 export { definePlugin } from "nextly";
 
 /**
+ * @experimental `defineWidget` — declares a dashboard widget once: its
+ * settings, its data, its size and how it draws. A widget drawn by its own
+ * component is handed `WidgetProps<typeof widget>`; the types are here and in
+ * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
+ * on a grid twelve columns wide, the one way a card's size is stated.
+ */
+export { defineWidget } from "nextly";
+export type {
+  GridSize,
+  WidgetData,
+  WidgetProps,
+  WidgetRenderSize,
+  WidgetSizeDeclaration,
+} from "nextly";
+
+/**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
  *   draft beside its published row.
  *
@@ -716,7 +732,7 @@ export type {
  * so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
- * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
+ * root export does: `WidgetDefinition.size` is a `WidgetSizeDeclaration`, and a
  * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
  * `WidgetOp` — a public property whose type has no public name can be inferred
  * but never annotated.
@@ -747,9 +763,6 @@ export type {
  * grants instead of the roles of whoever minted it.
  */
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
@@ -766,9 +779,6 @@ export {
   type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,

@@ -16,8 +16,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A signed-in user's declared rule decides alone, without the permission.
-  "rule-alone-for-people",
   // A visitor's read that the target's rule does not refuse, with no rule or
   // one answering `true`, is allowed, where the decision reads the Public
   // role's permissions. Reads only: a visitor's write with no rule naming it
@@ -38,9 +36,6 @@ export const DEVIATIONS = [
   // A Single asked by a route that authorized no user falls through to the
   // visitor's answer, where a collection refuses.
   "single-route-authorized-visitor",
-  // A super-admin role named on a server-supplied `user` passes without a
-  // lookup.
-  "claimed-super-admin",
   // A key's permission is matched on its stored slug, so a scope carrying
   // slugs without grant rows is judged on the slugs.
   "key-slug-string-match",

@@ -7,8 +7,11 @@
  *
  * Evaluation priority:
  * 1. **Super-admin bypass** — always returns `true`
- * 2. **Code-defined access** — function or boolean from collection/single config
- * 3. **Database permission** — checks RBAC tables via `hasPermission()`
+ * 2. **Database permission** — checks RBAC tables via `hasPermission()`; a
+ *    signed-in user without it is refused before any rule is asked
+ * 3. **Code-defined access** — function or boolean from collection/single
+ *    config, where it names the operation: it only narrows the permission,
+ *    and allows only by answering `true`
  *
  * Default behavior: **deny** (fail-secure). If no code access is defined and
  * the user has no database permission for the resource+action, access is denied.
@@ -44,7 +47,15 @@ import {
   clearDeclaredTargets,
   declareTarget,
 } from "../../../auth/access/declared-rules";
-import { noticeRuleNoLongerAllows } from "../../../auth/access/rule-answer-log";
+import {
+  reportRuleFilterMisuse,
+  ruleAnswer,
+  type RuleAnswer,
+} from "../../../auth/access/rule-answer";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
@@ -64,12 +75,39 @@ import type {
 } from "./access-control-types";
 
 /**
+ * Asks a rule function once, through `ask`, and reads its answer through `ruleAnswer`, for
+ * the caller to judge. A rule that throws refuses, and is logged so it can be
+ * found and fixed: `null`. A filter it may not answer, or one that is not
+ * well formed, is reported as misused.
+ */
+async function askRuleFunction(
+  ask: () => unknown,
+  operation: AccessOperation,
+  target: AccessTarget
+): Promise<{ answer: unknown; meaning: RuleAnswer } | null> {
+  let answer: unknown;
+  try {
+    answer = await ask();
+  } catch (error) {
+    consoleLogger.error(
+      `[rbac] Code access function for ${operation}:${target.slug} threw`,
+      { error: error }
+    );
+    return null;
+  }
+  const meaning = ruleAnswer(answer);
+  reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  return { answer, meaning };
+}
+
+/**
  * Unified RBAC access control service.
  *
  * Orchestrates the three-tier access evaluation:
  * 1. Super-admin bypass
- * 2. Code-defined access functions/booleans (from in-memory registry or explicit param)
- * 3. Database role/permission checks
+ * 2. Database role/permission checks, which a signed-in user must pass first
+ * 3. Code-defined access functions/booleans (from in-memory registry or
+ *    explicit param), which only narrow the permission
  *
  * Holds an in-memory registry of code-defined access configs registered
  * at startup from `defineCollection({ access })` and `defineSingle({ access })`.
@@ -204,6 +242,16 @@ export class RBACAccessControlService {
       ];
 
     if (operationAccess !== undefined) {
+      // The permission first: a declared rule only narrows it, so a user who
+      // lacks it is refused before the rule is asked.
+      if (!(await hasPermission(userId, operation, resource, executor))) {
+        // A rule of `false` refused this caller before too, so its refusal
+        // is not named as new.
+        if (operationAccess !== false) {
+          noticePermissionNowComesFirst(resource, operation, "signed-in user");
+        }
+        return false;
+      }
       if (typeof operationAccess === "boolean") {
         return operationAccess;
       }
@@ -213,10 +261,9 @@ export class RBACAccessControlService {
           userId,
           operation,
           target,
-          operationAccess,
           executor
         );
-        return this.userRuleAllows(operationAccess, ctx, operation, resource);
+        return this.userRuleAllows(operationAccess, ctx, operation, target);
       }
     }
 
@@ -232,23 +279,21 @@ export class RBACAccessControlService {
     rule: (ctx: AccessControlContext) => unknown,
     ctx: AccessControlContext,
     operation: AccessOperation,
-    resource: string
+    target: AccessTarget
   ): Promise<boolean> {
-    let answer: unknown;
-    try {
-      answer = await rule(ctx);
-    } catch (error) {
-      // Code access function threw — fail-secure
-      consoleLogger.error(
-        `[rbac] Code access function for ${operation}:${resource} threw`,
-        { error: error }
+    const asked = await askRuleFunction(() => rule(ctx), operation, target);
+    if (asked === null) return false;
+    // Only `true` allows every entry.
+    if (asked.meaning.kind !== "allow" && Boolean(asked.answer)) {
+      noticeRuleNoLongerAllows(
+        target.slug,
+        operation,
+        "signed-in user",
+        asked.answer,
+        asked.meaning
       );
-      return false;
     }
-    if (answer !== true && Boolean(answer)) {
-      noticeRuleNoLongerAllows(resource, operation, "signed-in user", answer);
-    }
-    return answer === true;
+    return asked.meaning.kind === "allow";
   }
 
   /**
@@ -331,31 +376,28 @@ export class RBACAccessControlService {
     if (typeof rule === "boolean") return rule;
     if (typeof rule !== "function") return undefined;
 
-    let answer: unknown;
-    try {
-      answer = await rule(
-        buildRuleContext(
-          rule,
-          { user: null, roles: [], permissions: [], principal },
-          { operation, target: { kind: target.kind, slug: target.slug } }
-        )
-      );
-    } catch (error) {
-      // Fail-secure, exactly as the authenticated path does. A rule that threw
-      // did not allow anything.
-      consoleLogger.error(
-        `[rbac] Code access function for ${operation}:${resource} threw`,
-        { error: error }
-      );
-      return false;
-    }
+    // Fail-secure, exactly as the authenticated path does: a rule that threw
+    // did not allow anything.
+    const asked = await askRuleFunction(
+      () =>
+        rule(
+          buildRuleContext(
+            { user: null, roles: [], permissions: [], principal },
+            { operation, target: { kind: target.kind, slug: target.slug } }
+          )
+        ),
+      operation,
+      target
+    );
+    if (asked === null) return false;
     // A rule allows only by answering `true`. A visitor was refused before
     // only by `false`, so any other answer that now refuses one is named
     // once; a plugin's person was already held to `true`.
-    if (principal === null && answer !== true && answer !== false) {
-      noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
+    const { answer, meaning } = asked;
+    if (principal === null && meaning.kind !== "allow" && answer !== false) {
+      noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
     }
-    return answer === true;
+    return meaning.kind === "allow";
   }
 
   /**
@@ -368,7 +410,6 @@ export class RBACAccessControlService {
     userId: string,
     operation: AccessOperation,
     target: AccessTarget,
-    rule: object,
     // Optional transaction-bound executor so the role/permission reads run on the
     // caller's transaction connection instead of the pool; see `checkAccess`.
     executor?: unknown
@@ -379,7 +420,6 @@ export class RBACAccessControlService {
     ]);
 
     return buildRuleContext(
-      rule,
       {
         user: { id: userId },
         roles: roleSlugs,

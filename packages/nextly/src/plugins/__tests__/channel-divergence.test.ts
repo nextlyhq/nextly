@@ -70,7 +70,7 @@ const DECLARED_DIFFERENCES: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "bogus",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
@@ -81,7 +81,7 @@ const DECLARED_DIFFERENCES: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       content: "Prose.",
       component: "p#X",
     },
@@ -92,12 +92,12 @@ const DECLARED_DIFFERENCES: Array<{
     widget: {
       id: "acme/thing",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
   {
-    case: "no defaultSize",
+    case: "no size",
     why: "typed optional on a contribution; resolution supplies one",
     widget: {
       id: "acme/thing",
@@ -113,7 +113,7 @@ const DECLARED_DIFFERENCES: Array<{
       id: "acme/thing",
       title: "   ",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
@@ -124,7 +124,7 @@ const DECLARED_DIFFERENCES: Array<{
       id: "stats",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
@@ -140,78 +140,8 @@ const DECLARED_DIFFERENCES: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "timeline",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [{ label: "L", href: "/admin/users/create" }],
-    },
-  },
-  {
-    case: "a defaultSize this core does not know",
-    why: "a closed vocabulary states THIS core's version; a plugin built against a newer one may name a size we have never heard of, and `sizes.ts` already falls back to full width calling that expected input rather than defensive decoration",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "enormous",
-      component: "p#X",
-    },
-  },
-  {
-    case: "a defaultHeight this core does not know",
-    why: "same version boundary, and the contribution contract does not even declare the field -- the resolver never reads it, so refusing would abort an install over a value nothing consumes",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      defaultHeight: "gigantic",
-      component: "p#X",
-    },
-  },
-  {
-    case: "a minSize this core does not know",
-    why: "its own branch in the registry's vocabulary check; one row per branch, so re-sharing any single one cannot hide behind another's coverage",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      minSize: "enormous",
-      component: "p#X",
-    },
-  },
-  {
-    case: "a maxSize this core does not know",
-    why: "same branch-per-row reason as minSize",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      maxSize: "enormous",
-      component: "p#X",
-    },
-  },
-  {
-    case: "a chrome value this core does not know",
-    why: 'a newer core may add one, and anything that is not "none" frames anyway, so this admin renders the card regardless',
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      component: "p#X",
-      chrome: "borderless",
-    },
-  },
-  {
-    case: "chrome none on an archetype this core does not know",
-    why: "its own placement BRANCH: this core cannot say whether a newer archetype's body is composed into a card, so removing the guard would break the boundary without failing the unknown-archetype or unknown-chrome rows",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "timeline",
-      defaultSize: "sm",
-      chrome: "none",
     },
   },
 ];
@@ -221,8 +151,9 @@ const DECLARED_DIFFERENCES: Array<{
  *
  * `expect` names the diagnostic the row exists for. Without it a fixture can be
  * refused by a DIFFERENT rule and the row stays green when its own is deleted:
- * `{ defaultSize: "sm", minSize: "xl", maxSize: "sm" }` violates both size
- * orderings, so removing either left the pair assertion satisfied by the other.
+ * a size with a minimum above its default and a default above its maximum
+ * breaks both orderings, so removing either would leave the pair assertion
+ * satisfied by the other.
  */
 const MUST_AGREE: Array<{
   case: string;
@@ -237,7 +168,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       query: { source: "collection:posts", op: "count" },
       cells: [
@@ -247,13 +178,33 @@ const MUST_AGREE: Array<{
     expect: /asks through its query or its cells, not both/,
   },
   {
-    case: "minSize above defaultSize",
+    // 🔴 Accepted, the setting would add a limit the ranged query refuses, and
+    // every request it changed would fail.
+    case: "a limit setting beside a ranged query",
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
-      minSize: "xl",
+      size: { default: { w: 3, h: 2 } },
+      component: "p#X",
+      query: {
+        source: "collection:posts",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "30d",
+      },
+      settings: [{ name: "limit", type: "number", label: "Limit" }],
+    },
+    expect: /declares a "limit" setting, and a query with a range/,
+  },
+  {
+    case: "a minimum above the default",
+    expect: /size\.min must not be larger than size\.default/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      size: { default: { w: 3, h: 2 }, min: { w: 8, h: 2 } },
       component: "p#X",
     },
   },
@@ -263,7 +214,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       content: "Prose.",
       actions: [{ label: "L", href: "/h" }],
     },
@@ -275,7 +226,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
     },
   },
   {
@@ -284,7 +235,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "actions",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [{ label: "L", href: "/h" }],
       content: "Prose nobody draws.",
     },
@@ -295,7 +246,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "actions",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [{}],
     },
   },
@@ -305,7 +256,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
     },
   },
   {
@@ -314,7 +265,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       content: "Prose.",
       query: { source: "collection:p", op: "count" },
     },
@@ -325,20 +276,20 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       defaultOrder: Number.NaN,
     },
   },
   {
-    case: "chrome none on an archetype core draws",
+    case: "a chrome field, whatever its value: no widget declines the frame",
     widget: {
       id: "acme/thing",
       title: "T",
-      archetype: "metric",
-      defaultSize: "sm",
-      query: { source: "collection:p", op: "count" },
-      chrome: "none",
+      archetype: "custom",
+      size: { default: { w: 3, h: 2 } },
+      component: "p#X",
+      chrome: "card",
     },
   },
   {
@@ -348,7 +299,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: "bogus",
     },
   },
@@ -359,7 +310,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: 42,
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
@@ -369,72 +320,53 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       query: "bogus",
     },
   },
   {
-    case: "a defaultSize below minSize when only maxSize is unknown",
-    expect: /below minSize/,
+    // Taller than its maximum, wide enough: each direction is judged.
+    case: "a default taller than the maximum",
+    expect: /size\.default must not be larger than size\.max/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
-      minSize: "xl",
-      maxSize: "enormous",
+      size: { default: { w: 3, h: 4 }, max: { w: 12, h: 3 } },
       component: "p#X",
     },
   },
   {
-    case: "minSize above maxSize",
-    expect: /exceeds maxSize/,
+    case: "a width outside the twelve columns",
+    expect: /size\.default\.w must be a whole number from 1 to 12/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
-      minSize: "xl",
-      maxSize: "sm",
+      size: { default: { w: 0, h: 2 } },
       component: "p#X",
     },
   },
   {
-    case: "minSize above maxSize when defaultSize is from a newer core",
-    expect: /exceeds maxSize/,
+    case: "a height that is not a whole number",
+    expect: /size\.max\.h must be a whole number from 2 to 12/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "enormous",
-      minSize: "xl",
-      maxSize: "sm",
+      size: { default: { w: 3, h: 2 }, max: { w: 6, h: 2.5 } },
       component: "p#X",
     },
   },
   {
-    case: "defaultSize above maxSize",
-    expect: /above maxSize/,
+    case: "a default wider than the maximum",
+    expect: /size\.default must not be larger than size\.max/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "xl",
-      maxSize: "sm",
-      component: "p#X",
-    },
-  },
-  {
-    case: "defaultSize above maxSize when minSize is from a newer core",
-    expect: /above maxSize/,
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "xl",
-      maxSize: "sm",
-      minSize: "enormous",
+      size: { default: { w: 8, h: 2 }, max: { w: 6, h: 2 } },
       component: "p#X",
     },
   },
@@ -445,7 +377,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: 42,
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
     },
   },
@@ -455,7 +387,7 @@ const MUST_AGREE: Array<{
     widget: {
       id: "acme/thing",
       title: "T",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       actions: [{ label: "L", href: "/admin/users/create" }],
     },
@@ -467,7 +399,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "timeline",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: 42,
     },
   },
@@ -478,7 +410,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "timeline",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [null],
     },
   },
@@ -489,7 +421,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "timeline",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [42],
     },
   },
@@ -507,7 +439,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       settings: {},
     },
@@ -519,7 +451,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       settings: [{ name: "limit", type: "number", defaultValue: "ten" }],
     },
@@ -531,7 +463,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       settings: [{ name: "mode", type: "select" }],
     },
@@ -543,7 +475,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       settings: [
         { name: "limit", type: "number" },
@@ -555,7 +487,7 @@ const MUST_AGREE: Array<{
     // It decides whether the admin draws a control that HIDES a card, and the
     // admin copies a registration's fields verbatim -- so a truthy non-boolean
     // such as "false" would draw the control on a card whose author declared
-    // the opposite. Unlike `chrome` there is no vocabulary a newer core could
+    // the opposite. There is no vocabulary a newer core could
     // extend here, so anything but a boolean is a mistake rather than skew.
     case: "a dismissible that is not a boolean",
     expect: /dismissible, when given, must be a boolean/,
@@ -563,7 +495,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       dismissible: "false",
     },
@@ -578,7 +510,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       query: { source: "collection:posts", op: "list" },
       sizedQuery: "true",
@@ -593,7 +525,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "list",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "collection:posts", op: "list" },
       sizedQuery: true,
     },
@@ -605,78 +537,45 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
       query: { source: "collection:posts", op: "count" },
       sizedQuery: true,
     },
   },
   {
-    case: "a chrome that is not a string",
-    expect: /chrome, when given, must be a string/,
+    case: "a hidesWhenEmpty that is not a boolean",
+    expect: /hidesWhenEmpty, when given, must be a boolean/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       component: "p#X",
-      chrome: 42,
+      hidesWhenEmpty: "yes",
     },
   },
   {
-    case: "a defaultSize that is not a string",
-    expect: /defaultSize, when given, must be a string/,
+    // 🔴 A named width is not a size on either channel: there is no newer
+    // vocabulary for a contribution to be excused for.
+    case: "a named width in place of a size",
+    expect: /size must be \{ default: \{ w, h \}, min\?, max\? \}/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: 42,
-      component: "p#X",
-    },
-  },
-  {
-    // BLANK, not merely absent, and the two are what the channels disagreed
-    // about. The summary reader takes `""` as unstated and falls back to the
-    // deprecated `size` alias; the admin resolver's `??` keeps it and renders
-    // full width -- so the card was stored at one width and drawn at another.
-    // Blank names no size in any version, so refusing it is shape rather than
-    // vocabulary and an unknown value like "xxl" still passes.
-    case: "a BLANK defaultSize",
-    expect: /defaultSize, when given, must not be empty/,
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "",
       size: "half",
       component: "p#X",
     },
   },
   {
-    case: "a defaultHeight that is not a string",
-    expect: /defaultHeight, when given, must be a string/,
+    case: "a size whose default is a named width",
+    expect: /size\.default must be \{ w, h \}/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
-      defaultSize: "sm",
-      defaultHeight: 2,
-      component: "p#X",
-    },
-  },
-  {
-    // The same hole one field over. A non-string height reached
-    // `DashboardWidget.height`, and re-adding the card copied it into a
-    // placement the next write refuses -- an ordinary edit turned into a draft
-    // that could never be saved.
-    case: "a BLANK defaultHeight",
-    expect: /defaultHeight, when given, must not be empty/,
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      defaultHeight: "",
+      size: { default: "sm" },
       component: "p#X",
     },
   },
@@ -691,7 +590,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "stats",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       cells: [
         {
           key: "a",
@@ -710,7 +609,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "stats",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       cells: [
         {
           key: "a",
@@ -734,7 +633,7 @@ const MUST_AGREE: Array<{
       id: "acme/thing",
       title: "T",
       archetype: "stats",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "collection:posts", op: "count" },
       cells: [
         {
@@ -783,23 +682,6 @@ describe("the registry and contributions channels agree except where declared", 
     }
   );
 
-  it("accepts chrome none on an archetype resolution supplies", () => {
-    // `{ component, chrome: "none" }` with no archetype is the typed, renderable
-    // form: resolution fills in `custom`, which is exactly where `"none"` is
-    // legal. Nothing else exercises the `resolved-custom` standing THROUGH the
-    // chrome rule -- the valid-chrome case spells `archetype: "custom"` out --
-    // so remapping that standing would start refusing this and no row would
-    // move.
-    const widget = {
-      id: "acme/thing",
-      title: "T",
-      defaultSize: "sm",
-      component: "p#X",
-      chrome: "none",
-    };
-    expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
-  });
-
   it("accepts a well-formed widget through BOTH channels", () => {
     // The positive control. Two validators that refused everything would
     // satisfy every MUST_AGREE row above.
@@ -807,7 +689,7 @@ describe("the registry and contributions channels agree except where declared", 
       id: "acme/revenue",
       title: "Revenue",
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "collection:orders", op: "count" },
     };
     expect(refuses(() => validateWidgetDefinition(good))).toBe(false);

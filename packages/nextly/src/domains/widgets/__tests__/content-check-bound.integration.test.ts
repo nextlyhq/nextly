@@ -15,6 +15,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { AUTHORIZATION_CONCURRENCY } from "../../../auth/entity-read-access";
 import { defineCollection, text } from "../../../config";
 import { requireNextly } from "../../../direct-api/nextly";
@@ -42,16 +46,21 @@ afterEach(async () => {
 
 /** An instance with `n` empty collections, every one readable, published as sources. */
 async function bootWith(n: number): Promise<TestNextly> {
+  const slugs = Array.from({ length: n }, (_, i) => `empty_${i}`);
   const t = await createTestNextly({
-    collections: Array.from({ length: n }, (_, i) =>
+    collections: slugs.map(slug =>
       defineCollection({
-        slug: `empty_${i}`,
+        slug,
         access: { read: () => true, create: () => true, update: () => true },
         fields: [text({ name: "title" })],
       })
     ),
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on every collection here, for the check and the first-entry step.
+  await userWhoMay(t, admin.user.id, "read", slugs);
+  await grantTo(t, admin.user.id, "create", slugs);
   // As `POST /api/dashboard/query` does first: publish the collection sources from the live
   // registry, which is what the check walks.
   await refreshCollectionSources();
@@ -110,12 +119,23 @@ describe("the content check, booted", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(
       CONTENT_CHECK_BUDGET_MS - 50
     );
-    // And the first-entry step is not ticked on a guess. A step whose check
-    // could not finish is not offered at all, since that check is also what
-    // decides whether the reader could finish it, and the answer says setup is
-    // not known, which keeps the card offered.
-    const progress = await onboardingProgress(conditionProbe(admin));
-    expect(progress.unknown).toBe(true);
-    expect(progress.steps.map(step => step.id)).not.toContain("entry");
+    // And the first-entry step is not ticked on a guess. On the Get started
+    // card, a step whose check could not finish is not offered at all, since
+    // that check is also what decides whether the reader could finish it, and
+    // the answer says setup is not known, which keeps the card offered.
+    // One probe for both reads, so they share one resolution and one wait.
+    const probe = conditionProbe(admin);
+    const answer = await probe.getStarted();
+    expect(answer.unknown).toBe(true);
+    expect(answer.steps.map(step => step.kind)).not.toContain("entry");
+    // The deprecated onboarding read answers as it always has: the step is a
+    // row still open, and "not known" means only that the collections or
+    // Singles could not be listed, which they were.
+    const progress = await onboardingProgress(probe);
+    expect(progress.unknown).toBe(false);
+    expect(progress.steps.find(step => step.id === "entry")).toEqual({
+      id: "entry",
+      complete: false,
+    });
   }, 20_000);
 });

@@ -11,12 +11,17 @@ import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import { answerForRefusal } from "../access/gate-adapters";
 import {
   refusalMessageFor,
   type RefusalScope,
@@ -472,11 +477,23 @@ export async function authorizeCaller(
     resource,
     getRBACService()
   );
-  // A caller whose access could not be read is not a caller without the
-  // permission: the read's error goes to the route's error handling, as it
-  // always has, rather than being answered as a refusal.
-  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
+    // A caller naming one entry it may not read is answered exactly as if the
+    // entry did not exist, whatever it asked to do: a 403 would confirm the
+    // entry is there. A caller who may read it is told what it may not do.
+    const answer = await answerForRefusal(
+      verdict,
+      action,
+      scope === "one",
+      asked => routeGateVerdict(authResult, asked, resource, getRBACService())
+    );
+    // A caller whose access could not be read is not a caller without the
+    // permission: the read's error goes to the route's error handling, as it
+    // always has, rather than being answered as a refusal.
+    if (answer.answer === "failed") throw answer.error;
+    if (answer.answer === "missing") {
+      return entryAnsweredAsMissing(action, resource);
+    }
     return {
       ...createErrorResponse(
         403,
@@ -489,6 +506,27 @@ export async function authorizeCaller(
     };
   }
   return authResult;
+}
+
+/**
+ * The answer a request naming one entry gets from a caller who may not read
+ * it: what a missing entry gets, `NOT_FOUND` in the generic words, so the two
+ * cannot be told apart. Which check refused goes to the log.
+ */
+function entryAnsweredAsMissing(
+  action: string,
+  resource: string
+): ErrorResponse {
+  return {
+    ...createErrorResponse(
+      NEXTLY_ERROR_STATUS.NOT_FOUND,
+      "Not Found",
+      genericPublicMessage("NOT_FOUND"),
+      undefined,
+      "NOT_FOUND"
+    ),
+    reason: `the caller may not read ${resource}, so the entry its ${action} names is answered as missing`,
+  };
 }
 
 /**
@@ -740,6 +778,14 @@ export function requestLanguage(
 export interface RouteOperation {
   method: string;
   params: Readonly<Record<string, string>>;
+  /**
+   * The request names one entry or document: an entry its path names by id,
+   * or a Single's own document. It is refused about that one, and a caller
+   * who may not read it is answered as if it were missing. Set by the route,
+   * which knows what its path names; the parameters cannot say, since a
+   * query may carry an `entryId` that names nothing.
+   */
+  namesOne?: boolean;
 }
 
 /**
@@ -779,8 +825,9 @@ export async function requireCollectionAccess(
       authResult,
       action,
       collectionSlug,
-      // A route naming one entry is refused about that entry.
-      operation?.params.entryId ? "one" : "all"
+      // A route naming one entry is refused about that entry. Named by the
+      // route, never by a parameter: a query can carry an `entryId` too.
+      operation?.namesOne ? "one" : "all"
     )
   );
 }

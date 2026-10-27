@@ -25,6 +25,7 @@ import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -107,6 +108,7 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  type FieldGroupReach,
   hasPasswordField,
   hashPasswordFieldValues,
   stripPasswordFieldValues,
@@ -133,19 +135,20 @@ import {
   applyInlineFieldGroupWriteAccess,
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
+  reachesFieldGroup,
   withStoredFieldGroups,
 } from "../../field-groups/field-group-write-access";
 import {
   liveFieldGroupReadPass,
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
   type FieldGroupWriteAccess,
 } from "../../field-groups/services/field-group-mutation-service";
-import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
 import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
@@ -162,12 +165,20 @@ import {
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  languagesChangedConflict,
+  languagesGoingLiveFrom,
+  languagesPromotedChangeReaches,
+  languagesToAsk,
+  unaskedLanguages,
+} from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
+import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -206,6 +217,7 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  asIdSet,
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
@@ -1133,9 +1145,11 @@ export class CollectionMutationService extends BaseService {
      * columns are keyed by the physical name and a `dbName` collection's
      * differs from `dc_<slug>`.
      */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    stripPasswordFieldValues(row, fields);
+    stripPasswordFieldValues(row, fields, reach);
     stripServerOnlyColumns(row, tableName);
   }
 
@@ -1143,7 +1157,9 @@ export class CollectionMutationService extends BaseService {
     row: Record<string, unknown>,
     fields: readonly unknown[],
     /** The SQL table the row came from, for its contributed columns. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): Record<string, unknown> {
     const doc = convertTimestampsToCamelCase(
       this.deserializeJsonFieldsForSnapshot(
@@ -1153,10 +1169,23 @@ export class CollectionMutationService extends BaseService {
     );
     stripPasswordFieldValues(
       doc,
-      fields as Parameters<typeof stripPasswordFieldValues>[1]
+      fields as Parameters<typeof stripPasswordFieldValues>[1],
+      reach
     );
     stripServerOnlyColumns(doc, tableName);
     return doc;
+  }
+
+  /**
+   * Where the password walk follows the field groups `fields` hold inline,
+   * read on `executor`: a write inside a transaction passes its own, since a
+   * pooled read there waits on the connection the transaction holds.
+   */
+  private passwordReach(
+    fields: readonly unknown[],
+    executor?: unknown
+  ): Promise<FieldGroupReach> {
+    return passwordReachOf(fields, this.fieldGroupDataService, executor);
   }
 
   /**
@@ -1406,7 +1435,8 @@ export class CollectionMutationService extends BaseService {
         parentRow: this.readShapeEventDocument(
           args.entry,
           args.fields,
-          args.tableName
+          args.tableName,
+          await this.passwordReach(args.fields, tx.getDrizzle())
         ),
         fields: args.fields,
         manyToManyFields: args.manyToManyFields,
@@ -1586,7 +1616,12 @@ export class CollectionMutationService extends BaseService {
     }
 
     const parentRow = this.deserializeJsonFieldsForSnapshot(merged, fields);
-    this.redactSnapshotRow(parentRow, fields, tableName);
+    this.redactSnapshotRow(
+      parentRow,
+      fields,
+      tableName,
+      await this.passwordReach(fields, tx.getDrizzle())
+    );
 
     const { components, manyToMany } = await this.buildFullSnapshotRelations(
       tx,
@@ -2104,8 +2139,10 @@ export class CollectionMutationService extends BaseService {
    * translated group or repeater is written there whole, so without its
    * stored value a denied child of it would be erased rather than kept.
    *
-   * The companion is read only where a field rule of the collection can ask,
-   * so an update with no such rule pays nothing more.
+   * The companion is read only where a field rule can ask: the collection's
+   * own, or a field group's when the collection holds one, which judges an
+   * instance held inline in a translated container. A trusted write runs no
+   * rule, and an update with no such rule pays nothing more.
    */
   private async storedForCarryForward(args: {
     row: Record<string, unknown>;
@@ -2116,10 +2153,14 @@ export class CollectionMutationService extends BaseService {
     locale?: string;
     /** The caller's transaction, when the update runs inside one. */
     tx?: { getDrizzle<T = unknown>(): T };
+    overrideAccess?: boolean;
   }): Promise<Record<string, unknown>> {
     const translated =
       this.localization &&
-      hasFieldAccessRule("collection", args.collectionName, "update")
+      args.overrideAccess !== true &&
+      (hasFieldAccessRule("collection", args.collectionName, "update") ||
+        (anyFieldGroupHasAccessRule("update") &&
+          reachesFieldGroup(args.fields as unknown as FieldConfig[])))
         ? await this.readCompanionLocalizedValues(
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
@@ -2130,8 +2171,36 @@ export class CollectionMutationService extends BaseService {
     return this.readShapeEventDocument(
       { ...args.row, ...translated },
       args.fields,
-      args.tableName
+      args.tableName,
+      await this.passwordReach(args.fields, args.tx?.getDrizzle())
     );
+  }
+
+  /**
+   * The field rules a create applies to `data`, told the id the entry is
+   * stored under where the collection keeps the one the caller sent.
+   */
+  private applyCreateFieldRules(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
+    },
+    data: Record<string, unknown>,
+    grants: () => Promise<CallerGrants>
+  ): Promise<void> {
+    return applyFieldWriteAccess({
+      kind: "collection",
+      slug: params.collectionName,
+      data,
+      operation: "create",
+      id: suppliedCreateId("create", params.collectionName, data),
+      user: params.user,
+      authenticatedScope: params.authenticatedScope,
+      overrideAccess: params.overrideAccess,
+      grants,
+    });
   }
 
   /**
@@ -2141,8 +2210,11 @@ export class CollectionMutationService extends BaseService {
    */
   private async keepDeniedFieldsAtStored(args: {
     data: Record<string, unknown>;
-    /** The entry, so owner- and record-aware rules can evaluate. */
-    entryId: string;
+    /**
+     * The entry's id as stored, so owner- and record-aware rules can
+     * evaluate: never the one the request named.
+     */
+    storedId: string;
     collectionName: string;
     stored: Record<string, unknown>;
     /** The entry's table, to read the instances it holds in their own. */
@@ -2169,23 +2241,17 @@ export class CollectionMutationService extends BaseService {
     // The parent row alone carries no field-group instance, so what an update
     // removes is read here or judged against nothing: in the write's own
     // language, and in each other one, since a removal removes them all.
-    const storedFieldGroupsIn = (locale?: string) =>
-      withStoredFieldGroups({
-        stored: args.stored,
-        parentTable: args.tableName,
-        fields: args.fields as unknown as FieldConfig[],
-        source: this.fieldGroupDataService,
-        access,
-        executor: args.executor,
-        locale,
-      });
+    const storedIn = this.storedFieldGroupsInLanguages({
+      stored: args.stored,
+      tableName: args.tableName,
+      fields: args.fields,
+      access,
+      executor: args.executor,
+    });
     await keepDeniedAtStoredOnUpdate({
       data: args.data,
-      stored: await storedFieldGroupsIn(args.params.locale),
-      storedIn: {
-        locales: this.localization?.locales.map(l => l.code) ?? [],
-        read: storedFieldGroupsIn,
-      },
+      stored: await storedIn.read(args.params.locale),
+      storedIn,
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       access,
@@ -2201,10 +2267,40 @@ export class CollectionMutationService extends BaseService {
           user: args.params.user,
           authenticatedScope: args.params.authenticatedScope,
           overrideAccess: args.params.overrideAccess,
-          id: args.entryId,
+          id: args.storedId,
           grants,
         }),
     });
+  }
+
+  /**
+   * Where an entry's stored field-group instances are read in each of the
+   * site's languages, on `executor`: `stored` with the instances it holds in
+   * their own tables, in the language asked (the default when none is).
+   */
+  private storedFieldGroupsInLanguages(args: {
+    stored: Record<string, unknown>;
+    tableName: string;
+    fields: FieldDefinition[];
+    access: FieldGroupWriteAccess;
+    executor?: unknown;
+  }): {
+    locales: string[];
+    read: (locale?: string) => Promise<Record<string, unknown>>;
+  } {
+    return {
+      locales: this.localization?.locales.map(l => l.code) ?? [],
+      read: locale =>
+        withStoredFieldGroups({
+          stored: args.stored,
+          parentTable: args.tableName,
+          fields: args.fields as unknown as FieldConfig[],
+          source: this.fieldGroupDataService,
+          access: args.access,
+          executor: args.executor,
+          locale,
+        }),
+    };
   }
 
   /**
@@ -3055,6 +3151,7 @@ export class CollectionMutationService extends BaseService {
     shared: ReleaseWriteContext,
     args: {
       collectionName: string;
+      /** The entry's id as stored, read from its row. */
       entryId: string;
       snapshot: unknown;
       restoreCtx: RestoreSchemaContext;
@@ -3087,7 +3184,7 @@ export class CollectionMutationService extends BaseService {
           draftInput
         ),
         collectionName: args.collectionName,
-        entryId: args.entryId,
+        storedId: args.entryId,
         user: args.user,
         overrideAccess: false,
         grants: args.grants,
@@ -3185,6 +3282,183 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a publish of every language puts live, each to be asked
+   * about: those its statuses name, a main row going live with no translation
+   * of its own being the default language's, those a pending change a write
+   * to every language promotes goes live in, and every configured language
+   * where the collection reaches a localized field group. Read on `tx` where
+   * one is given, and on the pool otherwise.
+   */
+  private async languagesToPublish(args: {
+    collectionName: string;
+    entryId: string;
+    row: Record<string, unknown>;
+    /** The collection's fields, for whether it reaches a localized field group. */
+    fields: readonly { type: string; name?: string }[];
+    /**
+     * The collection, where the write promotes the working draft kept in its
+     * own slot, as a write to every language does. Publishing every language
+     * promotes none, and passes nothing.
+     */
+    promotesDraftOf?: unknown;
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const defaultLocale = this.localization?.defaultLocale;
+    const goingLive = (
+      await this.languagesGoingLive({
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        row: args.row,
+        writeLocale: undefined,
+        perLocaleStatus: false,
+        everyLanguage: true,
+        ...(args.tx === undefined ? {} : { tx: args.tx }),
+      })
+    )
+      .map(locale => locale ?? defaultLocale)
+      .filter((locale): locale is string => typeof locale === "string");
+    goingLive.push(...(await this.languagesPromoted(args)));
+    return languagesToAsk([...new Set(goingLive)], {
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
+        args.fields,
+        args.tx
+      ),
+    });
+  }
+
+  /**
+   * The languages a pending change a write to every language promotes goes
+   * live in, as stored: where the collection is localized, keeps drafts and
+   * holds a working draft in that write's own slot, every configured
+   * language. The change can carry shared values, which every language's
+   * document shows, so a language already live is changed by it as surely as
+   * the draft's own. A draft the schema has since made ineligible is not
+   * promoted, and is asked about all the same: asking about more languages can
+   * only refuse. Read on `tx` where one is given.
+   */
+  private async languagesPromoted(args: {
+    collectionName: string;
+    entryId: string;
+    promotesDraftOf?: unknown;
+    tx?: TransactionContext;
+  }): Promise<string[]> {
+    const collection = args.promotesDraftOf;
+    if (collection === undefined || !this.keepsWorkingDrafts(collection)) {
+      return [];
+    }
+    const locale = this.wildcardDraftLocale(collection);
+    if (locale === null) return [];
+    const draft = await new VersionsRepository(
+      args.tx ?? this.adapter
+    ).findWorkingDraft(
+      {
+        scopeKind: "collection",
+        scopeSlug: args.collectionName,
+        entryId: args.entryId,
+      },
+      locale
+    );
+    return languagesPromotedChangeReaches(
+      draft === undefined ? undefined : locale,
+      this.localization?.locales.map(language => language.code) ?? []
+    );
+  }
+
+  /**
+   * Whether a publish of every language is refused in any of `languages`:
+   * `ask` (the publish permission and rule) asked once for each, each time
+   * told that language and all of them, so a rule that answers by language
+   * answers for each. Asked before the transaction, never on its connection:
+   * a rule is the app's own code and may read the database, which on a held
+   * connection waits for one the transaction keeps. The first refusal, or
+   * `undefined`; the languages refused go to the server log only. With no
+   * language going live, `ask` is asked once, in the operation's languages.
+   */
+  private async refusedInEachLanguage(args: {
+    collectionName: string;
+    entryId: string;
+    languages: readonly string[];
+    ask: () => Promise<CollectionServiceResult | null>;
+  }): Promise<CollectionServiceResult | undefined> {
+    const denied = await askEachLanguage(args.languages, args.ask);
+    if (!denied) return undefined;
+    this.logger.warn("Publish refused in some languages", {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      refusedLanguages: denied.refused,
+    });
+    return denied.refusal;
+  }
+
+  /**
+   * The conflict refusing a publish whose languages going live, re-read under
+   * the lock, include one the rule was not asked about before it; `undefined`
+   * where none is, and where nothing was asked per language (an unpublish).
+   * Reads only: no rule runs on the transaction.
+   */
+  private async languagesChangedUnderLock(
+    args: Parameters<CollectionMutationService["languagesToPublish"]>[0] & {
+      asked: readonly string[] | undefined;
+      tx: TransactionContext;
+    }
+  ): Promise<NextlyError | undefined> {
+    if (args.asked === undefined) return undefined;
+    const unasked = unaskedLanguages(
+      args.asked,
+      await this.languagesToPublish(args)
+    );
+    return unasked.length > 0 ? languagesChangedConflict(unasked) : undefined;
+  }
+
+  /**
+   * The lifecycle permission and rule for publishing or unpublishing every
+   * language, asked before the transaction: a publish once for each language
+   * it puts live, those languages kept for the lock to compare with; an
+   * unpublish once, in every language.
+   */
+  private async askBeforeLifecycle(
+    args: Omit<
+      Parameters<CollectionMutationService["languagesToPublish"]>[0],
+      "tx"
+    > & {
+      publishes: boolean;
+      ask: () => Promise<CollectionServiceResult | null>;
+    }
+  ): Promise<{
+    denied: CollectionServiceResult | null | undefined;
+    askedLanguages?: string[];
+  }> {
+    if (!args.publishes) return { denied: await args.ask() };
+    const askedLanguages = await this.languagesToPublish(args);
+    return {
+      denied: await this.refusedInEachLanguage({
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        languages: askedLanguages,
+        ask: args.ask,
+      }),
+      askedLanguages,
+    };
+  }
+
+  /**
+   * Whether `fields` reach a field group whose definition is localized, at any
+   * depth, read on `tx` where one is given. None without the field-group
+   * service, which a boot without field groups does not register.
+   */
+  private reachesLocalizedFieldGroup(
+    fields: readonly { type: string; name?: string }[],
+    tx?: TransactionContext
+  ): Promise<boolean> {
+    const service = this.fieldGroupDataService;
+    if (!service) return Promise.resolve(false);
+    return reachesLocalizedFieldGroup(fields, slug =>
+      service.getComponentDefinition(slug, tx?.getDrizzle())
+    );
+  }
+
+  /**
    * Which languages a publish moves from not live to live, as the stored
    * statuses say. A language keeping its own status answers from its companion
    * row, where a language with no row starts as a draft; otherwise the
@@ -3211,32 +3485,12 @@ export class CollectionMutationService extends BaseService {
             )
         : null;
     if (args.everyLanguage && statuses !== null && statuses.size > 0) {
-      // Only the languages the app still configures. A removed language's
-      // row can outlive it, and judged it would be read as the default
-      // language, refusing every publish over content no request can reach
-      // to repair.
-      const configured = new Set(
-        this.localization?.locales.map(locale => locale.code) ?? []
-      );
-      const going: (string | undefined)[] = [...statuses]
-        .filter(
-          ([locale, status]) =>
-            status !== "published" &&
-            (configured.size === 0 || configured.has(locale))
-        )
-        .map(([locale]) => locale);
-      // The main row goes live with the default language whether or not that
-      // language stores a translation row: one holding only shared values has
-      // none, and its document is still published.
-      const defaultLocale = this.localization?.defaultLocale;
-      if (
-        defaultLocale !== undefined &&
-        !statuses.has(defaultLocale) &&
-        args.row.status !== "published"
-      ) {
-        going.push(defaultLocale);
-      }
-      return going;
+      return languagesGoingLiveFrom({
+        statuses,
+        configured: this.localization?.locales.map(locale => locale.code) ?? [],
+        defaultLocale: this.localization?.defaultLocale,
+        mainPublished: args.row.status === "published",
+      });
     }
     const live =
       args.perLocaleStatus && args.writeLocale !== undefined
@@ -3319,7 +3573,11 @@ export class CollectionMutationService extends BaseService {
       },
       args.fields
     );
-    stripPasswordFieldValues(document, args.fields);
+    stripPasswordFieldValues(
+      document,
+      args.fields,
+      await this.passwordReach(args.fields, args.connection.getDrizzle())
+    );
     return document;
   }
 
@@ -3730,7 +3988,7 @@ export class CollectionMutationService extends BaseService {
               user: params.user,
               authenticatedScope: params.authenticatedScope,
               overrideAccess: params.overrideAccess,
-              id: params.entryId,
+              id: String((row as { id: unknown }).id),
               grants,
             })
         ),
@@ -4030,87 +4288,26 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Delete password-field values from component instances in a snapshot's
-   * component map, descending through nested components. `stripPasswordFieldValues`
-   * handles a component instance's own passwords and any nested in a
-   * group/repeater, but cannot follow a component referenced by slug; this
-   * resolves each instance's schema (from the tagged `_componentType`, or the
-   * field's single declared component) and recurses so a password two components
-   * deep is removed too. Mutates in place: on every path that reaches here the
-   * component data has already been saved (promote) or will never be saved
-   * (draft edit), so stripping the snapshot copy cannot affect a live write.
+   * Delete password-field values from the field-group instances of a
+   * snapshot's component map, at every depth: through the field groups they
+   * reference, by their own type where a dynamic zone's row names it, and
+   * through those held inline in their containers. One walk with every other
+   * password handler (`stripPasswordFieldValues`), so it cannot miss a place
+   * the hash reaches. An instance whose fields are not known is dropped rather
+   * than stored un-inspected. Mutates in place: on every path that reaches
+   * here the component data has already been saved (promote) or will never be
+   * saved (draft edit), so stripping the snapshot copy cannot affect a live
+   * write.
    */
   private stripComponentPasswordsInPlace(
     components: Record<string, unknown>,
     schema: FieldConfig[],
     componentFields: Map<string, FieldConfig[]>
   ): void {
-    const declaredSlugs = (field: FieldConfig): string[] =>
-      // A strip walk that misses a migrated definition's slugs leaves the
-      // plaintext inside the working-draft snapshot.
-      fieldGroupSlugList(field);
-    const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {
-      if (
-        !instance ||
-        typeof instance !== "object" ||
-        Array.isArray(instance)
-      ) {
-        return;
-      }
-      const rec = instance as Record<string, unknown>;
-      stripPasswordFieldValues(rec, cfields);
-      for (const child of cfields) {
-        const childSlugs = declaredSlugs(child);
-        if (childSlugs.length > 0) stripField(rec, child, childSlugs);
-      }
-    };
-    const stripField = (
-      owner: Record<string, unknown>,
-      field: FieldConfig,
-      slugs: string[]
-    ): void => {
-      if (!field.name) return;
-      const value = owner[field.name];
-      const isArray = Array.isArray(value);
-      const instances = isArray ? value : value != null ? [value] : [];
-      const kept: unknown[] = [];
-      let dropped = false;
-      for (const inst of instances) {
-        if (!inst || typeof inst !== "object") {
-          kept.push(inst);
-          continue;
-        }
-        // Asked rather than read: an instance already stored may carry either spelling of
-        // this key, depending on which side of the storage migration wrote it.
-        const tagged = readFieldGroupType(inst);
-        const slug =
-          typeof tagged === "string"
-            ? tagged
-            : slugs.length === 1
-              ? slugs[0]
-              : undefined;
-        const cfields = slug ? componentFields.get(slug) : undefined;
-        if (cfields) {
-          stripInstance(inst, cfields);
-          kept.push(inst);
-        } else {
-          // The instance's schema cannot be resolved (a dynamic-zone row naming
-          // a component the field does not allow, or one absent from the
-          // registry), so a password nested inside it cannot be located and
-          // removed. Drop the instance rather than store an un-inspected value
-          // in plaintext, the same safe direction the restore filter takes for
-          // an unknown subtree.
-          dropped = true;
-        }
-      }
-      if (!dropped) return;
-      if (isArray) owner[field.name] = kept;
-      else delete owner[field.name];
-    };
-    for (const field of schema) {
-      const slugs = declaredSlugs(field);
-      if (slugs.length > 0) stripField(components, field, slugs);
-    }
+    stripPasswordFieldValues(components, schema, {
+      fieldsOf: slug => componentFields.get(slug),
+      direct: true,
+    });
   }
 
   private async buildFullSnapshotRelations(
@@ -4246,13 +4443,21 @@ export class CollectionMutationService extends BaseService {
     },
   >(
     finalData: Record<string, unknown>,
-    fields: T[]
+    fields: T[],
+    /** The write's transaction-bound executor, when it holds a connection. */
+    executor?: unknown
   ): Promise<{
     manyToManyFields: T[];
     manyToManyData: Record<string, string[]>;
     componentFieldData: Record<string, unknown>;
   }> {
-    await hashPasswordFieldValues(finalData, fields);
+    // At every depth, through the field groups held inline in a container:
+    // their passwords are stored in that container's value.
+    await hashPasswordFieldValues(
+      finalData,
+      fields,
+      await this.passwordReach(fields, executor)
+    );
 
     // AFTER every mutating hook has run. A field-level
     // beforeValidate/beforeChange hook can (re)introduce an own
@@ -4388,7 +4593,11 @@ export class CollectionMutationService extends BaseService {
         }
       }
     }
-    stripPasswordFieldValues(entry, fields);
+    stripPasswordFieldValues(
+      entry,
+      fields,
+      await this.passwordReach(fields, executor)
+    );
     // Strip the system owner column so a mutation response (e.g. an admin or
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
@@ -4866,16 +5075,7 @@ export class CollectionMutationService extends BaseService {
         "collection",
         params.collectionName
       );
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: readableByDefaults,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
       // The view is defaulted BEFORE it is judged a second time, and both
       // halves matter.
       //
@@ -4894,16 +5094,7 @@ export class CollectionMutationService extends BaseService {
       // a default the rules removed here is one the record's own pass will not
       // put back.
       applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: readableByDefaults,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, readableByDefaults, writeGrants);
       // The stored fields carry constant defaults; a function default exists
       // only in the live config, which the registry captured at boot.
       applyFieldDefaults(
@@ -4991,16 +5182,7 @@ export class CollectionMutationService extends BaseService {
 
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, finalData, writeGrants);
       // The field groups this entry stores inline, inside its groups and
       // repeaters, by their own rules: no field-group save reaches them.
       await this.judgeInlineFieldGroups({
@@ -5375,7 +5557,12 @@ export class CollectionMutationService extends BaseService {
             fields
           )
         );
-        this.redactSnapshotRow(snapshotParent, fields, tableName);
+        this.redactSnapshotRow(
+          snapshotParent,
+          fields,
+          tableName,
+          await this.passwordReach(fields, tx.getDrizzle())
+        );
         // Components + m2m are read from the transaction: the write above just
         // persisted them, and an empty relationship reads as [] — so the
         // document is complete and read-shaped with no in-memory overlay. These
@@ -6025,10 +6212,11 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    // Set when the in-transaction document-rule re-check refuses the publish
-    // against the row-locked document. Declared out here so the catch can read
-    // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
-    // transaction rolls back, so `instanceof` no longer identifies it.
+    // Set when the publish rule, asked inside the transaction once for each
+    // language going live, refuses one of them. Declared out here so the
+    // catch can read it: the adapter re-wraps the thrown sentinel in a
+    // DatabaseError as the transaction rolls back, so `instanceof` no longer
+    // identifies it.
     let publishDocDenied: CollectionServiceResult | undefined;
     // Set when judging the languages going live refuses the publish inside the
     // transaction, read by the catch for the same reason as the one above.
@@ -6103,19 +6291,35 @@ export class CollectionMutationService extends BaseService {
         locale: undefined,
       });
 
-      const publishDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: direction.accessAction,
-        entryId: params.entryId,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // Not route-authorized as publish: the POST was authorized as `update`,
-        // so the publish permission is checked here.
-        routeAuthorized: false,
-        // Judge a scoped API key on its own `publish-<slug>` grant.
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (publishDenied) return publishDenied;
+      // The lifecycle permission and rule for this direction. Not
+      // route-authorized: the POST was authorized as `update`, so the publish
+      // or unpublish permission is checked here. A scoped API key is judged on
+      // its own `<action>-<slug>` grant.
+      const lifecycleDenied = () =>
+        this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: direction.accessAction,
+          entryId: params.entryId,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+      const fields = ((publishCollection as { fields?: unknown }).fields ??
+        []) as FieldDefinition[];
+      // Asked here, before the transaction and off its connection: a rule is
+      // the app's own code and may read the database. The lock re-reads what
+      // goes live, and asks nothing.
+      const { denied: deniedBeforePublish, askedLanguages } =
+        await this.askBeforeLifecycle({
+          publishes: direction.nextStatus === "published",
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          row: existingEntry as Record<string, unknown>,
+          fields,
+          ask: lifecycleDenied,
+        });
+      if (deniedBeforePublish) return deniedBeforePublish;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -6129,8 +6333,6 @@ export class CollectionMutationService extends BaseService {
       // Resolved versioning config + field set for the in-transaction capture.
       const versionsConfig = (publishCollection as Record<string, unknown>)
         .versions as ResolvedVersionsConfig | null | undefined;
-      const fields = ((publishCollection as { fields?: unknown }).fields ??
-        []) as FieldDefinition[];
       const manyToManyFields = fields.filter(
         f =>
           f.type === "relationship" && f.options?.relationType === "manyToMany"
@@ -6239,6 +6441,21 @@ export class CollectionMutationService extends BaseService {
           // through the same step as the single-entry publish, so the two
           // cannot judge one document differently. The refusal is kept: the
           // adapter re-wraps whatever leaves the transaction.
+          // What goes live, re-read on the row this transaction locked and
+          // before anything is written. A language the rule was not asked
+          // about refuses the publish as a conflict, so nothing goes live.
+          const languagesChanged = await this.languagesChangedUnderLock({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            row: preImageRow,
+            fields,
+            tx,
+            asked: askedLanguages,
+          });
+          if (languagesChanged) {
+            publishRefused = languagesChanged;
+            throw languagesChanged;
+          }
           if (direction.nextStatus === "published") {
             try {
               await this.assertLanguagesGoLiveValid({
@@ -6404,7 +6621,12 @@ export class CollectionMutationService extends BaseService {
                   fields
                 )
               );
-              this.redactSnapshotRow(parentRow, fields, tableName);
+              this.redactSnapshotRow(
+                parentRow,
+                fields,
+                tableName,
+                await this.passwordReach(fields, tx.getDrizzle())
+              );
               const {
                 components: snapshotComponents,
                 manyToMany: snapshotM2M,
@@ -6464,7 +6686,8 @@ export class CollectionMutationService extends BaseService {
               status: direction.nextStatus,
             },
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           );
           // Overlay the committed publish instant AFTER camelCasing: the source
           // rows carry the pre-publish `updatedAt` (the pooled/pre-read excludes
@@ -6480,7 +6703,8 @@ export class CollectionMutationService extends BaseService {
           const previousDocument = this.readShapeEventDocument(
             preImageRow as Record<string, unknown>,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           );
           const publishEventFields = await this.webhookFieldTreeIfRecording(
             params.collectionName,
@@ -6637,13 +6861,17 @@ export class CollectionMutationService extends BaseService {
               ...localeValues,
               status: direction.nextStatus,
             };
-            stripPasswordFieldValues(localeDataParent, fields);
+            const localeReach = await this.passwordReach(
+              fields,
+              tx.getDrizzle()
+            );
+            stripPasswordFieldValues(localeDataParent, fields, localeReach);
             const localePrevParent = {
               ...previousDocument,
               ...localeValues,
               status: priorLocaleStatus,
             };
-            stripPasswordFieldValues(localePrevParent, fields);
+            stripPasswordFieldValues(localePrevParent, fields, localeReach);
             const localeData = assembleDocument({
               parentRow: localeDataParent,
               components: localeComponents,
@@ -7071,7 +7299,8 @@ export class CollectionMutationService extends BaseService {
       args.fields,
       args.tableName,
       previousLocalizedValues,
-      committedLocaleStatus
+      committedLocaleStatus,
+      await this.passwordReach(args.fields, tx.getDrizzle())
     );
     const { components: previousComponents, manyToMany: previousM2M } =
       await this.buildFullSnapshotRelations(
@@ -7116,7 +7345,8 @@ export class CollectionMutationService extends BaseService {
     /** The pending change alone, where `before` lays the caller's payload over it. */
     pending?: Record<string, unknown>;
     collectionName: string;
-    entryId: string;
+    /** The entry's id as stored, which the rules are told: never the request's. */
+    storedId: string;
     user: UserContext | undefined;
     authenticatedScope?: AuthenticatedScope;
     overrideAccess?: boolean;
@@ -7144,7 +7374,7 @@ export class CollectionMutationService extends BaseService {
           authenticatedScope: args.authenticatedScope,
           overrideAccess: args.overrideAccess,
           grants: args.grants,
-          id: args.entryId,
+          id: args.storedId,
         });
         await applyFieldGroupWriteAccessToDocument({
           document,
@@ -7156,9 +7386,15 @@ export class CollectionMutationService extends BaseService {
           live: args.live,
         });
       },
-      // What the schema declares, so a field named like one of the store's
-      // own columns is still judged as the content it is.
-      authoredFieldNames: declaredFieldNames(args.fields),
+      // What the schema declares, its field groups' schemas included, so a
+      // field named like one of the store's own columns is still judged as the
+      // content it is.
+      authoredFieldNames: declaredFieldNames(args.fields, field =>
+        referencedFieldGroupFields(
+          field,
+          slug => args.componentSchemas?.get(slug)?.fields
+        )
+      ),
       slug: args.collectionName,
       locale: args.locale,
     });
@@ -7174,7 +7410,9 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[],
     tableName: string,
     localizedValues: Record<string, unknown>,
-    companionStatus: string | null
+    companionStatus: string | null,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): Record<string, unknown> {
     const parent = this.deserializeJsonFieldsForSnapshot(
       {
@@ -7184,7 +7422,7 @@ export class CollectionMutationService extends BaseService {
       },
       fields
     );
-    this.redactSnapshotRow(parent, fields, tableName);
+    this.redactSnapshotRow(parent, fields, tableName, reach);
     return parent;
   }
 
@@ -7207,6 +7445,7 @@ export class CollectionMutationService extends BaseService {
     reads: GoingLiveReads;
   }): Promise<Map<string, Record<string, unknown>>> {
     const ids = [...args.rows.keys()];
+    const reach = await this.passwordReach(args.fields);
     const componentFields = args.fields.filter(isFieldGroupField);
     const populated =
       this.fieldGroupDataService !== undefined && componentFields.length > 0
@@ -7258,7 +7497,8 @@ export class CollectionMutationService extends BaseService {
             args.locale === undefined
               ? {}
               : await args.reads.translations(id, args.locale),
-            null
+            null,
+            reach
           ),
           components,
           manyToMany,
@@ -7418,6 +7658,12 @@ export class CollectionMutationService extends BaseService {
    */
   async resolveTransitionAuthorization(args: {
     collectionName: string;
+    /**
+     * The one entry the write changes, where it changes one, so a caller who
+     * may not read it is answered as if it were missing. A create or a
+     * batch resolved ahead names no one existing entry.
+     */
+    entryId?: string;
     accessUser?: UserContext;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
@@ -7446,6 +7692,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "publish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -7455,6 +7702,7 @@ export class CollectionMutationService extends BaseService {
       this.accessService.checkCollectionAccess({
         collectionName: args.collectionName,
         operation: "unpublish",
+        entryId: args.entryId,
         user: args.accessUser,
         overrideAccess: args.overrideAccess,
         routeAuthorized: false,
@@ -7781,6 +8029,15 @@ export class CollectionMutationService extends BaseService {
     replaces: Record<string, unknown>
   ): Promise<void> {
     const { params, splitComponentSchemas } = ctx;
+    const access = {
+      ...fieldGroupWriteAccessOf(params),
+      // Still inside the write's transaction.
+      grants: callerAccessGrants(
+        params.user,
+        params.authenticatedScope,
+        tx.getDrizzle()
+      ),
+    };
     await keepDeniedFieldGroupsInDraft({
       draft: draftDocument,
       replaces,
@@ -7794,15 +8051,17 @@ export class CollectionMutationService extends BaseService {
       fieldGroupFields: {
         get: slug => splitComponentSchemas?.get(slug)?.fields,
       },
-      access: {
-        ...fieldGroupWriteAccessOf(params),
-        // Still inside the write's transaction.
-        grants: callerAccessGrants(
-          params.user,
-          params.authenticatedScope,
-          tx.getDrizzle()
-        ),
-      },
+      access,
+      // What a stored instance holds in each language, read on the write's
+      // own transaction: a held draft writes no translation, so another
+      // language's values are the live rows'.
+      storedIn: this.storedFieldGroupsInLanguages({
+        stored: { id: params.entryId },
+        tableName: collectionTableName(ctx.collection, params.collectionName),
+        fields: ctx.fields,
+        access,
+        executor: tx.getDrizzle(),
+      }),
     });
   }
 
@@ -8303,7 +8562,7 @@ export class CollectionMutationService extends BaseService {
       // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
-        entryId: params.entryId,
+        storedId: String(existingEntry.id),
         collectionName: params.collectionName,
         stored: await this.storedForCarryForward({
           row: existingEntry as Record<string, unknown>,
@@ -8312,6 +8571,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           entryId: params.entryId,
           locale: params.locale,
+          overrideAccess: params.overrideAccess,
         }),
         tableName,
         fields,
@@ -8374,7 +8634,11 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
-      await hashPasswordFieldValues(finalData, fields);
+      await hashPasswordFieldValues(
+        finalData,
+        fields,
+        await this.passwordReach(fields)
+      );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
       // A field-level beforeValidate/beforeChange hook can (re)introduce an own
@@ -8521,10 +8785,13 @@ export class CollectionMutationService extends BaseService {
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
       // The guard carries the pre-resolved PERMISSION denial, judged off this
-      // transaction's connection so the under-lock step needs no DB read.
+      // transaction's connection so the under-lock step runs no rule. A write
+      // to every language that publishes carries the languages it asked about
+      // too, which the lock compares with the languages going live.
       let transitionGuard: {
         op: "publish" | "unpublish";
         permissionDenied: CollectionServiceResult | null;
+        askedLanguages?: readonly string[];
       } | null = null;
       if (
         collectionHasStatus &&
@@ -8533,8 +8800,8 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const permissionDenied = await this.accessService.checkCollectionAccess(
-          {
+        const transitionDenied = () =>
+          this.accessService.checkCollectionAccess({
             collectionName: params.collectionName,
             operation: transitionOp,
             entryId: params.entryId,
@@ -8547,13 +8814,41 @@ export class CollectionMutationService extends BaseService {
             // not the key owner's — the route only checked `update` against the
             // key's scope.
             authenticatedScope: params.authenticatedScope,
-          }
-        );
-        if (permissionDenied) {
+          });
+        if (sweepAllLocales && transitionOp === "publish") {
+          // A write to every language that publishes asks the publish rule
+          // once for each language it puts live, each time told that language
+          // and all of them, as publishing every language does: a rule that
+          // answers by language answers for each, and any refusal refuses the
+          // write. Asked here, off the transaction's connection; the row lock
+          // (below) re-reads what goes live, so a translation drafted after
+          // this read cannot go live unasked.
+          const askedLanguages = await this.languagesToPublish({
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            row: existingEntry as Record<string, unknown>,
+            fields,
+            promotesDraftOf: collection,
+          });
           transitionGuard = {
             op: transitionOp,
-            permissionDenied,
+            permissionDenied:
+              (await this.refusedInEachLanguage({
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                languages: askedLanguages,
+                ask: transitionDenied,
+              })) ?? null,
+            askedLanguages,
           };
+        } else {
+          const permissionDenied = await transitionDenied();
+          if (permissionDenied) {
+            transitionGuard = {
+              op: transitionOp,
+              permissionDenied,
+            };
+          }
         }
       }
 
@@ -8795,41 +9090,6 @@ export class CollectionMutationService extends BaseService {
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
 
-          // A wildcard must not decide the fate of work somebody saved and has
-          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
-          // UNDER THE LOCK, because the answer changes: a draft save serialises
-          // on this same parent lock, so a check that ran earlier can be
-          // overtaken by a save that commits first, and the release would then
-          // proceed over work it never saw. The refusal travels out on the
-          // same out-of-band result the transition gate uses, since the adapter
-          // re-wraps a thrown sentinel before the catch can identify it.
-          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
-            const heldBy = this.heldLanguages(
-              collection,
-              (
-                await new VersionsRepository(tx).findAllWorkingDrafts({
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                })
-              ).map(draft => draft.locale)
-            );
-            if (heldBy.length > 0) {
-              transitionDeniedResult = {
-                success: false,
-                statusCode: 409,
-                message:
-                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
-                  `Publish or discard them first, or publish each language on ` +
-                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
-                  `status and will not decide what happens to work that has ` +
-                  `not been released.`,
-                data: null,
-              };
-              throw new StatusTransitionDeniedError();
-            }
-          }
-
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
           // companion upsert, and the many-to-many rewrite have all run by then.
@@ -9058,8 +9318,78 @@ export class CollectionMutationService extends BaseService {
                 transitionDeniedResult = transitionGuard.permissionDenied;
                 throw new StatusTransitionDeniedError();
               }
+              // What goes live, re-read on the locked row: a language the
+              // rule was not asked about refuses the write as a conflict.
+              // Only where the lock found a row: one deleted since the write
+              // was authorized puts no language live, and the write that
+              // follows matches nothing and is answered as a missing
+              // document. The row that is gone is never read for this, and
+              // the pre-transaction copy is never stood in for it: judging a
+              // document that no longer exists would answer a refusal where
+              // the caller should be told it is not there.
+              const { askedLanguages } = transitionGuard;
+              if (askedLanguages !== undefined && preUpdateRow) {
+                const changed = await this.languagesChangedUnderLock({
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  row: preUpdateRow as Record<string, unknown>,
+                  fields,
+                  promotesDraftOf: collection,
+                  tx,
+                  asked: askedLanguages,
+                });
+                if (changed) {
+                  transitionDeniedResult = {
+                    success: false,
+                    statusCode: 500,
+                    message: changed.message,
+                    data: null,
+                    ...errorEnvelopeFields(changed),
+                  };
+                  throw new StatusTransitionDeniedError();
+                }
+              }
               // The permission above is the whole decision: no rule judges the
               // row, so the row-locked document cannot change the answer.
+            }
+          }
+
+          // After the lifecycle permission and rule above, so a caller who may
+          // not publish or unpublish is refused before it learns which
+          // languages hold unreleased work.
+          //
+          // A wildcard must not decide the fate of work somebody saved and has
+          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
+          // UNDER THE LOCK, because the answer changes: a draft save serialises
+          // on this same parent lock, so a check that ran earlier can be
+          // overtaken by a save that commits first, and the release would then
+          // proceed over work it never saw. The refusal travels out on the
+          // same out-of-band result the transition gate uses, since the adapter
+          // re-wraps a thrown sentinel before the catch can identify it.
+          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
+            const heldBy = this.heldLanguages(
+              collection,
+              (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                })
+              ).map(draft => draft.locale)
+            );
+            if (heldBy.length > 0) {
+              transitionDeniedResult = {
+                success: false,
+                statusCode: 409,
+                message:
+                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
+                  `Publish or discard them first, or publish each language on ` +
+                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                  `status and will not decide what happens to work that has ` +
+                  `not been released.`,
+                data: null,
+              };
+              throw new StatusTransitionDeniedError();
             }
           }
 
@@ -9240,7 +9570,7 @@ export class CollectionMutationService extends BaseService {
                 callerSupplied: callerContribution,
                 pending: pendingDocument,
                 collectionName: params.collectionName,
-                entryId: params.entryId,
+                storedId: String(existingEntry.id),
                 user: params.user,
                 authenticatedScope: params.authenticatedScope,
                 overrideAccess: params.overrideAccess,
@@ -9289,11 +9619,15 @@ export class CollectionMutationService extends BaseService {
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
-              // What the caller sent that differs from the draft it promotes,
-              // the draft read as the same kind of document: an echo of the
-              // draft, or a system field the write ignores, is no edit.
-              promotionCarriesContent = editsOver(
-                this.deserializeJsonFieldsForSnapshot(
+              // Whether the caller's write moves the document off the draft it
+              // promotes: the merged document, before access is judged,
+              // against the draft alone assembled by the same pass, so a
+              // component patch counts merged and an echo of the draft, a
+              // junction's ids in another order, or a system field the write
+              // ignores, is no edit.
+              promotionCarriesContent = editsOver({
+                entity: "collection",
+                draft: this.deserializeJsonFieldsForSnapshot(
                   this.assemblePromotedDocument(
                     draftInput,
                     {},
@@ -9305,8 +9639,11 @@ export class CollectionMutationService extends BaseService {
                   ),
                   fields
                 ),
-                callerContribution
-              );
+                promoted: mergedPromoteData,
+                views: new Map(
+                  manyToManyFields.map(field => [field.name, asIdSet])
+                ),
+              });
             }
           }
 
@@ -9705,7 +10042,11 @@ export class CollectionMutationService extends BaseService {
                 },
                 fields
               );
-              stripPasswordFieldValues(parentRow, fields);
+              stripPasswordFieldValues(
+                parentRow,
+                fields,
+                await this.passwordReach(fields, tx.getDrizzle())
+              );
               // Strip the system owner column (created_by) — see create path.
               stripServerOnlyColumns(parentRow, tableName);
               const {
@@ -9827,7 +10168,11 @@ export class CollectionMutationService extends BaseService {
                   { ...currentParent, ...priorLocalizedValues },
                   fields
                 );
-                stripPasswordFieldValues(liveParentRow, fields);
+                stripPasswordFieldValues(
+                  liveParentRow,
+                  fields,
+                  await this.passwordReach(fields, tx.getDrizzle())
+                );
                 stripServerOnlyColumns(liveParentRow, tableName);
                 const draftWrite = await this.storeWorkingDraftInTx(tx, {
                   collection,
@@ -11246,16 +11591,7 @@ export class CollectionMutationService extends BaseService {
         params.authenticatedScope,
         tx.getDrizzle()
       );
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: finalData,
-        operation: "create",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: params.overrideAccess,
-        grants: writeGrants,
-      });
+      await this.applyCreateFieldRules(params, finalData, writeGrants);
       // The field groups this entry stores inline, inside its groups and
       // repeaters, by their own rules: no field-group save reaches them.
       await this.judgeInlineFieldGroups({
@@ -11327,7 +11663,11 @@ export class CollectionMutationService extends BaseService {
       }
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
-        await this.prepareCreateWritePayload(finalData, fields);
+        await this.prepareCreateWritePayload(
+          finalData,
+          fields,
+          tx.getDrizzle()
+        );
 
       // Before the localized split below, which copies these values into the
       // companion payload for the row this create is about to insert.
@@ -11828,7 +12168,7 @@ export class CollectionMutationService extends BaseService {
       // and every denied value inside a container kept as the row holds it.
       await this.keepDeniedFieldsAtStored({
         data: finalData,
-        entryId: entryId,
+        storedId: String(existingEntry.id),
         collectionName: params.collectionName,
         stored: await this.storedForCarryForward({
           row: existingEntry,
@@ -11838,6 +12178,7 @@ export class CollectionMutationService extends BaseService {
           entryId,
           // A transactional update writes the default language.
           tx,
+          overrideAccess: params.overrideAccess,
         }),
         tableName,
         fields,
@@ -11904,7 +12245,11 @@ export class CollectionMutationService extends BaseService {
         (collection as { status?: boolean }).status === true &&
         finalData.status === "published";
 
-      await hashPasswordFieldValues(finalData, fields);
+      await hashPasswordFieldValues(
+        finalData,
+        fields,
+        await this.passwordReach(fields, tx.getDrizzle())
+      );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
       // A field-level beforeValidate/beforeChange hook can (re)introduce an own
@@ -11983,6 +12328,7 @@ export class CollectionMutationService extends BaseService {
         params.transitionAuth ??
         (await this.resolveTransitionAuthorization({
           collectionName: params.collectionName,
+          entryId,
           accessUser: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
           // This fallback fires only for a direct caller-owned-tx write (the bulk
@@ -12349,7 +12695,8 @@ export class CollectionMutationService extends BaseService {
           parentRow: this.readShapeEventDocument(
             previousEntry,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           ),
           fields,
           manyToManyFields,
@@ -12390,12 +12737,14 @@ export class CollectionMutationService extends BaseService {
                 ),
               },
               fields,
-              tableName
+              tableName,
+              await this.passwordReach(fields, tx.getDrizzle())
             ),
             liveParentRow: this.readShapeEventDocument(
               existingEntry,
               fields,
-              tableName
+              tableName,
+              await this.passwordReach(fields, tx.getDrizzle())
             ),
             snapshotComponents: previousParts.components,
             snapshotM2M: previousParts.manyToMany,
@@ -12462,7 +12811,8 @@ export class CollectionMutationService extends BaseService {
           parentRow: this.readShapeEventDocument(
             updated as Record<string, unknown>,
             fields,
-            tableName
+            tableName,
+            await this.passwordReach(fields, tx.getDrizzle())
           ),
           fields,
           manyToManyFields,
@@ -12873,6 +13223,9 @@ export class CollectionMutationService extends BaseService {
         }>({
           collectionName: params.collectionName,
           operation: "delete",
+          // The one entry it deletes, so a caller who may not read it is
+          // answered as if it were missing, as the ordinary delete answers.
+          entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),

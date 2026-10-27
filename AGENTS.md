@@ -389,9 +389,8 @@ already in hand may move; preconditions may not.
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
 instead of `readAccessCaller`, or a rule handed permissions not spelled as
-stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
-one release. Two doors that answer one key differently is a defect this
-repository has already had.
+stored (`read-posts`), such as the earlier `posts:read`. Two doors that answer
+one key differently is a defect this repository has already had.
 
 ### One question has one implementation
 

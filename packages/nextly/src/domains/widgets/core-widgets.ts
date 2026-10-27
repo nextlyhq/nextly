@@ -60,17 +60,6 @@
 
 import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
 
-import {
-  CONTENT_WIDTHS,
-  CREATE_WIDTHS,
-  NEEDS_ATTENTION_WIDTHS,
-  OVER_TIME_WIDTHS,
-  RECENT_ACTIVITY_WIDTHS,
-  RECENT_ENTRIES_WIDTHS,
-  RECENTLY_EDITED_WIDTHS,
-  TEAM_WIDTHS,
-  UPCOMING_RELEASES_WIDTHS,
-} from "./core-widget-widths";
 import { settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { GET_STARTED_WIDGET_ID } from "./get-started-steps";
@@ -187,7 +176,9 @@ export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
 /**
  * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
  * Recently edited, Recent activity, Content, Upcoming releases and Team, each
- * at its agreed width (`core-widget-widths.ts`), after the onboarding cards.
+ * at its agreed size, after the onboarding cards. The cards that share a row
+ * share a height, so the default dashboard tiles: Needs attention and Create
+ * at 3 rows, the two activity lists at 4, Upcoming releases and Team at 4.
  *
  * Spaced by ten rather than numbered one-by-one, so a card can be placed
  * between two of these later without renumbering the rest -- the reason
@@ -200,10 +191,16 @@ const CORE_WIDGET_LITERALS = [
     description:
       "The setup steps this reader could still take, detected from the install rather than ticked by hand.",
     archetype: "custom",
-    defaultSize: "full",
-    // Full width only: its steps are laid out across the row.
-    minSize: "full",
-    maxSize: "full",
+    // Full width only, and tall enough for every step it shows by default: a card never scrolls,
+    // so a shorter one cut its last steps off. Measured in the browser, the steps it draws before
+    // "Show N more" (a collection, an entry, five Singles and an invite, about 580 px with that
+    // control) fit the body of eight rows. Taller for a site that opens the rest of its Singles,
+    // never shorter. The end-to-end grid spec checks that the steps fit.
+    size: {
+      default: { w: 12, h: 8 },
+      min: { w: 12, h: 8 },
+      max: { w: 12, h: 12 },
+    },
     // First: it addresses a reader who has just arrived.
     defaultOrder: 0,
     component: "core#GetStartedCard",
@@ -217,8 +214,7 @@ const CORE_WIDGET_LITERALS = [
      * the step answer and the card's own settings, after the stored row is
      * read (see `api/widget-layout.ts`).
      *
-     * It replaces "Set up your project" and the sample-content offer, whose
-     * saved cards convert into it (`RETIRED_WIDGETS`).
+     * It replaces "Set up your project" and the sample-content offer.
      */
     dismissible: true,
   },
@@ -228,9 +224,12 @@ const CORE_WIDGET_LITERALS = [
     description:
       "Each collection and Single this reader may see, with its entries and drafts.",
     archetype: "custom",
-    defaultSize: "full",
     // From half the row, where its list of collections and Singles still reads, to the full width.
-    ...CONTENT_WIDTHS,
+    size: {
+      default: { w: 12, h: 4 },
+      min: { w: 6, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     defaultOrder: 50,
     component: "core#CollectionQuickLinks",
     // Each collection's entries and drafts, and each Single, counted as the reader, in the batch
@@ -240,8 +239,7 @@ const CORE_WIDGET_LITERALS = [
     /*
      * Offered only while this reader has a collection or a Single to see that
      * is neither internal nor hidden. A reader with nothing to list is not
-     * shown an empty list. It replaces the Collections and Singles cards, whose
-     * saved cards convert into it (`RETIRED_WIDGETS`).
+     * shown an empty list. It replaces the Collections and Singles cards.
      */
     lifecycle: "conditional",
     visibleWhen: "content:present",
@@ -252,9 +250,12 @@ const CORE_WIDGET_LITERALS = [
     description:
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
-    defaultSize: "md",
     // From a third, where its row of create buttons wraps, to the full width.
-    ...CREATE_WIDTHS,
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 4, h: 2 },
+      max: { w: 12, h: 4 },
+    },
     defaultOrder: 20,
     component: "core#QuickCreate",
     // Offered only to a reader who could create an entry somewhere: every
@@ -268,9 +269,12 @@ const CORE_WIDGET_LITERALS = [
     // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
     description: "Your project's team at a glance.",
     archetype: "custom",
-    defaultSize: "md",
     // From a quarter, where its small tier draws the people alone, to half the row.
-    ...TEAM_WIDTHS,
+    size: {
+      default: { w: 4, h: 4 },
+      min: { w: 3, h: 2 },
+      max: { w: 6, h: 4 },
+    },
     defaultOrder: 70,
     component: "core#TeamSummary",
     link: { label: "All users", href: "/admin/users" },
@@ -286,8 +290,11 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     // Two thirds by default; from a third, where its small tier still names
     // each kind, to the full width, where each kind breaks down per collection.
-    defaultSize: "xl",
-    ...NEEDS_ATTENTION_WIDTHS,
+    size: {
+      default: { w: 8, h: 3 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     defaultOrder: 10,
     // Offered only to a reader who may read a kind it counts; its source
     // answers "not available" to anyone else.
@@ -316,9 +323,12 @@ const CORE_WIDGET_LITERALS = [
     // the card's like any other's.
     archetype: "custom",
     component: "core#RecentlyEdited",
-    defaultSize: "lg",
     // Half the row by default; from a third, where its rows still read, to the full width.
-    ...RECENTLY_EDITED_WIDTHS,
+    size: {
+      default: { w: 6, h: 4 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     defaultOrder: 30,
     // From the activity trail, one row per document at its latest save the
     // reader may see, across every collection they may read; the same trail
@@ -362,9 +372,12 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     component: "core#UpcomingReleases",
     link: { label: "All releases", href: "/admin/releases" },
-    defaultSize: "md",
     // From a third, where its rows still read, to two thirds: a short list needs no more.
-    ...UPCOMING_RELEASES_WIDTHS,
+    size: {
+      default: { w: 4, h: 4 },
+      min: { w: 4, h: 3 },
+      max: { w: 8, h: 6 },
+    },
     defaultOrder: 60,
     // Beside its gate: offered once a release exists that the reader may
     // read, not as an empty card on a site that has never made one.
@@ -436,9 +449,12 @@ const CORE_WIDGET_LITERALS = [
     // other's, and answered by `system:activity` through the batch, the same
     // read the activity endpoint makes.
     archetype: "custom",
-    defaultSize: "lg",
     // Half the row by default; from a third, where its rows still read, to the full width.
-    ...RECENT_ACTIVITY_WIDTHS,
+    size: {
+      default: { w: 6, h: 4 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     defaultOrder: 40,
     component: "core#RecentActivity",
     query: { source: ACTIVITY_SOURCE_ID, op: "list" },
@@ -457,9 +473,9 @@ const CORE_WIDGET_LITERALS = [
     // Added from a collection's group of the add panel, once per collection,
     // and never placed on the default dashboard.
     offered: "per-collection",
-    // A quarter by default; up to two thirds, where the trend is drawn.
-    defaultSize: "sm",
-    maxSize: "xl",
+    // A figure, a quarter wide by default; up to two thirds, where the trend
+    // is drawn, and a row taller to give it room.
+    size: { default: { w: 3, h: 2 }, max: { w: 8, h: 3 } },
     settings: [
       { name: "collection", type: "collection", label: "Collection" },
       { name: "filter", type: "filter", of: "collection", label: "Filter" },
@@ -515,6 +531,40 @@ const CORE_WIDGET_LITERALS = [
     ],
   },
   {
+    id: "core/breakdown",
+    title: "Breakdown",
+    description:
+      "How a collection's entries divide: by status, or by a field with choices.",
+    archetype: "bars",
+    // Added from a collection's group of the add panel, once per collection
+    // and again with other settings, never placed on the default dashboard.
+    // Offered only on a collection with something to divide its entries by.
+    offered: "per-collection",
+    // A third by default; from a quarter to half the row.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 6, h: 4 },
+    },
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "filter", type: "filter", of: "collection", label: "Filter" },
+      // No static default: collections need not share a field. Unset, or set
+      // to a field this reader may not use, it groups by what the collection
+      // divides by (status, else its first groupable choice field).
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        label: "Group by",
+        defaultFrom: "collection",
+      },
+    ],
+    // Its source and its group key are the card's settings: a Breakdown set
+    // to no collection, or to one with nothing to divide by, asks nothing.
+    query: { op: "groupBy", status: "all" },
+  },
+  {
     id: "core/note",
     title: "Note",
     description: "A note of your own, in Markdown, that only you see.",
@@ -525,7 +575,12 @@ const CORE_WIDGET_LITERALS = [
     // Added from the add panel when a reader wants one, never placed on the
     // default dashboard, where it would be an empty card; several allowed.
     offered: "on-request",
-    defaultSize: "md",
+    // Any width from a quarter, and as tall as its reader's text wants.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 2 },
+      max: { w: 12, h: 6 },
+    },
     settings: [NOTE_TEXT],
   },
   {
@@ -538,8 +593,12 @@ const CORE_WIDGET_LITERALS = [
     // Added from a collection's group of the add panel, once per collection or
     // more, and never placed on the default dashboard.
     offered: "per-collection",
-    defaultSize: "md",
-    ...RECENT_ENTRIES_WIDTHS,
+    // Half the row by default; from a third, where its rows still read, to the full width.
+    size: {
+      default: { w: 6, h: 4 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     // Asked like core's own lists: the rows its size draws and one more, so the
     // card can say more exist at every size.
     sizedQuery: true,
@@ -572,8 +631,12 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     component: "core#OverTime",
     offered: "per-collection",
-    defaultSize: "md",
-    ...OVER_TIME_WIDTHS,
+    // Half the row by default; from a third, where its chart still reads, to the full width.
+    size: {
+      default: { w: 6, h: 3 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 4 },
+    },
     settings: [
       { name: "collection", type: "collection", label: "Collection" },
       { name: "filter", type: "filter", of: "collection", label: "Filter" },

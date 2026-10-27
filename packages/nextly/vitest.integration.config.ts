@@ -55,9 +55,10 @@ export default defineConfig({
     // system tables with a fixed name (`nextly_schema_events`) cannot use the
     // per-file table prefix, so two of them sharing a database drop and
     // recreate the same table out from under each other. With more workers
-    // each worker process has a database of its own (in-memory SQLite, which
-    // `integrationWorkers` requires), so files run in parallel across workers
-    // and still one at a time within each.
+    // each worker process has a database of its own (in-memory SQLite, or the
+    // PostgreSQL database the global setup made for its pool id; MySQL stays
+    // on one worker, which `integrationWorkers` enforces), so files run in
+    // parallel across workers and still one at a time within each.
     fileParallelism: workers > 1,
   },
 });

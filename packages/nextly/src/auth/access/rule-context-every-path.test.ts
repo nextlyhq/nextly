@@ -175,15 +175,16 @@ describe("a collection or Single rule", () => {
     expect(seen[0].target).toEqual({ kind: "collection", slug: "posts" });
   });
 
-  it("still allows on the earlier spelling, warned once, on a session", async () => {
+  it("no longer allows on the earlier spelling on a session, and warns nothing", async () => {
+    // The session holds `read-posts`; the rule names it the way rules were
+    // once handed it, which is no longer in the list.
     const rule = ({ permissions }: AccessRuleContext) =>
       permissions.includes("posts:read");
     rbac.registerCollectionAccess("posts", { read: rule });
-    const ask = () =>
-      rbac.checkAccess({ userId: "u1", operation: "read", resource: "posts" });
-    await expect(ask()).resolves.toBe(true);
-    await expect(ask()).resolves.toBe(true);
-    expect(warn).toHaveBeenCalledTimes(1);
+    await expect(
+      rbac.checkAccess({ userId: "u1", operation: "read", resource: "posts" })
+    ).resolves.toBe(false);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

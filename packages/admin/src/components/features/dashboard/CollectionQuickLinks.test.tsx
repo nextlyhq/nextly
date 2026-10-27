@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   NAV_COLLECTIONS_PARAMS,
@@ -60,14 +61,16 @@ function given({
       ? { ok: true as const, result: { op: "list" as const, items: counts } }
       : undefined;
   render(
-    <CollectionQuickLinks
-      widgetId="core/content"
-      placementId="core/content"
-      settings={{}}
-      slot={slot}
-      isFetching={slot === undefined}
-      {...(onRetry ? { onRetry } : {})}
-    />
+    inFrame(
+      <CollectionQuickLinks
+        widgetId="core/content"
+        placementId="core/content"
+        settings={{}}
+        slot={slot}
+        isFetching={slot === undefined}
+        {...(onRetry ? { onRetry } : {})}
+      />
+    )
   );
 }
 

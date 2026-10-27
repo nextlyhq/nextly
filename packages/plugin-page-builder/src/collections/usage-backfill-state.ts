@@ -80,8 +80,9 @@ export function usageBackfillStateCollection(): CollectionConfig {
       // the whole mechanism, which is why nothing outside may make it.
       //
       // These do NOT stop a session super-admin. The RBAC gate is ordered
-      // "super-admin bypass -> code-defined access -> DB permissions", so for
-      // such a caller these callbacks are never evaluated. Closing that needs a
+      // "super-admin bypass -> DB permissions -> code-defined access, which
+      // only narrows them", so for such a caller these callbacks are never
+      // evaluated. Closing that needs a
       // write boundary external collection operations cannot cross, which is a
       // core capability rather than an access rule a plugin can declare.
       //

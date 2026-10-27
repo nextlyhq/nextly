@@ -23,6 +23,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
   checkbox,
   date,
   defineCollection,
@@ -53,6 +57,17 @@ const CLERK = { id: "clerk", email: "clerk@x.test", roles: [] };
 
 function handlerOf(t: TestNextly): CollectionsHandler {
   return t.getService("collectionsHandler") as CollectionsHandler;
+}
+
+/**
+ * Stores BOSS and CLERK as users. A code rule only narrows the permission, so
+ * each holds publish and update on `slug`, which a publish needs.
+ */
+async function seatPublishers(t: TestNextly, slug: string): Promise<void> {
+  for (const who of [BOSS, CLERK]) {
+    await userWhoMay(t, who.id, "publish", [slug]);
+    await grantTo(t, who.id, "update", [slug]);
+  }
 }
 
 /** Published, with drafts on, and two fields only BOSS may write. */
@@ -92,6 +107,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
   });
+  await seatPublishers(current, SLUG);
   return current;
 }
 
@@ -134,6 +150,7 @@ async function bootGroupWithProtectedChild(
       }),
     ],
   });
+  await seatPublishers(current, slug);
   return current;
 }
 
@@ -412,6 +429,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(
@@ -599,6 +617,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(
@@ -673,6 +692,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      await seatPublishers(current, slug);
       const h = handlerOf(current);
 
       const created = await h.createEntry(

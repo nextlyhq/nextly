@@ -187,6 +187,16 @@ export type ContentSetting =
       type: "groupBy";
       of: string;
       defaultValue?: string;
+      /**
+       * `"collection"`: when the card states no grouping, or one this reader
+       * may not use, group by what the collection most naturally divides by
+       * ({@link naturalGroupBy}): status where it has a lifecycle, else its
+       * first groupable choice field. For a widget offered per collection,
+       * whose collections need not share a field a static default could name.
+       *
+       * @experimental While the content widgets are being built.
+       */
+      defaultFrom?: "collection";
     });
 
 /**
@@ -601,11 +611,12 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, quick, ...rest } = setting as {
+  const { name, type, defaultValue, quick, defaultFrom, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
     quick?: unknown;
+    defaultFrom?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
@@ -624,20 +635,35 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  const flags = flagsProblem(type, quick, (rest as { rows?: unknown }).rows);
+  const flags = flagsProblem(
+    type,
+    quick,
+    (rest as { rows?: unknown }).rows,
+    defaultFrom
+  );
   if (flags !== undefined) return `setting "${name}" ${flags}`;
 
   return problemForType(type, rest, defaultValue, name);
 }
 
-/** Why a setting's `quick` or `rows` is unusable, or `undefined`. */
+/** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */
 function flagsProblem(
   type: AnyWidgetSetting["type"],
   quick: unknown,
-  rows: unknown
+  rows: unknown,
+  defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
     return `has quick ${describeValue(quick)}; expected true or false`;
+  }
+  // Refused rather than ignored: a misspelt value, or the flag on a setting
+  // it means nothing to, would otherwise leave a card grouped by nothing with
+  // no fault anywhere pointing at the declaration.
+  if (
+    defaultFrom !== undefined &&
+    (type !== "groupBy" || defaultFrom !== "collection")
+  ) {
+    return `has defaultFrom ${describeValue(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
   return rowsProblem(type, rows);
 }
@@ -820,6 +846,18 @@ export function validateWidgetSettings(
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 
+/**
+ * Why `value` cannot be a starting value of `setting`, or `undefined`. Judged
+ * as a declared default is, since a card falls back to it the same way: the
+ * site config's starting values replace the declaration's.
+ */
+export function startingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  return defaultProblem(setting.type, limitsOf(setting), value, setting.name);
+}
+
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: AnyWidgetSetting, value: unknown): boolean {
   return USABLE_AS[setting.type](value, limitsOf(setting));
@@ -880,6 +918,31 @@ export function resolveWidgetSettings(
     if (fallback !== undefined) resolved[setting.name] = fallback;
   }
   return resolved;
+}
+
+/**
+ * The field a collection's entries most naturally divide by, or `undefined`
+ * when it has none: what a Group by setting stands for when the card leaves it
+ * to the collection.
+ *
+ * `status` on a collection with a draft and published lifecycle, since it is
+ * the one column every such collection shares and means the same thing on
+ * each. Otherwise the first field with choices that can be grouped by: a
+ * choice field's buckets are few and named, where a free-text column's are
+ * neither. Read from what the source publishes to this reader, which already
+ * leaves out every field a read rule could refuse, so no ruled field is ever
+ * the answer.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function naturalGroupBy(source: {
+  lifecycle: boolean;
+  fields: readonly (KnobField & { choices?: readonly unknown[] })[];
+}): string | undefined {
+  if (source.lifecycle) return "status";
+  return source.fields.find(
+    field => field.choices !== undefined && field.groupable !== false
+  )?.name;
 }
 
 /**
@@ -999,6 +1062,18 @@ function filterOnlyCellSetting(
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
+/**
+ * Whether a knob drives `setting` on `query`, the source it declares or none
+ * yet: the table's own answer, for a rule that must know which of a widget's
+ * queries a setting reaches, not merely that some knob takes it.
+ */
+export function drivesQuery(
+  setting: AnyWidgetSetting,
+  query: unknown
+): boolean {
+  return knobFor(setting, declaredKnobSource(query)) !== undefined;
+}
+
 function declaredKnobSource(query: unknown): KnobSource | undefined {
   const source =
     typeof query === "object" && query !== null
@@ -1044,7 +1119,8 @@ export interface KnobContext {
   fieldsOf?: (collection: string) => readonly KnobField[] | undefined;
   /**
    * The collection a slug names, as the server published it to this reader,
-   * or `undefined` when it is not known.
+   * or `undefined` when it is not known: what a setting whose default depends
+   * on the collection reads (`defaultFrom`).
    *
    * @experimental
    */
@@ -1063,6 +1139,38 @@ interface KnobQuery {
   sort?: string;
   groupBy?: string;
 }
+
+/**
+ * Whether `setting` sets how many rows a card asks for: a number setting named
+ * `limit`. The limit knob drives it, and a widget whose query has a range may
+ * not declare it (`rangedLimitSettingProblem`), both by this one test.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function isLimitSetting(setting: unknown): boolean {
+  return (
+    typeof setting === "object" &&
+    setting !== null &&
+    (setting as { type?: unknown }).type === "number" &&
+    (setting as { name?: unknown }).name === "limit"
+  );
+}
+
+/**
+ * A query as settings may leave it: as declared with each knob applied, or,
+ * for a titled list set to a collection it cannot title, the same with no
+ * source and no fields, which asks nothing.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export type AppliedQuery<T> =
+  | T
+  | (T extends unknown
+      ? Omit<T, "source" | "select"> & {
+          source?: undefined;
+          select?: undefined;
+        }
+      : never);
 
 /** How one kind of setting becomes part of a card's query. */
 interface QueryKnob {
@@ -1104,9 +1212,17 @@ function readingCollection<T extends KnobQuery>(
     query.op === "list";
   if (!titled) return { ...query, source: `collection:${slug}` };
   const select = titledRows(ctx.sourceOf?.(slug));
-  return select === undefined
-    ? query
-    : { ...query, source: `collection:${slug}`, select };
+  if (select !== undefined) {
+    return { ...query, source: `collection:${slug}`, select };
+  }
+  // Nor the source the widget was declared with: a card set to a collection
+  // it cannot title reads nothing, never another collection's rows. Typed as
+  // `T` for the knobs that follow; `applyWidgetSettings` says it may be this.
+  if (query.source === undefined && query.select === undefined) return query;
+  const sourceless: T = { ...query };
+  delete sourceless.source;
+  delete sourceless.select;
+  return sourceless;
 }
 
 /**
@@ -1178,6 +1294,21 @@ function allOffered(
 }
 
 /**
+ * The collection a Collection setting's value names, if any: only a value
+ * shaped like a collection slug names one, so a special default such as "*"
+ * names none and the card reads the source its widget declared.
+ *
+ * One rule for every reader of the value: the query a card asks, and whether
+ * the card is withheld from a reader (`collection-cards.ts`). Judged apart, a
+ * card could be withheld for a collection its query never reads.
+ */
+export function namedCollection(value: unknown): string | undefined {
+  return typeof value === "string" && SLUG_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+/**
  * Query knobs a setting may drive: ONE closed map from a kind of setting to
  * how it becomes part of the card's query.
  *
@@ -1192,7 +1323,7 @@ function allOffered(
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {
-    drives: setting => setting.type === "number" && setting.name === "limit",
+    drives: isLimitSetting,
     apply: (query, value) => ({ ...query, limit: value as number }),
   },
   {
@@ -1206,13 +1337,14 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       setting.type === "collection" &&
       (readsACollection(source) || narrowsBy(source, "collection")),
     apply: (query, value, source, setting, ctx) => {
-      // Only a value shaped like a collection slug names one, read before any
-      // use of it: a special default such as "*" leaves the query as it is.
-      if (typeof value !== "string" || !SLUG_PATTERN.test(value)) return query;
+      // Read before any use of the value: a special default such as "*"
+      // names no collection and leaves the query as it is.
+      const collection = namedCollection(value);
+      if (collection === undefined) return query;
       if (!readsACollection(source) && narrowsBy(source, "collection")) {
-        return { ...query, where: { ...query.where, collection: value } };
+        return { ...query, where: { ...query.where, collection } };
       }
-      return readingCollection(query, value, setting, ctx);
+      return readingCollection(query, collection, setting, ctx);
     },
   },
   {
@@ -1314,14 +1446,41 @@ function fittingValue(
 ): unknown {
   const value = resolved[setting.name];
   const fields = readerFieldsFor(setting, resolved, ctx);
-  if (value === undefined || knob.fits === undefined || fields === undefined) {
-    return value;
+  // Unknown fields, or a knob naming none: every value fits, and the server
+  // judges the query.
+  const fits = (candidate: unknown) =>
+    knob.fits === undefined ||
+    fields === undefined ||
+    knob.fits(candidate, fields);
+  if (value !== undefined && fits(value)) return value;
+  // Unset (a static default would already be the resolved value) or not
+  // fitting: the default, held to the same test. A default taken from the
+  // collection is how an unset Group by gets a value at all, and a card
+  // converted from an older one stores only its collection.
+  const fallback = defaultFor(setting, resolved, ctx);
+  return fallback !== undefined && fits(fallback) ? fallback : undefined;
+}
+
+/**
+ * The value a setting falls back to: its declared default, or, for a Group by
+ * setting that takes its default from the collection, what that collection
+ * most naturally divides by. One reading, so the unset card and the card whose
+ * stored grouping a read rule withholds fall back to the same field.
+ */
+function defaultFor(
+  setting: AnyWidgetSetting,
+  resolved: Record<string, unknown>,
+  ctx: KnobContext | undefined
+): unknown {
+  const declared = declaredDefault(setting);
+  if (declared !== undefined) return declared;
+  if (setting.type !== "groupBy" || setting.defaultFrom !== "collection") {
+    return undefined;
   }
-  if (knob.fits(value, fields)) return value;
-  const fallback = declaredDefault(setting);
-  return fallback !== undefined && knob.fits(fallback, fields)
-    ? fallback
-    : undefined;
+  const collection = resolved[setting.of];
+  const source =
+    typeof collection === "string" ? ctx?.sourceOf?.(collection) : undefined;
+  return source === undefined ? undefined : naturalGroupBy(source);
 }
 
 /**
@@ -1391,7 +1550,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
   settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined,
   ctx: KnobContext = {}
-): T {
+): AppliedQuery<T> {
   if (!settings || settings.length === 0) return query;
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);

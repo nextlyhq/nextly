@@ -19,6 +19,8 @@
 
 import {
   actionGatesOf,
+  collectionSettingField,
+  knobQueriesField,
   textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
@@ -26,15 +28,15 @@ import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
   archetypeResultProblem,
-  chromeProblem,
+  chromeFieldProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
-  legacySizeToWidgetSize,
   querylessQueryProblem,
   CELL_ARCHETYPES,
   cellsProblem,
   customAsksTwiceProblem,
   QUERYLESS_ARCHETYPES,
+  rangedLimitSettingProblem,
   textContentProblem,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
@@ -343,6 +345,10 @@ const FIELD_RULES: ReadonlyArray<
   // takes the cells, while the identical registered definition is refused.
   customAsksTwiceProblem,
 
+  // Through the SAME rule the registry applies: a "limit" setting beside a
+  // ranged query would fail every request it changed.
+  rangedLimitSettingProblem,
+
   // Through the SAME rule the registry applies, and it is the rule ITSELF
   // rather than a second spelling of it. This channel had no settings check at
   // all, so `settings: {}` from an untyped declaration passed the JSON gate,
@@ -353,19 +359,16 @@ const FIELD_RULES: ReadonlyArray<
   widget =>
     widgetSettingsProblem(widget.settings, false, settingsSourceOf(widget)),
 
-  // Through the SAME rule the registry applies. Without it a contributed
-  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
-  // refused the identical declaration, and the admin then ignored the value --
-  // so the documented refusal was true of one channel only.
-  widget => chromeProblem(widget.chrome, widget.archetype),
+  // Through the SAME rule the registry applies: no widget declines the frame.
+  widget => chromeFieldProblem(widget),
 
   // The rules that hold whatever core version a plugin was built against: a
-  // title that is a string, a query that is an object, orderings between sizes
-  // this core can rank, and `actions` on an archetype it recognises.
+  // title that is a string, a query that is an object, a size in grid units
+  // within its own bounds, and `actions` on an archetype it recognises.
   //
   // Vocabulary checks are deliberately NOT among them. A contribution crosses a
-  // version boundary, so refusing a size, height or chrome value this core has
-  // not learned yet would abort a whole plugin install over a card the admin
+  // version boundary, so refusing a value from a vocabulary this core has not
+  // learned yet would abort a whole plugin install over a card the admin
   // renders anyway -- those belong to `validateWidgetDefinition`, which judges
   // the resolved widget rather than a declaration from an unknown vintage.
   widget => widgetValueProblem(widget),
@@ -500,7 +503,7 @@ export function assertAdminWidgets(plugins: PluginDefinition[]): void {
  * contributes nothing to the admin.
  *
  * Reads the fields WITHOUT narrowing them: a contribution may come from a
- * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * plugin built against a newer core, so `archetype` is copied as whatever
  * string it is rather than checked against this core's vocabulary. Refusing an
  * unknown one here would drop the whole card from the arrangement over a value
  * the admin already survives.
@@ -512,68 +515,6 @@ function contributedText(
 ): string | undefined {
   const value = declaration[field];
   return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-/**
- * One contributed declaration, reduced to the summary layout resolution reads,
- * or `undefined` when it carries no usable id.
- *
- * Reads the fields WITHOUT narrowing them: a contribution may come from a
- * plugin built against a newer core, so `defaultSize` is copied as whatever
- * string it is rather than checked against this core's vocabulary. Refusing an
- * unknown one here would drop the whole card from the arrangement over a value
- * the admin already survives.
- */
-/**
- * The size a contribution states, in the enum, whichever field it used.
- *
- * 🔴 The deprecated `size` alias is read too, through the SAME translation the
- * admin's resolver applies. Reading `defaultSize` alone emitted a summary with
- * no size for a declaration that legally states only `size: "half"`, so the
- * default placement stored no geometry while the grid drew the card at half
- * width -- and a later change to the plugin's declaration then silently resized
- * what the reader had been told was their saved arrangement.
- *
- * The alias is read only when `defaultSize` is absent, which is the precedence
- * `resolveOne` applies: a plugin that adopted the enum meant it.
- */
-function contributedSize(
-  declaration: Record<string, unknown>
-): string | undefined {
-  const declared = contributedText(declaration, "defaultSize");
-  if (declared !== undefined) return declared;
-  const legacy = contributedText(declaration, "size");
-  return legacy === "full" || legacy === "half"
-    ? legacySizeToWidgetSize(legacy)
-    : undefined;
-}
-
-/**
- * A contributed card's declared geometry: where it starts, and the smallest
- * and largest size it allows.
- *
- * The bounds are carried because `widthFacts` reads the widths a card may take
- * from them. Left out, a widget declared from half to full was offered all
- * five widths, and a reader could narrow it below what its plugin draws at.
- * Strings, as `defaultSize` is: the registry has validated each, and a newer
- * plugin's size is one this core reads as no bound rather than refuses.
- */
-function sizesOf(
-  declaration: Record<string, unknown>
-): Pick<
-  CanonicalWidget,
-  "defaultSize" | "minSize" | "maxSize" | "defaultHeight"
-> {
-  const defaultSize = contributedSize(declaration);
-  const minSize = contributedText(declaration, "minSize");
-  const maxSize = contributedText(declaration, "maxSize");
-  const defaultHeight = contributedText(declaration, "defaultHeight");
-  return {
-    ...(defaultSize === undefined ? {} : { defaultSize }),
-    ...(minSize === undefined ? {} : { minSize }),
-    ...(maxSize === undefined ? {} : { maxSize }),
-    ...(defaultHeight === undefined ? {} : { defaultHeight }),
-  };
 }
 
 /**
@@ -605,6 +546,7 @@ function lifecycleOf(
     // is a declaration mistake, and publishing it as `true` would honour a
     // value the author never wrote.
     ...(declaration.dismissible === true ? { dismissible: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
   };
 }
 
@@ -653,7 +595,10 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // The gates inside an `actions` declaration, verbatim, for the same
     // reason the card's own gate is.
     actionGates: actionGatesOf(declaration.actions),
-    ...sizesOf(declaration),
+    // Its size, verbatim when stated: `widgetValueProblem` has already refused
+    // one the grid cannot draw or whose default lies outside its own bounds.
+    // Absent when unstated, so `sizeFacts` reads it as the admin does.
+    ...(widget.size === undefined ? {} : { size: widget.size }),
     // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot
     // become a sort key that puts the card nowhere in particular.
     ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)
@@ -664,6 +609,12 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // a placement's text to: a contribution's settings passed the registry's
     // own check above, so they are read as declared.
     ...textBoundsField(widget.settings),
+    // Its Collection setting, so a card is judged by the collection it reads
+    // whichever channel declared the widget.
+    ...collectionSettingField(widget.settings),
+    // What its settings may drive, so a Collection setting no knob reaches
+    // on its query decides nothing about which of its cards are withheld.
+    ...knobQueriesField(widget),
   };
 }
 

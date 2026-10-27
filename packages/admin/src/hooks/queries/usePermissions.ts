@@ -15,6 +15,8 @@ import {
 } from "@admin/services/permissionApi";
 import type { Permission } from "@admin/types/entities";
 
+import { invalidateCurrentUserAccess } from "../current-user-access";
+
 /**
  * Query Keys:
  * - `["permissions"]` - All permissions list (base key for invalidation)
@@ -264,6 +266,12 @@ export function useUpdatePermission(): UseMutationResult<
         );
       }
     },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
+    },
     onSettled: (_, __, { permissionId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
@@ -339,6 +347,7 @@ export function useDeletePermission(): UseMutationResult<
     onSuccess: () => {
       // Invalidate all permissions queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }

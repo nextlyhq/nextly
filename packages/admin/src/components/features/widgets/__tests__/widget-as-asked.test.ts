@@ -9,10 +9,13 @@ import { describe, expect, it } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import {
+  askableQuery,
+  askableWith,
   settingsAsAsked,
   titleAsAsked,
   widgetAsAsked,
 } from "../widget-as-asked";
+import { gridBounds } from "./grid-bounds";
 
 const settings: DashboardWidget["settings"] = [
   {
@@ -28,7 +31,7 @@ const recentlyEdited: DashboardWidget = {
   id: "core/recently-edited",
   title: "Recently edited",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "system:recent-edits", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
@@ -81,7 +84,7 @@ describe("a custom card asking through cells", () => {
     id: "core/count",
     title: "Count",
     archetype: "custom",
-    size: "sm",
+    size: gridBounds(3),
     settings: [
       { name: "collection", label: "Collection", type: "collection" },
       { name: "filter", label: "Filter", type: "filter", of: "collection" },
@@ -140,13 +143,115 @@ describe("a custom card asking through cells", () => {
     });
   });
 
-  it("is titled by the collection it is set to, and as its widget when set to none", () => {
-    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toBe(
-      "Count: Posts"
+  it("is titled by its subject, the collection it is set to, with its widget's name beneath", () => {
+    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Count",
+    });
+    // A collection with no published label is named as stored.
+    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toEqual({
+      title: "drafts",
+      subtitle: "Count",
+    });
+  });
+
+  it("is titled as its widget, with no subtitle, when set to no collection", () => {
+    expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
+  });
+});
+
+describe("whether a card can be asked", () => {
+  const choices = [{ value: "a", label: "A" }];
+  const sources: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      fields: [{ name: "status", type: "string", choices }],
+    },
+    {
+      collection: "notes",
+      label: "Notes",
+      lifecycle: false,
+      fields: [{ name: "title", type: "string" }],
+    },
+  ];
+  const breakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "bars",
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+    query: { op: "groupBy", status: "all" },
+  } as unknown as DashboardWidget;
+
+  it("is asked where its collection gives it a source and a group key", () => {
+    expect(
+      widgetAsAsked(breakdown, { collection: "posts" }, sources).query
+    ).toMatchObject({ source: "collection:posts", groupBy: "status" });
+    expect(askableWith(breakdown, { collection: "posts" }, sources)).toBe(true);
+  });
+
+  it("is not asked where the collection has nothing to divide by", () => {
+    // 🔴 The query has a source, so a test of the source alone sends it, and
+    // the endpoint refuses a grouping of nothing.
+    expect(
+      widgetAsAsked(breakdown, { collection: "notes" }, sources).query?.source
+    ).toBe("collection:notes");
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
     );
-    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toBe(
-      "Count: drafts"
+  });
+
+  it("is not asked where every cell it declares falls away on the collection", () => {
+    // Its only cell needs a lifecycle: on Notes nothing is left to ask.
+    const lifecycleOnly = {
+      id: "core/lifecycle-only",
+      title: "Lifecycle only",
+      archetype: "custom",
+      settings: [{ name: "collection", type: "collection" }],
+      cells: [
+        {
+          key: "split",
+          when: "lifecycle",
+          query: { op: "groupBy", groupBy: "status", status: "all" },
+        },
+      ],
+    } as unknown as DashboardWidget;
+    // 🔴 Read from the cells as asked, an empty list fell through to "no
+    // query, so askable", and the card was offered asking nothing.
+    expect(askableWith(lifecycleOnly, { collection: "notes" }, sources)).toBe(
+      false
     );
-    expect(titleAsAsked(count, {}, [posts])).toBe("Count");
+    // The control: where the cell applies, it is asked.
+    expect(askableWith(lifecycleOnly, { collection: "posts" }, sources)).toBe(
+      true
+    );
+  });
+
+  it("judges each collection from the declaration, not from a card already asked", () => {
+    // What the settings sheet must be handed: the card as asked on Posts has
+    // Posts' group key, which a test of Notes would then carry along.
+    const asked = widgetAsAsked(breakdown, { collection: "posts" }, sources);
+    expect(asked.query?.groupBy).toBe("status");
+    expect(askableWith(asked, { collection: "notes" }, sources)).toBe(true);
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("asks a query with a source and, where grouped, a group key", () => {
+    expect(askableQuery({ source: "collection:posts", op: "list" })).toBe(true);
+    expect(askableQuery({ op: "list" })).toBe(false);
+    expect(askableQuery({ source: "collection:posts", op: "groupBy" })).toBe(
+      false
+    );
   });
 });

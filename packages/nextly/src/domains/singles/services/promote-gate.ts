@@ -53,6 +53,7 @@ import { entryWriteContext } from "../../collections/services/stored-field-read"
 import { applyFieldGroupWriteAccessToDocument } from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
+import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   type ComponentFieldResolver,
@@ -467,9 +468,12 @@ async function resolveForLocale(
     // denied allowed to change, the snapshot's own copy of a denied field
     // already equals live, so writing it changes nothing.
     applyRules: promotionRules(ctx, live),
-    // What this Single declares, so a field named like one of the store's own
-    // columns is judged as the content it is rather than skipped as metadata.
-    authoredFieldNames: declaredFieldNames(ctx.fields),
+    // What this Single declares, its field groups' schemas included, so a field
+    // named like one of the store's own columns is judged as the content it is
+    // rather than skipped as metadata.
+    authoredFieldNames: declaredFieldNames(ctx.fields, field =>
+      referencedFieldGroupFields(field, slug => ctx.componentFields?.(slug))
+    ),
     slug: ctx.slug,
     locale,
   });

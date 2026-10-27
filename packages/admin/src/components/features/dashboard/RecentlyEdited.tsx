@@ -22,6 +22,7 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
 import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
+import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import {
   LIST_CLASS,
   LIST_DETAIL_CLASS,
@@ -29,7 +30,6 @@ import {
   LIST_ROW_CLASS,
 } from "@admin/components/features/widgets/frame/geometry";
 import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
-import { CardEmpty } from "@admin/components/features/widgets/frame/states";
 import { Link } from "@admin/components/ui/link";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
@@ -40,9 +40,6 @@ import {
   recentEditRows,
   type RecentEditRow,
 } from "./recently-edited-model";
-
-/** The card's heading in its error state. */
-const TITLE = "Recently edited";
 
 /**
  * One document's row. The title is the link; an untitled document is listed
@@ -98,16 +95,21 @@ const EditRow: React.FC<{
 };
 
 export const RecentlyEdited: React.FC<WidgetComponentProps> = props => {
-  const { tier, drawn, now, read } = useListCard(props, TITLE);
+  const { tier, drawn, now, read } = useListCard(props);
   const { query } = props;
   if ("node" in read) return read.node;
   // A row this build cannot read is left out rather than drawn from guesses.
   const edits = recentEditRows(read.list);
   if (edits.length === 0) {
     return (
-      <CardEmpty
-        title={noEditsText(read.list)}
-        detail="Entries and Singles people save show here."
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: {
+            title: noEditsText(read.list),
+            detail: "Entries and Singles people save show here.",
+          },
+        }}
       />
     );
   }

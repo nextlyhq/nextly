@@ -13,7 +13,6 @@
  */
 import type { Principal } from "../../plugins/principals/types";
 import { permissionSlug } from "../../schemas/_zod/rbac";
-import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
 import {
   apiKeyWriteAllowed,
@@ -35,6 +34,8 @@ import {
   decide,
   declaresRule,
   judge,
+  outcomeAnswer,
+  ruleLetsThrough,
   plainRule,
   type AccessTarget,
   type Decision,
@@ -51,7 +52,11 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { noticeRuleNoLongerAllows } from "./rule-answer-log";
+import {
+  noticePermissionNowComesFirst,
+  noticeRuleNoLongerAllows,
+} from "./rule-answer-log";
+import { askReadAsPlainRead } from "./rule-language";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
 export type GateVerdict =
@@ -66,6 +71,41 @@ export type GateVerdict =
       readonly refusal: "insufficient" | "unauthenticated" | "failed";
       readonly error?: unknown;
     };
+
+/**
+ * How a gate answers a refusal: `failed` when the caller's access could not
+ * be read, `missing` when the caller named one entry it may not read (it is
+ * answered exactly as a missing entry is), else `refused`, in words.
+ */
+export type RefusalAnswer =
+  | { readonly answer: "failed"; readonly error: unknown }
+  | { readonly answer: "missing" }
+  | { readonly answer: "refused" };
+
+/**
+ * The answer to `refused`, a refusal of `action`. A caller that names one
+ * entry (`namesOne`) and was refused it for want of a grant is asked whether it
+ * may read it, as a plain read is asked: one it may not read is answered as
+ * missing, so the refusal does not confirm the entry exists. `ask` asks the
+ * gate's own question about another action.
+ */
+export async function answerForRefusal(
+  refused: Extract<GateVerdict, { allowed: false }>,
+  action: string,
+  namesOne: boolean,
+  ask: (action: "read") => Promise<GateVerdict>
+): Promise<RefusalAnswer> {
+  if (refused.refusal === "failed") {
+    return { answer: "failed", error: refused.error };
+  }
+  if (!namesOne || refused.refusal !== "insufficient") {
+    return { answer: "refused" };
+  }
+  const read = action === "read" ? refused : await askReadAsPlainRead(ask);
+  if (read.allowed) return { answer: "refused" };
+  if (read.refusal === "failed") return { answer: "failed", error: read.error };
+  return { answer: "missing" };
+}
 
 const ALLOWED: GateVerdict = Object.freeze({ allowed: true });
 const INSUFFICIENT: GateVerdict = Object.freeze({
@@ -178,33 +218,21 @@ async function gateVerdict(
   return staffOrVisitorVerdict(kind, q, target);
 }
 
-/** The verdict for a signed-in user, an API key or a visitor. */
+/**
+ * The verdict for a signed-in user, an API key or a visitor. A user is judged
+ * by the roles their lookup finds: role names on the `user` a caller hands in
+ * grant nothing, so super-admin authority is decided in one place.
+ */
 async function staffOrVisitorVerdict(
   kind: "collection" | "single",
   q: GateQuestion,
   target: AccessTarget
 ): Promise<GateVerdict> {
   const keyScope = q.scope?.actorType === "apiKey" ? q.scope : undefined;
-  if (!keyScope && (await claimedSuperAdmin(q, target))) return ALLOWED;
   if (q.routeAuthorized) return routeAuthorizedVerdict(kind, q, target);
   if (!q.user) return visitorVerdict(kind, q, target);
   if (keyScope) return keyVerdict(q, target, keyScope, q.user);
   return userVerdict(q, target, q.user);
-}
-
-/**
- * A super-admin role named on the `user` a caller hands in passes without a
- * lookup, as it always has.
- */
-async function claimedSuperAdmin(
-  q: GateQuestion,
-  target: AccessTarget
-): Promise<boolean> {
-  const user = q.user;
-  if (!user || !isSuperAdminContext(user)) return false;
-  return deviate("claimed-super-admin", true, () =>
-    decided(actorForUser(user.id, { executor: q.executor }), q.action, target)
-  );
 }
 
 /**
@@ -379,10 +407,14 @@ async function grantJudgedVerdict(
   );
 }
 
-/** A rule allows only by answering `true`; no rule adds no limit. */
+/**
+ * A rule allows every entry only by answering `true`; no rule adds no limit.
+ * A filter allows only the entries it matches, which this gate does not
+ * apply, so it refuses.
+ */
 function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
-  return !("threw" in outcome) && outcome.value === true;
+  return !("threw" in outcome) && outcomeAnswer(outcome).kind === "allow";
 }
 
 /**
@@ -400,7 +432,13 @@ function noticeWhereRuleAllowedBefore(
 ): void {
   if (!outcome.declared || "threw" in outcome) return;
   if (!allowedBefore(outcome.value)) return;
-  noticeRuleNoLongerAllows(q.slug, q.action, caller, outcome.value);
+  noticeRuleNoLongerAllows(
+    q.slug,
+    q.action,
+    caller,
+    outcome.value,
+    outcomeAnswer(outcome)
+  );
 }
 
 /** A visitor's rule refused only by answering `false`. */
@@ -421,8 +459,10 @@ async function decidedFrom(
   target: AccessTarget,
   outcome: RuleOutcome
 ): Promise<boolean> {
+  // Asked exactly when the decision itself would ask it, so the outcomes it
+  // is handed are the ones it reads.
   const update =
-    isLifecycle(action) && outcomeAllows(outcome)
+    isLifecycle(action) && ruleLetsThrough(outcome, target, action)
       ? await askRule(actor, "update", target)
       : undefined;
   return judge(actor, action, target, { action: outcome, update }).allowed;
@@ -508,11 +548,30 @@ async function plainRuleVerdict(
   if (await userIsSuperAdmin(userId, { executor: q.executor })) {
     return ALLOWED;
   }
+  // The permission first; a rule only narrows it. A rule of `false` refused
+  // this caller before too, so its refusal is not named as new.
+  const holds = await userHoldsPermission(userId, q.action, q.slug, {
+    executor: q.executor,
+  });
+  if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
+  if (!isLifecycle(q.action)) return verdictOf(plain);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", plain, () =>
+    await deviate("lifecycle-judged-alone", plain, () =>
       decided(looked(), q.action, target)
     )
   );
+}
+
+/**
+ * A signed-in user refused for want of the permission, where the target
+ * declares a rule for the action: named once, since that rule used to decide
+ * alone.
+ */
+function refusedWithoutPermission(q: GateQuestion): GateVerdict {
+  noticePermissionNowComesFirst(q.slug, q.action, "signed-in user");
+  return INSUFFICIENT;
 }
 
 /** A rule function, handed the caller's roles and permissions. */
@@ -529,11 +588,15 @@ async function ruleVerdict({
     return ALLOWED;
   }
   const actor = await looked();
+  // The permission first: a user without it is refused before the rule is
+  // asked, as the decision refuses.
+  if (!holdsPermission(actor, q.action, q.slug)) {
+    return refusedWithoutPermission(q);
+  }
   const outcome = await askRule(actor, q.action, target);
-  // The rule lets a signed-in user through only by answering `true`, as it
-  // has always done for a key.
-  const today = outcomeAllows(outcome);
-  if (!today) {
+  // The rule then lets the user through only by answering `true`.
+  const allowed = outcomeAllows(outcome);
+  if (!allowed) {
     noticeWhereRuleAllowedBefore(
       outcome,
       allowedUserBefore,
@@ -541,8 +604,11 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
+  if (!isLifecycle(q.action)) return verdictOf(allowed);
+  // A publish or an unpublish is judged by its own permission and rule here,
+  // where the decision also asks update's.
   return verdictOf(
-    await deviate("rule-alone-for-people", today, () =>
+    await deviate("lifecycle-judged-alone", allowed, () =>
       decidedFrom(actor, q.action, target, outcome)
     )
   );

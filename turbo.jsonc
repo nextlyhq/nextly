@@ -159,7 +159,6 @@
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
     "DEBUG",
-    "DEBUG_CACHE",
     "DEBUG_RBAC",
     "DEBUG_SCHEMA", // nextly schema apply: verbose pipeline + drizzle-kit output
     "FORCE_PATH_STYLE",
