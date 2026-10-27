@@ -9,12 +9,14 @@ import registry, { routeConfig } from "../pages/registry";
 import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
+import { pluginPageScreen, type ScreenName } from "./navigation/screen-names";
 import { routedDocumentView } from "./plugins/document-view-registry";
 import {
   arePluginPagesKnown,
   isPluginPageAddress,
   matchPluginPage,
 } from "./plugins/plugin-route-registry";
+import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
 /**
@@ -68,6 +70,12 @@ export interface RouteResult {
    * matched, which is a genuine 404 rather than a route without a section.
    */
   section?: CarriedRouteSection;
+  /**
+   * What the browser tab calls this screen, as the route declared it. Carried
+   * like `section`, so the title reads the route table's answer rather than
+   * matching the pathname a second time.
+   */
+  screenName?: ScreenName;
 }
 
 type Params = Record<string, string | string[]>;
@@ -121,6 +129,7 @@ function matchDynamicRoute(pathname: string): {
   requiredPermission?: string | string[];
   requiresBuilder?: boolean;
   section?: CarriedRouteSection;
+  screenName?: ScreenName;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
@@ -148,6 +157,7 @@ function matchDynamicRoute(pathname: string): {
         requiredPermission: config?.requiredPermission,
         requiresBuilder: config?.requiresBuilder,
         section: config?.type === "private" ? config.section : undefined,
+        screenName: config?.screenName,
         pattern,
       };
     }
@@ -239,6 +249,18 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
 }
 
 // Main route resolution function
+// Fetches the page an admin address leads to, so a link hovered or focused
+// before its click starts the download early. An address outside the admin,
+// or one leading to a page that isn't fetched lazily, does nothing.
+setRoutePreloader(href => {
+  if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return;
+  const [pathname] = href.split(/[?#]/, 1);
+  const { Component } = resolveRoute(pathname, "");
+  if ("preload" in Component && typeof Component.preload === "function") {
+    Component.preload();
+  }
+});
+
 export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Exact match
   if (registry[pathname]) {
@@ -251,6 +273,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: config?.requiredPermission,
       requiresBuilder: config?.requiresBuilder,
       section: config?.type === "private" ? config.section : undefined,
+      screenName: config?.screenName,
     };
   }
 
@@ -271,6 +294,9 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: pluginPage.requiredPermission,
       pluginComponentPath: pluginPage.component,
       section: pluginPage.section ?? "plugins",
+      // A plugin declares no name for its page; the host names it from what
+      // it already holds, the plugin's menu label for it or its address.
+      screenName: pluginPageScreen,
     };
   }
 
@@ -304,6 +330,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
+      screenName: dynamic.screenName,
     };
   }
 
@@ -313,5 +340,8 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
     params: {},
     searchParams: {},
     routeType: "private",
+    // No table entry answers this address, so the tab says what the screen
+    // shows instead.
+    screenName: "Page Not Found",
   };
 }

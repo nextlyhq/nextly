@@ -12,7 +12,7 @@ import { declaredWidget } from "../domains/widgets/declaration/declared-widgets"
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
 
-import { prepareCards } from "./widget-cards";
+import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import {
   answerReadyQueries,
@@ -128,6 +128,19 @@ const declarations: Record<string, unknown> = {
       load: async () => {
         throw new Error("the row for customer 42 at secret@example.com");
       },
+      view: "figure",
+    },
+  },
+  // A needed setting with no value, and a `shows` that would say no: which one decides?
+  "acme/needs-maybe": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/needs-maybe",
+      size: { default: { w: 12, h: 3 } },
+      settings: { collection: { type: "collection" } },
+      shows: (input: unknown) => showsPredicate(input),
+      load: needsLoad,
       view: "figure",
     },
   },
@@ -647,5 +660,137 @@ describe("a card's load that fails", () => {
       owner: "plugin @acme/shop",
       widget: "acme/dated",
     });
+  });
+});
+
+describe("whether a card is shown to the person asking, without its load", () => {
+  /** The card of `widget` placed with `config`, asked as the batch asks one. */
+  function shown(widget: string, config?: Record<string, unknown>) {
+    return cardIsShownTo(
+      declarations[widget] as never,
+      {
+        id: `c-${widget.slice(5)}`,
+        widgetId: widget,
+        w: 12,
+        h: 3,
+        removed: false,
+        ...(config === undefined ? {} : { config }),
+      },
+      batch,
+      {
+        signal: new AbortController().signal,
+        scope: createBatchScope().forOwner("plugin @acme/shop"),
+        now: new Date(Date.UTC(2026, 9, 22)),
+      }
+    );
+  }
+
+  it("is shown when nothing says otherwise, and its load is never run", async () => {
+    await expect(shown("acme/orders", { items: 3 })).resolves.toBe(true);
+    expect(ordersFunction).not.toHaveBeenCalled();
+  });
+
+  it("is not shown to a person its access refuses, by predicate or by a collection", async () => {
+    accessPredicate.mockImplementation(() => false);
+    await expect(shown("acme/gated")).resolves.toBe(false);
+    accessPredicate.mockImplementation(() => true);
+    // The control: the same card, admitted.
+    await expect(shown("acme/gated")).resolves.toBe(true);
+    check.mockImplementation(async (raw: unknown) => {
+      if ((raw as { source: string }).source === "collection:customers") {
+        throw new Error("forbidden");
+      }
+      return raw as WidgetQuery;
+    });
+    await expect(shown("acme/reads")).resolves.toBe(false);
+    expect(gatedLoad).not.toHaveBeenCalled();
+    expect(readsLoad).not.toHaveBeenCalled();
+  });
+
+  it("is shown while a setting it needs has no value, with shows not asked", async () => {
+    // The card asks for that setting itself; left out, the step that fixes it would go too.
+    showsPredicate.mockImplementation(() => false);
+    await expect(shown("acme/needs-maybe")).resolves.toBe(true);
+    expect(showsPredicate).not.toHaveBeenCalled();
+    // The control: with the setting given, the same shows decides, and says no.
+    await expect(
+      shown("acme/needs-maybe", { collection: "orders" })
+    ).resolves.toBe(false);
+    expect(showsPredicate).toHaveBeenCalledOnce();
+    expect(needsLoad).not.toHaveBeenCalled();
+  });
+
+  it("is shown only when shows answers true, handed what load would be", async () => {
+    await expect(shown("acme/maybe", { items: 3 })).resolves.toBe(true);
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      settings: { items: 3 },
+      user: { id: "reader" },
+    });
+    showsPredicate.mockImplementation(() => "yes");
+    await expect(shown("acme/maybe")).resolves.toBe(false);
+    expect(maybeLoad).not.toHaveBeenCalled();
+  });
+
+  it("is not shown when shows throws, which is logged as the widget's", async () => {
+    showsPredicate.mockImplementation(() => {
+      throw new Error("lookup failed");
+    });
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      await expect(shown("acme/maybe")).resolves.toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "declared-widget-not-judged",
+          logContext: expect.objectContaining({
+            owner: "plugin @acme/shop",
+            widget: "acme/maybe",
+            reason: "widget-shows-threw",
+          }),
+        })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is not shown when shows does not settle within the card's budget", async () => {
+    vi.useFakeTimers();
+    showsPredicate.mockImplementation(() => new Promise(() => {}));
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      const judging = shown("acme/maybe");
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      await expect(judging).resolves.toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "widget-shows-timed-out",
+          }),
+        })
+      );
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

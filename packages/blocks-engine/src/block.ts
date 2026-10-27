@@ -246,8 +246,55 @@ export interface BlockEditorMeta<P extends object = Record<string, unknown>> {
   keywords?: string[];
   /** Named preset variations offered when inserting. */
   variations?: BlockVariation<P>[];
-  /** Custom inspector/canvas component for this block. */
+  /**
+   * The block's own inspector, drawn in place of the controls the editor would
+   * generate from its `props`. A component path (`"module#Export"`) that the
+   * app's generated component map imports, given the inspector props the
+   * engine also exports.
+   *
+   * Only the content controls are replaced: the editor still draws the
+   * block's identity, its CSS id and attributes, and its Style tab, because
+   * those are the same for every block and a plugin redrawing them would be a
+   * second, drifting copy. A path nothing registered falls back to the
+   * generated controls.
+   */
   component?: ComponentPath;
+}
+
+/**
+ * What a block's custom inspector ({@link BlockEditorMeta.component}) is given.
+ *
+ * @experimental The contract will grow with the editor's controls registry, so
+ *   a plugin should expect additions.
+ *
+ * Inspector-only: the canvas draws the block with its `render` as it draws
+ * every other block, so a custom inspector never changes what the page shows
+ * except through `commit`.
+ */
+export interface BlockInspectorProps<
+  P extends object = Record<string, unknown>,
+> {
+  /** The selected node, as the document holds it now. */
+  readonly node: BlockNode;
+  /** The node's props, as stored. Read these rather than `node.props`'s type. */
+  readonly props: Readonly<Partial<P>>;
+  /**
+   * Set one prop. The same path the generated controls write through, so the
+   * change is one step in the editor's history and is validated as theirs is.
+   *
+   * Refused, with nothing written, while the block is read-only, and inside
+   * an area locked `"contentOnly"` for any prop not declared
+   * `role: "content"`, whatever the component does: the flag below is for
+   * drawing, and the refusal is the host's.
+   */
+  readonly commit: (name: Extract<keyof P, string>, value: unknown) => void;
+  /**
+   * Whether the block may not be changed at all: locked in Layers. Draw the
+   * controls disabled while it is true. Inside an area locked
+   * `"contentOnly"` it stays false, because the block's content props may
+   * still change there; only those commits are accepted.
+   */
+  readonly readOnly: boolean;
 }
 
 /**

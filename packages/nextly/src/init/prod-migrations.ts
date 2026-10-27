@@ -50,6 +50,9 @@ interface MigrateCoreLike {
     logger: LoggerLike;
     lockMode: "wait";
     ttlSeconds?: number;
+    lockWaitMs?: number;
+    lockCommand?: string;
+    lockReleaseOnInterrupt?: boolean;
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
@@ -96,36 +99,38 @@ export interface RunProdMigrationsArgs {
   };
   /** Plugin additions to Builder entities, when the caller has them. */
   deferredExtends?: readonly unknown[];
+  /**
+   * How long the boot waits for a held schema lock, in milliseconds. Absent, it waits as a
+   * command-line run does, about a minute; a test shortens it.
+   */
+  lockWaitMs?: number;
   adapter: AdapterLike;
   logger: LoggerLike;
   /** Injected for tests; defaults to the real migrateCore + ledger bootstrap. */
   migrateCore?: MigrateCoreLike;
 }
 
-/** The refusal, built in one place so its code and wording cannot drift. */
-function bootMigrationsNotRun(dialect: string): NextlyError {
-  // Dialect-specific, because the recovery differs and the wrong advice is
-  // worse than none. `forceUnlock` deletes the Postgres lock ROW; it returns
-  // immediately for every other dialect. MySQL's lock is a session-scoped
-  // `GET_LOCK`, so there IS no stale row to clear — it is held by a live
-  // connection and dies with it, which makes "restart the holder" the only
-  // recovery and `--force-unlock` a no-op that would waste an operator's time
-  // during an incident.
-  const recovery =
-    dialect === "postgresql"
-      ? "This usually resolves on restart once the other instance finishes; " +
-        "if the lock is stale, clear it with `nextly migrate --force-unlock`."
-      : "The lock is held by another live connection and is released when that " +
-        "connection ends, so this usually resolves on restart once the other " +
-        "instance finishes or is stopped.";
-
+/**
+ * The refusal, built in one place so its code and wording cannot drift.
+ *
+ * `held` is the lock's own refusal when there is one: it names what holds the schema lock, since
+ * when, and when the lock lapses if that holder has gone, which is what an operator reading a
+ * failed start needs in order to tell a long migration on another instance from a stuck one.
+ */
+function bootMigrationsNotRun(held?: NextlyError): NextlyError {
+  const detail =
+    held === undefined ? "" : ` The lock's holder: ${held.publicMessage}`;
   return new NextlyError({
     code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
     publicMessage:
-      "Boot migrations did not run: the migrate lock was still held after " +
+      "Boot migrations did not run: the schema lock was still held after " +
       "waiting. Refusing to start rather than serve against a schema that may " +
-      "not match this build. " +
-      recovery,
+      "not match this build. This usually resolves on restart once the other " +
+      "run finishes; a holder that has stopped lets the lock lapse on its own, " +
+      "and `nextly migrate --force-unlock` clears it at once when no other run " +
+      "is in progress." +
+      detail,
+    cause: held,
   });
 }
 
@@ -232,7 +237,13 @@ async function applyBootMigrations(
     adapter,
     migrationsDir: run.migrationsDir,
     logger: run.coreLogger,
+    // Waits as a command-line run does, and refuses to start below when the lock stays held.
     lockMode: "wait",
+    lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    // Inside a server: a SIGTERM may begin a graceful shutdown that lets the work run on, so the
+    // lock is left to lapse within one lease rather than released under it.
+    lockReleaseOnInterrupt: false,
+    ...(args.lockWaitMs !== undefined ? { lockWaitMs: args.lockWaitMs } : {}),
     ttlSeconds: args.config.db.migrateLockTtlSeconds,
     knownJunctions: resolvedSchema.knownJunctions,
     // The same sets the CLI applies, from the same config: a boot that
@@ -241,24 +252,22 @@ async function applyBootMigrations(
     ...(await pluginMigrationArgs(args.config.plugins ?? [])),
     ensureLedger: run.ensureLedger,
   });
-  // REFUSES rather than serving. `ran: false` means the migrate lock stayed
-  // held past the wait deadline, so this process never learned whether the
-  // schema it is about to serve matches the code. The tempting reading — "the
-  // holder did the work, carry on" — is an assumption: the holder may have
-  // died, been killed, or still be mid-flight, and a lock timing out says
-  // nothing about whether migrations ran.
+  // REFUSES rather than serving. A held lock no longer comes back as
+  // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the
+  // failure path below turns into this same refusal), but a run that did not
+  // run is still not one to serve after: this process never learned whether
+  // the schema it is about to serve matches the code.
   //
   // `applied` is 0 here and 0 on an up-to-date database, which is why this
-  // previously logged `complete (0 applied)` and started anyway. On a rolling
+  // once logged `complete (0 applied)` and started anyway. On a rolling
   // deploy that is the second replica serving traffic against a schema it
   // never migrated.
   //
   // Failing startup is recoverable and quiet in an orchestrator: the process
   // exits, the platform restarts it, and by then the holder has usually
-  // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
-  // which is the intervention the situation actually calls for.
+  // finished; a holder that died lets the lock lapse within one lease.
   if (!ran) {
-    throw bootMigrationsNotRun(adapter.dialect);
+    throw bootMigrationsNotRun();
   }
   logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
 
@@ -294,20 +303,16 @@ async function applyBootMigrations(
  * The refusal a failed run amounts to, or undefined when the failure is one
  * the app can serve through.
  *
- * Two fatal shapes, and MySQL is why the second is here: `withMigrateLock`
- * reports a busy lock as `ran: false` on Postgres but THROWS
- * `NEXTLY_MIGRATE_LOCK_BUSY` on MySQL when the wait expires mid-flight.
- * Rethrowing only the first would have left MySQL serving the unmigrated
- * schema this whole change exists to prevent.
+ * Two fatal shapes: the refusal itself, and the schema lock's own refusal,
+ * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
+ * ends with the lock still held. Either means this process never learned
+ * whether the schema it would serve matches its code.
  */
-function fatalBootMigrationError(
-  err: unknown,
-  dialect: string
-): NextlyError | undefined {
+function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
-    return bootMigrationsNotRun(dialect);
+    return bootMigrationsNotRun(err);
   }
   return undefined;
 }
@@ -325,7 +330,7 @@ async function settleFailedBootMigrations(
   // recoverable by running `nextly migrate` against a database the app can
   // still usefully serve; this one means the app does not know what it is
   // serving, which is the case the refusal exists for.
-  const fatal = fatalBootMigrationError(err, args.adapter.dialect);
+  const fatal = fatalBootMigrationError(err);
   if (fatal !== undefined) {
     // Recorded before rethrowing: `registerServices` checks it before it
     // connects anything, so every later boot attempt in this process refuses

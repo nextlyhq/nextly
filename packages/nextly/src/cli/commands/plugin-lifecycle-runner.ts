@@ -368,18 +368,16 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     const { withMigrateLock } = await import(
       "../../domains/schema/pipeline/locks"
     );
-    const outcome = await withMigrateLock(
-      drizzleAdapter.getDrizzle(),
-      dialect,
-      work,
-      {
-        mode: "wait",
-        logger: {
-          warn: m => context.logger.warn(m),
-          info: m => context.logger.info(m),
-        },
-      }
-    );
+    const outcome = await withMigrateLock(drizzleAdapter, dialect, work, {
+      // The schema lock, which `migrate` and every other schema change take. A held one is
+      // waited for, about a minute, and then the command stops naming its holder.
+      command: "nextly plugins install/uninstall",
+      mode: "wait",
+      logger: {
+        warn: m => context.logger.warn(m),
+        info: m => context.logger.info(m),
+      },
+    });
     if (!outcome.ran) {
       throw new NextlyError({
         code: "CONFLICT",
