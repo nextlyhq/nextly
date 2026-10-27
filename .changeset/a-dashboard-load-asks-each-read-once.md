@@ -38,3 +38,5 @@ Three reads were asked twice on every load:
 - **The permission list:** every caller asked again as it mounted. An answer now counts for two seconds, so one screen's callers share it and the next screen asks afresh, where a changed role is seen.
 
 That is three fewer requests per dashboard load, for every reader.
+
+A card missing a setting now says "No collection chosen yet" beside its "Choose collection" button, so the message no longer repeats the button.
