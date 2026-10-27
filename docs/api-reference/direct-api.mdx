@@ -67,6 +67,8 @@ const visiblePosts = await nextly.find({
 
 Without a `user`, the call is judged as a signed-out visitor: it can read where no rule names the read, and a create, update or delete needs a rule that allows it.
 
+A collection's `read` rule may also answer with a filter, which limits a list and its count to the entries it matches (experimental; see [A read rule that answers with a filter](/docs/permissions#a-read-rule-that-answers-with-a-filter-experimental)).
+
 `overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
 
 To run a collection or Single operation as a plugin-defined signed-in person, pass the person as `principal` (`@experimental`). Access rules always apply, so `overrideAccess` is not needed; the call is refused if it also sets `overrideAccess: true`, `trusted` or `frameworkFilter`, or names a `user` or an API key. A person is named per call: `new Nextly({ principal })` and `requireNextly({ principal })` are refused. See [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).

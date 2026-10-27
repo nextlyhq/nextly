@@ -640,6 +640,7 @@ export class MySqlAdapter extends DrizzleAdapter {
   ): Promise<T> {
     let connection: OwnConnection;
     try {
+      // mysql2's connection already satisfies `OwnConnection`, so it is assigned as it comes.
       connection = await mysql.createConnection(this.buildConnectionConfig());
     } catch (error) {
       throw this.classifyError(error);

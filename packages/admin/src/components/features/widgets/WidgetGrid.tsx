@@ -156,7 +156,7 @@ function askedWith(
   dashboardWidth: number | undefined,
   editing: boolean,
   sources: readonly PublishedContentSource[] | undefined
-): Array<ArrangedWidget & { tier?: SizeTier; editing?: true }> {
+): Array<ArrangedWidget & { tier?: SizeTier; h?: number; editing?: true }> {
   return rows.map(row => {
     // A card core answers on the server is asked by its id at rest, and with
     // the settings it is drawn with while customising, when they may not be
@@ -164,13 +164,12 @@ function askedWith(
     if (row.widget.serverData === true) {
       return editing ? { ...row, editing: true as const } : row;
     }
-    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
-    // the query is asked before the card can measure itself, and sized for that tier.
-    const tier = predictedTier(
-      drawnSize(row.size, row.widget.size).w,
-      dashboardWidth
-    );
-    const sized = tier ? { ...row, tier } : row;
+    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span,
+    // and the height its rows are counted from: the query is asked before the card can measure
+    // itself, and sized for both.
+    const size = drawnSize(row.size, row.widget.size);
+    const tier = predictedTier(size.w, dashboardWidth);
+    const sized = tier ? { ...row, tier, h: size.h } : row;
     const widget = widgetAsAsked(row.widget, row.config, sources);
     // The declared query, or cells, travel with the asked ones, so the batch keys the card by
     // what it declares and a change of its settings asks this card again alone.
@@ -422,7 +421,7 @@ export function WidgetGrid(): JSX.Element {
     cellSlots,
     fetchingPlacementIds,
     updatedAtFor,
-    fetchedTierFor,
+    fetchedSizeFor,
     requested,
     counted,
     failed,
@@ -538,7 +537,7 @@ export function WidgetGrid(): JSX.Element {
                   cellSlots={cellSlots}
                   requested={requested}
                   updatedAtFor={updatedAtFor}
-                  fetchedTierFor={fetchedTierFor}
+                  fetchedSizeFor={fetchedSizeFor}
                   fetchingPlacementIds={fetchingPlacementIds}
                   retry={retry}
                   announcement={announcement}

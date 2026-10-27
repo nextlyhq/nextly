@@ -19,7 +19,7 @@ import { CardEmpty } from "../../frame/states";
 import { CardTierContext } from "../../frame/tier";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
-const widget = (select?: string[]): DashboardWidget =>
+const widget = (select?: string[], limit?: number): DashboardWidget =>
   ({
     id: "acme/posts",
     title: "Recent posts",
@@ -29,6 +29,7 @@ const widget = (select?: string[]): DashboardWidget =>
       source: "collection:posts",
       op: "list",
       ...(select && { select }),
+      ...(limit !== undefined && { limit }),
     },
   }) as DashboardWidget;
 
@@ -66,11 +67,19 @@ describe("the table archetype", () => {
     expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
   });
 
-  it("falls back to the field name when the source has no label", () => {
-    // A field name is a poor heading, but it is true — which an invented one
-    // derived from the identifier would not be.
-    draw(listOf([{ slug: "hello" }], [{ name: "slug" }]), widget(["slug"]));
-    expect(screen.getByText("slug")).toBeInTheDocument();
+  it("falls back to the field name, written as the admin writes any field's, when the source has no label", () => {
+    // 🔴 The admin names a field one way on every surface (`lib/field-label`): the entry list
+    // heads this column "Slug", so a card heading it "slug" names one field two ways.
+    draw(
+      listOf(
+        [{ title: "Hello", slug: "hello" }],
+        [{ name: "title", label: "Title" }, { name: "slug" }]
+      ),
+      widget(["title", "slug"])
+    );
+    expect(
+      screen.getAllByRole("columnheader").map(node => node.textContent)
+    ).toEqual(["Title", "Slug"]);
   });
 
   it("draws only the columns the SERVER described, not those selected", () => {
@@ -79,12 +88,20 @@ describe("the table archetype", () => {
     // the table from the declaration would print "Salary" above a column every
     // row leaves empty.
     draw(
-      listOf([{ title: "Hello" }], [{ name: "title", label: "Title" }]),
-      widget(["title", "salary"])
+      listOf(
+        [{ title: "Hello", views: 3 }],
+        [
+          { name: "title", label: "Title" },
+          { name: "views", label: "Views" },
+        ]
+      ),
+      widget(["title", "salary", "views"])
     );
     expect(screen.getByText("Title")).toBeInTheDocument();
     expect(screen.queryByText(/salary/i)).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("widget-table-heading")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("columnheader").map(node => node.textContent)
+    ).toEqual(["Title", "Views"]);
   });
 
   it("refuses rows the server did not describe rather than reading select", () => {
@@ -113,22 +130,43 @@ describe("the table archetype", () => {
     draw(listOf([]), widget(["title"]));
     // The frame's one empty state, not a table of nothing.
     expect(screen.getByTestId("card-empty")).toBeInTheDocument();
-    expect(screen.queryByTestId("widget-table")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-table")).not.toBeInTheDocument();
   });
 
-  it("caps the rows it draws", () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({ title: `Row ${i}` }));
-    draw(listOf(many, [{ name: "title" }]), widget(["title"]));
-    expect(screen.getAllByTestId("widget-table-row")).toHaveLength(5);
+  it("draws the card's number of items, five when it names none", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      title: `Row ${i}`,
+      views: i,
+    }));
+    draw(
+      listOf(many, [{ name: "title" }, { name: "views" }]),
+      widget(["title", "views"])
+    );
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
+  });
+
+  it("caps the rows it draws at ten, whatever the card asks for", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      title: `Row ${i}`,
+      views: i,
+    }));
+    draw(
+      listOf(many, [{ name: "title" }, { name: "views" }]),
+      widget(["title", "views"], 25)
+    );
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(10);
   });
 
   it("does NOT stringify an object cell into [object Object]", () => {
     draw(
-      listOf([{ title: { en: "Localised" } }], [{ name: "title" }]),
-      widget(["title"])
+      listOf(
+        [{ title: { en: "Localised" }, views: { total: 3 } }],
+        [{ name: "title" }, { name: "views" }]
+      ),
+      widget(["title", "views"])
     );
     expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("widget-table-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(1);
   });
 
   it("prints a zero rather than dropping it", () => {

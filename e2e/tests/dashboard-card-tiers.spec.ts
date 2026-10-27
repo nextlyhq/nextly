@@ -172,7 +172,7 @@ test("a 12-column card on a 900px dashboard draws its rows as a table", async ({
   await page.reload();
   await sizeDashboard(page, 900);
   await expect(
-    cellOf(page, RECENT_ENTRIES).getByTestId("widget-table")
+    cellOf(page, RECENT_ENTRIES).getByTestId("list-card-table")
   ).toBeVisible();
 });
 

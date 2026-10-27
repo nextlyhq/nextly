@@ -58,6 +58,10 @@ export const DEVIATIONS = [
   // The schema list shows a collection to whoever holds its read permission,
   // without reading the collection's read rule.
   "schema-list-ignores-rules",
+  // A collection's read rule that answers a well-formed filter is refused by
+  // a way in that does not apply the filter, where the decision allows the
+  // entries it matches.
+  "filter-not-applied",
 ] as const;
 
 export type Deviation = (typeof DEVIATIONS)[number];

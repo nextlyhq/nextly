@@ -62,7 +62,7 @@ const branding = {
         id: "acme/recent",
         title: "recent list",
         archetype: "list",
-        size: { default: { w: 6, h: 3 } },
+        size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
         query: {
           source: "collection:recent",
           op: "list",
@@ -196,8 +196,8 @@ describe("when the arrangement cannot be read", () => {
 
 describe("the first request a card makes", () => {
   it("is sized for the width its arrangement gives it, not its declared one", async () => {
-    // On 680 px a six-column card is 332 px wide, small: three rows, asked as four. This person's
-    // arrangement draws the same card full width, 680 px, medium: eight rows, asked as nine.
+    // As declared, the card is three rows tall: two rows, asked as three. This person's
+    // arrangement draws it six rows tall: seven rows of its eight, asked as eight.
     // 🔴 A grid that sized from the declaration while the arrangement was on its way would ask
     // four first. The declared fallback (a FAILED read) cannot tell the two apart, so this is
     // the case that does.
@@ -210,7 +210,7 @@ describe("the first request a card makes", () => {
           id: "p-recent",
           widgetId: "acme/recent",
           w: 12,
-          h: 3,
+          h: 6,
           removed: false,
         },
       ],
@@ -235,6 +235,6 @@ describe("the first request a card makes", () => {
     const first = (
       firstBody as { queries: { source: string; limit?: number }[] }
     ).queries.find(query => query.source === "collection:recent");
-    expect(first?.limit).toBe(9);
+    expect(first?.limit).toBe(8);
   });
 });
