@@ -8,21 +8,33 @@
  * differently.
  */
 
-type Version = readonly [number, number, number];
+/** A version's numbers, and whether it is a prerelease (`16.4.1-canary.1`). */
+type Version = readonly [number, number, number] & { prerelease?: boolean };
 
 function parseVersion(text: string): Version {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim());
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/.exec(text.trim());
   if (!match) throw new Error(`not a version: ${text}`);
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  return Object.assign(
+    [Number(match[1]), Number(match[2]), Number(match[3])] as const,
+    {
+      prerelease: match[4] !== undefined,
+    }
+  );
 }
 
+/** Older first; of two with the same numbers, a prerelease comes before its release, as in semver. */
 function compare(a: Version, b: Version): number {
-  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  return (
+    a[0] - b[0] ||
+    a[1] - b[1] ||
+    a[2] - b[2] ||
+    Number(Boolean(b.prerelease)) - Number(Boolean(a.prerelease))
+  );
 }
 
 /**
  * Negative when `a` is older than `b`, positive when newer, 0 when equal.
- * A prerelease suffix is ignored: `17.0.0-canary.1` compares as `17.0.0`.
+ * A prerelease is older than its release: `16.4.1-canary.1` is below `16.4.1`.
  */
 export function compareVersions(a: string, b: string): number {
   return compare(parseVersion(a), parseVersion(b));
@@ -35,6 +47,10 @@ export function compareVersions(a: string, b: string): number {
  * the test that reads it.
  */
 function satisfiesComparator(version: Version, comparator: string): boolean {
+  // None of these ranges names a prerelease, and semver admits a prerelease
+  // only to a range that names one of the same version: a package manager
+  // reading the published peer ranges refuses `16.4.1-canary.1` too.
+  if (version.prerelease) return false;
   const caret = /^\^(\d+\.\d+\.\d+)$/.exec(comparator);
   if (caret) {
     const floor = parseVersion(caret[1]);
