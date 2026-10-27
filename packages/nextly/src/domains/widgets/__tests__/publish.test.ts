@@ -23,7 +23,7 @@ const def = (
   id,
   title: id,
   archetype: "metric",
-  defaultSize: "sm",
+  size: { default: { w: 3, h: 2 } },
   query: { source: "collection:posts", op: "count" },
   ...over,
 });
@@ -46,7 +46,7 @@ describe("publishableWidgets", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:posts", op: "count" },
       },
     ]);
@@ -69,7 +69,7 @@ describe("publishableWidgets", () => {
     registerWidget(
       def("acme/edits", {
         archetype: "list",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         query: { source: "system:edits", op: "list", select: ["entryTitle"] },
       })
     );

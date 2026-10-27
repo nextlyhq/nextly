@@ -21,6 +21,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 
@@ -37,17 +38,18 @@ const CARDS = [
 interface Layout {
   version: number;
   scope: string;
-  widgets: Record<string, { defaultWidth: string }>;
+  widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
   }>;
 }
 
 /**
- * Place each of the four cards, at the width a new one starts at and not removed, in the saved
+ * Place each of the four cards, at the size a new one starts at and not removed, in the saved
  * layout: not every card may be drawn full width.
  */
 async function placeCards(page: Page): Promise<void> {
@@ -66,15 +68,16 @@ async function placeCards(page: Page): Promise<void> {
   const others = layout.placements.filter(
     placement => !CARDS.includes(placement.widgetId as (typeof CARDS)[number])
   );
-  const placements = [
-    ...CARDS.map(widgetId => ({
+  const placed = [];
+  for (const widgetId of CARDS) {
+    placed.push({
       id: `e2e-${widgetId.replace("/", "-")}`,
       widgetId,
-      width: layout.widgets[widgetId].defaultWidth,
+      ...(await defaultSizeOf(page, widgetId)),
       removed: false,
-    })),
-    ...others,
-  ];
+    });
+  }
+  const placements = [...placed, ...others];
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: { placements, version: layout.version, scope: layout.scope },
   });

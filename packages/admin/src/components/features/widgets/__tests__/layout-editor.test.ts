@@ -25,16 +25,23 @@ import {
   removePlacement,
   restorePlacement,
   setPlacementConfig,
-  setPlacementWidth,
+  setPlacementSize,
 } from "../layout-editor";
 
-import { MAX_PLACEMENTS, layoutSizeProblem } from "nextly/config";
+import { MAX_PLACEMENTS, layoutSizeProblem, sizeBounds } from "nextly/config";
+
+/** Bounds that allow every size the grid can draw. */
+const ANY_SIZE = sizeBounds({
+  default: { w: 1, h: 2 },
+  max: { w: 12, h: 12 },
+});
 
 function placements(...ids: string[]): WidgetPlacement[] {
   return ids.map(id => ({
     id,
     widgetId: `core/${id}`,
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
   }));
 }
@@ -254,37 +261,77 @@ describe("a drag released over a drop line", () => {
   });
 });
 
-describe("choosing a width", () => {
-  it("sets an allowed width on that card only", () => {
-    const next = setPlacementWidth(placements("a", "b"), "a", "half", [
-      "half",
-      "full",
+describe("choosing a size", () => {
+  /** From 4 columns by 2 rows up to 8 by 4, starting at 6 by 3. */
+  const bounds = {
+    default: { w: 6, h: 3 },
+    min: { w: 4, h: 2 },
+    max: { w: 8, h: 4 },
+  };
+
+  it("sets a size within the bounds on that card only", () => {
+    const next = setPlacementSize(
+      placements("a", "b"),
+      "a",
+      { w: 6, h: 4 },
+      bounds
+    );
+    expect(next.map(p => [p.w, p.h])).toEqual([
+      [6, 4],
+      [12, 3],
     ]);
-    expect(next.map(p => p.width)).toEqual(["half", "full"]);
   });
 
-  it("refuses a width the widget does not allow", () => {
-    // The server refuses a CHANGED width outside the widget's list, so a draft
-    // holding one could never be saved.
+  it("sets the bounds' own ends", () => {
     const list = placements("a");
-    expect(setPlacementWidth(list, "a", "quarter", ["half", "full"])).toEqual(
+    expect(
+      setPlacementSize(list, "a", { w: 4, h: 2 }, bounds)[0]
+    ).toMatchObject({ w: 4, h: 2 });
+    expect(
+      setPlacementSize(list, "a", { w: 8, h: 4 }, bounds)[0]
+    ).toMatchObject({ w: 8, h: 4 });
+  });
+
+  it("refuses a size past the bounds, in either direction", () => {
+    // 🔴 A card can never be resized past its widget's bounds: the server holds a CHANGED size
+    // to them, so a draft holding one could never be saved.
+    const list = placements("a");
+    expect(setPlacementSize(list, "a", { w: 9, h: 3 }, bounds)).toEqual(list);
+    expect(setPlacementSize(list, "a", { w: 6, h: 5 }, bounds)).toEqual(list);
+    expect(setPlacementSize(list, "a", { w: 3, h: 3 }, bounds)).toEqual(list);
+    expect(setPlacementSize(list, "a", { w: 6, h: 1 }, bounds)).toEqual(list);
+    expect(setPlacementSize(list, "a", { w: 6, h: 3 }, undefined)).toEqual(
       list
     );
-    expect(setPlacementWidth(list, "a", "quarter", undefined)).toEqual(list);
+  });
+
+  it("refuses a size the grid could not draw, whatever the bounds allow", () => {
+    const list = placements("a");
+    expect(setPlacementSize(list, "a", { w: 4.5, h: 3 }, ANY_SIZE)).toEqual(
+      list
+    );
+    expect(setPlacementSize(list, "a", { w: 13, h: 3 }, ANY_SIZE)).toEqual(
+      list
+    );
+    // The control: a drawable size in the same bounds is set.
+    expect(
+      setPlacementSize(list, "a", { w: 4, h: 3 }, ANY_SIZE)[0]
+    ).toMatchObject({ w: 4, h: 3 });
   });
 });
 
 describe("removing and restoring", () => {
-  it("removing KEEPS the card, its place, its width and its settings", () => {
+  it("removing KEEPS the card, its place, its size and its settings", () => {
     const list = placements("a", "b", "c").map(p =>
-      p.id === "b" ? { ...p, width: "third", config: { limit: 5 } } : p
+      p.id === "b" ? { ...p, w: 4, h: 3, config: { limit: 5 } } : p
     );
     const removed = removePlacement(list, "b");
     expect(ids(removed)).toEqual(["a", "b", "c"]);
     expect(removed[1]).toEqual({
       id: "b",
       widgetId: "core/b",
-      width: "third",
+      w: 4,
+      h: 3,
       removed: true,
       config: { limit: 5 },
     });
@@ -297,12 +344,13 @@ describe("removing and restoring", () => {
 });
 
 describe("adding a widget", () => {
-  it("appends it at the widget's default width", () => {
-    const added = addPlacement(placements("a"), "core/z", "third");
+  it("appends it at the widget's default size", () => {
+    const added = addPlacement(placements("a"), "core/z", { w: 4, h: 3 });
     expect(ids(added).slice(0, 1)).toEqual(["a"]);
     expect(added[1]).toMatchObject({
       widgetId: "core/z",
-      width: "third",
+      w: 4,
+      h: 3,
       removed: false,
     });
   });
@@ -310,23 +358,23 @@ describe("adding a widget", () => {
   it("names the first card of a widget after the widget", () => {
     // The id the default dashboard gives that card, so a card added back is
     // the same card the default would have drawn.
-    expect(addPlacement(placements("a"), "core/z", "full")[1].id).toBe(
+    expect(addPlacement(placements("a"), "core/z", { w: 12, h: 3 })[1].id).toBe(
       "core/z"
     );
   });
 
   it("mints a fresh id for a second card of the same widget", () => {
-    const once = addPlacement([], "core/z", "full");
-    const twice = addPlacement(once, "core/z", "full");
+    const once = addPlacement([], "core/z", { w: 12, h: 3 });
+    const twice = addPlacement(once, "core/z", { w: 12, h: 3 });
     expect(twice[1].id).not.toBe("core/z");
     expect(new Set(ids(twice)).size).toBe(2);
   });
 
   it("mints a fresh id when another card already holds the widget's id", () => {
     const holder: WidgetPlacement[] = [
-      { id: "core/z", widgetId: "core/other", width: "full", removed: false },
+      { id: "core/z", widgetId: "core/other", w: 12, h: 3, removed: false },
     ];
-    const added = addPlacement(holder, "core/z", "full");
+    const added = addPlacement(holder, "core/z", { w: 12, h: 3 });
     expect(added[1].id).not.toBe("core/z");
   });
 
@@ -340,26 +388,27 @@ describe("adding at the write contract's ceiling", () => {
     return Array.from({ length: MAX_PLACEMENTS }, (_, i) => ({
       id: `p${i}`,
       widgetId: `core/w${i}`,
-      width: "full",
+      w: 12,
+      h: 3,
       removed: false,
     }));
   }
 
   it("refuses rather than building an arrangement no write can carry", () => {
-    expect(addPlacement(full(), "core/extra", "full")).toHaveLength(
+    expect(addPlacement(full(), "core/extra", { w: 12, h: 3 })).toHaveLength(
       MAX_PLACEMENTS
     );
   });
 
   it("returns a NEW array even when it refuses", () => {
     const list = full();
-    expect(addPlacement(list, "core/extra", "full")).not.toBe(list);
+    expect(addPlacement(list, "core/extra", { w: 12, h: 3 })).not.toBe(list);
   });
 
   it("still adds one below the ceiling", () => {
-    expect(addPlacement(full().slice(1), "core/extra", "full")).toHaveLength(
-      MAX_PLACEMENTS
-    );
+    expect(
+      addPlacement(full().slice(1), "core/extra", { w: 12, h: 3 })
+    ).toHaveLength(MAX_PLACEMENTS);
   });
 });
 
@@ -381,10 +430,13 @@ describe("whether anything changed", () => {
     expect(hasChanges(list, moveLater(list, "a"))).toBe(true);
   });
 
-  it("notices a width change alone", () => {
+  it("notices a size change alone, in either direction", () => {
     const list = placements("a");
     expect(
-      hasChanges(list, setPlacementWidth(list, "a", "half", ["half"]))
+      hasChanges(list, setPlacementSize(list, "a", { w: 6, h: 3 }, ANY_SIZE))
+    ).toBe(true);
+    expect(
+      hasChanges(list, setPlacementSize(list, "a", { w: 12, h: 4 }, ANY_SIZE))
     ).toBe(true);
   });
 
@@ -446,7 +498,8 @@ describe("a save over the submission limit", () => {
   const at = (i: number, removed = false): WidgetPlacement => ({
     id: `p${i}`,
     widgetId: `w/${i}`,
-    width: "full",
+    w: 12,
+    h: 3,
     removed,
   });
 

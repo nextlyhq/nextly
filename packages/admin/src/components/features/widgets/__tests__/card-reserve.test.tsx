@@ -17,6 +17,8 @@ import { statsBody } from "../archetypes/stats";
 import * as geometry from "../frame/geometry";
 import { WidgetCard } from "../WidgetCard";
 
+import { gridBounds } from "./grid-bounds";
+
 type Tier = "small" | "medium" | "large";
 
 /** Each geometry constant by name, tried longest first so a class that contains another wins. */
@@ -47,7 +49,7 @@ function listCard(limit: number): DashboardWidget {
     id: "acme/recent",
     title: "Recent",
     archetype: "list",
-    defaultSize: "md",
+    size: gridBounds(4),
     query: { source: "collection:posts", op: "list", select: SELECT, limit },
   } as unknown as DashboardWidget;
 }

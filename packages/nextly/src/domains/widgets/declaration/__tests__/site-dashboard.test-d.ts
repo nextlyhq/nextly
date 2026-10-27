@@ -6,6 +6,7 @@
 import { expectTypeOf } from "vitest";
 
 import type { AdminConfig } from "../../../../shared/types/config";
+import type { WidgetSizeDeclaration } from "../../grid-size";
 import type {
   AdminDashboardConfig,
   CoreWidgetId,
@@ -45,4 +46,21 @@ expectTypeOf<
 // or that changes a saved dashboard.
 expectTypeOf<keyof DashboardContribution>().toEqualTypeOf<
   "widgets" | "suggest" | "alternatives" | "attention"
+>();
+
+// A default card's size is `w` and `h` in grid units, each optional; it takes
+// no named width.
+expectTypeOf<keyof DefaultLayoutCard>().toEqualTypeOf<
+  "widget" | "w" | "h" | "settings"
+>();
+expectTypeOf<DefaultLayoutCard["w"]>().toEqualTypeOf<number | undefined>();
+expectTypeOf<DefaultLayoutCard["h"]>().toEqualTypeOf<number | undefined>();
+
+// An override narrows the widget's size with any of the declaration's own
+// ends, and has no width or widths of its own.
+expectTypeOf<keyof WidgetOverride>().toEqualTypeOf<
+  "title" | "description" | "size" | "settings"
+>();
+expectTypeOf<WidgetOverride["size"]>().toEqualTypeOf<
+  Partial<WidgetSizeDeclaration> | undefined
 >();

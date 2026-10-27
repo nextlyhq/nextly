@@ -11,11 +11,8 @@ import * as loggerModule from "../observability/logger";
 import { buildPluginAdminMeta } from "./admin-meta";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
-import { widthFacts } from "../domains/widgets/canonical";
-
 import {
   assertAdminWidgets,
-  contributedWidgetSummaries,
   resetArchetypeWarnings,
 } from "./validate-admin-widgets";
 
@@ -106,7 +103,7 @@ describe("contributed widgets are validated at boot", () => {
         withWidget({
           id: "acme/revenue",
           component: "@acme/p/admin#Revenue",
-          size: "half",
+          size: { default: { w: 6, h: 4 } },
           query: {
             source: "collection:posts",
             op: "count",
@@ -158,7 +155,7 @@ describe("contributed widgets are validated at boot", () => {
           id: "acme/posts",
           title: "Published posts",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           query: { source: "collection:posts", op: "count" },
         }),
       ])
@@ -620,7 +617,7 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
-  it("accepts a widget declaring no title, archetype or defaultSize", () => {
+  it("accepts a widget declaring no title, archetype or size", () => {
     // The other half of that control. Those three are REQUIRED on a
     // `WidgetDefinition` and OPTIONAL on a `PluginAdminWidget`, so borrowing
     // the definition validator here would reject the shape this file exists to
@@ -658,7 +655,7 @@ describe("the serializer cannot publish what boot refused", () => {
         withWidget({
           id: "acme/revenue",
           component: "@acme/p/admin#Revenue",
-          size: "half",
+          size: { default: { w: 6, h: 4 } },
         }),
       ],
       undefined
@@ -740,37 +737,54 @@ describe("a contributed widget draws the result its archetype can draw", () => {
   });
 });
 
-describe("a contributed widget's sizes in the server's summary", () => {
-  it("carry its smallest and largest, so a card is offered only the widths between", () => {
-    const [summary] = contributedWidgetSummaries([
-      withWidget({
-        id: "acme/half-up",
-        title: "Half and up",
-        component: "@acme/p/admin#HalfUp",
-        defaultSize: "lg",
-        minSize: "lg",
-        maxSize: "full",
-      }),
-    ]);
-    expect(summary).toMatchObject({ minSize: "lg", maxSize: "full" });
-    // Half to full, as the declaration says; not all five widths.
-    expect(widthFacts(summary!).allowedWidths).toEqual([
-      "half",
-      "twoThirds",
-      "full",
-    ]);
+describe("a contributed widget's size, judged at boot", () => {
+  /** The detail a refused contribution's error carries, or `undefined` when it passed. */
+  function refusal(size: unknown): string | undefined {
+    try {
+      assertAdminWidgets([
+        withWidget({ id: "acme/w", component: "@acme/p/admin#W", size }),
+      ]);
+      return undefined;
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      return (error as NextlyError).logMessage;
+    }
+  }
+
+  it("refuses a default above its own maximum, as the registry does", () => {
+    // 🔴 The same check both channels ask (`sizeDeclarationProblems`), so a
+    // card cannot start at a size its reader may not return it to on one
+    // channel while the other refuses it.
+    expect(refusal({ default: { w: 8, h: 4 }, max: { w: 6, h: 4 } })).toContain(
+      "size.default must not be larger than size.max"
+    );
   });
 
-  it("leave a widget that states no bounds every width", () => {
-    const [summary] = contributedWidgetSummaries([
-      withWidget({
-        id: "acme/any",
-        title: "Any",
-        component: "@acme/p/admin#Any",
-      }),
-    ]);
-    expect(summary).not.toHaveProperty("minSize");
-    expect(summary).not.toHaveProperty("maxSize");
-    expect(widthFacts(summary!).allowedWidths).toHaveLength(5);
+  it("refuses a minimum above its default", () => {
+    expect(refusal({ default: { w: 4, h: 3 }, min: { w: 6, h: 3 } })).toContain(
+      "size.min must not be larger than size.default"
+    );
+  });
+
+  it("refuses a width outside the twelve columns", () => {
+    expect(refusal({ default: { w: 13, h: 4 } })).toContain(
+      "size.default.w must be a whole number from 1 to 12"
+    );
+  });
+
+  it("refuses a named width in place of a size", () => {
+    expect(refusal("full")).toContain(
+      "size must be { default: { w, h }, min?, max? }"
+    );
+  });
+
+  it("accepts a size within its own bounds", () => {
+    expect(
+      refusal({
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 12, h: 6 },
+      })
+    ).toBeUndefined();
   });
 });

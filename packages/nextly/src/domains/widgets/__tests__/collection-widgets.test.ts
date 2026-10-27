@@ -8,6 +8,7 @@ import {
   generatedCollectionSlug,
 } from "../collection-widgets";
 import type { WidgetStatCell } from "../definition";
+import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import type { WidgetSource } from "../sources";
 
 function source(patch: Partial<WidgetSource>): WidgetSource {
@@ -88,7 +89,7 @@ describe("what a collection gets", () => {
         id: "core/mixed",
         title: "Mixed",
         archetype: "stats",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         cells: [
           {
             key: "a",
@@ -599,5 +600,43 @@ describe("the cards that draw a picture", () => {
       }),
     ]);
     expect(widgets.map(w => w.archetype)).not.toContain("bars");
+  });
+});
+
+describe("the size each generated card starts at", () => {
+  // Every kind of card a collection can get: a lifecycle, a date to bucket,
+  // and every op answered.
+  const everything = source({
+    lifecycleStatus: true,
+    supports: ["count", "list", "groupBy", "timeseries"],
+    fields: [
+      { name: "id", type: "string" },
+      { name: "title", type: "string" },
+      { name: "status", type: "string" },
+      { name: "createdAt", type: "date" },
+      { name: "updatedAt", type: "date" },
+    ],
+  });
+
+  it("is a size in grid units the registry accepts, never below two rows", () => {
+    const widgets = collectionWidgets([everything]);
+    // The control: every kind is reached, so the check below covers them all.
+    expect(widgets.map(w => w.archetype).sort()).toEqual(
+      ["bars", "list", "metric", "stats", "table", "timeseries"].sort()
+    );
+    for (const widget of widgets) {
+      expect([widget.id, sizeDeclarationProblems(widget.size)]).toEqual([
+        widget.id,
+        [],
+      ]);
+      expect(sizeBounds(widget.size).min.h).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("keeps a table at half the row or wider, where its columns fit", () => {
+    const table = collectionWidgets([everything]).find(
+      w => w.archetype === "table"
+    );
+    expect(table && sizeBounds(table.size).min.w).toBeGreaterThanOrEqual(6);
   });
 });

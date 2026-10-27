@@ -13,6 +13,7 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { CardEmpty } from "../../frame/states";
 import { actionsBody } from "../actions";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 vi.mock("@admin/components/ui/link", () => ({
   Link: ({ children, ...rest }: Record<string, unknown>) => (
@@ -32,7 +33,7 @@ const widget = (
     id: "core/shortcuts",
     title: "Shortcuts",
     archetype: "actions",
-    size: "sm",
+    size: gridBounds(3),
     ...(actions && { actions }),
   }) as DashboardWidget;
 
