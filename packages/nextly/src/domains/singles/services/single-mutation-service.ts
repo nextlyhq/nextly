@@ -22,7 +22,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { holdsGrant } from "../../../auth/access/gate-adapters";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -215,6 +214,7 @@ import {
   checkSingleAccess,
   getSingleHookCollection,
   resolveNextlyForHooks,
+  singleGrantRefusal,
 } from "./single-query-service";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -1282,24 +1282,15 @@ export class SingleMutationService extends BaseService {
       // Its grant is asked here, before any work only a publish needs; its rule
       // below, in each language, once the languages going live are known.
       const accessDenied = publishesEveryLanguage
-        ? (await holdsGrant({
-            action: "publish",
+        ? await singleGrantRefusal({
             slug,
+            operation: "publish",
             user: options.user,
             overrideAccess: options.overrideAccess,
+            rbacAccessControlService: this.rbacAccessControlService,
             authenticatedScope: options.authenticatedScope,
-          }))
-          ? null
-          : await checkSingleAccess({
-              slug,
-              operation: "publish",
-              user: options.user,
-              overrideAccess: options.overrideAccess,
-              routeAuthorized: false,
-              rbacAccessControlService: this.rbacAccessControlService,
-              authenticatedScope: options.authenticatedScope,
-              logger: this.logger,
-            })
+            logger: this.logger,
+          })
         : await checkSingleAccess({
             slug,
             operation: gate,

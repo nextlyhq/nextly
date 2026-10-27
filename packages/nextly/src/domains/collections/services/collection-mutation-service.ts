@@ -6232,6 +6232,41 @@ export class CollectionMutationService extends BaseService {
     return { accessUser, schema, existingEntry };
   }
 
+  /**
+   * The refusal for a caller who certainly lacks the lifecycle grant
+   * ({@link holdsGrant}), worded by the full gate, or `null` to go on: asked
+   * before the work only a publish or an unpublish needs, its rule being asked
+   * once the languages going live are known.
+   */
+  private async lifecycleGrantRefusal(
+    action: "publish" | "unpublish",
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    user: UserContext | undefined
+  ): Promise<CollectionServiceResult | null> {
+    const held = await holdsGrant({
+      action,
+      slug: params.collectionName,
+      user,
+      overrideAccess: params.overrideAccess,
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (held) return null;
+    return this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: action,
+      entryId: params.entryId,
+      user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: false,
+      authenticatedScope: params.authenticatedScope,
+    });
+  }
+
   private async setLifecycleAllLocales(
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
@@ -6274,28 +6309,15 @@ export class CollectionMutationService extends BaseService {
         (publishCollection as { status?: boolean }).status === true;
       // A collection with a lifecycle is asked the lifecycle grant here, before
       // any work only that change needs; its rule below, once the languages
-      // going live are known. A caller without it is refused as the gate words.
-      if (
-        hasMainStatus &&
-        !(await holdsGrant({
-          action: direction.accessAction,
-          slug: params.collectionName,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          authenticatedScope: params.authenticatedScope,
-        }))
-      ) {
-        const refused = await this.accessService.checkCollectionAccess({
-          collectionName: params.collectionName,
-          operation: direction.accessAction,
-          entryId: params.entryId,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-        });
-        if (refused) return refused;
-      }
+      // going live are known.
+      const grantRefused = hasMainStatus
+        ? await this.lifecycleGrantRefusal(
+            direction.accessAction,
+            params,
+            accessUser
+          )
+        : null;
+      if (grantRefused) return grantRefused;
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
@@ -8536,27 +8558,10 @@ export class CollectionMutationService extends BaseService {
       const { accessUser, schema, existingEntry } = toUpdate;
       // Its grant is asked here, before any work only a publish needs; its
       // rule below, in each language, once the languages going live are known.
-      if (
-        publishesEveryLanguage &&
-        !(await holdsGrant({
-          action: "publish",
-          slug: params.collectionName,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          authenticatedScope: params.authenticatedScope,
-        }))
-      ) {
-        const refused = await this.accessService.checkCollectionAccess({
-          collectionName: params.collectionName,
-          operation: "publish",
-          entryId: params.entryId,
-          user: accessUser,
-          overrideAccess: params.overrideAccess,
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-        });
-        if (refused) return refused;
-      }
+      const grantRefused = publishesEveryLanguage
+        ? await this.lifecycleGrantRefusal("publish", params, accessUser)
+        : null;
+      if (grantRefused) return grantRefused;
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
