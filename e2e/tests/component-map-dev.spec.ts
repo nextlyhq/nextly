@@ -21,20 +21,20 @@ test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
 
 /**
  * A development server whose component map lacks a dashboard widget's
- * component, with automatic regeneration off, refuses the admin, naming the
- * plugin, the widget, the component and the fix.
+ * component, with automatic regeneration off, serves the admin: it warns,
+ * naming the widget, its owner, the component and the switch, and only that
+ * widget's card draws its error state, naming the widget, its owner and the
+ * missing path.
  *
- * Regeneration off is the case under test because it is the only one in which
- * development refuses: with it on, `next dev` writes the map again and the
- * widget draws, which a test run must not do to the checkout. It is also how
- * this suite's own server runs (`NEXTLY_GENERATED_FILES_WRITE=0`).
+ * Regeneration off is the case under test because with it on, `next dev`
+ * writes the map again and the widget draws, which a test run must not do to
+ * the checkout. It is also how this suite's own server runs
+ * (`NEXTLY_GENERATED_FILES_WRITE=0`).
  *
  * Its own `next dev`, with the fixture plugin that declares the widget switched
- * on, because a refused admin is the point and the suite's server keeps its
- * admin for the other specs. Its own port, build directory and database, so it
- * never shares `.next-e2e` or the suite's database with that server. The
- * suite's server, started without the fixture, is the control: the same app
- * with the map whole serves the admin.
+ * on, so the suite's server keeps its dashboard for the other specs. Its own
+ * port, build directory and database, so it never shares `.next-e2e` or the
+ * suite's database with that server.
  *
  * @module tests/component-map-dev
  */
@@ -43,9 +43,10 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..", "..");
 const PLAYGROUND = path.join(NEXTLY_ROOT, "apps", "playground");
 const SUITE_PORT = Number(process.env.E2E_PORT) || 3100;
-const SUITE_URL = `http://localhost:${SUITE_PORT}`;
-const REFUSING_PORT = SUITE_PORT + 9;
-const REFUSING_URL = `http://localhost:${REFUSING_PORT}`;
+const FIXTURE_PORT = SUITE_PORT + 9;
+const FIXTURE_URL = `http://localhost:${FIXTURE_PORT}`;
+const MISSING = "missing-widget-fixture/never-built";
+const COMPONENT = "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt";
 /** This spec's own build directory and database, removed when it ends. */
 const DIST_DIR = ".next-e2e-component-map";
 const DB_FILE = "./data/e2e-component-map.db";
@@ -90,7 +91,7 @@ test.beforeAll(async () => {
   cleanNextWrites = cleanUpNextWrites();
   const env = {
     ...process.env,
-    PORT: String(REFUSING_PORT),
+    PORT: String(FIXTURE_PORT),
     NEXTLY_SECRET: E2E_NEXTLY_SECRET,
     DB_DIALECT: "sqlite",
     DATABASE_URL: `file:${DB_FILE}`,
@@ -108,7 +109,7 @@ test.beforeAll(async () => {
       "next",
       "dev",
       "--port",
-      String(REFUSING_PORT),
+      String(FIXTURE_PORT),
     ],
     process.platform,
     env
@@ -129,7 +130,7 @@ test.beforeAll(async () => {
   }
   // A cold development boot compiles on first request, so the health route
   // can take as long as the suite's own server allows for its boot.
-  await waitForHealth(REFUSING_URL, 240_000);
+  await waitForHealth(FIXTURE_URL, 240_000);
 });
 
 test.afterAll(async () => {
@@ -148,33 +149,71 @@ test.afterAll(async () => {
   cleanNextWrites?.();
 });
 
+interface Layout {
+  version: number;
+  scope: string;
+  placements: Array<{ widgetId: string }>;
+}
+
 test.describe("a development server missing a widget's component, with regeneration off", () => {
-  test("refuses the admin, naming the plugin, the widget, the component and the fix", async ({
+  test("serves the admin, warning with the widget, its owner, the component and the switch", async ({
     request,
   }) => {
     test.setTimeout(240_000);
-    const admin = await request.get(`${REFUSING_URL}/admin`, {
+    const admin = await request.get(`${FIXTURE_URL}/admin`, {
       timeout: 200_000,
     });
-    expect(admin.status()).toBe(500);
+    expect(admin.status()).toBe(200);
     await expect
       .poll(() => output, { timeout: 30_000 })
       .toContain(
-        'plugin "missing-widget-fixture", widget "missing-widget-fixture/never-built"'
+        `- missing: plugin "missing-widget-fixture", widget "${MISSING}": ${COMPONENT}`
       );
-    expect(output).toContain(
-      "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt"
-    );
     expect(output).toContain(
       "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0)"
     );
-    expect(output).toContain("Run `npx nextly generate:types`");
   });
 
-  test("serves the admin when the map is whole", async ({ request }) => {
-    // The control: the suite's own development server, the same app with
-    // regeneration off and the fixture not configured.
-    const admin = await request.get(`${SUITE_URL}/admin`, { timeout: 200_000 });
-    expect(admin.status()).toBe(200);
+  test("draws that card's error state, naming the widget, its owner and the path", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    // Development signs the dev user in on its own.
+    await page.goto(`${FIXTURE_URL}/admin`, { timeout: 200_000 });
+    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    const read = await page.request.get(
+      `${FIXTURE_URL}/admin/api/dashboard/layout`
+    );
+    const layout = (await read.json()) as Layout;
+    const write = await page.request.put(
+      `${FIXTURE_URL}/admin/api/dashboard/layout`,
+      {
+        data: {
+          placements: [
+            {
+              id: "e2e-missing",
+              widgetId: MISSING,
+              w: 12,
+              h: 4,
+              removed: false,
+            },
+            ...layout.placements.filter(each => each.widgetId !== MISSING),
+          ],
+          version: layout.version,
+          scope: layout.scope,
+        },
+      }
+    );
+    expect(write.ok(), await write.text()).toBe(true);
+
+    await page.goto(`${FIXTURE_URL}/admin`);
+    const card = page.getByRole("region", { name: "Never built" });
+    await expect(card).toHaveAttribute("data-state", "error", {
+      timeout: 60_000,
+    });
+    await expect(card).toContainText(
+      `Widget "${MISSING}" of plugin "missing-widget-fixture" draws with ${COMPONENT}`
+    );
+    await expect(card).toContainText("npx nextly generate:types");
   });
 });

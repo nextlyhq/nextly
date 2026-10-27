@@ -316,6 +316,7 @@ function resolveRegistered(
     ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
+    ...(meta.owner === undefined ? {} : { owner: meta.owner }),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -401,6 +402,8 @@ function mergeCollision(
     settings: preferRegistered(registration.settings, contribution.settings),
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
+    // Only core publishes an owner, on a registration; a contribution names none.
+    ...(registration.owner === undefined ? {} : { owner: registration.owner }),
     actions: preferRegistered(registration.actions, contribution.actions),
     // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
     // a contributed stats card colliding with a registered metric would hand

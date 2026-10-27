@@ -142,6 +142,33 @@ describe("the map's check against the site's config", () => {
     expect(code).not.toMatch(/^import (?!type)[^\n]*nextly\.config/m);
   });
 
+  it("names a widget entry's widget and owner on its own line, where a props error is reported", () => {
+    const withWidget = {
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          pages: [{ path: "reports", component: "@acme/shop/admin#Reports" }],
+        },
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([withWidget], "../../nextly.config");
+    expect(code).toContain(
+      '"@acme/shop/admin#Revenue": _p0.Revenue, // widget "acme/revenue" of plugin "@acme/shop"\n'
+    );
+    // A page's entry names nothing beside it.
+    expect(code).toContain('"@acme/shop/admin#Reports": _p0.Reports,\n');
+  });
+
   it("writes the map unchecked, as before, where there is no config file", () => {
     const code = buildComponentImportMap([shop]);
     expect(code).not.toContain("siteConfig");

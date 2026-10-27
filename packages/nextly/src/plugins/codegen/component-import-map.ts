@@ -46,8 +46,8 @@ export type ComponentMapUse =
 
 /**
  * One component the generated map registers: its path, who declared it, and
- * what it is for. A widget's entry also names the widget, so a refusal can
- * say which card is affected.
+ * what it is for. A widget's entry also names the widget, so a warning, the
+ * CI check and the map itself can say which card is affected.
  */
 export interface ComponentMapEntry {
   readonly path: string;
@@ -56,6 +56,16 @@ export interface ComponentMapEntry {
   readonly use: ComponentMapUse;
   /** The widget's id, for a `widget` entry. */
   readonly widget?: string;
+}
+
+/**
+ * A component as a warning or a check names it: whose it is, and the widget or the use it is
+ * for. One wording for the development check and `generate:types --check` alike.
+ */
+export function describeComponentUse(each: ComponentMapEntry): string {
+  return each.use === "widget"
+    ? `${each.owner}, widget "${each.widget ?? "?"}": ${each.path}`
+    : `${each.owner}, ${each.use}: ${each.path}`;
 }
 
 /** Filename of the generated admin component import map. */
@@ -349,9 +359,9 @@ function parsePath(path: string): ParsedPath {
  * contributions, declared widgets, then block editor components. A path two
  * contributions share appears once for each.
  *
- * The richer list, kept whole for the check: two widgets drawn with one
- * missing component are two cards that draw empty, and the refusal names and
- * counts both. The map's own entries are derived from it.
+ * The richer list, kept whole for the development check: two widgets drawn
+ * with one missing component are two cards that draw their error state, and
+ * its warning names both. The map's own entries are derived from it.
  */
 export function componentUses(
   plugins: readonly PluginDefinition[]
@@ -375,9 +385,9 @@ export function componentUses(
  * widget's.
  *
  * 🔴 A widget's use wins over any other. One path may serve a page and a
- * widget alike, and the check refuses only over a missing widget component:
- * kept as the page's, that path would only be warned about, and production
- * would serve the widget with an empty card.
+ * widget alike, and a missing widget component is the one that turns a card
+ * into its error state: kept as the page's, that path would be named as a
+ * page by the CI check, hiding which card it breaks.
  */
 export function componentImportMapEntries(
   plugins: readonly PluginDefinition[]
@@ -408,6 +418,25 @@ export function componentImportMapPaths(
  */
 const pathListExport = (paths: readonly string[]): string =>
   `export const registeredComponentPaths = ${JSON.stringify(paths)} as const;`;
+
+/**
+ * The paths a generated list holds, read back from {@link pathListExport}'s line as written or
+ * as a formatter lays it out (one path a line, a trailing comma), or `undefined` for a list in
+ * any other shape. Each path is a JSON string, so it is read back with `JSON.parse`.
+ */
+export function listedPathsOf(listCode: string): string[] | undefined {
+  const array =
+    /export const registeredComponentPaths = \[([^\]]*)\] as const;/.exec(
+      listCode
+    )?.[1];
+  if (array === undefined) return undefined;
+  const strings = array.match(/"(?:[^"\\]|\\.)*"/g) ?? [];
+  // Anything between the strings but commas and spaces is a shape this does not read.
+  if (array.replace(/"(?:[^"\\]|\\.)*"/g, "").replace(/[\s,]/g, "") !== "") {
+    return undefined;
+  }
+  return strings.map(each => JSON.parse(each) as string);
+}
 
 /**
  * How the map holds itself to its list.
@@ -480,7 +509,8 @@ export function buildComponentImportMap(
   plugins: PluginDefinition[],
   configImport?: string
 ): string {
-  const paths = componentImportMapPaths(plugins);
+  const entries = componentImportMapEntries(plugins);
+  const paths = entries.map(each => each.path);
   const parsed = paths.map(parsePath);
   const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
   const alias = new Map<string, string>();
@@ -504,11 +534,11 @@ export function buildComponentImportMap(
   }
   lines.push("");
   lines.push("const registered = {");
-  for (const p of parsed) {
+  parsed.forEach((p, index) => {
     lines.push(
-      `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
+      `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},${widgetNote(entries[index])}`
     );
-  }
+  });
   // Each component registered under a typed widget's path must take that widget's props, or
   // the site's build fails here; every other path is left as it was.
   lines.push(
@@ -523,6 +553,17 @@ export function buildComponentImportMap(
   lines.push("export const registeredComponentPaths = listed;");
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * A widget's entry names its widget and owner on its own line, where the site's build reports a
+ * component whose props do not take that widget's (`DeclaredComponentMap`), so the error reads
+ * which card it is about. Nothing for any other entry.
+ */
+function widgetNote(entry: ComponentMapEntry | undefined): string {
+  return entry?.use === "widget"
+    ? ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${entry.owner}`
+    : "";
 }
 
 /** Filename of the generated list of the paths the map registers. */

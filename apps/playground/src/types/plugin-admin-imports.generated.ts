@@ -11,8 +11,8 @@ import type { DeclaredComponentMap } from "nextly";
 import type * as siteConfig from "../../nextly.config";
 
 const registered = {
-  "@/plugins/widget-kit-fixture/admin#KitCard": _p0.KitCard,
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p0.ThrowingCard,
+  "@/plugins/widget-kit-fixture/admin#KitCard": _p0.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p0.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p1.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p1.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
