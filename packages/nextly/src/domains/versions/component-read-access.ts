@@ -36,6 +36,8 @@ import {
 } from "../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
+import { isListField } from "./diff/compute-diff";
+
 /** Who is reading, and their grants, shared with the entity's own pass. */
 export interface ComponentReadCaller {
   user?: Record<string, unknown>;
@@ -100,16 +102,15 @@ export async function applyComponentReadAccess(
 }
 
 /**
- * The rows a container value holds, each keyed as a reader of the version
- * addresses it: a row of a list by its index in that list (`"1"`), so an
- * entry that is not a row still keeps its place in the count; a single group
- * or instance by nothing (`null`). A container held as JSON text is parsed
+ * The rows a container value holds, each with its place in it: its index in
+ * a list, so an entry that is not a row still keeps its place in the count,
+ * or 0 for a value that is one row. A container held as JSON text is parsed
  * first, as the redaction parses it, so what was withheld inside it is
  * reported too.
  */
 function containerRows(
   value: unknown
-): { key: string | null; row: Record<string, unknown> }[] {
+): { index: number; row: Record<string, unknown> }[] {
   let opened: unknown = value;
   if (typeof value === "string") {
     // Text that is not JSON holds no rows, as the redaction reads it.
@@ -121,30 +122,30 @@ function containerRows(
   }
   if (Array.isArray(opened)) {
     return opened.flatMap((row: unknown, index) =>
-      isRecord(row) ? [{ key: String(index), row }] : []
+      isRecord(row) ? [{ index, row }] : []
     );
   }
-  return isRecord(opened) ? [{ key: null, row: opened }] : [];
+  return isRecord(opened) ? [{ index: 0, row: opened }] : [];
 }
 
 /**
  * Each row of a container before redaction, paired with its redacted copy by
- * its key, which the redaction leaves in place: it removes fields, not rows.
+ * its place, which the redaction leaves alone: it removes fields, not rows.
  */
 function pairedRows(
   beforeValue: unknown,
   afterValue: unknown
 ): {
-  key: string | null;
+  index: number;
   before: Record<string, unknown>;
   after: Record<string, unknown>;
 }[] {
   const afterRows = new Map(
-    containerRows(afterValue).map(({ key, row }) => [key, row])
+    containerRows(afterValue).map(({ index, row }) => [index, row])
   );
-  return containerRows(beforeValue).flatMap(({ key, row }) => {
-    const after = afterRows.get(key);
-    return after ? [{ key, before: row, after }] : [];
+  return containerRows(beforeValue).flatMap(({ index, row }) => {
+    const after = afterRows.get(index);
+    return after ? [{ index, before: row, after }] : [];
   });
 }
 
@@ -216,8 +217,10 @@ export function nestedWithheldPaths(
     }
     for (const row of pairedRows(beforeObj[name], afterObj[name])) {
       const inner = rowFields(field, row.before, componentFields);
-      // A list row is named by its key; a single group or instance by none.
-      const rowPath = row.key === null ? path : `${path}.${row.key}`;
+      // A row of a list is named by its index, decided by the field's
+      // cardinality as the comparison reads rows: a single group or instance
+      // is named by none, even arriving as a one-element array.
+      const rowPath = isListField(field) ? `${path}.${row.index}` : path;
       if (inner) walk(row.before, row.after, inner, rowPath);
     }
   };

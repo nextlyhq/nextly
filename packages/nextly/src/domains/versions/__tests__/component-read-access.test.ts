@@ -14,6 +14,7 @@ import {
   fieldsCarryingReadRules,
   nestedWithheldPaths,
 } from "../component-read-access";
+import { computeVersionDiff } from "../diff/compute-diff";
 
 afterEach(() => clearFieldFunctions());
 
@@ -273,6 +274,52 @@ describe("malformed and serialized values", () => {
       "text.1.secret",
       "text.3.secret",
     ]);
+  });
+
+  // A non-repeatable component populated from its own table arrives as a
+  // one-element array, and still holds one value.
+  const hero = { name: "hero", type: "component", component: "card" };
+  const heroFields = new Map([
+    [
+      "card",
+      fields({ name: "title", type: "text" }, { name: "secret", type: "text" }),
+    ],
+  ]);
+  const heroBefore = { hero: [{ title: "a", secret: "S-1" }] };
+  const heroAfter = { hero: [{ title: "a" }] };
+
+  it("names a single component by none, even when it arrives as a one-element array", () => {
+    expect([
+      ...nestedWithheldPaths(heroBefore, heroAfter, fields(hero), heroFields),
+    ]).toEqual(["hero.secret"]);
+  });
+
+  it("names a field where the comparison looks for it", () => {
+    // The two read one path: what the redaction names, the comparison finds,
+    // so the field is hidden in its place and the comparison says it is
+    // incomplete, rather than leaving it out as a field never held.
+    const withheld = nestedWithheldPaths(
+      heroBefore,
+      heroAfter,
+      fields(hero),
+      heroFields
+    );
+    const diff = computeVersionDiff(
+      heroAfter,
+      heroAfter,
+      fields({
+        ...hero,
+        componentFields: heroFields.get("card"),
+      }),
+      {
+        componentRulesApplied: true,
+        withheldFrom: withheld,
+        withheldTo: withheld,
+      }
+    );
+
+    expect(JSON.stringify(diff.fields)).toContain('"kind":"hidden"');
+    expect(diff.incomplete).toBe(true);
   });
 });
 

@@ -434,7 +434,14 @@ function isComponentField(field: FieldConfig): boolean {
 function isComponentList(field: FieldConfig): boolean {
   return isComponentField(field) && isRepeatable(field);
 }
-function isListField(field: FieldConfig): boolean {
+/**
+ * Whether a field holds a list of rows, by its cardinality rather than by the
+ * shape its value arrives in: a non-repeatable component populated from its
+ * own table arrives as a one-element array and still holds one value. Shared
+ * with the redaction's path naming, so a path names a row by index exactly
+ * where this comparison reads rows.
+ */
+export function isListField(field: FieldConfig): boolean {
   return field.type === "repeater" || isComponentList(field);
 }
 function isGroupField(field: FieldConfig): boolean {
