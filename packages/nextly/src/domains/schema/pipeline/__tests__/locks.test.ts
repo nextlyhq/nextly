@@ -133,6 +133,88 @@ describe("withMigrateLock (mysql named lock)", () => {
       withMigrateLock(db, "mysql", async () => "x")
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATE_LOCK_BUSY" });
   });
+
+  /**
+   * A named lock goes with the connection holding it, so it is never stale and
+   * `--force-unlock` clears nothing on MySQL: the message must not send anyone
+   * there, and must say what does free it.
+   */
+  it("tells a MySQL user what frees the lock, not to force-unlock it", async () => {
+    await expect(
+      withMigrateLock(fakeMysql(0), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("connection ends"),
+    });
+    await expect(
+      withMigrateLock(fakeMysql(0), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("run with `--force-unlock`"),
+    });
+  });
+});
+
+describe("withMigrateLock (mysql, while an older version holds the old name)", () => {
+  /**
+   * Both names share one wait. A `GET_LOCK` that used most of the budget must
+   * leave the old name's check only what is left, not a fresh budget, or a
+   * caller's maximum wait could nearly double.
+   */
+  /** A MySQL whose own lock is free, and granted only after `getLockMs`, while an older version holds the old name. */
+  function legacyHeld(getLockMs = 0) {
+    return {
+      execute: vi.fn(async (q: unknown) => {
+        const text = JSON.stringify(q);
+        if (text.includes("GET_LOCK")) {
+          if (getLockMs)
+            await new Promise(resolve => setTimeout(resolve, getLockMs));
+          return { rows: [{ locked: 1 }] };
+        }
+        if (text.includes("IS_USED_LOCK")) return { rows: [{ holder: 7 }] };
+        return { rows: [] };
+      }),
+    };
+  }
+
+  it("spends one wait across the per-database lock and the old name", async () => {
+    // A clock of its own, so a slow host cannot fail it: GET_LOCK takes 1.2 s
+    // of the 1 s budget, so the old name's check has nothing left and the call
+    // settles at once. A fresh budget for the old name would keep it waiting.
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const outcome = withMigrateLock(
+        legacyHeld(1200),
+        "mysql",
+        async () => "x",
+        { mode: "wait", maxWaitMs: 1_000 }
+      );
+      void outcome.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_300);
+      expect(settled).toBe(true);
+      await expect(outcome).resolves.toEqual({
+        ran: false,
+        reason: "lock-held",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the lock it met is the old server-wide one, not this database's", async () => {
+    await expect(
+      withMigrateLock(legacyHeld(), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATE_LOCK_BUSY",
+      publicMessage: expect.stringContaining("server-wide"),
+    });
+    await expect(
+      withMigrateLock(legacyHeld(), "mysql", async () => "x")
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("on this database"),
+    });
+  });
 });
 
 describe("withMigrateLock (postgres lock row)", () => {
@@ -157,6 +239,21 @@ describe("withMigrateLock (postgres lock row)", () => {
     await expect(
       withMigrateLock(db, "postgresql", async () => "x")
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATE_LOCK_BUSY" });
+  });
+
+  it("points a PostgreSQL user at --force-unlock, which clears a stale row", async () => {
+    await expect(
+      withMigrateLock(
+        fakeDb({ acquireRows: [0] }),
+        "postgresql",
+        async () => "x"
+      )
+    ).rejects.toMatchObject({
+      publicMessage:
+        "Another schema operation holds the migrate lock. Wait for it to finish " +
+        "(a running dev server also holds it) and retry, or run with " +
+        "`--force-unlock` to clear a stale lock.",
+    });
   });
 
   it("wait mode: settles via isSettled() even if never acquired (does not run fn)", async () => {

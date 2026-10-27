@@ -142,6 +142,8 @@ export interface CanonicalWidget {
   visibleWhen?: string | readonly string[];
   /** Whether the reader may send this card away; see `WidgetDefinition`. */
   dismissible?: boolean;
+  /** Whether the card leaves the grid while its answer is empty; see `WidgetDefinition`. */
+  hidesWhenEmpty?: boolean;
   /**
    * The bounds the declaration's textarea settings state, from either channel,
    * so the layout write holds a placement's text to them whichever channel
@@ -155,6 +157,14 @@ export interface CanonicalWidget {
    * Absent when the declaration states none.
    */
   collectionSetting?: AnyWidgetSetting;
+  /**
+   * The queries a setting of the declaration may drive: its query, or each of
+   * its cells' queries. A Collection setting no knob drives on any of them
+   * names no collection the card reads, so it decides nothing about which
+   * cards are withheld. Absent on a summary built before the field existed,
+   * which is judged by its setting alone.
+   */
+  knobQueries?: readonly unknown[];
   /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none, and a declared
@@ -211,6 +221,7 @@ const REGISTRATION_FIELDS = [
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "hidesWhenEmpty",
   "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
@@ -234,7 +245,29 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
     ...collectionSettingField(definition.settings),
+    ...knobQueriesField(definition),
   };
+}
+
+/**
+ * The queries a declaration's settings may drive, as a summary field: its
+ * query, or each of its cells' queries.
+ */
+export function knobQueriesField(declaration: {
+  query?: unknown;
+  cells?: unknown;
+}): Pick<CanonicalWidget, "knobQueries"> {
+  const cells = Array.isArray(declaration.cells) ? declaration.cells : [];
+  const knobQueries = [
+    ...(declaration.query === undefined ? [] : [declaration.query]),
+    ...cells.map((cell: unknown) =>
+      typeof cell === "object" && cell !== null
+        ? (cell as { query?: unknown }).query
+        : undefined
+    ),
+  ];
+  // Absent when it asks nothing, as every unstated field is.
+  return knobQueries.length === 0 ? {} : { knobQueries };
 }
 
 /**
@@ -371,6 +404,28 @@ function addPanelFallback(
   };
 }
 
+/**
+ * The registration's card flags, with the contribution's wherever the registration states none.
+ *
+ * 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a contributed `dismissible`
+ * colliding with a registration that states nothing is dropped HERE and kept THERE -- the browser
+ * draws a card its reader can send away while the server's canonical copy of the same declaration
+ * says nothing about it, which is exactly the two-implementations divergence the merge exists to
+ * prevent. `hidesWhenEmpty` falls back the same way, for the same reason.
+ */
+function flagFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "dismissible" | "hidesWhenEmpty"> {
+  const dismissible = registration.dismissible ?? contribution.dismissible;
+  const hidesWhenEmpty =
+    registration.hidesWhenEmpty ?? contribution.hidesWhenEmpty;
+  return {
+    ...(dismissible === undefined ? {} : { dismissible }),
+    ...(hidesWhenEmpty === undefined ? {} : { hidesWhenEmpty }),
+  };
+}
+
 function mergeCanonical(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -378,13 +433,6 @@ function mergeCanonical(
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
   const defaultHeight =
     registration.defaultHeight ?? contribution.defaultHeight;
-  // 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a
-  // contributed `dismissible` colliding with a registration that states
-  // nothing is dropped HERE and kept THERE -- the browser draws a card its
-  // reader can send away while the server's canonical copy of the same
-  // declaration says nothing about it, which is exactly the two-implementations
-  // divergence this function exists to prevent.
-  const dismissible = registration.dismissible ?? contribution.dismissible;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -395,10 +443,14 @@ function mergeCanonical(
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
-    ...(dismissible === undefined ? {} : { dismissible }),
+    ...flagFallback(contribution, registration),
     ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
+    // The registration's queries alone, as the admin's merge takes its query
+    // and cells: the drawn widget asks what the registration declares, and
+    // asks nothing when it declares neither, though the contribution did.
+    knobQueries: registration.knobQueries ?? [],
     // Both copies' action gates, because both copies ship: the payload carries
     // each channel's declaration and withholds the actions in each, so every
     // gate either names has to be resolved.

@@ -41,15 +41,17 @@ describe("card states from a widget's answer", () => {
     expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
   });
 
-  it("draws the declaration's description under the title", () => {
-    // The frame's one optional line, which a real declaration reaches only through the renderer.
+  it("keeps the declaration's description out of the header, which holds the title alone", () => {
+    // A description is what the add panel offers a widget by; the header is
+    // one fixed height, the subject and at most the widget's own name.
     render(
       <WidgetRenderer
         definition={{ ...list, description: "Newest first" }}
         slot={{ ok: true, result: { op: "list", items: [{ title: "Hello" }] } }}
       />
     );
-    expect(screen.getByText("Newest first")).toBeInTheDocument();
+    expect(screen.queryByText("Newest first")).toBeNull();
+    expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
   it("draws any other failure as an error with Retry", () => {
