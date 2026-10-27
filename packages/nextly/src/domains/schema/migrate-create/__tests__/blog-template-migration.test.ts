@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
+import { users } from "../../../../schemas/users/mysql";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveCollectionTableName } from "../../utils/resolve-table-name";
 import { toMinimalEntities } from "../config-entities";
@@ -290,6 +291,34 @@ describe("the blog template's MySQL migration", () => {
     expect(
       statements.match(/\b(?:CHARSET|CHARACTER SET|COLLATE)\b[^;]*/gi)
     ).toBeNull();
+  });
+
+  // nextly's users.id is as wide as the ids an auth adapter may give, which
+  // can be longer than a UUID: a narrower reference refuses a real user's id.
+  it("gives each reference to users the width nextly gives users.id", () => {
+    const created = createdTables(sql);
+    const references: Array<[string, string]> = [];
+    for (const [, table, body] of sql.matchAll(
+      /CREATE TABLE IF NOT EXISTS\s+`([^`]+)`\s*\(([\s\S]*?)\n\)/g
+    ))
+      for (const [, column] of body.matchAll(
+        /FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`users`/g
+      ))
+        references.push([table, column]);
+    for (const [, table, column] of sql.matchAll(
+      /ALTER TABLE\s+`([^`]+)`\s+ADD CONSTRAINT\s+`[^`]+`\s+FOREIGN KEY\s*\(`([^`]+)`\)\s*REFERENCES\s+`users`/g
+    ))
+      references.push([table, column]);
+    expect(references.length).toBeGreaterThan(0);
+    const width = users.id.getSQLType().toLowerCase();
+    expect(
+      references.map(
+        ([table, column]) =>
+          `${table}.${column} ${created.get(table)?.find(c => c.name === column)?.type}`
+      )
+    ).toEqual(
+      references.map(([table, column]) => `${table}.${column} ${width}`)
+    );
   });
 
   it("keys no TEXT, BLOB or JSON column", () => {

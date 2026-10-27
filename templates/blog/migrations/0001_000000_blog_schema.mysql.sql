@@ -6,8 +6,10 @@
 --
 -- Every table takes the database's character set and collation, as nextly's
 -- own tables do: a foreign key to `users` or `media` needs both sides in one
--- collation. A column that references a row is varchar(36), nextly's id type
--- for one, since MySQL keys no TEXT column and indexes every foreign key.
+-- collation. A column that references a row is a varchar, since MySQL keys no
+-- TEXT column and indexes every foreign key: varchar(191) for a user, the
+-- width nextly gives users.id (an auth adapter's ids can be longer than a
+-- UUID), and varchar(36), nextly's id type, for any other row.
 
 -- ============================================
 -- UP: Create all blog schema
@@ -23,7 +25,7 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `content` text,
   `excerpt` text,
   `featured_image` varchar(36),
-  `author` varchar(36),
+  `author` varchar(191),
   `categories` json,
   `tags` json,
   `published_at` timestamp NULL DEFAULT NULL,
@@ -83,7 +85,7 @@ CREATE TABLE IF NOT EXISTS `dc_tags` (
 -- field on MySQL.
 CREATE TABLE IF NOT EXISTS `user_ext` (
   `id` varchar(36) PRIMARY KEY NOT NULL,
-  `user_id` varchar(36) NOT NULL,
+  `user_id` varchar(191) NOT NULL,
   `bio` text,
   `avatar_url` text,
   `slug` varchar(255),
@@ -205,7 +207,7 @@ ALTER TABLE `dc_posts`
 ADD CONSTRAINT `fk_posts_featured_image`
 FOREIGN KEY (`featured_image`) REFERENCES `media`(`id`) ON DELETE SET NULL;
 
--- Posts author -> users (text FK — users.id is text in the core schema)
+-- Posts author -> users (varchar(191), as users.id in the core schema)
 ALTER TABLE `dc_posts`
 ADD CONSTRAINT `fk_posts_author`
 FOREIGN KEY (`author`) REFERENCES `users`(`id`) ON DELETE SET NULL;
