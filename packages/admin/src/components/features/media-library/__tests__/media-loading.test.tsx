@@ -152,6 +152,28 @@ describe("folder tree", () => {
     expect(api.listSubfolders).toHaveBeenCalledTimes(2);
   });
 
+  it("reopens a folder whose lookup failed, and asks again", async () => {
+    api.listRootFolders.mockResolvedValue([folder("f1", "Blog")]);
+    api.listSubfolders
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([folder("f9", "2026")]);
+
+    render(<FolderTreeView {...props} />, { wrapper: Wrapper });
+    fireEvent.click(await screen.findByText("Blog"));
+    await screen.findByRole("button", { name: "Try again" });
+    // Closed instead of retried.
+    fireEvent.click(screen.getByText("Blog"));
+    expect(
+      screen.queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument();
+
+    // Opening it again asks again.
+    fireEvent.click(screen.getByText("Blog"));
+
+    expect(await screen.findByText("2026")).toBeInTheDocument();
+    expect(api.listSubfolders).toHaveBeenCalledTimes(2);
+  });
+
   it("offers to open a folder again once a subfolder is created in it", async () => {
     useAdminFreshness();
     api.listRootFolders.mockResolvedValue([folder("f1", "Blog")]);
