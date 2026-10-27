@@ -1228,16 +1228,40 @@ jobs:
           echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Design lint
+        id: design-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Design lint failed
+        if: ${{ !cancelled() && steps.design-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Workspace lint
+        id: workspace-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Workspace lint failed
+        if: ${{ !cancelled() && steps.workspace-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Scripts lint
+        id: scripts-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:scripts
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Scripts lint failed
+        if: ${{ !cancelled() && steps.scripts-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       - name: Build
         id: build

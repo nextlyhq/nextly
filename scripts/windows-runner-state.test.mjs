@@ -28,12 +28,34 @@ describe("the Windows gate jobs", () => {
 
 describe("the gates whose failure lets later gates run", () => {
   const steps = workflow.jobs["windows-gates"].steps;
-  it.each(["lint", "typecheck"])("%s is followed at once by a look at the runner, on its own failure", id => {
-    const index = steps.findIndex(step => step.id === id);
-    expect(index).toBeGreaterThan(-1);
-    const next = steps[index + 1];
+  const byId = new Map(steps.filter(step => step.id).map(step => [step.id, step]));
+  const isGate = step => /\bpnpm\b/.test(step.run ?? "");
+  // The steps a step needs to have succeeded, through every step those need in turn.
+  const needs = (step, seen = new Set()) => {
+    for (const [, id] of String(step.if ?? "").matchAll(/steps\.([\w-]+)\.outcome == 'success'/g)) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        needs(byId.get(id), seen);
+      }
+    }
+    return seen;
+  };
+  // A gate whose failure leaves a later gate free to run: one that runs past a failure and
+  // doesn't need this gate to have succeeded.
+  const freesLaterGates = index =>
+    steps
+      .slice(index + 1)
+      .some(later => isGate(later) && /!cancelled\(\)|always\(\)/.test(later.if ?? "") && !needs(later).has(steps[index].id));
+  const freeing = steps.flatMap((step, index) => (isGate(step) && freesLaterGates(index) ? [step] : []));
+
+  it("are found from the steps' own conditions", () => {
+    expect(freeing.map(step => step.id)).toEqual(["design-lint", "workspace-lint", "scripts-lint", "lint", "typecheck"]);
+  });
+
+  it.each(freeing.map(step => [step.name, step]))("%s is followed at once by a look at the runner, on its own failure", (_, step) => {
+    const next = steps[steps.indexOf(step) + 1];
     expect(next.uses).toBe(ACTION);
-    expect(next.if).toBe(`\${{ !cancelled() && steps.${id}.outcome == 'failure' }}`);
+    expect(next.if).toBe(`\${{ !cancelled() && steps.${step.id}.outcome == 'failure' }}`);
     expect(next["continue-on-error"]).toBe(true);
   });
 });
