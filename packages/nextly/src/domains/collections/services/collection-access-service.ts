@@ -168,8 +168,11 @@ export class CollectionAccessService extends BaseService {
     // What the caller may read decides how an entry outside the filter is
     // refused, so it is asked as the reads that apply a filter ask it, and
     // as a plain read is: in the default language and its fallbacks, not
-    // every language the write acts in.
-    const read = await askReadAsPlainRead(ask);
+    // every language the write acts in, and of the caller itself, since a
+    // route that authorized the write judged the write and not a read.
+    const read = await askReadAsPlainRead(
+      this.gateFor({ ...params, routeAuthorized: false }, true)
+    );
     if (!read.allowed && read.refusal === "failed") {
       return {
         denied: this.accessUnreadable<T>(read.error, {

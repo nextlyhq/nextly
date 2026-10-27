@@ -7434,7 +7434,7 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.accessService.checkCollectionAccess({
+    const access = await this.accessService.checkCollectionWrite({
       collectionName: params.collectionName,
       operation: "update",
       entryId: params.entryId,
@@ -7447,7 +7447,26 @@ export class CollectionMutationService extends BaseService {
       // super-admin bypass does not apply to a super-admin-owned key here.
       authenticatedScope: params.authenticatedScope,
     });
-    return denied === null;
+    if (access.denied) return false;
+    // A rule that answers a filter lets the caller update only the entries
+    // it matches: this one, matched as it is stored.
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      "update",
+      schema,
+      access
+    );
+    if (!match) return true;
+    const found = await this.storedWriteMatch(
+      this.db,
+      schema as Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+      params.entryId,
+      match
+    );
+    return found.exists && found.writes;
   }
 
   /**

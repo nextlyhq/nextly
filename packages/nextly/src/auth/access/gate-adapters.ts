@@ -336,9 +336,9 @@ async function routeAuthorizedVerdict(
   target: AccessTarget
 ): Promise<GateVerdict> {
   if (q.user && readsRouteFilter(kind, q, target)) {
-    // The route's allow said only that the caller may read; the route kept
-    // its verdict for the request, every entry or a read rule's filter, and
-    // the read applies it. The rule is not asked again: the route asked it,
+    // The route's allow said only that the caller may act; the route kept
+    // its verdict for the request, every entry or the rule's filter, and the
+    // read or the write applies it. The rule is not asked again: the route asked it,
     // and a rule may call out to a service, whose second answer could differ
     // from the first.
     const kept = routeVerdictFor({
@@ -347,8 +347,8 @@ async function routeAuthorizedVerdict(
       action: q.action,
       language: ruleLanguageKey(),
     });
-    // A route that judged this read only in another language said nothing
-    // of this one.
+    // A route that judged this only in another language said nothing of
+    // this one.
     if (kept === "other-language") return INSUFFICIENT;
     if (kept && "filter" in kept) return onlyMatching(q, kept.filter, true);
     // `routeAuthorized` is set by server code that has already judged the
@@ -365,21 +365,24 @@ async function routeAuthorizedVerdict(
 }
 
 /**
- * Whether a read the route already authorized reads the filter the route let
- * its caller through on: where the asker applies the rule's filter and the
- * collection's read rule is a function, which may answer one. A plain `true`
- * or `false` was judged by the route, as before.
+ * Whether a read or write the route already authorized reads the filter the
+ * route let its caller through on: where the action is one whose filter is
+ * applied and the collection's rule for it is a function, which may answer
+ * one. A plain `true` or `false` was judged by the route, as before.
+ *
+ * A read reads it only where its asker applies the filter. A write's is read
+ * whoever asks, so an asker that cannot apply a filter the route let the
+ * caller through on refuses, rather than allowing every entry.
  */
 function readsRouteFilter(
   kind: "collection" | "single",
   q: GateQuestion,
   target: AccessTarget
 ): boolean {
-  if (!q.appliesFilter || q.action !== "read" || kind !== "collection") {
-    return false;
-  }
+  if (!FILTER_APPLIED.has(q.action) || kind !== "collection") return false;
+  if (q.action === "read" && !q.appliesFilter) return false;
   return (
-    declaresRule(target, "read") && plainRule(target, "read") === undefined
+    declaresRule(target, q.action) && plainRule(target, q.action) === undefined
   );
 }
 

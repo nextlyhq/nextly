@@ -702,6 +702,20 @@ const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "getEntry",
 ]);
 
+/**
+ * The entry writes whose service matches the entry against a write rule's
+ * filter: an update, a delete, and the writes an editor makes through an
+ * entry's versions, each judged as an update of the entry.
+ */
+const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "updateEntry",
+  "deleteEntry",
+  "restoreEntryVersion",
+  "discardWorkingDraft",
+  "takeLiveSharedValues",
+  "autosaveEntry",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -925,6 +939,9 @@ async function resolveAuthorization(
         // filtered read, which applies a read rule's filter; every other entry
         // route refuses a caller whose rule answers one.
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
+        // The entry writes whose service matches the entry against a write
+        // rule's filter let such a caller through on it the same way.
+        appliesWriteFilter: FILTERED_WRITE_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(req, slug, route);
