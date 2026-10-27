@@ -362,7 +362,18 @@ export const COMPONENTS_METHODS: Record<
       desired.components[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredFieldGroup["fields"],
+        // A Required or Unique field leaving translation is diffed without its setting, as the
+        // apply's first push creates it, so the dialog does not ask how existing rows fill a
+        // required column the copy fills from the default language.
+        fields: (fieldsWithLeavingSettingsDeferred({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          wasLocalized:
+            (component as { localized?: boolean }).localized === true,
+          isLocalized:
+            readRequestLocalized(body) ??
+            (component as { localized?: boolean }).localized === true,
+        }) ?? fields) as DesiredFieldGroup["fields"],
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.

@@ -1121,7 +1121,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        // A Required or Unique field leaving translation is diffed without its setting, as the
+        // apply's first push creates it, so the dialog does not ask how existing rows fill a
+        // required column the copy fills from the default language.
+        fields: (fieldsWithLeavingSettingsDeferred({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          wasLocalized: (single as { localized?: boolean }).localized === true,
+          isLocalized:
+            readRequestLocalized(body) ??
+            (single as { localized?: boolean }).localized === true,
+        }) ?? fields) as DesiredSingle["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: single.status === true,
