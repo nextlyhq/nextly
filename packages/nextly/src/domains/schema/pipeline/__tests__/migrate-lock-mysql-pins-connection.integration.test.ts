@@ -156,7 +156,7 @@ describeMysql("withMigrateLock on MySQL", () => {
           withMigrateLock(db, "mysql", async () => {
             ran = true;
           })
-        ).rejects.toThrow("holds the migrate lock");
+        ).rejects.toThrow("server-wide migrate lock");
         expect(ran).toBe(false);
         expect(await holderOfLock()).toBeNull();
       } finally {
