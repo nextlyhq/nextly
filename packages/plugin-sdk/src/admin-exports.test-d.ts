@@ -1,6 +1,14 @@
 import { expectTypeOf } from "vitest";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
+import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
+import type {
+  WidgetBarChartProps,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetSeriesChartProps,
+  WidgetTableProps,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Checkbox,
@@ -165,3 +173,41 @@ expectTypeOf(drawsAnyValidationRule).toBeFunction();
 expectTypeOf(EDITABLE_VALIDATION_RULES).toMatchTypeOf<readonly string[]>();
 expectTypeOf<ValidationRulesEditorProps>().not.toBeNever();
 expectTypeOf<ValidationRuleValues>().not.toBeNever();
+
+// The widget kit: `Widget.*` holds the parts core's own cards are drawn with. Each part's props
+// are the published `Widget*Props` types, so a view written against them type-checks against the
+// part itself. The formatters and the colour accessor are the server-safe root's, not here.
+
+const { Widget } = adminEntry;
+expectTypeOf(Widget.Figure).parameter(0).toEqualTypeOf<WidgetFigureProps>();
+expectTypeOf(Widget.BarChart).parameter(0).toEqualTypeOf<WidgetBarChartProps>();
+expectTypeOf(Widget.SeriesChart)
+  .parameter(0)
+  .toEqualTypeOf<WidgetSeriesChartProps>();
+expectTypeOf(Widget.List<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetListProps<{ id: string }>>();
+expectTypeOf(Widget.Table<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetTableProps<{ id: string }>>();
+// A chart's unit is part of both charts' props, as core's cards pass it.
+expectTypeOf<WidgetBarChartProps>().toHaveProperty("unit");
+expectTypeOf<WidgetSeriesChartProps>().toHaveProperty("unit");
+// A table takes at most three columns beside its title, what a narrow card's row holds.
+type Column = WidgetTableProps<{ id: string }>["columns"][number];
+expectTypeOf<readonly [Column, Column, Column]>().toMatchTypeOf<
+  WidgetTableProps<{ id: string }>["columns"]
+>();
+expectTypeOf<readonly [Column, Column, Column, Column]>().not.toMatchTypeOf<
+  WidgetTableProps<{ id: string }>["columns"]
+>();
+// A client module cannot be called from a Server Component, so the formatters are not here.
+expectTypeOf(adminEntry).not.toHaveProperty("formatWidgetNumber");
+expectTypeOf(adminEntry).not.toHaveProperty("formatWidgetChange");
+expectTypeOf(adminEntry).not.toHaveProperty("widgetChartColour");
+// The names the kit replaced are gone, with no alias.
+expectTypeOf(adminEntry).not.toHaveProperty("CardFigure");
+expectTypeOf(adminEntry).not.toHaveProperty("cardNumber");
+expectTypeOf(adminEntry).not.toHaveProperty("cardChange");
+expectTypeOf(adminEntry).not.toHaveProperty("GroupsChart");
+expectTypeOf(adminEntry).not.toHaveProperty("OverTimeChart");

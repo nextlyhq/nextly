@@ -11,7 +11,16 @@
  * Using each export in a type position makes the compiler error if any is
  * missing.
  */
-import { WIDGET_CONDITIONS, WIDGET_LIFECYCLES } from "@nextlyhq/plugin-sdk";
+import { expectTypeOf } from "vitest";
+
+import {
+  formatWidgetChange,
+  formatWidgetNumber,
+  WIDGET_CONDITIONS,
+  WIDGET_LIFECYCLES,
+  widgetChartColour,
+  type WidgetChartSlot,
+} from "@nextlyhq/plugin-sdk";
 import type {
   GridSize,
   WidgetLifecycle,
@@ -70,5 +79,13 @@ const _vocabulary: readonly string[] = [
 void _lifecycle;
 void _condition;
 void _vocabulary;
+
+// The figure formatters and the chart colour accessor, from the server-safe root: a figure as
+// drawn and as heard, and a slot's colour token.
+expectTypeOf(formatWidgetNumber).returns.toHaveProperty("text");
+expectTypeOf(formatWidgetNumber).returns.toHaveProperty("label");
+expectTypeOf(formatWidgetChange).returns.toHaveProperty("text");
+expectTypeOf(widgetChartColour).parameter(0).toEqualTypeOf<WidgetChartSlot>();
+expectTypeOf<WidgetChartSlot>().toEqualTypeOf<1 | 2 | 3 | 4 | 5>();
 
 export type { _WidgetSurface };
