@@ -43,11 +43,23 @@ export const OLD_FRAMEWORK_PATTERNS = [
     passes: "export function instrumentationHook(configImport: string)",
   },
   {
-    name: "a Next.js 14 or 15 or React 18 branch or note",
-    pattern:
-      /\b(?:Next(?:\.js)?\s*1[45]|React\s*18)\b|\^14\s*\|\||\b(?:major|version)\s*<\s*1[56]\b/,
+    name: "a Next.js 14 or 15 branch or note",
+    // A bare "Next 15" only capitalised: "the next 15" is ordinary prose.
+    pattern: /\bNext\s*1[45]\b|\^14\s*\|\||\b(?:major|version)\s*<\s*1[56]\b/,
     finds: "draftMode() is sync on Next 14",
-    passes: "Next.js 16.4 passes route params as a Promise",
+    passes: ["Next.js 16.4 passes route params as a Promise", "the next 15 rows"],
+  },
+  {
+    name: "Next.js 14 or 15 named in any case",
+    pattern: /\bnext\.js\s*1[45]\b/i,
+    finds: "works on next.js 15 as well",
+    passes: "next.js 16.4 reads the top-level option",
+  },
+  {
+    name: "React 18 named in any case",
+    pattern: /\breact(?:[\s-]+dom)?\s*18\b/i,
+    finds: "correct under react 18 too",
+    passes: "react 19 counts a settled-node promise",
   },
   {
     name: "a read of the installed React version",
