@@ -18,6 +18,7 @@ import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
+import { onceForRequest } from "./access/request-memo";
 import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
 import { SESSION_CUTOFF_SECONDS } from "./session/session-standing";
@@ -116,7 +117,11 @@ export function scopeHoldsSuperAdmin(
 ): boolean {
   if (scope === undefined) return false;
   const lapsesAt = SUPER_ADMIN_SCOPES.get(scope);
-  return lapsesAt !== undefined && performance.now() < lapsesAt;
+  if (lapsesAt === undefined) return false;
+  // Asked once per request, so every door one operation passes gives the
+  // same answer, even one asked after the bound passed mid-operation. A scope
+  // kept for a later request is asked again there, and has lapsed by then.
+  return onceForRequest(scope, () => performance.now() < lapsesAt);
 }
 
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */

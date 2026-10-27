@@ -109,6 +109,35 @@ function keptFor(
 }
 
 /**
+ * What each request has answered about an object, such as a key's scope, kept
+ * beside its per-user lookups and dropped with the request.
+ */
+const keptAboutObjects = new WeakMap<
+  Map<string, KeptForUser>,
+  WeakMap<object, unknown>
+>();
+
+/**
+ * The answer `ask` gives about `subject`, asked once per request and given
+ * again to every later question about it there, so the doors one operation
+ * passes agree even when the answer would change partway through it. A later
+ * request asks again. Outside a request it is asked every time.
+ */
+export function onceForRequest<T>(subject: object, ask: () => T): T {
+  const memo = lookups.getStore();
+  if (!memo) return ask();
+  let kept = keptAboutObjects.get(memo);
+  if (!kept) {
+    kept = new WeakMap();
+    keptAboutObjects.set(memo, kept);
+  }
+  if (kept.has(subject)) return kept.get(subject) as T;
+  const answer = ask();
+  kept.set(subject, answer);
+  return answer;
+}
+
+/**
  * Forgets every lookup the request has kept. Called when the request writes a
  * role, a permission or a role assignment, so a later ask sees the change.
  */
