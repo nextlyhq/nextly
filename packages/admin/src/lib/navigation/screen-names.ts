@@ -14,6 +14,10 @@
  *
  * @module lib/navigation/screen-names
  */
+import {
+  CONTENT_SECTION_LABEL,
+  type ContentSection,
+} from "@admin/components/layout/sidebar/lib/content-rail";
 import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav";
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
 import type { NavSection } from "@admin/constants/nav-sections";
@@ -73,6 +77,15 @@ export function resolveScreenName(
  */
 export function railScreen(section: NavSection): ScreenName {
   return () => MAIN_MENU_ITEMS.find(item => item.id === section)?.label;
+}
+
+/**
+ * A Content section's list screen, named as the Content panel names its part
+ * ("Collections", "Singles"): both sections sit under one rail item, so the
+ * rail has no entry of their own to read.
+ */
+export function contentScreen(section: ContentSection): ScreenName {
+  return () => CONTENT_SECTION_LABEL[section];
 }
 
 /**

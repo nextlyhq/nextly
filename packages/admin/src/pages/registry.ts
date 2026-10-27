@@ -15,6 +15,7 @@ import {
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
   collectionScreen,
+  contentScreen,
   railScreen,
   settingsScreen,
   singleScreen,
@@ -421,13 +422,13 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.COLLECTIONS]: {
     component: CollectionsLandingRedirect,
-    screenName: railScreen("collections"),
+    screenName: contentScreen("collections"),
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.SINGLES]: {
     component: SinglesLandingRedirect,
-    screenName: railScreen("singles"),
+    screenName: contentScreen("singles"),
     type: "private",
     section: overridableBy("singles"),
   },

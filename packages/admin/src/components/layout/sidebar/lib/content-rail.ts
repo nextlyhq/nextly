@@ -27,6 +27,16 @@ export const CONTENT_SECTION_HREF: Readonly<Record<ContentSection, string>> = {
   singles: ROUTES.SINGLES,
 };
 
+/**
+ * What each section is called: its part of the Content panel's control, and
+ * the browser tab of its list screen. Kept here rather than in the panel so
+ * the route table can name those screens without loading the panel.
+ */
+export const CONTENT_SECTION_LABEL: Readonly<Record<ContentSection, string>> = {
+  collections: "Collections",
+  singles: "Singles",
+};
+
 /** Whether a section is one of the Content item's. */
 export function isContentSection(section: string): section is ContentSection {
   return (CONTENT_SECTIONS as readonly string[]).includes(section);

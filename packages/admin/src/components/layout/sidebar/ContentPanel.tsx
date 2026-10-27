@@ -29,6 +29,7 @@ import { cn } from "@admin/lib/utils";
 
 import {
   CONTENT_SECTION_HREF,
+  CONTENT_SECTION_LABEL,
   contentPanelView,
   type ContentSection,
 } from "./lib/content-rail";
@@ -41,12 +42,12 @@ const PART: Record<
   { label: string; href: string; noun: string }
 > = {
   collections: {
-    label: "Collections",
+    label: CONTENT_SECTION_LABEL.collections,
     href: CONTENT_SECTION_HREF.collections,
     noun: "collections",
   },
   singles: {
-    label: "Singles",
+    label: CONTENT_SECTION_LABEL.singles,
     href: CONTENT_SECTION_HREF.singles,
     noun: "Singles",
   },

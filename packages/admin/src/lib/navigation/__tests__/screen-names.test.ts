@@ -7,6 +7,7 @@
  * literal would still say the old name, and would pass any test that only
  * compared against today's spelling.
  */
+import { CONTENT_SECTION_LABEL } from "@admin/components/layout/sidebar/lib/content-rail";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@admin/components/layout/sidebar/lib/settings-nav", async () => {
@@ -72,6 +73,13 @@ describe("the name each route gives its screen", () => {
     );
 
     expect(unnamed).toEqual([]);
+  });
+
+  it("names the Content screens as the Content panel names its parts", () => {
+    // Both sections sit under one rail item, so their names come from the
+    // panel's own labels rather than the rail's.
+    expect(nameOf(ROUTES.COLLECTIONS)).toBe(CONTENT_SECTION_LABEL.collections);
+    expect(nameOf(ROUTES.SINGLES)).toBe(CONTENT_SECTION_LABEL.singles);
   });
 
   it("names a settings screen by its entry in the settings panel", () => {
