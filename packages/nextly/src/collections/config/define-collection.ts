@@ -45,6 +45,7 @@ import { simplePluralize } from "../../shared/lib/pluralization";
 import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
+import { asDeclaredFields, toTitleCase } from "./declared-config";
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
 import { assertValidCollectionConfig } from "./validate-config";
@@ -1041,23 +1042,6 @@ export interface CollectionConfig {
 // Utility Functions
 // ============================================================
 
-/**
- * Converts a slug to title case for display.
- *
- * @param str - The string to convert
- * @returns Title-cased string
- *
- * @example
- * ```typescript
- * toTitleCase('blog-posts') // 'Blog Posts'
- * toTitleCase('order_items') // 'Order Items'
- * toTitleCase('users') // 'Users'
- * ```
- */
-function toTitleCase(str: string): string {
-  return str.replace(/[-_]/g, " ").replace(/\b\w/g, char => char.toUpperCase());
-}
-
 // ============================================================
 // defineCollection Function
 // ============================================================
@@ -1134,33 +1118,13 @@ function toTitleCase(str: string): string {
  * ```
  */
 /**
- * A collection as an author writes it.
+ * A collection as `defineCollection` takes it.
  *
  * Identical to `CollectionConfig` except for the fields array, which also
- * admits a contributed type declared through `pluginField()`. The widening
- * lives here rather than in `FieldConfig` because a union member carrying an
- * index signature widens property access for every internal reader of that
- * union.
- */
-
-/**
- * The authored fields as the rest of the system reads them.
- *
- * A contributed declaration is structurally a field — a name, a type, and the
- * options its own type reads — and every internal consumer dispatches on
- * `type` as a string. The authoring widening exists so a plugin type can be
- * written down; it is dropped at this boundary, after validation, rather than
- * carried into the union every reader shares, where an index-signature member
- * would widen property access for all of them.
- */
-function asDeclaredFields(
-  fields: readonly AuthorableFieldConfig[]
-): FieldConfig[] {
-  return fields as FieldConfig[];
-}
-
-/**
- * A collection as `defineCollection` takes it.
+ * admits a contributed type declared through `pluginField()`, and the access
+ * rules, typed by those fields. The widening lives here rather than in
+ * `FieldConfig` because a union member carrying an index signature widens
+ * property access for every internal reader of that union.
  *
  * `Fields` is the declared fields as written, so a read rule's filter is
  * typed by their names (see `CollectionRuleFilter`); `ReadAnswer` is what the
