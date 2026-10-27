@@ -35,6 +35,10 @@ import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
 import { manageCounts, type Actor, type KeyActor } from "./actor";
+import {
+  answeringPermissions,
+  storedSlugHolds,
+} from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -553,35 +557,6 @@ function gateVerdict(
     rules,
     permissionWithoutService,
   });
-}
-
-/**
- * The permissions any one of which holds `action` on `resource`, as the
- * decision counts them: the permission itself and, on a system resource, that
- * resource's `manage-` permission, which still counts as its read, create,
- * update and delete ({@link manageCounts}).
- */
-function answeringPermissions(
-  action: string,
-  resource: string
-): RoutePermission[] {
-  return manageCounts(action, resource)
-    ? [
-        { action, resource },
-        { action: "manage", resource },
-      ]
-    : [{ action, resource }];
-}
-
-/** Whether a key's stored slugs name any permission holding the action. */
-function storedSlugHolds(
-  stored: readonly string[],
-  action: string,
-  resource: string
-): boolean {
-  return answeringPermissions(action, resource).some(permission =>
-    stored.includes(permissionSlug(permission.action, permission.resource))
-  );
 }
 
 /** Whether a signed-in user holds any permission holding the action. */
