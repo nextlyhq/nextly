@@ -12,9 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { apiKeyScope } from "../authenticated-scope";
 
-const { failingClosedSpy, throwingSpy } = vi.hoisted(() => ({
+const { failingClosedSpy, throwingSpy, visitorSpy } = vi.hoisted(() => ({
   failingClosedSpy: vi.fn(),
   throwingSpy: vi.fn(),
+  visitorSpy: vi.fn(),
 }));
 
 // The user's actor, each lookup that fails counted as holding nothing. The
@@ -24,11 +25,14 @@ vi.mock("./resolve-actor", async importOriginal => ({
   ...(await importOriginal<typeof import("./resolve-actor")>()),
   actorForUserFailingClosed: failingClosedSpy,
   actorForUser: throwingSpy,
+  // The visitor's actor, its Public grants as each case sets them: a failed
+  // read of them is a visitor holding nothing.
+  actorForVisitorFailingClosed: visitorSpy,
 }));
 
 import { makePrincipal } from "../../plugins/principals/principal";
 
-import { userActor } from "./actor";
+import { userActor, visitorActor } from "./actor";
 import { clearDeclaredTargets, declareTarget } from "./declared-rules";
 import { relatedRowReads } from "./population-read";
 
@@ -113,6 +117,28 @@ describe("an API key", () => {
         { user: owner, scope, principal: null },
         service()
       )
+    ).resolves.toBe(true);
+  });
+});
+
+describe("a visitor, without the access-control service", () => {
+  it("is refused where the Public role does not hold the read, as a failed lookup leaves it", async () => {
+    // Without the service no rule is read, but the Public role still decides:
+    // a visitor holding nothing, which is also what a failed read of its
+    // grants leaves, is not shown the rows.
+    visitorSpy.mockResolvedValue(visitorActor([]));
+    await expect(
+      relatedRowReads("posts", { principal: null }, undefined)
+    ).resolves.toBe(false);
+  });
+
+  it("is shown the rows where the Public role holds the read", async () => {
+    // The control: only what Public holds differs.
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+    await expect(
+      relatedRowReads("posts", { principal: null }, undefined)
     ).resolves.toBe(true);
   });
 });
