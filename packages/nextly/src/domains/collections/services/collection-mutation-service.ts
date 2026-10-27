@@ -11151,6 +11151,8 @@ export class CollectionMutationService extends BaseService {
    *
    * A filter on a translated field is matched in `locale`, the language the
    * write acts in; a write acting on every language matches in the default.
+   * Whether the caller may read the entry is matched in the default language,
+   * as the plain read its verdict comes from is asked.
    */
   private async prepareFilteredWrite(
     collectionName: string,
@@ -11208,13 +11210,16 @@ export class CollectionMutationService extends BaseService {
             ),
             localizedColumns: companion.localizedFields.map(f => f.column),
           });
-    const locale = options.locale ?? this.localization?.defaultLocale;
-    const localizedCtx = localizedFilterContext(
-      readiness === "ready" ? (companion ?? null) : null,
-      locale ? [locale] : null,
-      schema
-    );
-    return { columns: prepared.columns(schema, localizedCtx) };
+    const ready = readiness === "ready" ? (companion ?? null) : null;
+    const contextIn = (locale: string | undefined) =>
+      localizedFilterContext(ready, locale ? [locale] : null, schema);
+    const defaultLocale = this.localization?.defaultLocale;
+    return {
+      columns: prepared.columns(schema, {
+        writes: contextIn(options.locale ?? defaultLocale),
+        reads: contextIn(defaultLocale),
+      }),
+    };
   }
 
   /**

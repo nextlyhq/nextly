@@ -267,6 +267,61 @@ describe("an update rule that answers a filter", () => {
   });
 });
 
+describe("an update rule's filter on a collection with languages", () => {
+  const LOCALIZED = "updfilter_localized_posts";
+
+  it("answers an entry outside the filter that a plain read hides as missing, whatever language the update writes", async () => {
+    // Whether the caller may read the entry is a plain read's question, in
+    // the default language. Here the read rule matches the entry's German
+    // title and not its default one, so a plain read hides the entry, and an
+    // update writing German is answered as if the entry were missing.
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: LOCALIZED,
+          localized: true,
+          access: {
+            read: () => ({ title: { equals: "shown" } }) as unknown as boolean,
+            update: ownEntries,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
+    await grantTo(t, AUTHOR, "update", [LOCALIZED]);
+    const created = await t.nextly.create({
+      collection: LOCALIZED,
+      data: { title: "hidden", owner: OTHER },
+    });
+    const others = String(created.item.id);
+    await t.nextly.update({
+      collection: LOCALIZED,
+      id: others,
+      locale: "de",
+      data: { title: "shown" },
+    } as never);
+
+    const refused = await errorOf(() =>
+      t.nextly.update({
+        collection: LOCALIZED,
+        id: others,
+        locale: "de",
+        data: { title: "renamed" },
+        ...asAuthor,
+      } as never)
+    );
+
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+  });
+});
+
 describe("a publish or unpublish rule that answers a filter", () => {
   it("publishes an entry the filter matches inside the caller's transaction, and refuses another's", async () => {
     // A status-only write, judged by the publish rule alone, as a plugin

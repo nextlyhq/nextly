@@ -54,10 +54,16 @@ export interface PreparedWriteMatch {
   /**
    * The two match columns over `schema`, each `1` where the row matches and
    * `0` where it does not. Pure, so they may be built inside a transaction.
+   * Each is matched in a language of its own: the write filter in the
+   * language the write acts in, and the read reach in the one the plain read
+   * whose verdict it carries was asked in.
    */
   columns(
     schema: DynamicSchema,
-    localizedCtx: LocalizedQueryContext | null
+    localizedCtx: {
+      writes: LocalizedQueryContext | null;
+      reads: LocalizedQueryContext | null;
+    }
   ): { writes: SQL<number>; reads: SQL<number> };
 }
 
@@ -97,9 +103,9 @@ export async function prepareWriteMatch(
   return {
     columns(schema, localizedCtx) {
       return {
-        writes: matchColumn(write.condition(schema, localizedCtx)),
+        writes: matchColumn(write.condition(schema, localizedCtx.writes)),
         reads: read
-          ? matchColumn(read.condition(schema, localizedCtx))
+          ? matchColumn(read.condition(schema, localizedCtx.reads))
           : readKind === "every"
             ? sql<number>`1`.mapWith(Number)
             : sql<number>`0`.mapWith(Number),
