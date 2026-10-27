@@ -603,6 +603,70 @@ describe("a read whose route already authorized it", () => {
   });
 });
 
+describe("a write whose route already authorized it", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  beforeEach(() => {
+    callerMay("update");
+  });
+
+  /** A route's update verdict kept for `u1` on `posts`, in the language now. */
+  const kept = (verdict: { filter: RuleFilter } | { all: true }) =>
+    rememberRouteVerdict(
+      {
+        userId: "u1",
+        slug: "posts",
+        action: "update",
+        language: currentRuleLanguage(),
+      },
+      verdict
+    );
+  const routeUpdate = (appliesFilter: boolean) =>
+    collectionGateVerdict(
+      asked(
+        { update: filtering() },
+        {
+          action: "update",
+          user: { id: "u1" },
+          routeAuthorized: true,
+          appliesFilter,
+        }
+      )
+    );
+
+  it("answers the filter the route let the caller through on to an asker that applies it", async () => {
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ filter: OWN });
+      return routeUpdate(true);
+    });
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("refuses an asker that cannot apply the filter the route let the caller through on", async () => {
+    // Not `allowed`, which would let the write change every entry: the
+    // route's allow was for the entries the filter matches.
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ filter: OWN });
+      return routeUpdate(false);
+    });
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+  });
+
+  it("allows every entry, whoever asks, where the route kept that verdict", async () => {
+    // The control: a route that allowed every entry vouches for every asker.
+    const verdict = await runWithAccessMemo(async () => {
+      kept({ all: true });
+      return routeUpdate(false);
+    });
+    expect(verdict).toEqual({ allowed: true });
+  });
+});
+
 describe("a write rule's filter", () => {
   const OWN = { author: { equals: "u1" } };
   const filtering = () => vi.fn(() => OWN as unknown as boolean);
