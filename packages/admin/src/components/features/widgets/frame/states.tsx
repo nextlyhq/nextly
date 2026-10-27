@@ -265,7 +265,7 @@ export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
  * this, such as a two-row card's, lays the title and the action in one row instead, so the action
  * stays inside the body rather than running under the footer's room.
  */
-export const EMPTY_STACKED_WITH_ACTION_PX = 20 + 4 + 8 + 32;
+export const EMPTY_STACKED_WITH_ACTION_PX: number = 20 + 4 + 8 + 32;
 
 export function CardEmpty({
   title,
