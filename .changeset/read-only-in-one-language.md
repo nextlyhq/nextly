@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-On a document a user may change in one language and only read in another, switching languages keeps the editor on screen while the new language's access is checked and offers nothing that saves until it is known; the language the user may only read then opens read-only, with the reader's banner.
+On a document a user may change in one language and only read in another, switching languages shows the loading screen while the new language's access is checked, so nothing is shown or offered for it until that is known; the language the user may only read then opens read-only, with the reader's banner.

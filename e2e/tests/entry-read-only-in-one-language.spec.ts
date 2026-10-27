@@ -1,9 +1,8 @@
 /**
  * A user who may change a note in English and only read it in Spanish, by the
  * fixture's rule, edits the English and opens the Spanish read-only. While the
- * Spanish answer is on its way the Spanish editor is on screen with nothing
- * that saves offered: the English answer kept meanwhile grants nothing in
- * Spanish.
+ * Spanish answer is on its way the page waits, showing neither editor: the
+ * English answer kept meanwhile grants nothing in Spanish, not even its read.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -61,7 +60,7 @@ function asksCapabilitiesIn(locale: string) {
     url.searchParams.get("locale") === locale;
 }
 
-test("edits the English and opens the Spanish read-only, offering no save while it loads", async () => {
+test("edits the English and opens the Spanish read-only, showing no editor while it loads", async () => {
   await gotoAdmin(page, `/collections/translator-notes/${noteId}`);
   await expect(save()).toBeVisible();
   await expect(banner()).toHaveCount(0);
@@ -82,18 +81,15 @@ test("edits the English and opens the Spanish read-only, offering no save while 
   await page.getByRole("button", { name: "Open Spanish" }).click();
   await expect.poll(() => asked).toBe(true);
 
-  // The Spanish editor is on screen, and nothing that saves is offered for
-  // Spanish on the English answer's word.
-  await expect(
-    page.getByRole("listitem").filter({ hasText: "Spanish" })
-  ).toContainText("editing now");
-  await expect(note()).toBeVisible();
-  // The Spanish document, which has no note of its own, not the English one
-  // left on screen.
-  await expect(note()).toHaveValue("");
+  // The page waits for the Spanish answer: no editor, so nothing that saves,
+  // is shown on the English answer's word.
+  await expect(page.getByText("Setting up your workspace")).toBeVisible();
+  await expect(note()).toHaveCount(0);
   await expect(save()).toHaveCount(0);
 
   release();
+  // The Spanish document, which has no note of its own.
+  await expect(note()).toHaveValue("");
   await expect(banner()).toHaveText(
     "Your access lets you view this, but not change it. If you need to change it, ask an admin."
   );
