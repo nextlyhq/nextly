@@ -508,6 +508,51 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("kept");
   });
 
+  it.each([
+    [
+      "a header value of several words",
+      {
+        note: "Rejected Password: correct-horse battery-staple\nnext line kept",
+      },
+      ["correct-horse", "battery-staple"],
+    ],
+    [
+      "a JSON array or object after a credential's name",
+      {
+        note: 'upstream said {"tokens":["first-secret","second-secret"]}',
+        other: 'upstream said {"token":{"value":"nested-secret"}}',
+      },
+      ["first-secret", "second-secret", "nested-secret"],
+    ],
+    [
+      "an address without a scheme",
+      { note: "fetch //user:relative-secret@storage.example/file" },
+      ["relative-secret"],
+    ],
+    [
+      "a bracketed parameter name",
+      { note: "posted user[password]=bracket-secret&tokens[]=list-secret" },
+      ["bracket-secret", "list-secret"],
+    ],
+  ])("takes them out of %s", (_, meta, secrets) => {
+    const out = receivedBy(meta);
+    for (const secret of secrets) expect(out).not.toContain(secret);
+  });
+
+  it("reads a boxed string whole, so its credential is found", () => {
+    const out = receivedBy({ note: new String("Bearer boxed-string-secret") });
+    // Copied character by character, no credential would ever be seen whole,
+    // and the characters would still spell it: the string is redacted as one.
+    expect(out).toContain("note: 'Bearer [redacted]'");
+  });
+
+  it("keeps the line after a header value it redacts", () => {
+    const out = receivedBy({
+      note: "Rejected Password: correct-horse\nnext line kept",
+    });
+    expect(out).toContain("next line kept");
+  });
+
   it("takes them out of a function's own fields", () => {
     const out = receivedBy({
       callback: Object.assign(() => undefined, {

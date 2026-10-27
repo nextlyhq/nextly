@@ -136,6 +136,12 @@ function copyInstance(
  * logged by kind alone: a console would print what a promise settled to.
  */
 function builtInForm(value: object, rules: LogCopyRules): unknown {
+  // A boxed string is read whole as text, so a credential in it is seen as
+  // one; copied by its character indices, no rule would ever see it.
+  if (value instanceof String) return rules.text(value.valueOf());
+  if (value instanceof Number || value instanceof Boolean) {
+    return value.valueOf();
+  }
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof RegExp) return rules.text(value.toString());
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
@@ -521,28 +527,34 @@ function isCredentialField(key: string, value: unknown): boolean {
  */
 const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 
-/** Credentials before a host in an address: `https://user:password@host`. */
-const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
+/**
+ * Credentials before a host in an address, with a scheme or without one:
+ * `https://user:password@host` and `//user:password@host`.
+ */
+const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
 
 /**
  * The name of a named value in text, in each form an upstream message quotes
  * one: a URL's `name=value`, a header's `Name: value`, JSON's
  * `"name":"value"` (escaped too, when a body sits inside a message) and
- * `name="value"`. Groups: the quote around the name, the name, and the
+ * `name="value"`, and a form's bracketed `user[password]=` or `tokens[]=`.
+ * Groups: the quote around the name, the name, and the
  * separator. The value is read only after a credential's name
  * (`TEXT_PARAMETER_VALUE`), so any other value is searched as ordinary text.
  */
-const TEXT_PARAMETER = /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)/g;
+const TEXT_PARAMETER =
+  /(\\?["']|)\b([A-Za-z_][\w.-]*(?:\[[\w.-]*\])*)\1(\s*[=:]\s*)/g;
 
 /**
  * A credential's value, read where its name ends: quoted, and then taken
  * whole so a quote is never read as an empty value with the secret after it;
  * an opening quote never closed (a message cut short), and then the rest of
- * the line, failing closed; or bare, with any `Bearer` or `Basic` scheme as
- * the second group.
+ * the line, failing closed; a JSON array or object, which is not parsed and
+ * so takes the rest of the line too; or bare, with any `Bearer` or `Basic`
+ * scheme as the second group.
  */
 const TEXT_PARAMETER_VALUE =
-  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
+  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|[[{][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
 
 /**
  * An `Authorization` header's value, read to the end of its line: a scheme
@@ -550,6 +562,13 @@ const TEXT_PARAMETER_VALUE =
  * after it, which can run to several words, as the credential.
  */
 const AUTHORIZATION_HEADER_VALUE = /([A-Za-z][\w.+-]*[ \t]+)?[^\r\n]*/y;
+
+/**
+ * Any other credential header's value (`Password: …`, `X-Api-Key: …`), which
+ * can run to several words: read to the end of its line, or to where the
+ * line goes on to another named value (`, page=2`).
+ */
+const HEADER_VALUE = /(?:(?!,\s*[A-Za-z_][\w.-]*\s*[=:])[^\r\n])*/y;
 
 /** A value's quotes, kept around its redaction so JSON still reads as JSON. */
 const VALUE_QUOTES = /^(\\?["']?)[\s\S]*?(\1)$/;
@@ -563,6 +582,52 @@ const CREDENTIAL_PARAMETER_ONLY_NAMES: ReadonlySet<string> = new Set([
   "key",
   "sig",
 ]);
+
+/** The sticky patterns a credential's value is read with, one per form. */
+interface ValueReaders {
+  value: RegExp;
+  authorization: RegExp;
+  header: RegExp;
+}
+
+/**
+ * A credential's value at `valueStart`, and the scheme word kept before its
+ * redaction. A header (`Password: correct horse`, its name unquoted) runs on
+ * to the end of its line, and an `Authorization` header keeps its scheme
+ * word; JSON's quoted names, and a quoted or structured value, end where
+ * their own form says.
+ */
+function readCredentialValue(
+  text: string,
+  valueStart: number,
+  found: {
+    nameQuote: string;
+    name: string;
+    separator: string;
+    readers: ValueReaders;
+  }
+): { value: string; scheme: string | undefined } {
+  const { nameQuote, name, separator, readers } = found;
+  const header =
+    separator.includes(":") &&
+    nameQuote === "" &&
+    !/["'\\[{]/.test(text.charAt(valueStart));
+  const authorization =
+    header && normalisedName(name).includes("authorization");
+  const reader = authorization
+    ? readers.authorization
+    : header
+      ? readers.header
+      : readers.value;
+  reader.lastIndex = valueStart;
+  const [value = "", headerScheme, valueScheme] = reader.exec(text) ?? [];
+  const scheme = authorization
+    ? headerScheme
+    : header
+      ? undefined
+      : valueScheme;
+  return { value, scheme };
+}
 
 /**
  * Every parameter in a piece of text whose name says it holds a credential,
@@ -579,12 +644,15 @@ function redactCredentialParameters(text: string): string {
   // searched as the text it is part of, so a chain like `a:a:a:…` costs one
   // step per name rather than one stack frame.
   const names = new RegExp(TEXT_PARAMETER.source, "g");
-  const values = new RegExp(TEXT_PARAMETER_VALUE.source, "y");
-  const headerValues = new RegExp(AUTHORIZATION_HEADER_VALUE.source, "y");
+  const readers: ValueReaders = {
+    value: new RegExp(TEXT_PARAMETER_VALUE.source, "y"),
+    authorization: new RegExp(AUTHORIZATION_HEADER_VALUE.source, "y"),
+    header: new RegExp(HEADER_VALUE.source, "y"),
+  };
   let out = "";
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
-    const [prefix, , name, separator] = match;
+    const [prefix, nameQuote, name, separator] = match;
     if (
       !isCredentialName(name) &&
       !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
@@ -592,16 +660,12 @@ function redactCredentialParameters(text: string): string {
       continue;
     }
     const valueStart = match.index + prefix.length;
-    // A header (`Authorization: Token …`) runs to the end of its line; any
-    // other value, and a quoted one, ends where its own form says.
-    const header =
-      separator.includes(":") &&
-      normalisedName(name).includes("authorization") &&
-      !/["'\\]/.test(text.charAt(valueStart));
-    const reader = header ? headerValues : values;
-    reader.lastIndex = valueStart;
-    const [value = "", headerScheme, valueScheme] = reader.exec(text) ?? [];
-    const scheme = header ? headerScheme : valueScheme;
+    const { value, scheme } = readCredentialValue(text, valueStart, {
+      nameQuote,
+      name,
+      separator,
+      readers,
+    });
     const [, open = "", close = ""] = VALUE_QUOTES.exec(value) ?? [];
     // The scheme says how a caller authenticated, which an operator needs;
     // only what follows it is the credential.
