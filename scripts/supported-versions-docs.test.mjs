@@ -111,14 +111,28 @@ describe("supported Next.js and React versions", () => {
     );
   });
 
-  it("names neither Next.js 15 nor React 18 in docs, package READMEs or skills", () => {
-    const files = [...docsPages(), ...packageReadmes(), ...skillFiles()];
+  it("names neither Next.js 15 nor React 18 in docs, READMEs or skills", () => {
+    const files = [...docsPages(), "README.md", ...packageReadmes(), ...skillFiles()];
     expect(files).toContain("packages/nextly/README.md");
     expect(files.some(file => file.startsWith(".agents/skills/"))).toBe(true);
     const found = files.flatMap(file =>
       oldMajorMentions(read(file)).map(line => `${file}: ${line.trim()}`)
     );
     expect(found, "Next.js 15 and React 18 are not supported").toEqual([]);
+  });
+
+  // The repository README is the first page most readers and coding agents
+  // see. Its Next.js and React rows link to the one place rather than copy a
+  // range that would drift from it.
+  it("has the root README's Next.js and React rows link to that place and name no version", () => {
+    const rows = read("README.md")
+      .split("\n")
+      .filter(line => /^\|\s*(Next\.js|React)\s*\|/.test(line));
+    expect(rows.map(row => row.split("|")[1].trim())).toEqual(["Next.js", "React"]);
+    for (const row of rows) {
+      expect(row).toContain("nextlyhq.com/docs/getting-started/installation#requirements");
+      expect(row.split("|")[2]).not.toMatch(/\d/);
+    }
   });
 
   it("recognises the ways a page names a dropped major", () => {

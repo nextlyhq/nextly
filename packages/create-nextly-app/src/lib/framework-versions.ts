@@ -38,6 +38,8 @@ export interface FrameworkVersionProblem {
   declared?: string;
   /** The supported range it falls outside. */
   supported: string;
+  /** The version judged outside it: the installed one, or the declared spec's lowest. */
+  judged: string;
   /** Below the range's floor, or on a newer major than it covers. */
   direction: "too-old" | "too-new";
 }
@@ -76,18 +78,31 @@ export async function frameworkVersionProblems(
     const supported = SUPPORTED_RANGES[name];
     const installed = await installedVersion(cwd, name);
     const declared = declaredSpec(manifest, name);
-    const judged =
-      installed ??
-      (declared !== undefined ? lowestVersionIn(declared) : undefined);
-    if (judged === undefined || satisfiesRange(judged, supported)) continue;
+    const lowestDeclared =
+      declared !== undefined ? lowestVersionIn(declared) : undefined;
     const floor = lowestVersionIn(supported);
-    // Every supported range names a floor; a range without one would leave
+    // A declaration whose lowest version is already past the supported major
+    // is judged even when the installed copy is in range: the next install
+    // reconciles to it, so the app is headed there. One that merely starts
+    // lower (`^16.0.0` beside an installed 16.4.2) is left to the installed copy.
+    const declaredTooNew =
+      lowestDeclared !== undefined &&
+      floor !== undefined &&
+      compareVersions(lowestDeclared, floor) > 0 &&
+      !satisfiesRange(lowestDeclared, supported);
+    const judged = declaredTooNew
+      ? lowestDeclared
+      : (installed ?? lowestDeclared);
+    if (judged === undefined || satisfiesRange(judged, supported)) continue;
+    // Too new only on a later major than the range covers; anything else
+    // outside it (below the floor, or a prerelease within the major) needs a
+    // supported release of the same major. A range without a floor leaves
     // nothing to compare, and the version is then reported as too new.
     const direction =
-      floor !== undefined && compareVersions(judged, floor) < 0
-        ? "too-old"
-        : "too-new";
-    problems.push({ name, installed, declared, supported, direction });
+      floor === undefined || major(judged) > major(floor)
+        ? "too-new"
+        : "too-old";
+    problems.push({ name, installed, declared, supported, judged, direction });
   }
   return problems;
 }
@@ -106,9 +121,7 @@ function majorsOf(problem: FrameworkVersionProblem): {
   foundMajor: number;
 } {
   const floor = lowestVersionIn(problem.supported) ?? problem.supported;
-  const found =
-    problem.installed ?? lowestVersionIn(problem.declared ?? "") ?? floor;
-  return { supportedMajor: major(floor), foundMajor: major(found) };
+  return { supportedMajor: major(floor), foundMajor: major(problem.judged) };
 }
 
 /** A version past the supported major: install that major, or wait for Nextly. */

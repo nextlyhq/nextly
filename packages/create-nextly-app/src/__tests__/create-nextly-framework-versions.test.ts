@@ -163,6 +163,32 @@ describe("an existing app below the supported versions", () => {
 
   // Not installed yet: the lowest version the app's range admits is what an
   // install could resolve to, so that is what is judged.
+  // A prerelease sorts below its release, and no supported range admits one.
+  it("stops on a prerelease of the supported floor", async () => {
+    const installed = { ...IN_RANGE, next: "16.4.1-canary.1" };
+    await declare(installed);
+    await install(installed);
+
+    const message = await refusal();
+
+    expect(message).toContain("next: installed 16.4.1-canary.1");
+    expect(message).toContain("^16.4.1");
+  });
+
+  // Above the floor, but a prerelease: the published peer range refuses it, and
+  // the fix is a supported release of the same major, not waiting for Nextly.
+  it("stops on a prerelease within the supported major, asking for a release", async () => {
+    const installed = { ...IN_RANGE, next: "16.5.0-canary.1" };
+    await declare(installed);
+    await install(installed);
+
+    const message = await refusal();
+
+    expect(message).toContain("next: installed 16.5.0-canary.1");
+    expect(message).toContain("pnpm add next@^16.4.1");
+    expect(message).not.toMatch(/wait for a Nextly release/);
+  });
+
   it("judges the lowest declared version when nothing is installed", async () => {
     await declare({ ...IN_RANGE, next: "^15.5.2" });
 
@@ -205,7 +231,33 @@ describe("an existing app above the supported versions", () => {
   );
 });
 
+describe("an existing app that declares a newer major than it has installed", () => {
+  // The next install reconciles to the declaration, so the app is headed for
+  // the newer major whatever is installed today.
+  it("stops, naming the declaration and the major it asks for", async () => {
+    await declare({ ...IN_RANGE, next: "^17.0.0" });
+    await install(IN_RANGE);
+
+    const message = await refusal();
+
+    expect(message).toContain("next: installed 16.4.2, declared ^17.0.0");
+    expect(message).toContain("^16.4.1");
+    expect(message).toContain("supports Next.js 17");
+  });
+});
+
 describe("an existing app on the supported versions", () => {
+  // A declaration that merely starts lower changes nothing the install keeps.
+  it("proceeds when the declaration starts below the floor but the installed copy is in range", async () => {
+    await declare({ ...IN_RANGE, next: "^16.0.0" });
+    await install(IN_RANGE);
+
+    await createNextly({ cwd: app, defaults: true, skills: false });
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(installs().length).toBeGreaterThan(0);
+  });
+
   it("proceeds and installs Nextly", async () => {
     await declare(IN_RANGE);
     await install(IN_RANGE);
