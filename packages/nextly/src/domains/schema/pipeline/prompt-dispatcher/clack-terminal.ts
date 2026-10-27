@@ -50,13 +50,17 @@ function hasTTY(): boolean {
 }
 
 /**
- * The columns whose rename candidates were answered "drop and add": each
- * candidate's source column that no confirmed rename consumed, once.
+ * The drops the rename candidates leave in the plan: each candidate's source
+ * column that no confirmed rename consumed, once. `answered` are those the
+ * prompt asked about and was told "drop and add"; `unasked` are those it
+ * never showed, because a rename took every column they could have become.
+ * Only an answer agrees to a drop.
  */
 function keptDrops(
   candidates: readonly RenameCandidate[],
-  confirmed: readonly RenameCandidate[]
-): Deletion[] {
+  confirmed: readonly RenameCandidate[],
+  answeredKeys: ReadonlySet<string>
+): { answered: Deletion[]; unasked: Deletion[] } {
   const renamed = new Set(
     confirmed.map(c => `${c.tableName}::${c.fromColumn}`)
   );
@@ -66,7 +70,12 @@ function keptDrops(
     if (renamed.has(key) || kept.has(key)) continue;
     kept.set(key, { kind: "column", table: c.tableName, column: c.fromColumn });
   }
-  return [...kept.values()];
+  const answered: Deletion[] = [];
+  const unasked: Deletion[] = [];
+  for (const [key, deletion] of kept) {
+    (answeredKeys.has(key) ? answered : unasked).push(deletion);
+  }
+  return { answered, unasked };
 }
 
 function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
@@ -100,16 +109,21 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
    * terminal by a `TTYRequiredError` that names the consent covering it,
    * and under a consent naming other targets by a refusal of its own.
    *
-   * `chosen` are the columns a rename prompt was answered "drop and add" for:
-   * their drops stay in the plan without an event of their own, so they are
-   * judged here too. The answer agreed to them, unless the consent names its
-   * targets, which then has to cover them like any other drop.
+   * `kept` are the drops the rename candidates leave in the plan, which have
+   * no event of their own, so they are judged here too (`keptDrops`). One the
+   * prompt was answered "drop and add" for is agreed to by that answer, unless
+   * the consent names its targets, which then has to cover it like any other
+   * drop; one the prompt never showed is judged like any other drop.
    */
   private async judgeDrops(
     drops: readonly DestructiveDropEvent[],
     interactive: boolean,
-    chosen: readonly Deletion[] = []
+    kept: { answered: Deletion[]; unasked: Deletion[] } = {
+      answered: [],
+      unasked: [],
+    }
   ): Promise<Resolution[] | null> {
+    const chosen = [...kept.answered, ...kept.unasked];
     if (drops.length === 0 && chosen.length === 0) return [];
     const consent = resolveDataLossConsent({
       env: process.env,
@@ -128,7 +142,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         ...chosen,
       ],
       consent,
-      approved: named ? [] : chosen,
+      approved: named ? [] : kept.answered,
       interactive,
       ask: askInTerminal,
       print: this.print,
@@ -241,13 +255,18 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
             confirmedRenames: [],
             resolutions: [] as Resolution[],
             proceed: true,
+            answeredDrops: new Set<string>(),
           };
     if (!renameResult.proceed) return renameResult;
 
     // Phase 2: F5/F6 events, with the drops the rename answers kept.
     const eventResult = await this.runEventPrompts(
       events,
-      keptDrops(candidates, renameResult.confirmedRenames)
+      keptDrops(
+        candidates,
+        renameResult.confirmedRenames,
+        renameResult.answeredDrops
+      )
     );
 
     return {
@@ -262,9 +281,16 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
   private async runEventPrompts(
     events: ClassifierEvent[],
-    chosen: readonly Deletion[] = []
+    kept: { answered: Deletion[]; unasked: Deletion[] } = {
+      answered: [],
+      unasked: [],
+    }
   ): Promise<{ resolutions: Resolution[]; proceed: boolean }> {
-    if (events.length === 0 && chosen.length === 0) {
+    if (
+      events.length === 0 &&
+      kept.answered.length === 0 &&
+      kept.unasked.length === 0
+    ) {
       return { resolutions: [], proceed: true };
     }
 
@@ -272,7 +298,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     // once, before any other question: the operator sees all that would be
     // lost before agreeing to any of it. Covered by consent, it is listed
     // and confirmed without asking.
-    const drops = await this.judgeDrops(events.filter(isDrop), true, chosen);
+    const drops = await this.judgeDrops(events.filter(isDrop), true, kept);
     if (drops === null) return { resolutions: [], proceed: false };
     const resolutions: Resolution[] = [...drops];
     const others = events.filter(event => !isDrop(event));
@@ -375,8 +401,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   //   4. If user picks 'drop_and_add', drop survives as drop+add (no rename).
   private async runShrinkingPoolPrompts(
     candidates: RenameCandidate[]
-  ): Promise<PromptDispatchResult> {
+  ): Promise<PromptDispatchResult & { answeredDrops: ReadonlySet<string> }> {
     const consumedDrops = new Set<string>();
+    // The drops the operator was asked about and answered "drop and add":
+    // what agrees to them. A drop whose prompt was skipped is not among them.
+    const answeredDrops = new Set<string>();
     const consumedAdds = new Set<string>();
     const confirmed: RenameCandidate[] = [];
 
@@ -462,6 +491,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       }
       // 'drop_and_add' falls through: drop and adds remain as-is in the
       // operations list; no consumed marks added.
+      if (choice === "drop_and_add") answeredDrops.add(dropKey);
     }
 
     clack.outro("Schema renames confirmed");
@@ -470,6 +500,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       confirmedRenames: confirmed,
       resolutions: [],
       proceed: true,
+      answeredDrops,
     };
   }
 }

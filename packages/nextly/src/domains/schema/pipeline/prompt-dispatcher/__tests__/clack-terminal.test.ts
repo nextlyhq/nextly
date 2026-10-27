@@ -683,6 +683,26 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     expect(printed).toContain("  - column dc_posts.title");
   });
 
+  it("asks about a drop whose rename prompt was never shown", async () => {
+    // `title` and `body` were both removed and `name` added. Renaming `title`
+    // to `name` consumes `name`, so `body` is never asked about at the rename
+    // prompt, and its drop has to be asked about like any other.
+    mockSelect.mockResolvedValue("rename:name");
+    mockConfirm.mockResolvedValue(false);
+    const { dispatcher, printed } = listingDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [candidate("title", "name"), candidate("body", "name")],
+      events: [],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(printed).toContain("  - column dc_posts.body");
+    expect(printed).not.toContain("  - column dc_posts.title");
+    expect(result.proceed).toBe(false);
+  });
+
   it("refuses, without asking, a drop a consent naming other columns leaves out", async () => {
     process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.byline";
     const { dispatcher } = listingDispatcher();
