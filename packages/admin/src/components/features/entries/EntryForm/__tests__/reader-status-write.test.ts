@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readerStatusWrite } from "../reader-status-write";
+import { readerStatusWrite, statusWritesHeld } from "../reader-status-write";
 import type { EntryFormIntent } from "../useEntryForm";
 
 const READER = { refused: true, writesHeld: false };
@@ -41,5 +41,19 @@ describe("readerStatusWrite", () => {
     expect(
       readerStatusWrite("publish", { refused: false, writesHeld: false })
     ).toBeUndefined();
+  });
+});
+
+describe("statusWritesHeld", () => {
+  it("holds a status write as the edits are, except for a settled reader", () => {
+    const held = (editsHeld: boolean, refused: boolean, writesHeld: boolean) =>
+      statusWritesHeld({ editsHeld, refused, writesHeld });
+    // An editor: nothing held.
+    expect(held(false, false, false)).toBe(false);
+    // A settled reader, nothing else holding the document: offered.
+    expect(held(true, true, false)).toBe(false);
+    // A reader's document held otherwise, or the answer not settled: held.
+    expect(held(true, true, true)).toBe(true);
+    expect(held(true, false, false)).toBe(true);
   });
 });
