@@ -82,8 +82,12 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
-              onClick={() => onChange([])}
-              disabled={disabled || value.length === 0}
+              // Inherited permissions are the base role's to give, so clearing
+              // takes away only what this role holds itself.
+              onClick={() =>
+                onChange(value.filter(id => lockedIds.includes(id)))
+              }
+              disabled={disabled || value.every(id => lockedIds.includes(id))}
               aria-label="Clear all permissions"
             >
               Clear All
