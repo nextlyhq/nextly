@@ -103,9 +103,15 @@ describe("the start-time version check", () => {
     ).toEqual([]);
   });
 
-  it("counts a prerelease of a supported release as in range", () => {
+  it("refuses a prerelease, even of a release in range", () => {
     expect(
       frameworkVersionProblems("/app", installed({ next: "16.5.0-canary.3" }))
-    ).toEqual([]);
+    ).toEqual([
+      {
+        name: "next",
+        installed: "16.5.0-canary.3",
+        supported: SUPPORTED_FRAMEWORK_RANGES.next,
+      },
+    ]);
   });
 });

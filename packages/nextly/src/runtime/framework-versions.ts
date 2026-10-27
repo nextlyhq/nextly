@@ -39,8 +39,9 @@ export interface FrameworkVersionProblem {
  * Each of next, react and react-dom the app has installed outside its range,
  * judged independently, so React in range does not vouch for React DOM. A
  * package the app does not have is not judged: nextly also runs where no
- * Next.js app is, as the CLI and in tests. A prerelease of a supported major
- * (a canary) counts as in range.
+ * Next.js app is, as the CLI and in tests. A prerelease (a canary) is outside
+ * a range that names none, as semver reads it and as create-nextly-app judges
+ * an app it is added to.
  */
 export function frameworkVersionProblems(
   appRoot: string,
@@ -53,7 +54,7 @@ export function frameworkVersionProblems(
   for (const [name, supported] of Object.entries(SUPPORTED_FRAMEWORK_RANGES)) {
     const version = installed(appRoot, name as FrameworkPackage);
     if (version === null) continue;
-    if (!semver.satisfies(version, supported, { includePrerelease: true })) {
+    if (!semver.satisfies(version, supported)) {
       problems.push({
         name: name as FrameworkPackage,
         installed: version,
