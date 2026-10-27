@@ -7,12 +7,15 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
+
 import {
   assertSupportedFrameworkVersions,
   type FrameworkPackage,
   frameworkVersionProblems,
-  SUPPORTED_FRAMEWORK_RANGES,
+  supportedFrameworkRanges,
 } from "../framework-versions";
+import { requireNextApi } from "../next-api";
 
 const IN_RANGE: Record<FrameworkPackage, string> = {
   next: "16.4.2",
@@ -62,13 +65,13 @@ describe("the start-time version check", () => {
             {
               name,
               installed: version,
-              supported: SUPPORTED_FRAMEWORK_RANGES[name],
+              supported: supportedFrameworkRanges()[name],
             },
           ],
         },
       });
       expect((error as { logMessage?: string }).logMessage).toContain(
-        `${name}@${version} (supported: ${SUPPORTED_FRAMEWORK_RANGES[name]})`
+        `${name}@${version} (supported: ${supportedFrameworkRanges()[name]})`
       );
     });
   }
@@ -80,7 +83,7 @@ describe("the start-time version check", () => {
       {
         name: "react-dom",
         installed: "19.2.4",
-        supported: SUPPORTED_FRAMEWORK_RANGES["react-dom"],
+        supported: supportedFrameworkRanges()["react-dom"],
       },
     ]);
   });
@@ -110,8 +113,31 @@ describe("the start-time version check", () => {
       {
         name: "next",
         installed: "16.5.0-canary.3",
-        supported: SUPPORTED_FRAMEWORK_RANGES.next,
+        supported: supportedFrameworkRanges().next,
       },
     ]);
+  });
+});
+
+describe("the two refusals of an unsupported Next.js", () => {
+  it("answer one status, the one the canonical map gives CONFIGURATION_ERROR", () => {
+    const atStart = refusal({ next: "15.5.0" });
+    let atUse: unknown;
+    try {
+      requireNextApi({}, "next/server", "after");
+    } catch (error) {
+      atUse = error;
+    }
+
+    const status = NEXTLY_ERROR_STATUS.CONFIGURATION_ERROR;
+    expect(status).toBe(500);
+    expect(atStart).toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      statusCode: status,
+    });
+    expect(atUse).toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      statusCode: status,
+    });
   });
 });

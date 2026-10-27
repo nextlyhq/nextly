@@ -9,24 +9,66 @@
  *
  * @module runtime/framework-versions
  */
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import semver from "semver";
 
 import { NextlyError } from "../errors/nextly-error";
 import { installedPackageVersion } from "../shared/lib/installed-package-version";
 
-/**
- * The supported ranges, the ones every package declares as peers. The home of
- * these ranges is `create-nextly-app`'s `supported-versions.ts`, which nextly
- * cannot import; `scripts/supported-peer-ranges.test.mjs` holds this copy equal
- * to it.
- */
-export const SUPPORTED_FRAMEWORK_RANGES = {
-  next: "^16.4.1",
-  react: "^19.3.0",
-  "react-dom": "^19.3.0",
-} as const;
+/** The packages whose releases nextly supports, each judged on its own. */
+const FRAMEWORK_PACKAGES = ["next", "react", "react-dom"] as const;
 
-export type FrameworkPackage = keyof typeof SUPPORTED_FRAMEWORK_RANGES;
+export type FrameworkPackage = (typeof FRAMEWORK_PACKAGES)[number];
+
+let ranges: Readonly<Record<FrameworkPackage, string>> | undefined;
+
+/**
+ * The supported range of each, read from nextly's own `package.json`: its peer
+ * ranges ARE the declaration of what it supports, and the one place a release
+ * review moves them. `create-nextly-app` inlines the same peers at its build.
+ *
+ * Found by walking up from this module to the manifest named `nextly`, so the
+ * same read works from source and from the published `dist`.
+ */
+export function supportedFrameworkRanges(): Readonly<
+  Record<FrameworkPackage, string>
+> {
+  if (ranges) return ranges;
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 20; i++) {
+    const path = join(dir, "package.json");
+    if (existsSync(path)) {
+      const manifest = JSON.parse(readFileSync(path, "utf8")) as {
+        name?: string;
+        peerDependencies?: Record<string, string>;
+      };
+      if (manifest.name === "nextly") {
+        const peers = manifest.peerDependencies ?? {};
+        const missing = FRAMEWORK_PACKAGES.filter(name => !peers[name]);
+        if (missing.length > 0) {
+          throw NextlyError.internal({
+            logContext: {
+              reason: `nextly's package.json declares no peer range for ${missing.join(", ")}`,
+            },
+          });
+        }
+        ranges = Object.fromEntries(
+          FRAMEWORK_PACKAGES.map(name => [name, peers[name]])
+        ) as Record<FrameworkPackage, string>;
+        return ranges;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw NextlyError.internal({
+    logContext: { reason: "nextly's own package.json was not found" },
+  });
+}
 
 /** A package installed outside its supported range. */
 export interface FrameworkVersionProblem {
@@ -51,7 +93,7 @@ export function frameworkVersionProblems(
   ) => string | null = installedPackageVersion
 ): FrameworkVersionProblem[] {
   const problems: FrameworkVersionProblem[] = [];
-  for (const [name, supported] of Object.entries(SUPPORTED_FRAMEWORK_RANGES)) {
+  for (const [name, supported] of Object.entries(supportedFrameworkRanges())) {
     const version = installed(appRoot, name as FrameworkPackage);
     if (version === null) continue;
     if (!semver.satisfies(version, supported)) {
@@ -79,10 +121,7 @@ export function assertSupportedFrameworkVersions(
   const named = problems
     .map(p => `${p.name}@${p.installed} (supported: ${p.supported})`)
     .join(", ");
-  throw new NextlyError({
-    code: "CONFIGURATION_ERROR",
-    statusCode: 500,
-    publicMessage: "Server configuration error.",
+  throw NextlyError.configuration({
     logMessage:
       `nextly cannot start: this app installs ${named}. ` +
       "Install versions inside those ranges.",

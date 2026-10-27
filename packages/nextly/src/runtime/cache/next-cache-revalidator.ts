@@ -22,6 +22,7 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import { consoleLogger } from "../../shared/types";
 import { loadNextModule, requireNextApi } from "../next-api";
 
 /** A Next `cacheLife`-style profile: `{ expire: 0 }` means expire immediately. */
@@ -44,16 +45,59 @@ export interface NextCacheModule {
 // every write.
 let cached: NextCacheModule | null | undefined;
 
+/** The two calls this adapter makes, from a loaded `next/cache`. */
+export function nextCacheFrom(mod: Record<string, unknown>): NextCacheModule {
+  return {
+    revalidateTag: requireNextApi(mod, "next/cache", "revalidateTag"),
+    revalidatePath: requireNextApi(mod, "next/cache", "revalidatePath"),
+  };
+}
+
 function loadNextCache(): NextCacheModule | null {
   if (cached !== undefined) return cached;
   const mod = loadNextModule("next/cache");
-  cached = mod
-    ? {
-        revalidateTag: requireNextApi(mod, "next/cache", "revalidateTag"),
-        revalidatePath: requireNextApi(mod, "next/cache", "revalidatePath"),
-      }
-    : null;
+  cached = mod ? nextCacheFrom(mod) : null;
   return cached;
+}
+
+// Whether a failure to resolve `next/cache` was logged already: once is
+// enough to name it, and every write after it would repeat the same line.
+let resolveFailureLogged = false;
+
+/**
+ * `next/cache` from `loader`, or null when it cannot be had. Resolving is
+ * inside the best-effort boundary too: a traced bundle missing one of its
+ * modules, or an export it lacks, must not turn the committed write this runs
+ * after into an error. Logged once; an unsupported Next.js is refused at
+ * start, not here.
+ */
+function resolveNextCache(
+  loader: () => NextCacheModule | null
+): NextCacheModule | null {
+  try {
+    return loader();
+  } catch (error) {
+    if (!resolveFailureLogged) {
+      resolveFailureLogged = true;
+      const reason = error instanceof Error ? error.message : String(error);
+      consoleLogger.warn(
+        `[nextly] cache revalidation is off: next/cache could not be resolved (${reason})`
+      );
+    }
+    return null;
+  }
+}
+
+/** Calls `call`, swallowing what it throws. */
+function attempt(call: () => void): void {
+  try {
+    call();
+  } catch {
+    // `revalidateTag` and `revalidatePath` throw when called outside a
+    // request/render scope (e.g. a CLI or background write). Swallowed per
+    // call so one failure never stops the rest, and a committed write is
+    // never turned into an error.
+  }
 }
 
 /**
@@ -72,26 +116,15 @@ export class NextCacheRevalidator implements CacheRevalidator {
   ) {}
 
   flush(intents: RevalidationIntent[]): void {
-    const next = this.loader();
+    const next = resolveNextCache(this.loader);
     // No Next cache in this runtime: nothing to bust.
     if (!next) return;
     for (const intent of intents) {
       for (const tag of intent.tags) {
-        try {
-          next.revalidateTag(tag, REVALIDATE_PROFILE);
-        } catch {
-          // `revalidateTag` throws when called outside a request/render scope
-          // (e.g. a CLI or background write). Swallow per-call so one failure
-          // never stops the rest, and a committed write is never turned into an
-          // error.
-        }
+        attempt(() => next.revalidateTag(tag, REVALIDATE_PROFILE));
       }
       for (const target of intent.paths ?? []) {
-        try {
-          next.revalidatePath(target.path, target.type);
-        } catch {
-          // Same rationale as the tag loop above.
-        }
+        attempt(() => next.revalidatePath(target.path, target.type));
       }
     }
   }

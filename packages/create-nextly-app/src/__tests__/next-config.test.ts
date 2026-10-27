@@ -281,6 +281,10 @@ describe("a config it cannot change safely", () => {
       "optimises the imports of a package Nextly needs external",
       'export default {\n  experimental: { optimizePackageImports: ["drizzle-orm"] },\n};\n',
     ],
+    [
+      "uses the deprecated experimental option for the list",
+      'export default {\n  experimental: { serverComponentsExternalPackages: ["my-native-lib"] },\n};\n',
+    ],
   ] as const) {
     it(`leaves the file untouched and says exactly what to add when the config ${why}`, async () => {
       await write("next.config.mjs", text);
@@ -383,6 +387,26 @@ describe("configs it can still change safely", () => {
     expect(result.kind).toBe("manual");
     expect(said(result)).toContain(
       "nextly also appears in its transpilePackages"
+    );
+  });
+});
+
+describe("a config with the deprecated experimental list", () => {
+  // Next.js still reads `experimental.serverComponentsExternalPackages`, by
+  // copying it over the top-level list, so writing a top-level list beside it
+  // would report success and lose Nextly's packages.
+  it("says to move its entries to the top-level list and delete the key", async () => {
+    const text =
+      'export default {\n  experimental: { serverComponentsExternalPackages: ["my-native-lib"] },\n};\n';
+    await write("next.config.mjs", text);
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result.kind).toBe("manual");
+    expect(await read("next.config.mjs")).toBe(text);
+    const message = said(result);
+    expect(message).toContain(
+      "move those entries into the top-level serverExternalPackages list and delete experimental.serverComponentsExternalPackages"
     );
   });
 });

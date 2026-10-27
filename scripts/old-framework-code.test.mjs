@@ -19,14 +19,34 @@ const ROOT = new URL("..", import.meta.url).pathname;
 export const OLD_FRAMEWORK_PATTERNS = [
   {
     name: "per-API feature detection of a Next.js export",
+    // Any spelling of `typeof <export> === "function"`: through a member
+    // (`mod.after`, `mod?.after`, `mod["after"]`), or as a bare name, which is
+    // how a destructured export is tested. Bare names only for the exports
+    // whose names are Next.js's own: `after`, `headers` and `cookies` are
+    // ordinary variable names too (`plugins/entity-transforms.ts` tests a
+    // local `after`). The limits, stated rather than implied: a
+    // destructured `after`, `headers` or `cookies`, and an export held under
+    // another name first (`const fn = mod.after; typeof fn`), are not seen.
+    // The structural guard is that every Next.js API is reached through
+    // `runtime/next-api.ts`.
     pattern:
-      /typeof\s+[\w$.?]+\.(?:unstable_cache|revalidateTag|revalidatePath|unstable_noStore|notFound|after|unstable_after|unstable_rethrow|draftMode|cookies|headers)\s*[!=]==\s*["']function["']/,
-    finds: 'typeof mod.unstable_cache === "function"',
-    // A field of nextly's own that shares a Next.js export's name is not one.
+      /typeof\s+(?:[\w$.?]+(?:\?\.|\.|\[\s*["'])(?:unstable_cache|revalidateTag|revalidatePath|unstable_noStore|notFound|after|unstable_after|unstable_rethrow|draftMode|cookies|headers)["']?\s*\]?|(?:unstable_cache|revalidateTag|revalidatePath|unstable_noStore|notFound|unstable_after|unstable_rethrow|draftMode))\s*[!=]==\s*["']function["']/,
+    finds: [
+      'typeof mod.unstable_cache === "function"',
+      'typeof mod?.after === "function"',
+      'typeof mod["after"] === "function"',
+      "typeof mod['revalidateTag'] !== 'function'",
+      'typeof unstable_rethrow === "function"',
+    ],
+    // A field of nextly's own that shares a Next.js export's name is not one,
+    // and destructuring an export to call it is how it is used.
     passes: [
       'requireNextApi(mod, "next/cache", "unstable_cache")',
       'typeof stored.after !== "string"',
       'typeof row.headers === "object"',
+      'const { draftMode } = await import("next/headers")',
+      'typeof afterward === "function"',
+      'typeof after === "function"',
     ],
   },
   {
@@ -36,9 +56,12 @@ export const OLD_FRAMEWORK_PATTERNS = [
     passes: "mod.after",
   },
   {
-    name: "Next.js 14's experimental option names",
-    pattern:
-      /\bserverComponentsExternalPackages\b|experimental[\s\S]{0,40}\binstrumentationHook\s*:/,
+    // Only the option Next.js 14 needed and nextly no longer writes. The
+    // deprecated `experimental.serverComponentsExternalPackages` is not here:
+    // supported releases still read it, and create-nextly-app must name it to
+    // refuse a config that has it.
+    name: "Next.js 14's instrumentation opt-in",
+    pattern: /experimental[\s\S]{0,40}\binstrumentationHook\s*:/,
     finds: "experimental: { instrumentationHook: true }",
     passes: "export function instrumentationHook(configImport: string)",
   },
@@ -47,7 +70,10 @@ export const OLD_FRAMEWORK_PATTERNS = [
     // A bare "Next 15" only capitalised: "the next 15" is ordinary prose.
     pattern: /\bNext\s*1[45]\b|\^14\s*\|\||\b(?:major|version)\s*<\s*1[56]\b/,
     finds: "draftMode() is sync on Next 14",
-    passes: ["Next.js 16.4 passes route params as a Promise", "the next 15 rows"],
+    passes: [
+      "Next.js 16.4 passes route params as a Promise",
+      "the next 15 rows",
+    ],
   },
   {
     name: "Next.js 14 or 15 named in any case",
@@ -105,9 +131,11 @@ function sourceFiles() {
 describe("code for unsupported Next.js and React releases", () => {
   for (const { name, pattern, finds, passes } of OLD_FRAMEWORK_PATTERNS) {
     it(`the ${name} pattern finds its example and passes the supported form`, () => {
-      expect(pattern.test(finds)).toBe(true);
+      for (const old of [finds].flat()) {
+        expect(pattern.test(old), old).toBe(true);
+      }
       for (const supported of [passes].flat()) {
-        expect(pattern.test(supported)).toBe(false);
+        expect(pattern.test(supported), supported).toBe(false);
       }
     });
   }

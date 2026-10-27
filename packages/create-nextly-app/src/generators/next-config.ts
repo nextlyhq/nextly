@@ -144,6 +144,13 @@ const CONFIG_FILES = [
 
 const PROPERTY = "serverExternalPackages";
 
+/**
+ * The deprecated spelling of the list, under `experimental`. Supported
+ * releases still read it, by copying it over the top-level list, so an app
+ * that has it would lose the packages this adds there.
+ */
+const LEGACY_PROPERTY = "serverComponentsExternalPackages";
+
 /** A text insertion at an offset of the original source, replacing `remove` characters. */
 type Edit = { at: number; remove: number; text: string };
 type Plan = { edits: Edit[]; added: string[] } | { reason: string };
@@ -442,7 +449,7 @@ function mayHide(property: Node, names: readonly string[]): boolean {
  * `experimental`: the list itself, and the lists Next.js checks it against.
  */
 const TOP_LEVEL_SETTINGS = [PROPERTY, "transpilePackages", "experimental"];
-const EXPERIMENTAL_SETTINGS = ["optimizePackageImports"];
+const EXPERIMENTAL_SETTINGS = ["optimizePackageImports", LEGACY_PROPERTY];
 
 /** Why an object might set one of `names` where this cannot read it, or null. */
 function hiddenSettings(
@@ -688,6 +695,9 @@ function experimentalConflict(
   experimental: ObjectExpression,
   required: string[]
 ): string | null {
+  if (propertyValue(experimental, LEGACY_PROPERTY)) {
+    return `it lists packages under experimental.${LEGACY_PROPERTY}, which Next.js copies over ${PROPERTY}, replacing the packages added there; move those entries into the top-level ${PROPERTY} list and delete experimental.${LEGACY_PROPERTY}`;
+  }
   return (
     clashReason("transpilePackages", object, "transpilePackages", required) ??
     clashReason(

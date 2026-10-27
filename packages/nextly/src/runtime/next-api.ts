@@ -22,7 +22,7 @@ import { createRequire } from "node:module";
 
 import { NextlyError } from "../errors/nextly-error";
 
-import { SUPPORTED_FRAMEWORK_RANGES } from "./framework-versions";
+import { supportedFrameworkRanges } from "./framework-versions";
 
 /** The `next/*` entries nextly loads. */
 export type NextModule =
@@ -73,13 +73,10 @@ export function requireNextApi<T>(
 ): T {
   const api = module[name];
   if (typeof api === "function") return api as T;
-  throw new NextlyError({
-    code: "CONFIGURATION_ERROR",
-    statusCode: 500,
-    publicMessage: "Server configuration error.",
+  throw NextlyError.configuration({
     logMessage:
       `${specifier} has no ${name}, which nextly uses: install next ` +
-      `${SUPPORTED_FRAMEWORK_RANGES.next}.`,
-    logContext: { specifier, name, supported: SUPPORTED_FRAMEWORK_RANGES.next },
+      `${supportedFrameworkRanges().next}.`,
+    logContext: { specifier, name, supported: supportedFrameworkRanges().next },
   });
 }

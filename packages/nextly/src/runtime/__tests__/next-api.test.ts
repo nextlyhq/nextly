@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { SUPPORTED_FRAMEWORK_RANGES } from "../framework-versions";
+import { supportedFrameworkRanges } from "../framework-versions";
 import { loadNextModule, requireNextApi } from "../next-api";
 
 /** Node's error for `specifier` not being installed, as `require` throws it. */
@@ -33,7 +33,7 @@ describe("requireNextApi", () => {
       expect.objectContaining({
         code: "CONFIGURATION_ERROR",
         logMessage: expect.stringContaining(
-          `next/server has no after, which nextly uses: install next ${SUPPORTED_FRAMEWORK_RANGES.next}`
+          `next/server has no after, which nextly uses: install next ${supportedFrameworkRanges().next}`
         ),
       })
     );
