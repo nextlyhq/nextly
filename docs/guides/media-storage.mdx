@@ -505,9 +505,8 @@ export function Cover({
 }
 ```
 
-The component takes the two values rather than a whole media record, because
-`media.findByID()` does not return them today: `MediaFile` has no `focalX` or `focalY`,
-so read the crop point from the media row until it does.
+`media.findByID()` returns both values on the media record, and server code can set
+them with `media.update({ id, data: { focalX, focalY } })`: whole numbers from 0 to 100.
 
 ## Media URLs
 

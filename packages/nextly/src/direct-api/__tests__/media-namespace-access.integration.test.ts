@@ -30,7 +30,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
-import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
+import {
+  PNG_1X1,
+  pdfDocument,
+} from "../../services/upload-validation/__tests__/format-fixtures";
 import { Nextly } from "../nextly";
 
 import { account, role, seedPermissions } from "./checked-access-fixtures";
@@ -456,6 +459,37 @@ describe.each(getConfiguredTestDialects())(
         expect(folder.id).toBeTruthy();
         await trusted.media.delete({ id });
         expect(await exists(id)).toBe(false);
+      });
+
+      it("stores an image's focus point, and a later read returns it", async () => {
+        const uploaded = await trusted.media.upload({
+          file: {
+            data: PNG_1X1,
+            name: "focus.png",
+            mimetype: "image/png",
+            size: PNG_1X1.length,
+          },
+        });
+
+        await trusted.media.update({
+          id: uploaded.id,
+          data: { focalX: 25, focalY: 70 },
+        });
+        const read = await trusted.media.findByID({ id: uploaded.id });
+        expect(read?.focalX).toBe(25);
+        expect(read?.focalY).toBe(70);
+
+        // A point the REST route would refuse is refused here too, and the
+        // stored one stays.
+        await expect(
+          trusted.media.update({
+            id: uploaded.id,
+            data: { focalX: 140, focalY: 70 },
+          })
+        ).rejects.toThrow();
+        expect(
+          (await trusted.media.findByID({ id: uploaded.id }))?.focalX
+        ).toBe(25);
       });
     });
   }
