@@ -34,6 +34,17 @@ describe("errorForLog", () => {
     expect(said).toBe(expected);
   });
 
+  it.each([
+    ["X-Api-Key: header-secret-1 while removing", "header-secret-1"],
+    ['upstream said {"token":"json-secret-2"}', "json-secret-2"],
+    ["Rejected Bearer bearer-secret-3 for this bucket", "bearer-secret-3"],
+  ])("keeps a credential's name joined to its value: %s", (message, secret) => {
+    const said = errorForLog(new Error(message));
+    // The control: the words around it are still said.
+    expect(said.length).toBeGreaterThan(10);
+    expect(said).not.toContain(secret);
+  });
+
   it("logs nothing of a thrown value that is not an error", () => {
     expect(errorForLog({ token: "token-secret" })).not.toMatch(/secret/);
   });

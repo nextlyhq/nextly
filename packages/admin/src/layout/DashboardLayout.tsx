@@ -28,6 +28,10 @@ import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
 } from "../components/layout/SidePanelReservation";
+import {
+  MAIN_CONTENT_ID,
+  SkipToContent,
+} from "../components/layout/SkipToContent";
 import { MediaProvider } from "../context/providers/MediaProvider";
 
 interface DashboardLayoutProps {
@@ -97,6 +101,9 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
     <MediaProvider>
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
+          {/* First in the tab order, ahead of the menu, rail and header, on
+              every page this layout draws, the editor included. */}
+          <SkipToContent />
           {/* Mobile Header */}
           <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
@@ -154,7 +161,13 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               {!hidden.has("header") && <DashboardHeader />}
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
-              <main className="@container/content flex-1 overflow-y-auto bg-transparent">
+              {/* The skip link's target: an id to name, and tabIndex -1 so
+                  focus can land on it without adding a Tab stop. */}
+              <main
+                id={MAIN_CONTENT_ID}
+                tabIndex={-1}
+                className="@container/content flex-1 overflow-y-auto bg-transparent focus:outline-none"
+              >
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">
