@@ -973,8 +973,18 @@ export function useCreateFolder(): UseMutationResult<
     mutationFn: async (input: CreateFolderInput) => {
       return await createFolder(input);
     },
-    onSuccess: () => {
-      // Invalidate folder queries to refetch
+    onSuccess: (created, input) => {
+      // A closed folder's subfolder lookup is disabled, so invalidating it
+      // refetches nothing, and a parent found empty earlier would keep saying
+      // so: no expander to open it by. Adding the new folder to the parent's
+      // cached answer gives it one; opening it then refetches, since the
+      // invalidation below still marks the answer out of date.
+      if (input.parentId) {
+        queryClient.setQueryData<MediaFolder[]>(
+          ["folders", "subfolders", input.parentId],
+          previous => (previous ? [...previous, created] : previous)
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });

@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   getFolderContents: vi.fn(),
   fetchMedia: vi.fn(),
   updateMedia: vi.fn(),
+  createFolder: vi.fn(),
 }));
 vi.mock("@admin/services/mediaApi", () => ({
   listRootFolders: (...a: unknown[]) => api.listRootFolders(...a),
@@ -35,7 +36,7 @@ vi.mock("@admin/services/mediaApi", () => ({
   deleteMedia: vi.fn(),
   getMediaById: vi.fn(),
   uploadMedia: vi.fn(),
-  createFolder: vi.fn(),
+  createFolder: (...a: unknown[]) => api.createFolder(...a),
   getFolderById: vi.fn(),
   updateFolder: vi.fn(),
   deleteFolder: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("@admin/services/mediaApi", () => ({
 }));
 
 import {
+  useCreateFolder,
   useFolderContents,
   useMedia,
   useUpdateMedia,
@@ -71,6 +73,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
+
+/**
+ * A client that keeps answers fresh for five minutes, as the admin's does.
+ * Without it every cached answer is stale at once and refetches on its own,
+ * which hides a read that only a refetch would correct.
+ */
+function useAdminFreshness() {
+  client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+  });
+}
 
 describe("folder tree", () => {
   const props = {
@@ -138,6 +151,43 @@ describe("folder tree", () => {
     expect(await screen.findByText("2026")).toBeInTheDocument();
     expect(api.listSubfolders).toHaveBeenCalledTimes(2);
   });
+
+  it("offers to open a folder again once a subfolder is created in it", async () => {
+    useAdminFreshness();
+    api.listRootFolders.mockResolvedValue([folder("f1", "Blog")]);
+    api.listSubfolders
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([folder("f9", "2026")]);
+    api.createFolder.mockResolvedValue(folder("f9", "2026"));
+
+    function TreeWithCreate() {
+      const create = useCreateFolder();
+      return (
+        <>
+          <FolderTreeView {...props} />
+          <button
+            type="button"
+            onClick={() => create.mutate({ name: "2026", parentId: "f1" })}
+          >
+            Create 2026 in Blog
+          </button>
+        </>
+      );
+    }
+    render(<TreeWithCreate />, { wrapper: Wrapper });
+    // Opened and found empty, then closed: the expander goes.
+    fireEvent.click(await screen.findByText("Blog"));
+    await screen.findByText("No subfolders");
+    fireEvent.click(screen.getByText("Blog"));
+    expect(screen.queryByText("No subfolders")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Create 2026 in Blog"));
+    await waitFor(() => expect(api.createFolder).toHaveBeenCalled());
+
+    // The folder can be opened again, and shows the new subfolder.
+    fireEvent.click(screen.getByText("Blog"));
+    expect(await screen.findByText("2026")).toBeInTheDocument();
+  });
 });
 
 describe("folder contents", () => {
@@ -172,6 +222,40 @@ describe("folder contents", () => {
     );
 
     expect(await screen.findByText(/3 media files/)).toBeInTheDocument();
+  });
+
+  it("the delete dialog counts the folder's files as they are when it opens", async () => {
+    useAdminFreshness();
+    // Read once (the folder was entered), then a file was uploaded to it.
+    api.getFolderContents
+      .mockResolvedValueOnce({
+        folder: folder("f1", "Blog"),
+        subfolders: [],
+        files: [],
+        breadcrumbs: [],
+      })
+      .mockResolvedValueOnce({
+        folder: folder("f1", "Blog"),
+        subfolders: [],
+        files: [{ id: "m1" }, { id: "m2" }],
+        breadcrumbs: [],
+      });
+    const { result } = renderHook(() => useFolderContents("f1"), {
+      wrapper: Wrapper,
+    });
+    await waitFor(() => expect(result.current.data?.files).toEqual([]));
+
+    render(
+      <DeleteFolderDialog
+        open
+        onOpenChange={vi.fn()}
+        folderId="f1"
+        folderName="Blog"
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(await screen.findByText(/2 media files/)).toBeInTheDocument();
   });
 });
 

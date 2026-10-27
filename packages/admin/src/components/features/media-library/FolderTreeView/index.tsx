@@ -194,7 +194,8 @@ function FolderTreeItem({
   // Until a folder has been opened it may have subfolders, so it keeps its
   // expander; once the answer says none, the expander goes. An open folder
   // keeps it whatever the answer, so "No subfolders" or a failed lookup can
-  // still be closed.
+  // still be closed. Creating a subfolder adds it to this cached answer, so a
+  // folder found empty earlier gets its expander back.
   const hasSubfolders =
     isExpanded || !isFetched || (subfoldersData?.length ?? 0) > 0;
 
