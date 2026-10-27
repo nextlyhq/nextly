@@ -58,9 +58,11 @@ import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+} from "../../i18n/migration/archive-preflight";
 import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
-import { fieldsLeavingTranslation } from "../../i18n/migration/reconcile-companion";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -1160,15 +1162,25 @@ export class SingleMetadataService {
     newFields: FieldDefinition[],
     schemaService: Pick<
       DynamicCollectionSchemaService,
-      "generateAlterTableMigration" | "plannedColumnTypes"
+      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
     >
   ): { newFields: FieldDefinition[]; settingsSQL: string } {
     const { wasLocalized, isLocalized, hasStatus } = input;
     const previousFields = (input.existing.fields ??
       []) as unknown as FieldDefinition[];
+    // Named after the change, by the main table's rename rule, so a field renamed and made shared
+    // leaves under its new name and its setting waits for the copy too.
+    const rename = schemaService.detectFieldRename(
+      previousFields,
+      input.fields ?? []
+    );
     const leaving = new Set(
       wasLocalized && isLocalized
-        ? fieldsLeavingTranslation(previousFields, input.fields ?? [])
+        ? fieldsLeavingTranslationUnder(
+            previousFields,
+            input.fields ?? [],
+            rename ? { from: rename.from.name, to: rename.to.name } : null
+          )
         : []
     );
     const unconstrained = withoutLeavingConstraints(newFields, leaving);

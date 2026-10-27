@@ -23,7 +23,10 @@ import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import type { LiveLocalization } from "../../i18n/localization-source";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+} from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
   buildFieldsJoiningTranslationStatements,
@@ -34,7 +37,6 @@ import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
   type FieldRename,
-  fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
 import {
   companionColumnNames,
@@ -1509,9 +1511,19 @@ export class DynamicCollectionService extends BaseService {
       // A field that stops being translated while the collection stays translated: main gains its
       // column in this save, so the companion transition has a shared column to copy the default
       // language's value into before it drops its own.
+      // Named after the change: a field renamed and made shared leaves under its new name, so its
+      // Required or Unique setting waits for the copy as any other leaving field's does. One
+      // rename rule for every column: the main table's decides a translated field's too.
+      const changeRename = fieldRenameOf(
+        this.schemaService.detectFieldRename(oldUserFields, userDefinedFields)
+      );
       const leavingTranslation = new Set(
         collectionWasLocalized && collectionIsLocalized
-          ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
+          ? fieldsLeavingTranslationUnder(
+              oldUserFields,
+              userDefinedFields,
+              changeRename
+            )
           : []
       );
       const mainBefore = onMain(oldUserFields, collectionWasLocalized);
@@ -1695,13 +1707,7 @@ export class DynamicCollectionService extends BaseService {
             isLocalized: collectionIsLocalized,
             status: hasStatus,
             wasStatus,
-            // One rename rule for every column: the main table's decides a translated field's too.
-            renamed: fieldRenameOf(
-              this.schemaService.detectFieldRename(
-                oldUserFields,
-                userDefinedFields
-              )
-            ),
+            renamed: changeRename,
           }
         );
         migrationSQL = localizedMigration.sql;

@@ -431,6 +431,27 @@ async function renameInChange(args: {
  * language's values in, so the apply pushes this list, runs the transition, and then pushes the
  * real fields to apply the settings. Undefined when no field needs it.
  */
+/**
+ * The fields that leave translation in this change, named as they are after it. A field the change
+ * renames is matched under its new name, so one renamed and made shared in the same change leaves
+ * translation too, and its Required or Unique setting waits for the default language's values.
+ * The one rule every Builder path uses, the schema dialogs and the schema service's saves alike.
+ */
+export function fieldsLeavingTranslationUnder(
+  oldFields: readonly LeavingFieldLike[],
+  newFields: readonly LeavingFieldLike[],
+  renamed?: FieldRename | null
+): string[] {
+  return fieldsLeavingTranslation(
+    renamed
+      ? oldFields.map(f =>
+          f.name === renamed.from ? { ...f, name: renamed.to } : f
+        )
+      : oldFields,
+    newFields
+  );
+}
+
 export function fieldsWithLeavingSettingsDeferred<
   F extends LeavingFieldLike,
 >(args: {
@@ -446,15 +467,15 @@ export function fieldsWithLeavingSettingsDeferred<
   renamed?: FieldRename | null;
 }): F[] | undefined {
   if (!args.wasLocalized || !args.isLocalized) return undefined;
-  const { renamed } = args;
-  const oldFields = renamed
-    ? args.oldFields.map(f =>
-        f.name === renamed.from ? { ...f, name: renamed.to } : f
-      )
-    : args.oldFields;
   const deferred = withoutLeavingConstraints(
     args.newFields,
-    new Set(fieldsLeavingTranslation(oldFields, args.newFields))
+    new Set(
+      fieldsLeavingTranslationUnder(
+        args.oldFields,
+        args.newFields,
+        args.renamed
+      )
+    )
   );
   return deferred.some((f, i) => f !== args.newFields[i])
     ? deferred
