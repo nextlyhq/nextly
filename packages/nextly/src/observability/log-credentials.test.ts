@@ -337,11 +337,42 @@ describe("credentials anywhere in a log value", () => {
     ["Rejected with X-Api-Key: header-secret-4, page=2", "header-secret-4"],
     ['retrying with token="quoted-secret-5" page=2', "quoted-secret-5"],
     ["retrying with password = 'spaced-secret-6' page=2", "spaced-secret-6"],
+    // A quoted JSON name is whatever sits between its quotes, as JSON reads
+    // it, not only an identifier.
+    [
+      'upstream said {"access token":"json-secret-7","page":2}',
+      "json-secret-7",
+    ],
+    ['upstream said {"2fa_token":"json-secret-8","page":2}', "json-secret-8"],
+    [
+      'upstream said {\\"access token\\":\\"escaped-secret-9\\",\\"page\\":2}',
+      "escaped-secret-9",
+    ],
+    [
+      'upstream said {"\\u0074oken":"unicode-secret-10","page":2}',
+      "unicode-secret-10",
+    ],
+    // A quoted name holding a parameter of its own (a map keyed by URL) is
+    // still searched as text, so the token in it is found.
+    [
+      'upstream said {"https://cb.example/x?token=url-secret-11":"v","page":2}',
+      "url-secret-11",
+    ],
   ])("takes the value out of %s", (text, secret) => {
     const out = receivedBy({ note: text, error: new Error(text) });
     // POPULATION CONTROL: the parameter beside it remains.
     expect(out).toMatch(/page\W*[=:]\W*2/);
     expect(out).not.toContain(secret);
+  });
+
+  it("keeps the value of a quoted name that says nothing, and quoted prose", () => {
+    const out = receivedBy({
+      note: 'upstream said {"display name":"Ada Lovelace","2nd line":"Flat 4","page":2}',
+      prose: 'the "session" ended: "kept-after-prose" and "token" was fine',
+    });
+    expect(out).toContain("Ada Lovelace");
+    expect(out).toContain("Flat 4");
+    expect(out).toContain("kept-after-prose");
   });
 
   it("takes them out of what a toJSON method would write", () => {

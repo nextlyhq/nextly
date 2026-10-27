@@ -543,12 +543,50 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
  * one: a URL's `name=value`, a header's `Name: value`, JSON's
  * `"name":"value"` (escaped too, when a body sits inside a message) and
  * `name="value"`, and a form's bracketed `user[password]=` or `tokens[]=`.
- * Groups: the quote around the name, the name, and the
- * separator. The value is read only after a credential's name
- * (`TEXT_PARAMETER_VALUE`), so any other value is searched as ordinary text.
+ *
+ * A double-quoted name is read as JSON reads one, whatever sits between its
+ * quotes (`"access token"`, `"2fa_token"`), not only an identifier; up to 256
+ * characters, so a long line costs a bounded step at each quote. It holds no
+ * `=` or `:`, though: a name that does (a map keyed by a URL with a `token=`
+ * in it) is left to be searched as text, so the parameter inside it is still
+ * found. Any other name keeps the identifier grammar.
+ *
+ * Groups: an escaped JSON name's quote and text, a JSON name's quote and
+ * text, any other name's quote and text, and the separator. The value is read
+ * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
+ * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(\\?["']|)\b([A-Za-z_][\w.-]*(?:\[[\w.-]*\])*)\1(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\(?!")[^\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]*(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
+
+/**
+ * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
+ * are decoded as JSON decodes them, so `"\u0074oken"` is judged as `token`;
+ * one JSON would refuse is judged as written.
+ */
+function parameterName(match: RegExpExecArray): {
+  nameQuote: string;
+  name: string;
+} {
+  const [, escapedQuote, escapedName, jsonQuote, jsonName, quote, name] = match;
+  if (escapedQuote !== undefined) {
+    return { nameQuote: escapedQuote, name: escapedName ?? "" };
+  }
+  if (jsonQuote !== undefined) {
+    return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
+  }
+  return { nameQuote: quote ?? "", name: name ?? "" };
+}
+
+/** A JSON name's text decoded, or as written when JSON would refuse it. */
+function decodedJsonName(text: string): string {
+  try {
+    const decoded: unknown = JSON.parse(`"${text}"`);
+    return typeof decoded === "string" ? decoded : text;
+  } catch {
+    return text;
+  }
+}
 
 /**
  * A credential's value, read where its name ends: quoted, and then taken
@@ -658,7 +696,9 @@ function redactCredentialParameters(text: string): string {
   let out = "";
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
-    const [prefix, nameQuote, name, separator] = match;
+    const [prefix] = match;
+    const separator = match[7] ?? "";
+    const { nameQuote, name } = parameterName(match);
     if (
       !isCredentialName(name) &&
       !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
