@@ -141,3 +141,77 @@ describe("the structured logger", () => {
     expect(out).not.toContain("refresh-abc-123");
   });
 });
+
+describe("credentials anywhere in a log value", () => {
+  /** What an app's service logger receives for `meta`, as Node prints it. */
+  function receivedBy(meta: Record<string, unknown>): string {
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", meta);
+    return inspect(received, { depth: Infinity });
+  }
+
+  it("takes them out of an error's message, stack, cause and fields", () => {
+    const cause = new Error(`upstream said Bearer ${KEY}`);
+    const error = new Error(`Rejected Authorization: Bearer ${KEY}`, {
+      cause,
+    });
+    Object.assign(error, { apiKey: KEY, request: updateOptions().request });
+
+    const out = receivedBy({ error });
+
+    // POPULATION CONTROL: the error still arrives, as an error, with its words.
+    expect(out).toContain("Rejected Authorization: Bearer");
+    expect(out).toContain("upstream said");
+    expect(out).not.toContain(KEY);
+    expect(out).not.toContain(SESSION_VALUE);
+  });
+
+  it.each([
+    "rawToken",
+    "pendingToken",
+    "setupToken",
+    "serverToken",
+    "rawKey",
+    "fullKey",
+    "secrets",
+    "signingSecret",
+    "sessionCookie",
+  ])("takes out a field named %s", field => {
+    expect(receivedBy({ [field]: "opaque-credential-value" })).not.toContain(
+      "opaque-credential-value"
+    );
+  });
+
+  it("keeps fields that only look like credentials", () => {
+    const out = receivedBy({
+      idempotencyKey: "order-42",
+      cacheKey: "posts:list",
+      maxTokens: 512,
+    });
+    expect(out).toContain("order-42");
+    expect(out).toContain("posts:list");
+    expect(out).toContain("512");
+  });
+
+  it("takes them out of a field's name, keeping fields apart", () => {
+    // Keyed by a credential, as a token-indexed record is: the names lose the
+    // credential, and the two fields stay two.
+    const out = receivedBy({
+      [`Bearer ${KEY}`]: "first",
+      [`Bearer ${KEY}x`]: "second",
+    });
+    expect(out).not.toContain(KEY);
+    expect(out).toContain("first");
+    expect(out).toContain("second");
+  });
+
+  it("hides the value of a field whose name says it's an authorization", () => {
+    const out = receivedBy({ [`Authorization: Bearer ${KEY}`]: KEY });
+    expect(out).not.toContain(KEY);
+  });
+});

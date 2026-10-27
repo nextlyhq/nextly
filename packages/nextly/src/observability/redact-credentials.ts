@@ -16,47 +16,59 @@
  * - a `Headers` object, and any other non-plain object carrying `headers`
  *   (Node's `IncomingMessage`, say), kept as its class name;
  * - the value of a field named like a credential (`authorization`, `cookie`,
- *   `password`, `token`, `apiKey`, ...), whatever its case or separators;
- * - a `Bearer` or `Basic` credential in running text.
+ *   `password`, `rawToken`, `apiKey`, ...), whatever its case or separators;
+ * - a `Bearer` or `Basic` credential in running text, a field's name included;
+ * - all of these inside an error's message, stack, cause and own fields.
  *
  * @module observability/redact-credentials
  */
+
+import { copyForLog } from "./log-copy";
 
 /** What a removed credential is replaced with. */
 const REDACTED = "[redacted]";
 
 /**
- * Field names whose value is a credential, compared lower-cased with `-` and
- * `_` removed, so `Authorization`, `set-cookie`, `api_key` and `apiKey` are
- * all found.
+ * What a field's name says its value is a credential by, matched anywhere in
+ * the name once it is lower-cased with `-`, `_` and spaces removed, so
+ * `Authorization`, `set-cookie`, `rawToken`, `dbPassword` and `signingSecret`
+ * are all found. A substring match, as Sentry's data scrubber matches
+ * sensitive keys: an unneeded `[redacted]` in a log costs nothing, while an
+ * exact list misses the next name someone gives a token.
  */
-const CREDENTIAL_FIELDS: ReadonlySet<string> = new Set([
-  "authorization",
-  "proxyauthorization",
-  "cookie",
-  "setcookie",
+const CREDENTIAL_NAME_PARTS: readonly string[] = [
   "password",
-  "passwordhash",
-  "currentpassword",
-  "newpassword",
+  "passwd",
   "secret",
-  "clientsecret",
-  "signingsecret",
   "token",
-  "accesstoken",
-  "refreshtoken",
-  "idtoken",
-  "sessiontoken",
-  "csrftoken",
-  "xcsrftoken",
   "apikey",
-  "xapikey",
+  "authorization",
+  "cookie",
+  "credential",
   "privatekey",
-]);
+  "csrf",
+  "session",
+];
 
-/** Whether a field's value is a credential, judged by its name. */
-function isCredentialField(key: string): boolean {
-  return CREDENTIAL_FIELDS.has(key.toLowerCase().replace(/[-_]/g, ""));
+/**
+ * A key that is a credential in its own right (`rawKey`, `fullKey`,
+ * `signingKey`), told from the many keys that aren't (`idempotencyKey`,
+ * `cacheKey`, `storageKey`) by what comes before `key`.
+ */
+const CREDENTIAL_KEY_NAME =
+  /(?:raw|full|api|private|secret|signing|access|master|encryption|license)key$/;
+
+/**
+ * Whether a field holds a credential, judged by its name. Only text can be a
+ * credential: a number or a flag under such a name (`maxTokens: 512`) is kept.
+ */
+function isCredentialField(key: string, value: unknown): boolean {
+  if (typeof value === "number" || typeof value === "boolean") return false;
+  const name = key.toLowerCase().replace(/[-_\s]/g, "");
+  return (
+    CREDENTIAL_NAME_PARTS.some(part => name.includes(part)) ||
+    CREDENTIAL_KEY_NAME.test(name)
+  );
 }
 
 /**
@@ -74,24 +86,18 @@ export function redactCredentialsInText(text: string): string {
 }
 
 /**
- * A copy of a value with every credential in it taken out: in strings, the
- * fields of plain objects and lists at any depth, and any request, response or
- * headers object. The value given is never changed. Errors and objects of
- * other classes are kept as they are, as the email masker keeps them.
+ * A copy of a value with every credential in it taken out: in strings, field
+ * names, the fields of plain objects and lists, and an error's message, stack,
+ * cause and own fields, at any depth, and any request, response or headers
+ * object. The value given is never changed.
  */
 export function redactCredentials<T>(value: T): T {
-  return redactValue(value, new WeakMap()) as T;
-}
-
-function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
-  if (typeof value === "string") return redactCredentialsInText(value);
-  if (value === null || typeof value !== "object") return value;
-  const known = seen.get(value);
-  if (known !== undefined) return known;
-  const http = httpMessageSummary(value);
-  if (http !== undefined) return http;
-  if (Array.isArray(value)) return redactList(value, seen);
-  return isPlainObject(value) ? redactRecord(value, seen) : value;
+  return copyForLog(value, {
+    text: redactCredentialsInText,
+    hideField: isCredentialField,
+    hidden: REDACTED,
+    other: httpMessageSummary,
+  });
 }
 
 /**
@@ -128,37 +134,4 @@ function httpMessageSummary(value: object): unknown {
 function isPlainObject(value: object): value is Record<string, unknown> {
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
-}
-
-/** A list copied with each member redacted. */
-function redactList(
-  value: readonly unknown[],
-  seen: WeakMap<object, unknown>
-): unknown[] {
-  const list: unknown[] = [];
-  // Recorded before the members, so a list that contains itself ends.
-  seen.set(value, list);
-  for (let i = 0; i < value.length; i++) list[i] = redactValue(value[i], seen);
-  return list;
-}
-
-/** A plain object copied with each credential field's value replaced. */
-function redactRecord(
-  value: Record<string, unknown>,
-  seen: WeakMap<object, unknown>
-): Record<string, unknown> {
-  const copy: Record<string, unknown> = {};
-  // Recorded before the fields, so an object that contains itself ends.
-  seen.set(value, copy);
-  for (const [key, field] of Object.entries(value)) {
-    // Defined rather than assigned, so a `__proto__` key becomes a field and
-    // not the copy's prototype.
-    Object.defineProperty(copy, key, {
-      value: isCredentialField(key) ? REDACTED : redactValue(field, seen),
-      writable: true,
-      configurable: true,
-      enumerable: true,
-    });
-  }
-  return copy;
 }

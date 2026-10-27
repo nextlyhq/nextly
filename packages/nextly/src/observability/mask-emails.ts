@@ -16,6 +16,7 @@
 
 import type { Logger } from "../shared/types";
 
+import { copyForLog } from "./log-copy";
 import {
   redactCredentials,
   redactCredentialsInText,
@@ -86,7 +87,7 @@ export function maskEmailsInText(text: string): string {
  * that class; a log payload is plain data and errors.
  */
 export function maskEmails<T>(value: T): T {
-  return maskValue(value, new WeakMap()) as T;
+  return copyForLog(value, { text: maskEmailsInText });
 }
 
 /**
@@ -107,153 +108,6 @@ function maskEmailsWhenActive<T>(value: T): T {
  */
 export function safeToLog<T>(value: T): T {
   return maskEmailsWhenActive(redactCredentials(value));
-}
-
-function maskValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
-  if (typeof value === "string") return maskEmailsInText(value);
-  if (value === null || typeof value !== "object") return value;
-  const known = seen.get(value);
-  if (known !== undefined) return known;
-  if (value instanceof Error) return maskError(value, seen);
-  if (Array.isArray(value)) return maskList(value, seen);
-  return isPlainObject(value) ? maskRecord(value, seen) : value;
-}
-
-/** Whether a value is plain data: an object literal or a null-prototype one. */
-function isPlainObject(value: object): value is Record<string, unknown> {
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-
-/** A list copied with each member masked. */
-function maskList(
-  value: readonly unknown[],
-  seen: WeakMap<object, unknown>
-): unknown[] {
-  const list: unknown[] = [];
-  // Recorded before the members, so a list that contains itself ends.
-  seen.set(value, list);
-  for (let i = 0; i < value.length; i++) list[i] = maskValue(value[i], seen);
-  return list;
-}
-
-/** A plain object copied with each field masked. */
-function maskRecord(
-  value: Record<string, unknown>,
-  seen: WeakMap<object, unknown>
-): Record<string, unknown> {
-  const copy: Record<string, unknown> = {};
-  // Recorded before the fields, so an object that contains itself ends.
-  seen.set(value, copy);
-  for (const [key, field] of Object.entries(value)) {
-    // Keys are masked too: a payload keyed by recipient names each one.
-    defineOwn(
-      copy,
-      freeKey(copy, maskEmailsInText(key)),
-      maskValue(field, seen),
-      true
-    );
-  }
-  return copy;
-}
-
-/**
- * `key`, or `key (2)`, `key (3)` and so on when it is taken: two addresses
- * that mask alike stay two fields rather than one overwriting the other.
- */
-function freeKey(copy: Record<string, unknown>, key: string): string {
-  if (!Object.hasOwn(copy, key)) return key;
-  let n = 2;
-  while (Object.hasOwn(copy, `${key} (${n})`)) n++;
-  return `${key} (${n})`;
-}
-
-/**
- * An error copied with its message, stack, cause and own fields masked, still
- * an instance of the error's own class so `instanceof` and `name` survive.
- *
- * Masking runs inside a log call, often inside a `catch` that exists to
- * absorb a failure, so it never throws: an error whose fields cannot be read
- * or copied is logged as a plain `Error` carrying its masked message instead.
- */
-function maskError(error: Error, seen: WeakMap<object, unknown>): Error {
-  try {
-    return copyErrorMasked(error, seen);
-  } catch {
-    const plain = new Error(
-      maskEmailsInText(readText(() => error.message, "(unreadable error)"))
-    );
-    seen.set(error, plain);
-    return plain;
-  }
-}
-
-function copyErrorMasked(error: Error, seen: WeakMap<object, unknown>): Error {
-  const name = maskEmailsInText(error.name);
-  const copy = blankCopyOf(error, maskEmailsInText(error.message), name);
-  seen.set(error, copy);
-  // Set as own data properties rather than assigned: an error class may
-  // declare any of them as an accessor with no setter on its prototype, and
-  // assigning through one throws.
-  if (copy.name !== name) defineOwn(copy, "name", name, false);
-  if (error.stack !== undefined) {
-    defineOwn(copy, "stack", maskEmailsInText(error.stack), false);
-  }
-  if (error.cause !== undefined) {
-    defineOwn(copy, "cause", maskValue(error.cause, seen), false);
-  }
-  if (error instanceof AggregateError) {
-    // The constructor makes `errors` an own property that is not enumerable,
-    // so the loop below would leave the copy without its failures.
-    defineOwn(copy, "errors", maskValue(error.errors, seen), false);
-  }
-  for (const [key, field] of Object.entries(error)) {
-    defineOwn(copy, key, maskValue(field, seen), true);
-  }
-  return copy;
-}
-
-/**
- * An empty error of the same class as `error`, holding `message`. A
- * `DOMException` (an aborted `fetch`, say) is built by its own constructor:
- * its `name`, `message` and `code` read slots only that constructor creates,
- * so a plain `Error` given its prototype throws on the first of them it
- * touches.
- */
-function blankCopyOf(error: Error, message: string, name: string): Error {
-  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
-    return new DOMException(message, name);
-  }
-  const copy = new Error(message);
-  Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
-  return copy;
-}
-
-/** A value read as text, or `fallback` when reading it throws. */
-function readText(read: () => unknown, fallback: string): string {
-  try {
-    return String(read());
-  } catch {
-    return fallback;
-  }
-}
-
-/**
- * Set `key` on `target` as a writable own data property. Defined rather than
- * assigned, so a `__proto__` key becomes a field and not the prototype.
- */
-function defineOwn(
-  target: object,
-  key: string,
-  value: unknown,
-  enumerable: boolean
-): void {
-  Object.defineProperty(target, key, {
-    value,
-    writable: true,
-    configurable: true,
-    enumerable,
-  });
 }
 
 /**
