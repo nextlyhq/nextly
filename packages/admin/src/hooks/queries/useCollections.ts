@@ -553,6 +553,45 @@ async function deleteCollectionsTogether(
 }
 
 /**
+ * Delete `ids` together, as one result for every collection: the server
+ * removed all of them or none.
+ */
+async function deleteAllOrNone(
+  ids: readonly string[]
+): Promise<BulkMutationResult<void, Error>> {
+  let failure: Error | undefined;
+  try {
+    if (ids.length > 0) await deleteCollectionsTogether(ids);
+  } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error));
+  }
+  const results: BulkMutationItemResult<void, Error>[] = ids.map(id =>
+    failure === undefined
+      ? { id, status: "fulfilled" as const, data: undefined }
+      : { id, status: "rejected" as const, error: failure }
+  );
+  return {
+    succeeded: failure === undefined ? ids.length : 0,
+    failed: failure === undefined ? 0 : ids.length,
+    total: ids.length,
+    results,
+    succeededIds: failure === undefined ? [...ids] : [],
+    failedIds: failure === undefined ? [] : [...ids],
+  };
+}
+
+/** The callbacks, in the order every other bulk hook calls them. */
+function reportBulkResult(
+  result: BulkMutationResult<void, Error>,
+  options: BulkMutationOptions<void, Error> | undefined
+): void {
+  if (options?.onItemComplete) result.results.forEach(options.onItemComplete);
+  options?.onComplete?.(result);
+  if (result.succeeded > 0) options?.onSuccess?.(result);
+  if (result.failed > 0) options?.onError?.(result);
+}
+
+/**
  * useBulkDeleteCollections - Delete several collections in one operation
  *
  * Sends ONE request naming every collection, rather than one delete each.
@@ -604,36 +643,10 @@ export function useBulkDeleteCollections(): UseBulkMutationReturn<
       setResult(null);
       setIsPending(true);
       try {
-        let failure: Error | undefined;
-        try {
-          if (ids.length > 0) await deleteCollectionsTogether(ids);
-        } catch (error) {
-          failure = error instanceof Error ? error : new Error(String(error));
-        }
-
-        // One outcome for every collection, since the server removed all of
-        // them or none.
-        const results: BulkMutationItemResult<void, Error>[] = ids.map(id =>
-          failure === undefined
-            ? { id, status: "fulfilled" as const, data: undefined }
-            : { id, status: "rejected" as const, error: failure }
-        );
-        const bulkResult: BulkMutationResult<void, Error> = {
-          succeeded: failure === undefined ? ids.length : 0,
-          failed: failure === undefined ? 0 : ids.length,
-          total: ids.length,
-          results,
-          succeededIds: failure === undefined ? [...ids] : [],
-          failedIds: failure === undefined ? [] : [...ids],
-        };
+        const bulkResult = await deleteAllOrNone(ids);
         setResult(bulkResult);
-
-        // The same callback order as every other bulk hook.
-        if (options?.onItemComplete) results.forEach(options.onItemComplete);
         void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
-        options?.onComplete?.(bulkResult);
-        if (bulkResult.succeeded > 0) options?.onSuccess?.(bulkResult);
-        if (bulkResult.failed > 0) options?.onError?.(bulkResult);
+        reportBulkResult(bulkResult, options);
         return bulkResult;
       } finally {
         setIsPending(false);

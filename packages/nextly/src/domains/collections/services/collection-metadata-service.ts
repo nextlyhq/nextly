@@ -1028,6 +1028,18 @@ export class CollectionMetadataService extends BaseService {
           ),
         }))
       );
+      // Every member's junction tables first: each holds keys to both of its
+      // tables, which the order above does not see, and with all of them
+      // gone only the members' own keys tie one table to another.
+      if (this.isDevelopment()) {
+        for (const collection of collections) {
+          const junctions = this.collectionService.generateDropJunctionsSQL(
+            collection.tableName,
+            collection.fields ?? []
+          );
+          if (junctions !== "") await this.fileManager.runMigration(junctions);
+        }
+      }
       for (const index of order) {
         await this.deleteCheckedCollection(slugs[index], collections[index]);
       }

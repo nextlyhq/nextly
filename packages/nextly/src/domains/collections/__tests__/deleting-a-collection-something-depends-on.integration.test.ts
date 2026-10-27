@@ -491,6 +491,73 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     }
   }
 
+  /**
+   * TAGS and POSTS made in the Builder, POSTS with a many-to-many to TAGS
+   * whose junction table holds keys to both, and one link stored. With
+   * `both`, TAGS has a many-to-many back to POSTS, with a link too.
+   */
+  async function builderManyToMany(both: boolean): Promise<TestNextly> {
+    const t = await createTestNextly({ dialect });
+    const manyToMany = (name: string, target: string) => ({
+      name,
+      type: "relationship",
+      options: { relationType: "manyToMany", target },
+    });
+    const handler = handlerOf(t) as unknown as {
+      createCollection(data: Record<string, unknown>): Promise<{
+        success: boolean;
+      }>;
+      updateCollection(
+        params: { collectionName: string },
+        body: Record<string, unknown>
+      ): Promise<{ success: boolean }>;
+    };
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      const made = [
+        await handler.createCollection({
+          name: TAGS,
+          label: "Tag",
+          fields: [{ name: "label", type: "text" }],
+        }),
+        await handler.createCollection({
+          name: POSTS,
+          label: "Post",
+          fields: [manyToMany("tags", TAGS)],
+        }),
+      ];
+      expect(made.map(result => result.success)).toEqual([true, true]);
+      const tag = await t.nextly.create({
+        collection: TAGS,
+        data: { label: "kept" },
+      });
+      const post = await t.nextly.create({
+        collection: POSTS,
+        data: { tags: [tag.item.id] },
+      });
+      if (both) {
+        const updated = await handler.updateCollection(
+          { collectionName: TAGS },
+          {
+            fields: [
+              { name: "label", type: "text" },
+              manyToMany("posts", POSTS),
+            ],
+          }
+        );
+        expect(updated).toMatchObject({ success: true });
+        await t.nextly.update({
+          collection: TAGS,
+          id: String(tag.item.id),
+          data: { posts: [post.item.id] },
+        });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    return t;
+  }
+
   /** The Builder's bulk delete as development runs it: the drops run here. */
   async function bulkDeleteInDevelopment(slugs: readonly string[]) {
     vi.stubEnv("NODE_ENV", "development");
@@ -512,6 +579,24 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     // Selected referenced-first: the key refuses TAGS's drop while a POSTS
     // row still points at it, so the set must be dropped POSTS first.
     current = await builderPair(false);
+
+    await bulkDeleteInDevelopment([TAGS, POSTS]);
+
+    await expectBothGone(current);
+  }, 120_000);
+
+  it("drops, in development, a collection and one whose many-to-many links point at it", async () => {
+    // The junction table belongs to POSTS and holds a key to TAGS, so TAGS
+    // cannot be dropped while it stands.
+    current = await builderManyToMany(false);
+
+    await bulkDeleteInDevelopment([TAGS, POSTS]);
+
+    await expectBothGone(current);
+  }, 120_000);
+
+  it("drops, in development, two collections joined both ways by many-to-many links", async () => {
+    current = await builderManyToMany(true);
 
     await bulkDeleteInDevelopment([TAGS, POSTS]);
 

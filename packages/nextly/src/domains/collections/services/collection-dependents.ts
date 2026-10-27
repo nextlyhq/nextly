@@ -328,26 +328,44 @@ async function readDependentRecords(
       )
     : { ok: false, error: schema.error };
 
-  if (!owners.ok || !schema.ok || !compiled.ok || !recorded.ok) {
-    const failed = new Map<UnreadableRecord, unknown>();
-    if (!owners.ok) failed.set("fields", owners.error);
-    if (!schema.ok) failed.set("foreignKeys", schema.error);
-    if (!compiled.ok) failed.set("elements", compiled.error);
-    else if (!recorded.ok) failed.set("elements", recorded.error);
+  const failed = failedReads({
+    fields: owners,
+    foreignKeys: schema,
+    // The compiled schema's elements and the recorded rows are one record.
+    elements: compiled.ok ? recorded : compiled,
+  });
+  if (failed.size > 0) {
     throw unreadableRefusal(
       collections.map(collection => collection.slug),
       failed
     );
   }
 
+  const extension = valueOf(schema);
   return {
-    owners: owners.value,
+    owners: valueOf(owners),
     keys:
-      schema.value === null
-        ? []
-        : foreignKeysInto(schema.value, new Set(allTables)),
-    elements: distinctElements([...compiled.value, ...recorded.value]),
+      extension === null ? [] : foreignKeysInto(extension, new Set(allTables)),
+    elements: distinctElements([...valueOf(compiled), ...valueOf(recorded)]),
   };
+}
+
+/** Each record whose read failed, with why, in the order a refusal names them. */
+function failedReads(
+  reads: Record<UnreadableRecord, Read<unknown>>
+): Map<UnreadableRecord, unknown> {
+  const failed = new Map<UnreadableRecord, unknown>();
+  for (const key of Object.keys(UNREADABLE_WORDS) as UnreadableRecord[]) {
+    const read = reads[key];
+    if (!read.ok) failed.set(key, read.error);
+  }
+  return failed;
+}
+
+/** A read's value, once every read has been seen to succeed. */
+function valueOf<T>(read: Read<T>): T {
+  if (!read.ok) throw read.error;
+  return read.value;
 }
 
 /** How a field reference reads in a message a person acts on. */

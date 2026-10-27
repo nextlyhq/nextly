@@ -2696,6 +2696,34 @@ ${allColumnDefs.join(",\n")}
     return types;
   }
 
+  /** A `DROP TABLE IF EXISTS` for each of a collection's own junction tables. */
+  private dropJunctionStatements(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): string[] {
+    return junctionTablesOf(tableName, fields).map(
+      junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+    );
+  }
+
+  /**
+   * The statements that drop only a collection's own junction tables, one
+   * per breakpoint, or `""` when it has none. Collections deleted together
+   * run these for every member before any member's own table goes: a
+   * junction holds keys to both of its tables, so while one stands neither
+   * table can be dropped on MySQL, nor on SQLite while it holds a link. Its
+   * collection's drop file still lists it, `IF EXISTS`, so the file stays
+   * whole on its own.
+   */
+  generateDropJunctionsSQL(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): string {
+    return this.dropJunctionStatements(tableName, fields).join(
+      "\n--> statement-breakpoint\n"
+    );
+  }
+
   generateDropTableMigration(
     collectionName: string,
     tableName: string,
@@ -2721,8 +2749,9 @@ ${allColumnDefs.join(",\n")}
     // collection's fields are known here; a junction another collection's field points at
     // this table through is that collection's, and stays until its field goes. Named by
     // `junctionTablesOf`, the list the check before a delete reads, so both name the same tables.
-    const dropJunctionStatements = junctionTablesOf(tableName, fields).map(
-      junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+    const dropJunctionStatements = this.dropJunctionStatements(
+      tableName,
+      fields
     );
 
     // One statement per breakpoint, as every other file this service writes:

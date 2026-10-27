@@ -1914,6 +1914,14 @@ export class DynamicCollectionService extends BaseService {
     });
   }
 
+  /** The statements that drop only a collection's own junction tables (see the schema service). */
+  generateDropJunctionsSQL(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): string {
+    return this.schemaService.generateDropJunctionsSQL(tableName, fields);
+  }
+
   generateDropTableMigration(
     collectionName: string,
     tableName: string,
