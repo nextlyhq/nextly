@@ -140,6 +140,10 @@
       "samples": 1,
       "compiled": 1
     },
+    "docs/page-builder/contributed-blocks.mdx": {
+      "samples": 6,
+      "compiled": 5
+    },
     "docs/page-builder/index.mdx": {
       "samples": 6,
       "compiled": 6
@@ -520,6 +524,10 @@
     },
     "docs/notices/index.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/page-builder/contributed-blocks.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './blocks' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module './blocks' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,

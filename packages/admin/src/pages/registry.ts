@@ -14,6 +14,13 @@ import {
 } from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
+  collectionScreen,
+  railScreen,
+  settingsScreen,
+  singleScreen,
+  type ScreenName,
+} from "../lib/navigation/screen-names";
+import {
   builderSection,
   collectionContentSection,
   overridableBy,
@@ -194,6 +201,15 @@ const SingleBuilderEditPage = lazyRoute(
 interface RouteConfigBase {
   component: React.ComponentType<PageProps>;
   /**
+   * What the browser tab calls this screen, before the site's name. Required,
+   * so a route added without one fails to compile instead of leaving its tab
+   * unnamed. Read from the sidebar's label wherever the sidebar names the
+   * destination (`railScreen`, `settingsScreen`), from the open collection or
+   * Single on content routes, and spelled here only for screens nothing else
+   * names. See `lib/navigation/screen-names`.
+   */
+  screenName: ScreenName;
+  /**
    * Permission required to access this route. A single slug, or a list treated
    * as any-of (holding any one grants access — models an umbrella permission).
    * Routes without this are accessible to all authenticated users.
@@ -231,14 +247,32 @@ export type RouteConfig =
  * rejected. That is what keeps the two in step, since the interceptor derives
  * its own copy from the same declaration and cannot import this module.
  */
-const PUBLIC_PAGES: Record<PublicRoutePath, React.ComponentType<PageProps>> = {
-  [ROUTES.SETUP]: SetupPage,
-  [ROUTES.LOGIN]: LoginPage,
-  [ROUTES.REGISTER]: RegisterPage,
-  [ROUTES.FORGOT_PASSWORD]: ForgotPasswordPage,
-  [ROUTES.RESET_PASSWORD]: ResetPasswordPage,
-  [ROUTES.VERIFY_EMAIL]: VerifyEmailPage,
-  [ROUTES.ACCEPT_INVITE]: AcceptInvitePage,
+// Each public page carries its screen name with it. The signed-out screens
+// have no sidebar to read a name from, so these are the one place they are
+// named, after what each screen is for.
+const PUBLIC_PAGES: Record<
+  PublicRoutePath,
+  Pick<RouteConfigBase, "component" | "screenName">
+> = {
+  [ROUTES.SETUP]: { component: SetupPage, screenName: "Set Up" },
+  [ROUTES.LOGIN]: { component: LoginPage, screenName: "Sign In" },
+  [ROUTES.REGISTER]: { component: RegisterPage, screenName: "Create Account" },
+  [ROUTES.FORGOT_PASSWORD]: {
+    component: ForgotPasswordPage,
+    screenName: "Forgot Password",
+  },
+  [ROUTES.RESET_PASSWORD]: {
+    component: ResetPasswordPage,
+    screenName: "Reset Password",
+  },
+  [ROUTES.VERIFY_EMAIL]: {
+    component: VerifyEmailPage,
+    screenName: "Verify Email",
+  },
+  [ROUTES.ACCEPT_INVITE]: {
+    component: AcceptInvitePage,
+    screenName: "Accept Invitation",
+  },
 };
 
 /**
@@ -247,11 +281,27 @@ const PUBLIC_PAGES: Record<PublicRoutePath, React.ComponentType<PageProps>> = {
  * the other.
  */
 const publicRouteConfig: Record<string, RouteConfig> = Object.fromEntries(
-  Object.entries(PUBLIC_PAGES).map(([path, component]) => [
+  Object.entries(PUBLIC_PAGES).map(([path, page]) => [
     path,
-    { component, type: "public" },
+    { ...page, type: "public" },
   ])
 );
+
+/**
+ * Names for screens the sidebar lists only in markup, not in a declaration
+ * this table can read: the builder panel's three entries. Each is named once
+ * here and shared by the list, create and edit screens it covers.
+ */
+const BUILDER_COLLECTIONS_NAME = "Collections";
+const BUILDER_SINGLES_NAME = "Singles";
+const BUILDER_FIELD_GROUPS_NAME = "Field Groups";
+
+/**
+ * General settings is listed in its panel as "General", which reads as a
+ * setting only under the panel's group heading. Alone in a tab it needs the
+ * word its page heading gives it.
+ */
+const GENERAL_SETTINGS_NAME = "General Settings";
 
 export const routeConfig: Record<string, RouteConfig> = {
   ...publicRouteConfig,
@@ -259,6 +309,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Dashboard route (homepage)
   [ROUTES.DASHBOARD]: {
     component: DashboardPage,
+    screenName: railScreen("dashboard"),
     type: "private",
     section: "dashboard",
   },
@@ -266,18 +317,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Users routes
   [ROUTES.USERS]: {
     component: DashboardUsersPage,
+    screenName: settingsScreen(ROUTES.USERS),
     type: "private",
     requiredPermission: "read-users",
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_CREATE]: {
     component: CreateUserPage,
+    screenName: settingsScreen(ROUTES.USERS),
     type: "private",
     requiredPermission: "create-users",
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_EDIT]: {
     component: EditUserPage,
+    screenName: settingsScreen(ROUTES.USERS),
     type: "private",
     requiredPermission: "update-users",
     section: overridableBy("settings"),
@@ -286,12 +340,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Media routes
   [ROUTES.MEDIA]: {
     component: MediaLibraryPage,
+    screenName: railScreen("media"),
     type: "private",
     requiredPermission: "read-media",
     section: overridableBy("media"),
   },
   [ROUTES.RELEASES]: {
     component: ReleasesPage,
+    screenName: railScreen("releases"),
     type: "private",
     // Gated on the SEEDED slug. The resource is `content-releases`, not
     // `releases`: registering the shorter name would reserve a word real sites
@@ -303,6 +359,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
   [ROUTES.RELEASES_DETAIL]: {
     component: ReleaseDetailPage,
+    screenName: railScreen("releases"),
     type: "private",
     // The same grants as the list. A detail route gated more loosely than the
     // list it is reached from would be a way around the list's own gate.
@@ -311,6 +368,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
   [ROUTES.TRANSLATIONS]: {
     component: TranslationsPage,
+    screenName: railScreen("translations"),
     type: "private",
     // No permission of its own: the page lists nothing the caller may not
     // already read. Every row comes back through the collection read rules, so
@@ -330,18 +388,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.BUILDER_COLLECTIONS]: {
     component: CollectionsPage,
+    screenName: BUILDER_COLLECTIONS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
   },
   [ROUTES.BUILDER_COLLECTIONS_NEW]: {
     component: CollectionBuilderPage,
+    screenName: BUILDER_COLLECTIONS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
   },
   [ROUTES.BUILDER_COLLECTIONS_EDIT]: {
     component: CollectionBuilderEditPage,
+    screenName: BUILDER_COLLECTIONS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
@@ -360,16 +421,19 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.COLLECTIONS]: {
     component: CollectionsLandingRedirect,
+    screenName: railScreen("collections"),
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.SINGLES]: {
     component: SinglesLandingRedirect,
+    screenName: railScreen("singles"),
     type: "private",
     section: overridableBy("singles"),
   },
   [ROUTES.FIELD_GROUPS]: {
     component: FieldGroupsLandingRedirect,
+    screenName: BUILDER_FIELD_GROUPS_NAME,
     type: "private",
     section: overridableBy("collections"),
   },
@@ -379,16 +443,19 @@ export const routeConfig: Record<string, RouteConfig> = {
   // registered BEFORE the wildcard [id] route to ensure correct matching.
   [ROUTES.COLLECTION_ENTRIES]: {
     component: CollectionEntriesPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_CREATE]: {
     component: CreateEntryPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_API]: {
     component: APIPlaygroundPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
@@ -398,11 +465,13 @@ export const routeConfig: Record<string, RouteConfig> = {
   // how the matcher is written.
   [ROUTES.COLLECTION_ENTRY_VERSIONS]: {
     component: EntryVersionsPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_EDIT]: {
     component: EditEntryPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
@@ -411,6 +480,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   // After the versions route, which must keep its address.
   [ROUTES.COLLECTION_ENTRY_VIEW]: {
     component: EditEntryPage,
+    screenName: collectionScreen,
     type: "private",
     section: collectionContentSection,
   },
@@ -418,18 +488,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Security & Roles routes
   [ROUTES.SECURITY_ROLES]: {
     component: RolesPage,
+    screenName: settingsScreen(ROUTES.SECURITY_ROLES),
     type: "private",
     requiredPermission: "read-roles",
     section: overridableBy("settings"),
   },
   [ROUTES.SECURITY_ROLES_CREATE]: {
     component: RolesCreatePage,
+    screenName: settingsScreen(ROUTES.SECURITY_ROLES),
     type: "private",
     requiredPermission: "create-roles",
     section: overridableBy("settings"),
   },
   [ROUTES.SECURITY_ROLES_EDIT]: {
     component: RolesEditPage,
+    screenName: settingsScreen(ROUTES.SECURITY_ROLES),
     type: "private",
     requiredPermission: "update-roles",
     section: overridableBy("settings"),
@@ -442,18 +515,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.BUILDER_SINGLES]: {
     component: SinglesPage,
+    screenName: BUILDER_SINGLES_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("singles"),
   },
   [ROUTES.BUILDER_SINGLES_NEW]: {
     component: SingleBuilderPage,
+    screenName: BUILDER_SINGLES_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("singles"),
   },
   [ROUTES.BUILDER_SINGLES_EDIT]: {
     component: SingleBuilderEditPage,
+    screenName: BUILDER_SINGLES_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("singles"),
@@ -462,16 +538,19 @@ export const routeConfig: Record<string, RouteConfig> = {
   // IMPORTANT: literal segments like /api must be registered before the wildcard [slug].
   [ROUTES.SINGLE_API]: {
     component: SingleAPIPlaygroundPage,
+    screenName: singleScreen,
     type: "private",
     section: overridableBy("singles"),
   },
   [ROUTES.SINGLE_VERSIONS]: {
     component: SingleVersionsPage,
+    screenName: singleScreen,
     type: "private",
     section: overridableBy("singles"),
   },
   [ROUTES.SINGLE_EDIT]: {
     component: SingleEditPage,
+    screenName: singleScreen,
     type: "private",
     section: overridableBy("singles"),
   },
@@ -479,6 +558,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   // entry route above gives. After the api and versions routes.
   [ROUTES.SINGLE_VIEW]: {
     component: SingleEditPage,
+    screenName: singleScreen,
     type: "private",
     section: overridableBy("singles"),
   },
@@ -489,18 +569,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.BUILDER_FIELD_GROUPS]: {
     component: FieldGroupsPage,
+    screenName: BUILDER_FIELD_GROUPS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
   },
   [ROUTES.BUILDER_FIELD_GROUPS_NEW]: {
     component: FieldGroupBuilderPage,
+    screenName: BUILDER_FIELD_GROUPS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
   },
   [ROUTES.BUILDER_FIELD_GROUPS_EDIT]: {
     component: FieldGroupBuilderEditPage,
+    screenName: BUILDER_FIELD_GROUPS_NAME,
     type: "private",
     requiresBuilder: true,
     section: builderSection("collections"),
@@ -527,42 +610,49 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.EMAIL]: {
     component: EmailMessagesPage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_HUB_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_DESIGN]: {
     component: EmailDesignPage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING]: {
     component: EmailProvidersPage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_MESSAGES_CREATE]: {
     component: CreateEmailTemplatePage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_MESSAGES_EDIT]: {
     component: EditEmailTemplatePage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING_CREATE]: {
     component: CreateEmailProviderPage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING_EDIT]: {
     component: EditEmailProviderPage,
+    screenName: railScreen("email"),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
     section: "email",
@@ -570,6 +660,7 @@ export const routeConfig: Record<string, RouteConfig> = {
 
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
+    screenName: GENERAL_SETTINGS_NAME,
     type: "private",
     requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
@@ -580,48 +671,58 @@ export const routeConfig: Record<string, RouteConfig> = {
   // anything.
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
     component: EmailSettingsRedirect,
+    screenName: railScreen("email"),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
+    // Not an entry in the settings panel, so named after its page heading.
+    screenName: "Permissions",
     type: "private",
     requiredPermission: "manage-permissions",
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS]: {
     component: ApiKeysPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_API_KEYS),
     type: "private",
     requiredPermission: [...API_KEYS_LIST_PERMISSIONS],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_CREATE]: {
     component: CreateApiKeyPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_API_KEYS),
     type: "private",
     // The endpoint accepts `create-api-keys` OR the `update-api-keys`
     // umbrella, so the route does too. Guarding on the narrower grant alone
@@ -632,6 +733,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
   [ROUTES.SETTINGS_API_KEYS_EDIT]: {
     component: EditApiKeyPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_API_KEYS),
     type: "private",
     requiredPermission: "update-api-keys",
     section: overridableBy("settings"),
@@ -645,24 +747,28 @@ export const routeConfig: Record<string, RouteConfig> = {
   // read-only slug for this resource to widen to.
   [ROUTES.SETTINGS_BACKGROUND_JOBS]: {
     component: BackgroundJobsPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_BACKGROUND_JOBS),
     type: "private",
     requiredPermission: "manage-background-jobs",
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_CREATE]: {
     component: CreateWebhookPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: ["create-webhooks", "update-webhooks"],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_EDIT]: {
     component: EditWebhookPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: "update-webhooks",
     section: overridableBy("settings"),
@@ -671,12 +777,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   // redeliver and drain actions inside are separately gated on update-webhooks.
   [ROUTES.SETTINGS_WEBHOOKS_DELIVERIES]: {
     component: WebhookDeliveriesPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks"],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_DELIVERY_DETAIL]: {
     component: WebhookDeliveryDetailPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WEBHOOKS),
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks"],
     section: overridableBy("settings"),
@@ -685,18 +793,21 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Image sizes settings
   [ROUTES.SETTINGS_IMAGE_SIZES]: {
     component: ImageSizesSettingsPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
     component: CreateImageSizePage,
+    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
     component: EditImageSizePage,
+    screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),
@@ -705,6 +816,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Plugin routes
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
+    screenName: railScreen("plugins"),
     type: "private",
     requiredPermission: "manage-settings",
     section: "plugins",
@@ -714,12 +826,16 @@ export const routeConfig: Record<string, RouteConfig> = {
   // path, whatever the plugin is called.
   [ROUTES.PLUGIN_BROWSE]: {
     component: PluginBrowsePage,
+    // The plugins panel's link to this screen is markup rather than a
+    // declaration, so its label is repeated here.
+    screenName: "Browse plugins",
     type: "private",
     requiredPermission: "manage-settings",
     section: "plugins",
   },
   [ROUTES.PLUGIN_DETAIL]: {
     component: PluginDetailPage,
+    screenName: railScreen("plugins"),
     type: "private",
     requiredPermission: "manage-settings",
     section: "plugins",
@@ -729,24 +845,28 @@ export const routeConfig: Record<string, RouteConfig> = {
   // plugin list has arrived; see `PluginSettingsGate`.
   [ROUTES.PLUGIN_SETTINGS]: {
     component: PluginSettingsPage,
+    screenName: railScreen("plugins"),
     type: "private",
     section: "plugins",
   },
 
   [ROUTES.USERS_FIELDS]: {
     component: UserFieldsPage,
+    screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_CREATE]: {
     component: CreateUserFieldPage,
+    screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_EDIT]: {
     component: EditUserFieldPage,
+    screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
     requiredPermission: "manage-settings",
     section: overridableBy("settings"),

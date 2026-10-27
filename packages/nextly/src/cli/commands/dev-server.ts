@@ -23,6 +23,10 @@ import {
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -278,6 +282,9 @@ export async function ensureCoreTables(
           adapter: drizzleAdapter,
           logger,
           label: "core table reconcile",
+          // A command-line run: a held schema lock is waited for, about a minute, and then
+          // the run stops naming its holder.
+          whenHeld: "wait",
           mayCreateLock: mayChangeSchema,
           // Idempotent table creation, and the documented way to stop a sync
           // is Ctrl+C — a claim stuck behind a dead process is the worse
@@ -339,6 +346,9 @@ export async function ensureCoreTables(
       adapter: drizzleAdapter,
       logger,
       label: "core table bootstrap",
+      // A command-line run: a held schema lock is waited for, about a minute, and then
+      // the run stops naming its holder.
+      whenHeld: "wait",
       mayCreateLock: options.autoSync !== false,
       releaseOnInterrupt: true,
     },
@@ -605,15 +615,30 @@ export async function performAutoSync(
     registryLogger
   );
 
+  // A collection or Single removed from code is left out of the push
+  // altogether. Merged in, its stored fields became desired schema: a dropped
+  // table was created again, and a table that had drifted from its row was
+  // altered to match it. Left out, the push never names it, and the drop
+  // guard keeps drizzle-kit from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(config.collections);
+  const declaredSingles = declaredSlugsOf(config.singles);
   const desired: DesiredSchema = {
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      () => registry.getAllCollections(),
+      async () =>
+        withoutRemovedFromCode(
+          await registry.getAllCollections(),
+          declaredCollections
+        ),
       logger
     ),
     singles: await mergeRegisteredSafely(
       desiredSingles,
-      () => singleRegistry.getAllSingles(),
+      async () =>
+        withoutRemovedFromCode(
+          await singleRegistry.getAllSingles(),
+          declaredSingles
+        ),
       (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
@@ -1033,7 +1058,13 @@ export async function performSinglesReconcile(
   const reconciledSlugs: string[] = [];
 
   await reconcileSingleTables({
-    ...singleTableSources(singleRegistry, () => drizzleAdapter.listTables()),
+    // A code-first Single the configuration no longer declares is left out,
+    // so `db:sync` does not build its dropped table again either.
+    ...singleTableSources(
+      singleRegistry,
+      () => drizzleAdapter.listTables(),
+      declaredSlugsOf(config.singles)
+    ),
     createTable: async single => {
       // Prefer code-first config (source of truth) but fall back to the
       // registry's stored fields for UI-created singles.
