@@ -809,6 +809,24 @@ describe("merging a write with the cards the writer could not see", () => {
     ]);
   });
 
+  it("keeps a withheld card of a one-card widget beside the one the caller adds", () => {
+    // 🔴 Neither refused nor replaced. Refusing the add would tell the caller
+    // a card they may not see exists; dropping the hidden card would lose it.
+    // Both are kept, and the read allows a row that already holds more than
+    // one, so the arrangement still saves when both are shown.
+    const hidden = card("old", "acme/pinned", {
+      config: { source: "secret" },
+    });
+    const added = card("new", "acme/pinned", { config: { source: "posts" } });
+    const merged = mergePreservingHidden(
+      [added],
+      [hidden],
+      new Set(["acme/pinned"]),
+      placement => placement.config?.source === "secret"
+    );
+    expect(merged).toEqual([hidden, added]);
+  });
+
   it("drops the latest carried cards past the stored ceiling, never the caller's", () => {
     const submitted = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
       card(`v${i}`, "core/a")
@@ -886,6 +904,14 @@ describe("the visibility token", () => {
     // shown.
     expect(visibilityToken(["a"], [], [], ['a="posts"'])).not.toBe(
       visibilityToken(["a"], [], [], ['a="secret"'])
+    );
+  });
+
+  it("moves when a fact a conversion is exact on changes, with nothing else changing", () => {
+    expect(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=createdAt"])
+    ).not.toBe(
+      visibilityToken(["a"], [], [], [], ["collection/p-timeline=eventOn"])
     );
   });
 

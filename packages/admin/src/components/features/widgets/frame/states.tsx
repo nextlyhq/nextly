@@ -3,9 +3,10 @@
 /**
  * The four states a card shows instead of its content, and the skeleton it shows first.
  *
- * Every card, core or plugin, draws these the same way: one wording, one look, one place an
- * action goes. A widget supplies data and a body; it never draws its own loading, empty,
- * unavailable or error state, which is what kept them differing card by card before.
+ * The frame draws these for every card, core or plugin, from its `CardState`
+ * (`card-state`): one wording, one look, one place an action goes. A widget supplies data and a
+ * body, and reports a state its own data says with `FrameState`; it never draws one itself, which
+ * is what kept them differing card by card before.
  *
  * None of them is a live region. The dashboard announces through its one polite region, and a
  * card that announced its own error would talk over it (see `WidgetCard`).
@@ -14,7 +15,6 @@
  */
 
 import { Button, Skeleton } from "@nextlyhq/ui";
-import type { WidgetSlot } from "nextly/widget-result";
 import type { JSX } from "react";
 
 import { Lock, RefreshCw, XCircle } from "@admin/components/icons";
@@ -334,31 +334,5 @@ export function CardError({
         </Button>
       )}
     </div>
-  );
-}
-
-/**
- * A custom card's failed answer in the frame's own words: "not available" when
- * the source is not this reader's, and otherwise the error, with the Retry the
- * frame offers a framed card when the card was handed one. One place, so every
- * custom card that draws its own states draws this one alike.
- */
-export function CardSlotFailure({
-  slot,
-  title,
-  onRetry,
-}: {
-  slot: Extract<WidgetSlot, { ok: false }>;
-  title: string;
-  onRetry?: (() => void) | undefined;
-}): JSX.Element {
-  return slot.code === "unavailable" ? (
-    <CardUnavailable />
-  ) : (
-    <CardError
-      message={slot.error}
-      title={title}
-      {...(onRetry ? { onRetry } : {})}
-    />
   );
 }

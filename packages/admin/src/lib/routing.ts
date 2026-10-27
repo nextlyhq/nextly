@@ -161,16 +161,18 @@ const SLUG_ROUTE_ACCESS: Record<
 > = {
   [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
-  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "update", subject: "collection" },
+  // An entry opens for a user who may read it, and is editable only for one
+  // who may change it: the editor shows a reader the same page, read-only.
+  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "read", subject: "collection" },
   // A document view is an editor of the document, so it asks what editing
-  // it asks: the same claim, the same save.
-  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "update", subject: "collection" },
+  // it asks.
+  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
   // Reading a document's history is a read of that document, and restoring
   // from it goes through the ordinary update path with its own check.
   [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
-  [ROUTES.SINGLE_EDIT]: { action: "update", subject: "single" },
-  [ROUTES.SINGLE_VIEW]: { action: "update", subject: "single" },
+  [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
 };

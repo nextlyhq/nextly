@@ -117,13 +117,14 @@ beforeEach(() => {
 });
 
 describe("each count asks what its list endpoint asks", () => {
-  // The four whose list is served by the catch-all route gate. Media and API
-  // keys are served by their own handlers and are pinned by name below.
+  // The three whose list is served by the catch-all route gate. Field groups,
+  // media and API keys are listed by their own handlers, whose gates
+  // `list-read-gates-readers.test.ts` holds to the counts'; the dispatcher's
+  // field-group read is the builder palette's, open to any signed-in caller.
   const LISTS: Array<[AdminCount, string, string]> = [
     ["users", "users", "listUsers"],
     ["roles", "rbac", "listRoles"],
     ["permissions", "rbac", "listPermissions"],
-    ["fieldGroups", "field-groups", "listComponents"],
   ];
 
   it.each(LISTS)(
@@ -154,7 +155,15 @@ describe("each count asks what its list endpoint asks", () => {
   });
 });
 
-describe("the two counts served by their own handlers", () => {
+describe("the counts whose lists are served by their own handlers", () => {
+  it("field groups: either settings grant", async () => {
+    for (const grant of GRANTS) {
+      expect((await countsFor([grant])).has("fieldGroups"), grant).toBe(
+        grant === "read-settings" || grant === "manage-settings"
+      );
+    }
+  });
+
   it("media: read-media", async () => {
     for (const grant of GRANTS) {
       expect((await countsFor([grant])).has("media"), grant).toBe(

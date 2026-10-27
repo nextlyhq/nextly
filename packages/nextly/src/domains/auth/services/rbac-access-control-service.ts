@@ -48,6 +48,11 @@ import {
   declareTarget,
 } from "../../../auth/access/declared-rules";
 import {
+  reportRuleFilterMisuse,
+  ruleAnswer,
+  type RuleAnswer,
+} from "../../../auth/access/rule-answer";
+import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "../../../auth/access/rule-answer-log";
@@ -68,6 +73,32 @@ import type {
   CollectionAccessControl,
   SingleAccessControl,
 } from "./access-control-types";
+
+/**
+ * Asks a rule function once, through `ask`, and reads its answer through `ruleAnswer`, for
+ * the caller to judge. A rule that throws refuses, and is logged so it can be
+ * found and fixed: `null`. A filter it may not answer, or one that is not
+ * well formed, is reported as misused.
+ */
+async function askRuleFunction(
+  ask: () => unknown,
+  operation: AccessOperation,
+  target: AccessTarget
+): Promise<{ answer: unknown; meaning: RuleAnswer } | null> {
+  let answer: unknown;
+  try {
+    answer = await ask();
+  } catch (error) {
+    consoleLogger.error(
+      `[rbac] Code access function for ${operation}:${target.slug} threw`,
+      { error: error }
+    );
+    return null;
+  }
+  const meaning = ruleAnswer(answer);
+  reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  return { answer, meaning };
+}
 
 /**
  * Unified RBAC access control service.
@@ -232,7 +263,7 @@ export class RBACAccessControlService {
           target,
           executor
         );
-        return this.userRuleAllows(operationAccess, ctx, operation, resource);
+        return this.userRuleAllows(operationAccess, ctx, operation, target);
       }
     }
 
@@ -248,23 +279,21 @@ export class RBACAccessControlService {
     rule: (ctx: AccessControlContext) => unknown,
     ctx: AccessControlContext,
     operation: AccessOperation,
-    resource: string
+    target: AccessTarget
   ): Promise<boolean> {
-    let answer: unknown;
-    try {
-      answer = await rule(ctx);
-    } catch (error) {
-      // Code access function threw — fail-secure
-      consoleLogger.error(
-        `[rbac] Code access function for ${operation}:${resource} threw`,
-        { error: error }
+    const asked = await askRuleFunction(() => rule(ctx), operation, target);
+    if (asked === null) return false;
+    // Only `true` allows every entry.
+    if (asked.meaning.kind !== "allow" && Boolean(asked.answer)) {
+      noticeRuleNoLongerAllows(
+        target.slug,
+        operation,
+        "signed-in user",
+        asked.answer,
+        asked.meaning
       );
-      return false;
     }
-    if (answer !== true && Boolean(answer)) {
-      noticeRuleNoLongerAllows(resource, operation, "signed-in user", answer);
-    }
-    return answer === true;
+    return asked.meaning.kind === "allow";
   }
 
   /**
@@ -347,30 +376,28 @@ export class RBACAccessControlService {
     if (typeof rule === "boolean") return rule;
     if (typeof rule !== "function") return undefined;
 
-    let answer: unknown;
-    try {
-      answer = await rule(
-        buildRuleContext(
-          { user: null, roles: [], permissions: [], principal },
-          { operation, target: { kind: target.kind, slug: target.slug } }
-        )
-      );
-    } catch (error) {
-      // Fail-secure, exactly as the authenticated path does. A rule that threw
-      // did not allow anything.
-      consoleLogger.error(
-        `[rbac] Code access function for ${operation}:${resource} threw`,
-        { error: error }
-      );
-      return false;
-    }
+    // Fail-secure, exactly as the authenticated path does: a rule that threw
+    // did not allow anything.
+    const asked = await askRuleFunction(
+      () =>
+        rule(
+          buildRuleContext(
+            { user: null, roles: [], permissions: [], principal },
+            { operation, target: { kind: target.kind, slug: target.slug } }
+          )
+        ),
+      operation,
+      target
+    );
+    if (asked === null) return false;
     // A rule allows only by answering `true`. A visitor was refused before
     // only by `false`, so any other answer that now refuses one is named
     // once; a plugin's person was already held to `true`.
-    if (principal === null && answer !== true && answer !== false) {
-      noticeRuleNoLongerAllows(resource, operation, "visitor", answer);
+    const { answer, meaning } = asked;
+    if (principal === null && meaning.kind !== "allow" && answer !== false) {
+      noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
     }
-    return answer === true;
+    return meaning.kind === "allow";
   }
 
   /**

@@ -50,10 +50,10 @@ describe("a deviation", () => {
       await deviate("no-service", true, () => false);
     });
     const second = recordingDeviations(async () => {
-      await deviate("claimed-super-admin", true, () => false);
+      await deviate("key-slug-string-match", true, () => false);
     });
     expect((await first).deviations).toEqual(["no-service"]);
-    expect((await second).deviations).toEqual(["claimed-super-admin"]);
+    expect((await second).deviations).toEqual(["key-slug-string-match"]);
   });
 });
 
@@ -69,12 +69,12 @@ describe("a deviation about a subject", () => {
         aboutSubject("pages", () => deviate("no-service", true, () => false)),
         aboutSubject("agreed", () => deviate("no-service", true, () => true)),
       ]);
-      await deviate("claimed-super-admin", true, () => false);
+      await deviate("key-slug-string-match", true, () => false);
     });
     expect(deviations).toEqual([
       "visitor-public-default",
       "no-service",
-      "claimed-super-admin",
+      "key-slug-string-match",
     ]);
     expect(bySubject.get("posts")).toEqual(["visitor-public-default"]);
     expect(bySubject.get("pages")).toEqual(["no-service"]);
