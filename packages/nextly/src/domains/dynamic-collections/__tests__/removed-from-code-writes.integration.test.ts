@@ -860,7 +860,11 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
   const name = `nextly_rw_${randomBytes(8).toString("hex")}`;
+  // The adapter factory validates the environment, which needs a URL for a
+  // server dialect: the server's, until the case's database exists.
+  vi.stubEnv("DATABASE_URL", serverUrl);
   vi.stubEnv("DB_DIALECT", dialect);
+  _resetEnvCache();
   const server = await createAdapter({ type: dialect, url: serverUrl });
   await server.executeQuery(createDatabaseStatement(dialect, name));
   const url = new URL(serverUrl);
@@ -1151,16 +1155,21 @@ async function refusedWith(work: Promise<unknown>): Promise<unknown> {
 describe.each(getConfiguredTestDialects())(
   "writes to a collection and a Single removed from code (%s)",
   dialect => {
-    let database: CaseDatabase;
+    let database: CaseDatabase | undefined;
+    /** The case's database, which `beforeEach` opened. */
+    const caseDb = (): CaseDatabase => {
+      if (!database) throw new Error("the case database is not open");
+      return database;
+    };
     let removed: Target;
     let declared: Target;
 
     beforeEach(async () => {
       database = await openDatabase(dialect);
-      await boot(database, WITH_REMOVED);
+      await boot(caseDb(), WITH_REMOVED);
       ({ removed, declared } = await seedBoth());
       // The deploy of the configuration without them.
-      await boot(database, AFTER_REMOVAL);
+      await boot(caseDb(), AFTER_REMOVAL);
     }, 120_000);
 
     afterEach(async () => {
@@ -1168,13 +1177,14 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
       plugin = undefined;
       pinHolder = undefined;
-      await database.close();
+      await database?.close();
+      database = undefined;
       vi.unstubAllEnvs();
       _resetEnvCache();
     });
 
     it("refuses every write operation with nothing in the database changed, and still serves reads", async () => {
-      const before = await everyRow(database.adapter);
+      const before = await everyRow(caseDb().adapter);
       hookCalls.length = 0;
       const outcomes: string[] = [];
       for (const operation of OPERATIONS) {
@@ -1186,7 +1196,7 @@ describe.each(getConfiguredTestDialects())(
           `${operation.name}: ${String(refusal.code)} ${JSON.stringify(refusal.data)} ${String(refusal.status)}`
         );
         outcomes.push(
-          `${operation.name} changed: ${changedTables(before, await everyRow(database.adapter)).join(", ") || "nothing"}`
+          `${operation.name} changed: ${changedTables(before, await everyRow(caseDb().adapter)).join(", ") || "nothing"}`
         );
         // Soft, so one run reports every operation rather than the first.
         expect
@@ -1198,7 +1208,7 @@ describe.each(getConfiguredTestDialects())(
           });
       }
       expect(
-        changedTables(before, await everyRow(database.adapter)),
+        changedTables(before, await everyRow(caseDb().adapter)),
         outcomes.join("\n")
       ).toEqual([]);
       expect(hookCalls, "no write hook ran").toEqual([]);
@@ -1236,7 +1246,7 @@ describe.each(getConfiguredTestDialects())(
         t().nextly.findSingle({ slug: REMOVED_EMPTY_SINGLE as never })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
       // And no read wrote anything.
-      expect(changedTables(before, await everyRow(database.adapter))).toEqual(
+      expect(changedTables(before, await everyRow(caseDb().adapter))).toEqual(
         []
       );
     }, 300_000);
@@ -1246,7 +1256,7 @@ describe.each(getConfiguredTestDialects())(
       // Single, due now, run by the engine under the configuration that
       // removed them. The release's own records are its own and change; the
       // entities' do not.
-      const repo = new ReleasesRepository(database.adapter as never);
+      const repo = new ReleasesRepository(caseDb().adapter as never);
       const release = await repo.createRelease({ title: "Go live" });
       for (const member of [
         {
@@ -1280,7 +1290,7 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(true);
 
-      const before = await everyRow(database.adapter);
+      const before = await everyRow(caseDb().adapter);
       hookCalls.length = 0;
       const mutations = createReleaseMutations({
         contentApi: t().nextly,
@@ -1316,7 +1326,7 @@ describe.each(getConfiguredTestDialects())(
           data: { kind: "single", slug: REMOVED.single },
         }),
       ]);
-      const changed = changedTables(before, await everyRow(database.adapter));
+      const changed = changedTables(before, await everyRow(caseDb().adapter));
       // Only the release's own bookkeeping: none of the entities' tables and
       // none of the history or content-event tables.
       expect(changed.filter(table => !/release/i.test(table))).toEqual([]);
