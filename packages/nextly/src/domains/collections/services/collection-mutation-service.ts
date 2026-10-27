@@ -33,6 +33,7 @@ import {
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { holdsGrant } from "../../../auth/access/gate-adapters";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
@@ -576,14 +577,33 @@ interface UpdateEntryWriteParams {
 }
 
 /** The only things that differ between the two update entry points. */
+/**
+ * A row's own gate and its answer ({@link CollectionMutationService.rowVerdict}),
+ * asked before a batch's transaction opened.
+ */
+export interface RowVerdict {
+  gate: "update" | "publish" | "unpublish";
+  denied: CollectionServiceResult | null;
+  /**
+   * The filter the gate's rule answered, where it was asked of a caller that
+   * matches the row against it, with what it was asked as.
+   */
+  filter?: {
+    params: FilteredWriteCheck["params"];
+    access: { filter?: RuleFilter; read?: ReadReach };
+  };
+}
+
 interface UpdateEntryWriteOptions {
   /**
    * Which shape of the row gate to apply. `access-service` asks
    * `checkCollectionAccess` for the whole verdict; `batch-hoisted` asks
    * nothing here, because the batch caller ran that gate once before the
-   * transaction opened. See the comment at the use site.
+   * transaction opened; a {@link RowVerdict} is this row's own gate, asked
+   * by the batch before its transaction opened. See the comment at the use
+   * site.
    */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | RowVerdict;
   /**
    * Run user hooks. All-or-nothing on purpose. Validation, access and
    * recording are NOT hooks and always run.
@@ -6265,6 +6285,41 @@ export class CollectionMutationService extends BaseService {
     return { accessUser, schema, existingEntry, gateAccess, gateParams };
   }
 
+  /**
+   * The refusal for a caller who certainly lacks the lifecycle grant
+   * ({@link holdsGrant}), worded by the full gate, or `null` to go on: asked
+   * before the work only a publish or an unpublish needs, its rule being asked
+   * once the languages going live are known.
+   */
+  private async lifecycleGrantRefusal(
+    action: "publish" | "unpublish",
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    user: UserContext | undefined
+  ): Promise<CollectionServiceResult | null> {
+    const held = await holdsGrant({
+      action,
+      slug: params.collectionName,
+      user,
+      overrideAccess: params.overrideAccess,
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (held) return null;
+    return this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: action,
+      entryId: params.entryId,
+      user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: false,
+      authenticatedScope: params.authenticatedScope,
+    });
+  }
+
   private async setLifecycleAllLocales(
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
@@ -6305,6 +6360,17 @@ export class CollectionMutationService extends BaseService {
       );
       const hasMainStatus =
         (publishCollection as { status?: boolean }).status === true;
+      // A collection with a lifecycle is asked the lifecycle grant here, before
+      // any work only that change needs; its rule below, once the languages
+      // going live are known.
+      const grantRefused = hasMainStatus
+        ? await this.lifecycleGrantRefusal(
+            direction.accessAction,
+            params,
+            accessUser
+          )
+        : null;
+      if (grantRefused) return grantRefused;
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
@@ -8358,6 +8424,10 @@ export class CollectionMutationService extends BaseService {
     // unlocalized write (`locale: undefined`): the main row's `status` moves and
     // is NOT stripped the way a non-default locale's write strips it. The only
     // thing the wildcard adds is the companion sweep at the write itself.
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate a write asks and the write itself must read the same
+    // body.
+    body = { ...body };
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
@@ -8553,6 +8623,12 @@ export class CollectionMutationService extends BaseService {
         });
         if (refused) return refused;
       }
+      // Its grant is asked here, before any work only a publish needs; its
+      // rule below, in each language, once the languages going live are known.
+      const grantRefused = publishesEveryLanguage
+        ? await this.lifecycleGrantRefusal("publish", params, accessUser)
+        : null;
+      if (grantRefused) return grantRefused;
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -11268,6 +11344,21 @@ export class CollectionMutationService extends BaseService {
   ): Promise<CollectionServiceResult | null> {
     const access = await this.accessService.checkCollectionWrite(params);
     if (access.denied) return access.denied;
+    return this.refusalOutsideFilterOfWrite(tx, params, access, filteredWrites);
+  }
+
+  /**
+   * The refusal of an entry outside the filter a write's gate answered, the
+   * entry matched on the caller's transaction. `null` where it is inside, or
+   * where the gate answered no filter; an entry inside one has it added to
+   * `filteredWrites`.
+   */
+  private async refusalOutsideFilterOfWrite(
+    tx: TransactionContext,
+    params: FilteredWriteCheck["params"],
+    access: { filter?: RuleFilter; read?: ReadReach },
+    filteredWrites: FilteredTransactionWrite[]
+  ): Promise<CollectionServiceResult | null> {
     const prepared = await this.matchInTransaction(
       tx,
       params.operation,
@@ -12625,9 +12716,6 @@ export class CollectionMutationService extends BaseService {
     // The filters this write was judged by, where a rule answered one: the
     // written row is matched against each again before the write may stand.
     const filteredWrites: FilteredTransactionWrite[] = [];
-    // The publish or unpublish gate that judged a write changing the status
-    // alone, which its transition is not asked of again.
-    let judgedLifecycle: "publish" | "unpublish" | undefined;
     try {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
@@ -12637,6 +12725,46 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           tx.getDrizzle()
         );
+      // Read once, as plain data: a caller's object may compute a key on each
+      // read, and the gate a write asks and the write itself must read the same
+      // body.
+      body = { ...body };
+      // The lifecycle action this row's own gate asked and allowed, if any.
+      let rowAllowed: "publish" | "unpublish" | undefined;
+      // The filter the row's own gate answered: the row is matched against it
+      // once it is locked, before any hook runs.
+      let rowFilter: RowVerdict["filter"];
+
+      // Asked before the row is locked, so a caller the gate refuses holds no
+      // lock on an entry it may not change, however many rows a batch names.
+      // A batch-hoisted row has nothing to re-check: the batch's caller asked
+      // the collection-level update gate once, and no row-ownership rule is
+      // left for a safety net to compare against.
+      if (options.rowGate !== "batch-hoisted") {
+        // Asked here, on the caller's transaction, where its caller owns it;
+        // a batch that opened its own asked it before opening it, off its
+        // connection, since a rule is the app's own code and may read the
+        // database.
+        const verdict =
+          options.rowGate === "access-service"
+            ? await this.rowVerdict(
+                params,
+                entryId,
+                body,
+                () => (collection as { status?: boolean }).status === true,
+                tx.getDrizzle(),
+                true
+              )
+            : options.rowGate;
+        const { gate, denied } = verdict;
+        rowFilter = verdict.filter;
+        // Handed on as the status alone: the system columns a status-only body
+        // may also name are never stored, and no hook is handed a value sent by
+        // a caller judged without update.
+        if (gate !== "update") body = { status: body.status };
+        if (denied) return denied;
+        if (gate !== "update") rowAllowed = gate;
+      }
 
       // No owner predicate: write access is decided for the collection rather
       // than per row, so the fetch is by id alone and the access service holds
@@ -12663,51 +12791,14 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
-
-      if (options.rowGate === "batch-hoisted") {
-        // Nothing to re-check per row. The batch worker's caller hoists the
-        // collection-level update gate out of the loop, and there is no
-        // row-ownership rule left for a safety net to compare against.
-      } else {
-        // A write that changes only the status of an entry with a lifecycle
-        // is a publish or an unpublish alone, judged by the gate its status
-        // names in place of update, whether or not the status moves.
-        const gate = await writeGateFor(
-          body,
-          "collection",
-          () => (collection as { status?: boolean }).status === true
-        );
-        // Handed on as the status alone: the system columns a status-only body
-        // may also name are never stored, and no hook is handed a value sent by
-        // a caller judged without update.
-        if (gate !== "update") {
-          body = { status: body.status };
-          judgedLifecycle = gate;
-        }
-        // The transaction API asks the access service for the whole verdict,
-        // with the caller's overrideAccess / routeAuthorized forwarded.
-        const gateParams = {
-          collectionName: params.collectionName,
-          operation: gate,
-          entryId: entryId,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          // The route attests only an update it ran itself.
-          routeAuthorized: gate === "update" && params.routeAuthorized,
-          // See the create path: without this a narrowed scope never reaches
-          // the gate, because the transaction methods sit outside the plugin
-          // facade's re-pinning wrapper.
-          authenticatedScope: params.authenticatedScope,
-          executor: tx.getDrizzle(),
-        };
-        // Matched on the caller's transaction, against the row it already
-        // holds locked, before any hook runs.
-        const refused = await this.refusalOfWriteInTransaction(
+      if (rowFilter) {
+        const outside = await this.refusalOutsideFilterOfWrite(
           tx,
-          gateParams,
+          rowFilter.params,
+          rowFilter.access,
           filteredWrites
         );
-        if (refused) return refused;
+        if (outside) return outside;
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -12968,7 +13059,7 @@ export class CollectionMutationService extends BaseService {
       // This fallback fires only for a direct caller-owned-tx write (the bulk
       // paths always pre-resolve and pass transitionAuth), so its reads run on
       // this transaction's connection rather than re-entering the pool.
-      const transitionAuth =
+      const resolvedAuth =
         params.transitionAuth ??
         (await this.transitionAuthorizationInTransaction(tx, {
           collectionName: params.collectionName,
@@ -12978,9 +13069,18 @@ export class CollectionMutationService extends BaseService {
           authenticatedScope: params.authenticatedScope,
           hasLifecycle: (collection as { status?: boolean }).status === true,
           namedStatus: finalData.status,
-          judgedLifecycle,
+          judgedLifecycle: rowAllowed,
           filteredWrites,
         }));
+      // The action this row's own gate already allowed stands as that answer:
+      // its rule is not asked again with a chance to answer otherwise after
+      // the row's hooks have run.
+      const transitionAuth: TransitionAuthorization =
+        rowAllowed === "publish"
+          ? { ...resolvedAuth, publishDenied: null }
+          : rowAllowed === "unpublish"
+            ? { ...resolvedAuth, unpublishDenied: null }
+            : resolvedAuth;
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
         entryId,
@@ -14241,9 +14341,10 @@ export class CollectionMutationService extends BaseService {
     /**
      * `access-service` where the batch could not hoist its gate: a caller
      * refused update may still change only entries' status, so each row is
-     * judged on its own.
+     * judged on its own. A {@link RowVerdict} is that judgement, asked before
+     * the batch's transaction opened.
      */
-    rowGate: "access-service" | "batch-hoisted" = "batch-hoisted"
+    rowGate: UpdateEntryWriteOptions["rowGate"] = "batch-hoisted"
   ): Promise<CollectionServiceResult<unknown>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.updateEntryWrite(tx, params, entryId, body, {
@@ -14253,6 +14354,61 @@ export class CollectionMutationService extends BaseService {
         failureMessage: "Failed to update entry",
       })
     );
+  }
+
+  /**
+   * A row's own gate and its answer: a write that changes only the status of
+   * an entry with a lifecycle asks the publish or unpublish its status names,
+   * any other update. Asked on `executor` where the caller owns a
+   * transaction, else on the pool, before any transaction opens.
+   *
+   * Asked of a caller that matches the row against a filter its rule
+   * answers (`appliesFilter`), the filter comes back with the verdict;
+   * asked of any other, such a rule refuses.
+   */
+  async rowVerdict(
+    params: Pick<
+      UpdateEntryWriteParams,
+      | "collectionName"
+      | "user"
+      | "overrideAccess"
+      | "routeAuthorized"
+      | "authenticatedScope"
+    >,
+    entryId: string,
+    body: Record<string, unknown>,
+    hasLifecycle: () => boolean | Promise<boolean>,
+    executor?: Parameters<
+      CollectionAccessService["checkCollectionAccess"]
+    >[0]["executor"],
+    appliesFilter = false
+  ): Promise<RowVerdict> {
+    const gate = await writeGateFor(body, "collection", hasLifecycle);
+    const gateParams = {
+      collectionName: params.collectionName,
+      operation: gate,
+      entryId,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // The route attests only an update it ran itself.
+      routeAuthorized: gate === "update" && params.routeAuthorized,
+      // Without this a narrowed scope never reaches the gate, because the
+      // transaction methods sit outside the plugin facade's re-pinning
+      // wrapper.
+      authenticatedScope: params.authenticatedScope,
+      ...(executor === undefined ? {} : { executor }),
+    };
+    if (!appliesFilter) {
+      return {
+        gate,
+        denied: await this.accessService.checkCollectionAccess(gateParams),
+      };
+    }
+    const access = await this.accessService.checkCollectionWrite(gateParams);
+    if (access.denied) return { gate, denied: access.denied };
+    return access.filter
+      ? { gate, denied: null, filter: { params: gateParams, access } }
+      : { gate, denied: null };
   }
 
   /**

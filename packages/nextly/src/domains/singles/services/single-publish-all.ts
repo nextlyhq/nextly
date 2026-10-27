@@ -123,6 +123,7 @@ import {
 } from "./promote-gate";
 import {
   checkSingleAccess,
+  singleGrantRefusal,
   type SingleQueryService,
 } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -378,6 +379,24 @@ export class SinglePublishAllService extends BaseService {
         },
       };
     }
+
+    // A Single with a lifecycle is asked the publish grant here, before any
+    // work only a publish needs; its rule is asked below, once the languages
+    // going live are known. A caller without the grant is refused as the full
+    // gate words it.
+    const refused =
+      (singleMeta as { status?: boolean }).status === true
+        ? await singleGrantRefusal({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
+        : null;
+    if (refused) return { result: refused };
 
     const { hasMainStatus, companion, companionPublishable } =
       await this.resolveLifecycle(slug, singleMeta);

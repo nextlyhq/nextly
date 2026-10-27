@@ -110,6 +110,9 @@ export function isStatusOnlyWrite(
   body: Record<string, unknown>,
   entity: WritableEntityKind
 ): boolean {
+  // Only a key the body owns: a `status` its prototype supplies is no key it
+  // names, and the write reads only its own keys.
+  if (!Object.prototype.hasOwnProperty.call(body, "status")) return false;
   // A status left `undefined` names none: the write drops it as it drops any
   // undefined status, so it is judged as the write it is.
   if (body.status === undefined) return false;
