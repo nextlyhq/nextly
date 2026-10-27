@@ -456,6 +456,28 @@ export async function requirePermission(
 }
 
 /**
+ * Every one of `permissions`, each asked as {@link requirePermission} asks
+ * one: for a change that is several kinds of change at once. The first one
+ * refused answers, so a caller is told the first permission it lacks.
+ */
+export async function requireAllPermissions(
+  req: Request,
+  permissions: ReadonlyArray<{ action: string; resource: string }>
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+
+  if ("statusCode" in authResult) {
+    return authResult;
+  }
+
+  for (const { action, resource } of permissions) {
+    const answer = await authorizeCaller(authResult, action, resource);
+    if (isErrorResponse(answer)) return answer;
+  }
+  return authResult;
+}
+
+/**
  * `requirePermission`'s decision, for a caller a gate has already
  * authenticated.
  *

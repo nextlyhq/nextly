@@ -23,6 +23,7 @@
 import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
+import { SCHEMA_CHANGE_PERMISSIONS } from "../domains/auth/system-write-policy";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
   coerceBuilderMaxPerDoc,
@@ -44,8 +45,8 @@ import { requireBuilderEnabled } from "../shared/builder-access";
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteCollectionAccess,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -138,7 +139,8 @@ export const PATCH = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("update-single-schema");
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A schema change asks create, update and delete on settings.
+    await requireRouteAllPermissions(request, SCHEMA_CHANGE_PERMISSIONS);
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
@@ -281,7 +283,8 @@ export const DELETE = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("delete-single");
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A schema change asks create, update and delete on settings.
+    await requireRouteAllPermissions(request, SCHEMA_CHANGE_PERMISSIONS);
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();

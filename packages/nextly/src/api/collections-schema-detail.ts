@@ -23,6 +23,7 @@
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
@@ -51,8 +52,8 @@ import { simplePluralize } from "../shared/lib/pluralization";
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteCollectionAccess,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -165,7 +166,11 @@ export const PATCH = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A definition change asks create, update and delete on settings.
+    await requireRouteAllPermissions(
+      request,
+      COLLECTION_DEFINITION_PERMISSIONS
+    );
 
     const { slug } = await context.params;
 
@@ -346,7 +351,11 @@ export const DELETE = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A definition change asks create, update and delete on settings.
+    await requireRouteAllPermissions(
+      request,
+      COLLECTION_DEFINITION_PERMISSIONS
+    );
 
     const { slug } = await context.params;
 

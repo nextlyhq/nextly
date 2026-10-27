@@ -21,6 +21,7 @@ import {
   authorizeCallerForAny,
   requireAuthentication,
   requirePermission,
+  requireAllPermissions,
   requireAnyPermission,
   requireCollectionAccess,
   requireCollectionWriteAccess,
@@ -121,10 +122,7 @@ import {
   runWithRequestCaller,
   type RequestCaller,
 } from "./auth/caller-scope";
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "./auth/collection-definition-policy";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
@@ -135,6 +133,11 @@ import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
 } from "./domains/auth/services/role-change-caller";
+import {
+  SCHEMA_CHANGE_PERMISSIONS,
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "./domains/auth/system-write-policy";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -685,7 +688,7 @@ async function handleSchemaRequest(
  *
  * Membership decides which permission a method resolves to, and the fallthrough
  * is not a refusal: a method absent from this set lands on the definition branch
- * and demands `manage-settings`. That denies the editors who hold
+ * and demands every schema change permission. That denies the editors who hold
  * `update-{slug}` and grants the request to a caller who holds settings but no
  * access to the collection, so an omission fails in both directions at once.
  * Exported so the route-parser suite can assert every entry route's method
@@ -722,7 +725,7 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "markEntryVersionSeen",
   // Discarding the working draft reverts the document to its live row; the
   // route parser marks it an `update` operation, so it resolves to the
-  // `update-{slug}` permission rather than a definition mutation's manage-settings.
+  // `update-{slug}` permission rather than a definition mutation's settings grants.
   "discardWorkingDraft",
   // Taking the live shared values rewrites the pending change, as a discard
   // does, so it is authorized as an update of the entry too.
@@ -764,7 +767,7 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleAutosave",
   // Publishing every language writes the document's status, so the route parser
   // marks it an `update` and this resolves it to `update-{slug}` rather than a
-  // definition mutation's manage-settings. The service checks `publish-{slug}`
+  // definition mutation's settings grants. The service checks `publish-{slug}`
   // on top, which no route-level gate can express.
   "publishAllSingleLocales",
   // Discarding the working draft reverts the document to its live row. Left out
@@ -937,11 +940,7 @@ async function resolveAuthorization(
     // onboarding checklist asks the same question to decide whether to OFFER
     // the step -- and a copy there would go on asking for a grant this route
     // had stopped requiring.
-    return requirePermission(
-      req,
-      COLLECTION_DEFINITION_ACTION,
-      COLLECTION_DEFINITION_RESOURCE
-    );
+    return requireAllPermissions(req, COLLECTION_DEFINITION_PERMISSIONS);
   }
 
   // --- Singles endpoints ---
@@ -982,16 +981,17 @@ async function resolveAuthorization(
         params: routeParams ?? {},
       });
     }
-    // Definition mutations (create/delete single, update schema) → manage-settings
-    return requirePermission(req, "manage", "settings");
+    // Definition mutations (create/delete single, update schema) are schema
+    // changes: create, update and delete on settings, all three.
+    return requireAllPermissions(req, SCHEMA_CHANGE_PERMISSIONS);
   }
 
   // --- Plugin settings → the SETTINGS permissions ---
   //
   // Without this branch these routes fell through to the default mapping,
   // which asks for `read-pluginSettings` / `update-pluginSettings`. Neither is
-  // seeded — the repository seeds `manage-settings` and `read-settings` — so
-  // every settings administrator got a 403 and only the super-admin bypass
+  // seeded — settings are granted by their plain permissions on `settings` —
+  // so every settings administrator got a 403 and only the super-admin bypass
   // could use the API at all.
   if (service === "pluginSettings") {
     // A plugin may name its own permission for its settings in place of
@@ -1037,8 +1037,7 @@ async function resolveAuthorization(
       // Whoever may change the settings may also read them: a grant of the
       // plugin's permission alone would otherwise open a page that cannot load.
       return authorizeCallerForAny(caller, [
-        { action: "read", resource: "settings" },
-        { action: "manage", resource: "settings" },
+        ...SYSTEM_READ_POLICY.settings.read.anyOf,
         write,
       ]);
     }
@@ -1049,7 +1048,7 @@ async function resolveAuthorization(
     return authorizeCaller(caller, write.action, write.resource);
   }
 
-  // --- Email providers → manage-email-providers ---
+  // --- Email providers → their own action on email-providers ---
   if (service === "emailProviders") {
     // The provider catalog is the one read a CREATOR also needs. The
     // permissions are seeded independently, so a role holding only
@@ -1058,39 +1057,28 @@ async function resolveAuthorization(
     // leaving the grant unusable for exactly the contributed providers the
     // catalog exists to describe. It exposes definitions, never stored records.
     if (method === "listProviderTypes") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "email-providers" },
-        { action: "create", resource: "email-providers" },
-        { action: "manage", resource: "email-providers" },
-      ]);
+      return requireListRead(req, SYSTEM_READ_POLICY.emailProviders.readTypes);
     }
 
+    // The action its verb names, as the system policies declare it; a
+    // `manage-` permission counts as each plain one.
     const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "email-providers" }]);
   }
 
-  // --- Email templates → manage-email-templates ---
+  // --- Email templates → their own action on email-templates ---
   if (service === "emailTemplates") {
     const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "email-templates" }]);
   }
 
-  // --- User fields → manage-settings ---
+  // --- User fields → their own action on settings ---
   if (service === "userFields") {
     const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "settings" }]);
   }
 
-  // --- Field groups → manage-settings ---
+  // --- Field groups → their own action on settings ---
   if (service === "field-groups") {
     // 🔴 The HTTP verb is a PROXY for the action, and these two methods are where the proxy is
     // wrong: both travel over POST while rewriting an EXISTING definition. Verb-derived
@@ -1109,10 +1097,7 @@ async function resolveAuthorization(
     };
     const action =
       FIELD_GROUP_ACTION_OVERRIDES[method] ?? getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "settings" }]);
   }
 
   // --- RBAC: roles and permissions ---
@@ -2347,13 +2332,16 @@ async function handleAdminMetaWorkspaceRequest(
  * PATCH /api/admin-meta/sidebar-groups
  *
  * Replaces the custom sidebar groups array.
- * Auth: manage-settings permission.
+ * Auth: a settings change (`update-settings`).
  *
  * Body: { groups: [{ slug, name, icon? }, ...] }
  */
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
-    const authResult = await requirePermission(req, "manage", "settings");
+    const authResult = await requireListRead(
+      req,
+      SYSTEM_WRITE_POLICY.settings.update
+    );
     if (isErrorResponse(authResult)) {
       return createJsonErrorResponse(authResult, req);
     }
