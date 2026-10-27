@@ -16,9 +16,6 @@ vi.mock("../shared/lib/installed-package-version", () => ({
 }));
 
 const { getNextly } = await import("../init");
-const { ensureServicesInitialized } = await import(
-  "../route-handler/auth-handler"
-);
 const { createDynamicHandlers } = await import("../routeHandler");
 
 const ORIGINAL_DB_DIALECT = process.env.DB_DIALECT;
