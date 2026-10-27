@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The media library now opens an item's details in a panel beside the grid that expands to a full-screen viewer, keeps its controls on one row, shows each image whole in its tile, and sets the focus point as one dot on the whole image, which is now saved: a media update used to drop the focus point it was given.
+The media library now opens an item's details in a panel beside the grid that expands to a full-screen viewer, keeps its controls on one row, fits each image inside its tile (whole when a stored image size shows it whole, otherwise from the light thumbnail), and sets the focus point as one dot on the whole image, which is now saved: a media update used to drop the focus point it was given.
