@@ -469,11 +469,9 @@ describe("how migrateCore asks for the schema lock", () => {
       async (
         _adapter: unknown,
         _dialect: unknown,
-        fn: () => Promise<unknown>
-      ) => ({
-        ran: true as const,
-        value: await fn(),
-      })
+        fn: () => Promise<unknown>,
+        _options?: Record<string, unknown>
+      ) => ({ ran: true as const, value: await fn() })
     );
     await migrateCore(deps({ withLock, ...over }) as never);
     return withLock.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
