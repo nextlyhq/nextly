@@ -7,12 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
+import { CORE_WIDGETS } from "../../core-widgets";
+import type { WidgetDefinition } from "../../definition";
 import { clearWidgets, getWidget } from "../../registry";
 import {
   cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
-  registerWidgetDeclarations,
+  registerDashboardWidgets,
   resetLegacyIdWarnings,
 } from "../declared-widgets";
 import { defineWidget } from "../define-widget";
@@ -39,11 +41,54 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("the one call every owner's widgets come through", () => {
+  /** The startup error's detail, or a failure when startup did not stop. */
+  function refused(run: () => void): string {
+    try {
+      run();
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      return (error as NextlyError).logMessage ?? "";
+    }
+    throw new Error("expected startup to stop");
+  }
+
+  it("names every fault of every owner, core's own included, in one message, and keeps none", () => {
+    // 🔴 Core's list was registered on its own before the declarations, so a
+    // mistake in it threw alone, and a plugin's fault was a second boot away,
+    // with core's cards already kept. Now both arrive in one message.
+    const [first, second] = CORE_WIDGETS;
+    const message = refused(() =>
+      registerDashboardWidgets({
+        core: [
+          first,
+          first,
+          {
+            ...second,
+            size: { default: { w: 13, h: 3 } },
+          } as WidgetDefinition,
+        ],
+        groups: [{ owner: SHOP, declarations: [{ ...revenue, title: "" }] }],
+      })
+    );
+    expect(message).toContain(
+      `core, widget "${first.id}": id "${first.id}" is already declared by core`
+    );
+    expect(message).toMatch(new RegExp(`core, widget "${second.id}": .*size`));
+    expect(message).toContain(
+      `${SHOP}, widget "${revenue.id}": title must be a non-empty string`
+    );
+    // Nothing kept: neither core's widgets nor the plugin's.
+    expect(getWidget(first.id)).toBeUndefined();
+    expect(getWidget(revenue.id)).toBeUndefined();
+  });
+});
+
 describe("registering declared widgets", () => {
   it("publishes each to the registry the admin reads as data only, its cards answered on the server", () => {
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState, recentOrders] },
-    ]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [ordersByState, recentOrders] }],
+    });
     const published = getWidget("acme/orders-by-state");
     expect(published).toMatchObject({
       id: "acme/orders-by-state",
@@ -51,7 +96,6 @@ describe("registering declared widgets", () => {
       description: "How many orders sit in each state",
       category: "Shop",
       archetype: "bars",
-      sketch: "bars",
       requiredPermission: "read-orders",
       size: {
         default: { w: 6, h: 4 },
@@ -65,6 +109,7 @@ describe("registering declared widgets", () => {
     expect(published?.query).toBeUndefined();
     expect(JSON.parse(JSON.stringify(published))).toEqual(published);
     expect(Object.keys(published ?? {})).not.toContain("data");
+    expect(Object.keys(published ?? {})).not.toContain("load");
     // Each widget's own size, in grid units, as it declares it.
     expect(getWidget("acme/recent-orders")?.size).toEqual({
       default: { w: 12, h: 5 },
@@ -73,14 +118,16 @@ describe("registering declared widgets", () => {
     });
     // A declared empty state: its words and action are published, its test is not, and the
     // action's permission is the gate's own name.
-    registerWidgetDeclarations([
-      {
-        owner: SHOP,
-        declarations: [
-          { ...ordersByState, id: "acme/orders-empty", empty: revenue.empty },
-        ],
-      },
-    ]);
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            { ...ordersByState, id: "acme/orders-empty", empty: revenue.empty },
+          ],
+        },
+      ],
+    });
     const own = getWidget("acme/orders-empty");
     expect(own).toMatchObject({
       archetype: "bars",
@@ -102,32 +149,68 @@ describe("registering declared widgets", () => {
   });
 
   it("publishes a widget drawn by its own component as a custom card core answers", () => {
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [revenue] }],
+    });
     // The admin hands its component the props its declaration types, so it is
     // offered like any declared widget: drawn by that component, its data
     // built on the server.
     expect(getWidget("acme/revenue")).toMatchObject({
       archetype: "custom",
-      component: (revenue.display as { component: string }).component,
+      component: revenue.view.component,
       serverData: true,
     });
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("publishes a core view by the display that draws it, under Other when it names no category", () => {
+    // Its bars-shaped preview goes too: a figure draws a total, not groups.
+    const {
+      category: _category,
+      preview: _preview,
+      ...uncategorised
+    } = ordersByState;
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            { ...uncategorised, id: "acme/figure", view: "figure" as const },
+            ordersByState,
+          ],
+        },
+      ],
+    });
+    // `figure` is drawn by the metric display; the add panel sketches it by that archetype.
+    expect(getWidget("acme/figure")).toMatchObject({
+      archetype: "metric",
+      category: "Other",
+    });
+    // The control: a category the declaration names is kept as written.
+    expect(getWidget(ordersByState.id)).toMatchObject({
+      archetype: "bars",
+      category: "Shop",
+    });
+  });
+
   it("publishes hidesWhenEmpty only for a widget that declares it", () => {
-    registerWidgetDeclarations([
-      {
-        owner: SHOP,
-        declarations: [{ ...revenue, hidesWhenEmpty: true }, ordersByState],
-      },
-    ]);
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [{ ...revenue, hidesWhenEmpty: true }, ordersByState],
+        },
+      ],
+    });
     expect(getWidget("acme/revenue")?.hidesWhenEmpty).toBe(true);
     // The control: a widget that says nothing is not published as hiding.
     expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [recentOrders] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [recentOrders] }],
+    });
     expect(declaredWidget("acme/recent-orders")).toMatchObject({
       owner: SHOP,
       declaration: recentOrders,
@@ -145,7 +228,7 @@ describe("registering declared widgets", () => {
     const unselected = {
       ...recentOrders,
       id: "acme/unselected",
-      data: {
+      load: {
         query: ({ settings }: { settings: Record<string, unknown> }) => ({
           collection: settings.collection,
           op: "list",
@@ -153,7 +236,9 @@ describe("registering declared widgets", () => {
         }),
       },
     } as unknown as typeof recentOrders;
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [unselected] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [unselected] }],
+    });
 
     expect(cardQueryFor("acme/unselected", {})).toBeUndefined();
     let refused: unknown;
@@ -178,10 +263,12 @@ describe("registering declared widgets", () => {
       description: "Starts small and may grow only wider",
       category: "Test",
       size: { default: { w: 3, h: 2 } },
-      data: async () => ({ total: 3 }),
-      display: "metric",
+      load: async () => ({ total: 3 }),
+      view: "figure",
     });
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [small] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [small] }],
+    });
     const published = getWidget("acme/small")?.size;
     expect(published).toEqual({
       default: { w: 3, h: 2 },
@@ -199,12 +286,14 @@ describe("registering declared widgets", () => {
   it("registers nothing when any declaration cannot work, and names every fault", () => {
     let thrown: unknown;
     try {
-      registerWidgetDeclarations([
-        {
-          owner: SHOP,
-          declarations: [ordersByState, { ...revenue, title: "" }],
-        },
-      ]);
+      registerDashboardWidgets({
+        groups: [
+          {
+            owner: SHOP,
+            declarations: [ordersByState, { ...revenue, title: "" }],
+          },
+        ],
+      });
     } catch (error) {
       thrown = error;
     }
@@ -222,10 +311,12 @@ describe("declarations plain JavaScript can hand over", () => {
   it("reports an entry that is not an object with the other faults, beside old-shape ids", () => {
     let thrown: unknown;
     try {
-      registerWidgetDeclarations(
-        [{ owner: SHOP, declarations: [null, { ...revenue, title: "" }] }],
-        [{ owner: 'plugin "@old/stats"', ids: ["old/x"] }]
-      );
+      registerDashboardWidgets({
+        groups: [
+          { owner: SHOP, declarations: [null, { ...revenue, title: "" }] },
+        ],
+        legacy: [{ owner: 'plugin "@old/stats"', ids: ["old/x"] }],
+      });
     } catch (error) {
       thrown = error;
     }
@@ -244,7 +335,9 @@ describe("declarations plain JavaScript can hand over", () => {
       enumerable: true,
       get: () => (reads++ === 0 ? "acme/recent-orders" : "core/recent-orders"),
     });
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [shifting] }]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [shifting] }],
+    });
     expect(declaredWidget("acme/recent-orders")?.declaration.id).toBe(
       "acme/recent-orders"
     );
@@ -255,16 +348,20 @@ describe("declarations plain JavaScript can hand over", () => {
 describe("widgets in today's shape", () => {
   it("stop startup when a declared widget takes an id one of them uses", () => {
     expect(() =>
-      registerWidgetDeclarations(
-        [{ owner: SHOP, declarations: [ordersByState] }],
-        [{ owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] }]
-      )
+      registerDashboardWidgets({
+        groups: [{ owner: SHOP, declarations: [ordersByState] }],
+        legacy: [
+          { owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] },
+        ],
+      })
     ).toThrow(NextlyError);
     try {
-      registerWidgetDeclarations(
-        [{ owner: SHOP, declarations: [ordersByState] }],
-        [{ owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] }]
-      );
+      registerDashboardWidgets({
+        groups: [{ owner: SHOP, declarations: [ordersByState] }],
+        legacy: [
+          { owner: 'plugin "@old/stats"', ids: ["acme/orders-by-state"] },
+        ],
+      });
     } catch (error) {
       expect((error as NextlyError).logMessage).toContain(
         'id "acme/orders-by-state" is already used by plugin "@old/stats", which declares it in the old shape'
@@ -277,8 +374,10 @@ describe("widgets in today's shape", () => {
       { owner: 'plugin "@one/a"', ids: ["shared/card"] },
       { owner: 'plugin "@two/b"', ids: ["shared/card"] },
     ];
-    expect(() => registerWidgetDeclarations([], legacy)).not.toThrow();
-    registerWidgetDeclarations([], legacy);
+    expect(() =>
+      registerDashboardWidgets({ groups: [], legacy: legacy })
+    ).not.toThrow();
+    registerDashboardWidgets({ groups: [], legacy: legacy });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toMatchObject({
       kind: "widget-id-shared-old-shape",
@@ -289,7 +388,10 @@ describe("widgets in today's shape", () => {
 
   it("may use a namespace the new shape reserves", () => {
     expect(() =>
-      registerWidgetDeclarations([], [{ owner: SHOP, ids: ["core/acme-card"] }])
+      registerDashboardWidgets({
+        groups: [],
+        legacy: [{ owner: SHOP, ids: ["core/acme-card"] }],
+      })
     ).not.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });
@@ -297,9 +399,9 @@ describe("widgets in today's shape", () => {
 
 describe("clearing", () => {
   it("forgets every declared widget, so a reload starts from nothing", () => {
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState] },
-    ]);
+    registerDashboardWidgets({
+      groups: [{ owner: SHOP, declarations: [ordersByState] }],
+    });
     clearDeclaredWidgets();
     expect(declaredWidget("acme/orders-by-state")).toBeUndefined();
   });
