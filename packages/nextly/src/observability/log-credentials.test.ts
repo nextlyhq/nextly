@@ -539,6 +539,34 @@ describe("credentials anywhere in a log value", () => {
     for (const secret of secrets) expect(out).not.toContain(secret);
   });
 
+  it("redacts alike through a logger wrapped twice, keeping the rest of the line", () => {
+    const received: unknown[] = [];
+    const sink = {
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    };
+    maskingServiceLogger(maskingServiceLogger(sink)).debug("line", {
+      note: "token=twice-wrapped-secret&page=2",
+    });
+    const out = inspect(received, { depth: Infinity });
+    expect(out).not.toContain("twice-wrapped-secret");
+    expect(out).toContain("page=2");
+  });
+
+  it("takes them out of an error class's display tag", () => {
+    const captured = "display-tag-secret";
+    class TaggedError extends Error {
+      get [Symbol.toStringTag](): string {
+        return `Bearer ${captured}`;
+      }
+    }
+    const out = receivedBy({ error: new TaggedError("upload failed") });
+    expect(out).not.toContain("display-tag-secret");
+    expect(out).toContain("upload failed");
+  });
+
   it("reads a boxed string whole, so its credential is found", () => {
     const out = receivedBy({ note: new String("Bearer boxed-string-secret") });
     // Copied character by character, no credential would ever be seen whole,

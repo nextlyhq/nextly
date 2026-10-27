@@ -391,15 +391,18 @@ function blankCopyOf(error: Error, message: string, name: string): Error {
   }
   const copy = new Error(message);
   Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
-  // The copy keeps the error's class, and with it any inspection hook the
-  // class defines, which a console logger would call past every rule. An own
-  // empty hook shadows it, so the copy prints as its redacted fields.
-  Object.defineProperty(copy, INSPECT_HOOK, {
-    value: undefined,
-    configurable: true,
-    enumerable: false,
-    writable: true,
-  });
+  // The copy keeps the error's class, and with it any inspection hook or
+  // display tag the class defines, which a console logger would read past
+  // every rule. Own empty ones shadow them, so the copy prints as its
+  // redacted fields.
+  for (const hook of [INSPECT_HOOK, Symbol.toStringTag]) {
+    Object.defineProperty(copy, hook, {
+      value: undefined,
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+  }
   return copy;
 }
 
@@ -550,11 +553,12 @@ const TEXT_PARAMETER =
  * whole so a quote is never read as an empty value with the secret after it;
  * an opening quote never closed (a message cut short), and then the rest of
  * the line, failing closed; a JSON array or object, which is not parsed and
- * so takes the rest of the line too; or bare, with any `Bearer` or `Basic`
+ * so takes the rest of the line too (but not the `[redacted]` marker itself,
+ * so text already redacted reads the same through a second pass); or bare, with any `Bearer` or `Basic`
  * scheme as the second group.
  */
 const TEXT_PARAMETER_VALUE =
-  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|[[{][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
+  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|(?!\[redacted\])[[{][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
 
 /**
  * An `Authorization` header's value, read to the end of its line: a scheme
