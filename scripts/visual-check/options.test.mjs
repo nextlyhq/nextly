@@ -112,6 +112,28 @@ describe("what the visual check is asked to do", () => {
     );
   });
 
+  it("takes --raw-base, an https address, only with --publish", () => {
+    const base = "https://raw.githubusercontent.com/someone/fork";
+    expect(
+      parseOptions(["/admin", "--publish", "t", "--raw-base", base])
+    ).toEqual(expect.objectContaining({ rawBase: base }));
+    expect(() => parseOptions(["/admin", "--raw-base", base])).toThrow(
+      UsageError
+    );
+    expect(() =>
+      parseOptions(["/admin", "--publish", "t", "--raw-base", "raw.example/x"])
+    ).toThrow(UsageError);
+  });
+
+  it("takes --prepare with routes to capture, and not with --unpublish", () => {
+    expect(parseOptions(["/admin", "--prepare", "open.mjs"])).toEqual(
+      expect.objectContaining({ prepare: "open.mjs" })
+    );
+    expect(() =>
+      parseOptions(["--unpublish", "t", "--prepare", "open.mjs"])
+    ).toThrow(UsageError);
+  });
+
   it("answers --help with the usage, and nothing else to do", () => {
     expect(parseOptions(["--help"])).toEqual(
       expect.objectContaining({ help: true })

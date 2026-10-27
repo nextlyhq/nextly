@@ -27,12 +27,14 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { signIn as signInThroughForm } from "../../e2e/tests/support/session.mjs";
 import { isCliEntry } from "../cli-entry.mjs";
 
 import { chromium, ROOT } from "./browser.mjs";
-import { captureRoutes } from "./capture.mjs";
+import { captureRoutes, sessionRenewer } from "./capture.mjs";
+import { isPublicRoute } from "./page-checks.mjs";
 import {
   capturePlan,
   parseOptions,
@@ -69,6 +71,29 @@ async function signInAsSeededUser(baseURL, file) {
 }
 
 /**
+ * The function a `--prepare` module exports by default, loaded before
+ * anything is built or served, so a wrong path or a module with no such
+ * function costs nothing to find out. No module, no function.
+ */
+async function loadPrepare(file) {
+  if (file === undefined) return undefined;
+  const resolved = path.resolve(file);
+  let loaded;
+  try {
+    loaded = await import(pathToFileURL(resolved).href);
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    throw new Error(`--prepare cannot load ${resolved}: ${said}`);
+  }
+  if (typeof loaded.default !== "function") {
+    throw new Error(
+      `--prepare ${resolved} has no default export function: export default async (page, { route, width, scheme }) => { … }`
+    );
+  }
+  return loaded.default;
+}
+
+/**
  * Serves the playground (unless reusing one), signs in, and captures every
  * route into `outDir`. A server this started is stopped afterwards, or left
  * running with `--keep` and the command that stops it printed.
@@ -81,6 +106,8 @@ async function serveAndCapture({
   signIn,
   log,
   drawnMs,
+  prepare,
+  now,
 }) {
   const baseURL = `http://localhost:${port}`;
   // The session holds a live sign-in, so it is kept out of the capture folder
@@ -96,7 +123,13 @@ async function serveAndCapture({
     if (!options.reuse) {
       server = await startServer({ port, keep: options.keep, log });
     }
-    await signIn(baseURL, storageState);
+    // Public screens are captured signed out, so a run of only those needs no
+    // session; any other route is captured with one, renewed as it ages.
+    let renew;
+    if (!options.routes.every(isPublicRoute)) {
+      await signIn(baseURL, storageState);
+      renew = sessionRenewer({ baseURL, file: storageState, signIn, now });
+    }
     const browser = await chromium.launch();
     try {
       return await captureRoutes({
@@ -107,6 +140,8 @@ async function serveAndCapture({
         outDir,
         storageState,
         drawnMs,
+        prepare,
+        renew,
       });
     } finally {
       await browser.close();
@@ -143,6 +178,7 @@ async function publishAndPrint({
   captures,
   findings,
   topic,
+  rawBase: givenRawBase,
   repoDir,
   publish,
   log,
@@ -151,6 +187,7 @@ async function publishAndPrint({
     const { branch, rawBase } = await publish({
       cwd: repoDir,
       topic,
+      rawBase: givenRawBase,
       files: captures.map(capture => capture.path),
     });
     log(`Published to ${branch}. Paste this into the pull request body:\n`);
@@ -208,6 +245,65 @@ async function unpublishAndSay({ topic, owner, repoDir, unpublish, log }) {
 }
 
 /**
+ * The run's options and `--prepare` function, or the exit code of a run that
+ * ends here: a wrong invocation or a `--prepare` module that cannot be used
+ * (2), `--help` (0), or `--unpublish`, which is a run of its own.
+ */
+async function setUp(argv, { log, repoDir, unpublish }) {
+  let options;
+  try {
+    options = parseOptions(argv);
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    log(`${error.message}\n${USAGE}`);
+    return { code: 2 };
+  }
+  if (options.help) {
+    log(USAGE);
+    return { code: 0 };
+  }
+  if (options.unpublish !== undefined) {
+    const code = await unpublishAndSay({
+      topic: options.unpublish,
+      owner: options.owner,
+      repoDir,
+      unpublish,
+      log,
+    });
+    return { code };
+  }
+  try {
+    return { options, prepare: await loadPrepare(options.prepare) };
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+    return { code: 2 };
+  }
+}
+
+/**
+ * Publishes the run's captures when `--publish` asked and the run allows it,
+ * saying why not otherwise. Answers whether nothing went wrong: true too when
+ * nothing was asked.
+ */
+async function publishIfAllowed(result, options, { repoDir, publish, log }) {
+  if (options.publish === undefined) return true;
+  const refusal = publishRefusal(result, options.allowFindings);
+  if (refusal) {
+    log(refusal);
+    return false;
+  }
+  return publishAndPrint({
+    captures: result.captures,
+    findings: result.findings,
+    topic: options.publish,
+    rawBase: options.rawBase,
+    repoDir,
+    publish,
+    log,
+  });
+}
+
+/**
  * One run, from its arguments to its exit code: 0 when every route was
  * captured and nothing was found, 1 when anything failed or was found, 2 for
  * a wrong invocation.
@@ -225,29 +321,15 @@ export async function visualCheck(argv, deps = {}) {
     unpublish = unpublishCaptures,
     repoDir = ROOT,
     drawnMs,
+    now,
   } = deps;
 
-  let options;
-  try {
-    options = parseOptions(argv);
-  } catch (error) {
-    if (!(error instanceof UsageError)) throw error;
-    log(`${error.message}\n${USAGE}`);
-    return 2;
-  }
-  if (options.help) {
-    log(USAGE);
-    return 0;
-  }
-  if (options.unpublish !== undefined) {
-    return unpublishAndSay({
-      topic: options.unpublish,
-      owner: options.owner,
-      repoDir,
-      unpublish,
-      log,
-    });
-  }
+  const { code, options, prepare } = await setUp(argv, {
+    log,
+    repoDir,
+    unpublish,
+  });
+  if (code !== undefined) return code;
 
   const outDir = path.resolve(options.out ?? DEFAULT_OUT);
   mkdirSync(outDir, { recursive: true });
@@ -257,33 +339,24 @@ export async function visualCheck(argv, deps = {}) {
     rmSync(path.join(outDir, step.file), { force: true });
   }
 
-  const port = prodPort(env, slotSettings());
   const result = await serveAndCapture({
     options,
-    port,
+    port: prodPort(env, slotSettings()),
     outDir,
     startServer,
     signIn,
     log,
     drawnMs,
+    prepare,
+    now,
   });
   report(result, outDir, log);
 
-  let published = true;
-  if (options.publish !== undefined) {
-    const refusal = publishRefusal(result, options.allowFindings);
-    if (refusal) log(refusal);
-    published =
-      !refusal &&
-      (await publishAndPrint({
-        captures: result.captures,
-        findings: result.findings,
-        topic: options.publish,
-        repoDir,
-        publish,
-        log,
-      }));
-  }
+  const published = await publishIfAllowed(result, options, {
+    repoDir,
+    publish,
+    log,
+  });
   const clean = result.failures.length === 0 && result.findings.length === 0;
   return clean && published ? 0 : 1;
 }

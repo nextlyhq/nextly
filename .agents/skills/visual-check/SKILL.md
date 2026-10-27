@@ -36,7 +36,11 @@ touches, read them, and put them in the pull request.
    whose box ends past the right edge (by selector), and axe's serious and
    critical violations (by rule and selector); any of these exits non-zero.
    A route is captured not at all when it answers 400 or more, is sent to
-   sign-in, draws no visible `<main>`, or gives axe nothing to judge.
+   sign-in, draws no visible `<main>`, never shows the scheme asked for, or
+   gives axe nothing to judge. The screens the admin lists as public
+   (`PUBLIC_ROUTE_PATHS`: sign-in, setup, register and the rest) are captured
+   signed out, as their visitors see them; every other route signed in, the
+   session renewed during a long run.
 3. Open and read EVERY capture, not a sample: the checks above find only what
    can be measured. What to look for is below.
 4. Fix, and capture again. A fix to the code needs a new build, so run without
@@ -54,7 +58,10 @@ touches, read them, and put them in the pull request.
    This pushes the captures, alone, to `pr-screenshots/posts-list`, a branch
    with no history in common with `main`, under your own git credentials, and
    prints the "The look" section, 390 px first. Paste it into the pull request
-   body.
+   body. When `origin` is not a GitHub URL (an ssh alias, a mirror), the run
+   refuses before pushing: pass `--raw-base
+https://raw.githubusercontent.com/<owner>/<repo>` for the repository it
+   pushes to.
 
    Only a clean, complete run is published: a route not captured always
    refuses it, and so do findings. When the findings predate your change (the
@@ -87,6 +94,31 @@ touches, read them, and put them in the pull request.
   an error, long content (a long title, many rows, a long word that will not
   wrap), and the screen with its dialog, menu or sheet open. Capture each
   (seed or set up the state first) and say in the pull request which are shown.
+  A dialog, menu or sheet is opened for the capture with `--prepare` (below).
+
+## Staging a dialog, a menu or a sheet
+
+`--prepare <module.mjs>` runs the module's default export on every view after
+the page settles and before it is read and captured, so the capture and the
+checks see what it opened:
+
+```js
+// ./open-filters.mjs, a scratch file kept out of the commit
+export default async (page, { route, width, scheme }) => {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.getByRole("dialog", { name: "Filters" }).waitFor();
+};
+```
+
+```sh
+pnpm visual-check /admin/collections/posts --prepare ./open-filters.mjs
+```
+
+Find what to open by its accessible name, as a reader would, not by a class
+name. A prepare that throws fails that view, naming its route, width and
+scheme, and nothing of that route is captured. Run it in its own topic, or
+alongside a run without it, so the screen is shown closed as well as open.
+
 - **Tokens in both schemes**: nothing that stays light in dark, or vanishes
   against its background in either; borders and focus rings visible; no
   colour that is not a `--nx-*` token.

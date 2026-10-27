@@ -18,7 +18,10 @@ import {
   it,
 } from "vitest";
 
-import { startFixtureServer } from "./fixture-server.mjs";
+import {
+  FIXTURE_SESSION_COOKIE,
+  startFixtureServer,
+} from "./fixture-server.mjs";
 import { visualCheck } from "./run.mjs";
 
 /** A PNG's height in pixels, read from its header. */
@@ -68,9 +71,20 @@ describe("the visual check, run against a stubbed server", () => {
         },
       };
     },
+    // Signs in as a fixture knows a session: by its cookie on the server's host.
     signIn: async (baseURL, file) => {
       calls.signedIn.push(baseURL);
-      writeFileSync(file, JSON.stringify({ cookies: [], origins: [] }));
+      const cookie = {
+        name: FIXTURE_SESSION_COOKIE,
+        value: "1",
+        domain: "localhost",
+        path: "/",
+        expires: -1,
+        httpOnly: false,
+        secure: false,
+        sameSite: "Lax",
+      };
+      writeFileSync(file, JSON.stringify({ cookies: [cookie], origins: [] }));
     },
   });
 
@@ -226,6 +240,96 @@ describe("the visual check, run against a stubbed server", () => {
       expect(record.pushed).toEqual([]);
     }
     expect(lines.join("\n")).toMatch(/Not published.*not captured/);
+  });
+
+  it("captures an admin screen once its root shows the scheme asked for", async () => {
+    expect(await run("/admin/themed", "--reuse")).toBe(0);
+    expect(captured()).toHaveLength(6);
+  });
+
+  it("captures nothing for a route whose admin never shows the scheme asked for, naming the view", async () => {
+    const code = await visualCheck(
+      ["/admin/stuck-light", "--reuse", "--out", out],
+      {
+        ...deps(),
+        drawnMs: 500,
+      }
+    );
+    expect(code).not.toBe(0);
+    expect(captured()).toEqual([]);
+    expect(lines.join("\n")).toMatch(
+      /\/admin\/stuck-light 390 dark: .*dark scheme/
+    );
+  });
+
+  /*
+   * The register fixture turns a signed-in visitor away, as a public screen
+   * may; the members-only one sends a signed-out visitor to sign in. Both pass
+   * only when each is opened as its kind of screen needs.
+   */
+  it("captures a public screen signed out and a private one signed in", async () => {
+    expect(await run("/admin/register", "/admin/members-only", "--reuse")).toBe(
+      0
+    );
+    expect(captured()).toHaveLength(12);
+  });
+
+  it("signs in for no run whose every route is public", async () => {
+    expect(await run("/admin/register", "--reuse")).toBe(0);
+    expect(calls.signedIn).toEqual([]);
+  });
+
+  it("signs in again when the session is old enough to expire during the run", async () => {
+    let clock = 0;
+    const code = await visualCheck(["/admin", "--reuse", "--out", out], {
+      ...deps(),
+      // Four minutes pass with every reading of the clock.
+      now: () => (clock += 4 * 60_000),
+    });
+    expect(code).toBe(0);
+    expect(calls.signedIn.length).toBeGreaterThan(1);
+  });
+
+  /** Writes a `--prepare` module that opens the fixture's dialog, or fails where there is none. */
+  const prepareModule = () => {
+    const file = path.join(out, "open-filters.mjs");
+    writeFileSync(
+      file,
+      `export default async (page, { route, width, scheme }) => {
+  await page.getByRole("button", { name: "Open filters" }).click({ timeout: 1000 });
+  await page.getByRole("dialog", { name: "Filters" }).waitFor({ timeout: 1000 });
+};
+`
+    );
+    return file;
+  };
+
+  it("runs --prepare before reading and capturing each view, so an opened dialog is in it", async () => {
+    await run("/admin/dialog", "--reuse", "--prepare", prepareModule());
+    expect(captured()).toHaveLength(6);
+    expect(lines.join("\n")).toContain(
+      "/admin/dialog 390 light: div#fixture-dialog ends past the right edge"
+    );
+  });
+
+  it("reads no dialog without --prepare, the control for the one above", async () => {
+    await run("/admin/dialog", "--reuse");
+    expect(lines.join("\n")).not.toContain("fixture-dialog");
+  });
+
+  it("captures nothing for a view whose --prepare fails, naming the view", async () => {
+    const code = await run("/admin", "--reuse", "--prepare", prepareModule());
+    expect(code).not.toBe(0);
+    expect(captured()).toEqual([]);
+    expect(lines.join("\n")).toMatch(/\/admin 390 light: --prepare failed/);
+  });
+
+  it("refuses a --prepare module with no default function before anything starts", async () => {
+    const file = path.join(out, "empty.mjs");
+    writeFileSync(file, "export const nothing = 1;\n");
+    expect(await run("/admin", "--prepare", file)).toBe(2);
+    expect(calls.started).toBe(0);
+    expect(lines.join("\n")).toMatch(/default export/);
   });
 
   it("captures the whole page with --full", async () => {

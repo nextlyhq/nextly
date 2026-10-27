@@ -9,11 +9,13 @@ import path from "node:path";
 
 import { THEME_STORAGE_KEY } from "../../e2e/tests/support/theme.mjs";
 import { settleTransitions } from "../../e2e/tests/support/axe-scan.mjs";
+import { SESSION_MAX_AGE_MS } from "../../e2e/tests/support/session.mjs";
 
 import { capturePlan } from "./options.mjs";
 import {
   checkPage,
   describeFinding,
+  isPublicRoute,
   routeFailure,
   SIGN_IN_PATH,
 } from "./page-checks.mjs";
@@ -60,8 +62,11 @@ async function settle(page, scheme, drawnMs) {
       () => true,
       () => false
     );
+  // Outside the admin's root there is no palette of its own to wait for: the
+  // emulated system scheme is already the page's.
+  let schemeShown = true;
   if (drawn && (await page.locator(".nextly-admin").count()) > 0) {
-    await page
+    schemeShown = await page
       .waitForFunction(
         dark =>
           globalThis.document
@@ -70,28 +75,73 @@ async function settle(page, scheme, drawnMs) {
         scheme === "dark",
         { timeout: drawnMs }
       )
-      .catch(() => undefined);
+      .then(
+        () => true,
+        () => false
+      );
   }
   await page.evaluate(() =>
     globalThis.document.fonts.ready.then(() => undefined)
   );
   await settleTransitions(page);
-  return drawn;
+  return { drawn, schemeShown };
 }
 
 /**
- * One view of one route: opened, judged, captured into `outDir` and read.
- * Answers why the route cannot be captured, or the capture and its findings.
+ * Why a view that answered cannot be captured, or null: no screen drawn, or
+ * an admin that never showed the scheme asked for, which would publish a
+ * light capture labelled dark, or the other way round.
  */
-async function captureView(context, step, { full, outDir, drawnMs }) {
+function settledFailure(
+  { drawn, schemeShown },
+  { route, scheme },
+  where,
+  drawnMs
+) {
+  const within = `within ${drawnMs / 1000}s`;
+  if (!drawn) return `${route} answered, but drew no visible <main> ${within}`;
+  if (!schemeShown)
+    return `${where}: the admin did not show the ${scheme} scheme ${within}`;
+  return null;
+}
+
+/**
+ * Runs the author's `--prepare` on a settled view, to stage what the capture
+ * should show (a dialog, a menu, a sheet), and lets what it opened settle.
+ * Answers why it failed, or null.
+ */
+async function prepared(page, step, prepare, where) {
+  if (!prepare) return null;
+  try {
+    await prepare(page, {
+      route: step.route,
+      width: step.width,
+      scheme: step.scheme,
+    });
+    await settleTransitions(page);
+    return null;
+  } catch (error) {
+    const said =
+      error instanceof Error ? error.message.split("\n")[0] : String(error);
+    return `${where}: --prepare failed: ${said}`;
+  }
+}
+
+/**
+ * One view of one route: opened, judged, staged by `--prepare`, captured into
+ * `outDir` and read. Answers why the route cannot be captured, or the capture
+ * and its findings.
+ */
+async function captureView(context, step, { full, outDir, drawnMs, prepare }) {
   const { route } = step;
+  const where = `${route} ${step.width} ${step.scheme}`;
   await context.addInitScript(
     ([key, value]) => globalThis.localStorage.setItem(key, value),
     [THEME_STORAGE_KEY, step.scheme]
   );
   const page = await context.newPage();
   const response = await page.goto(route, { waitUntil: "load" });
-  const drawn = await settle(page, step.scheme, drawnMs);
+  const settled = await settle(page, step.scheme, drawnMs);
   // No response is a same-document navigation, which answered by definition.
   const failure =
     routeFailure({
@@ -99,9 +149,8 @@ async function captureView(context, step, { full, outDir, drawnMs }) {
       status: response?.status() ?? 200,
       finalUrl: page.url(),
     }) ??
-    (drawn
-      ? null
-      : `${route} answered, but drew no visible <main> within ${drawnMs / 1000}s`);
+    settledFailure(settled, step, where, drawnMs) ??
+    (await prepared(page, step, prepare, where));
   if (failure) return { failure };
   const file = path.join(outDir, step.file);
   await page.screenshot({ path: file, fullPage: full });
@@ -112,7 +161,6 @@ async function captureView(context, step, { full, outDir, drawnMs }) {
     file: step.file,
     path: file,
   };
-  const where = `${route} ${step.width} ${step.scheme}`;
   const { findings, unread } = await checkPage(page);
   if (unread) return { failure: `${where}: ${unread}`, capture };
   return {
@@ -122,55 +170,65 @@ async function captureView(context, step, { full, outDir, drawnMs }) {
 }
 
 /**
+ * Every view of one route, stopping at the first that fails. A public screen
+ * (one the admin lists as reachable without a session) is opened signed out,
+ * as its visitors see it; any other is opened with the session, renewed
+ * first when it is old enough to expire.
+ */
+async function captureRoute(
+  route,
+  { browser, baseURL, storageState, renew, ...view }
+) {
+  const signedIn = !isPublicRoute(route);
+  const made = [];
+  const seen = [];
+  for (const step of capturePlan([route])) {
+    if (signedIn) await renew?.();
+    const context = await browser.newContext({
+      baseURL,
+      storageState: signedIn ? storageState : undefined,
+      viewport: step.viewport,
+      colorScheme: step.scheme,
+    });
+    try {
+      const result = await captureView(context, step, view);
+      if (result.capture) made.push(result.capture);
+      if (result.failure) return { made, seen, failure: result.failure };
+      seen.push(...result.seen);
+    } finally {
+      await context.close();
+    }
+  }
+  return { made, seen, failure: null };
+}
+
+/**
  * Captures every route of `routes` six ways into `outDir`, and reads each
  * view.
  *
- * Each view has a browser context of its own, opened with the stored session,
- * the viewport, and the scheme both as the system preference and as the
- * admin's stored choice. A route that fails any view (an error status, a
- * redirect to sign-in, no screen drawn, or nothing axe could judge) keeps none
- * of its captures: half a set would read as the whole of it.
+ * Each view has a browser context of its own, opened with the viewport, the
+ * scheme both as the system preference and as the admin's stored choice, and
+ * the session unless the route is public. A route that fails any view (an
+ * error status, a redirect to sign-in, no screen drawn, the scheme not shown,
+ * a failed `--prepare`, or nothing axe could judge) keeps none of its
+ * captures: half a set would read as the whole of it.
  *
  * @returns {Promise<{ captures: Array<{ route: string, width: number, scheme: string, file: string, path: string }>,
  *   failures: string[], findings: string[] }>}
  */
 export async function captureRoutes({
-  browser,
-  baseURL,
   routes,
-  full,
-  outDir,
-  storageState,
   drawnMs = DRAWN_MS,
+  ...options
 }) {
   const captures = [];
   const failures = [];
   const findings = [];
   for (const route of routes) {
-    const made = [];
-    const seen = [];
-    let failure = null;
-    for (const step of capturePlan([route])) {
-      const context = await browser.newContext({
-        baseURL,
-        storageState,
-        viewport: step.viewport,
-        colorScheme: step.scheme,
-      });
-      try {
-        const view = await captureView(context, step, {
-          full,
-          outDir,
-          drawnMs,
-        });
-        if (view.capture) made.push(view.capture);
-        failure = view.failure ?? null;
-        if (failure) break;
-        seen.push(...view.seen);
-      } finally {
-        await context.close();
-      }
-    }
+    const { made, seen, failure } = await captureRoute(route, {
+      ...options,
+      drawnMs,
+    });
     if (failure) {
       for (const capture of made) rmSync(capture.path, { force: true });
       failures.push(failure);
@@ -180,4 +238,25 @@ export async function captureRoutes({
     findings.push(...seen);
   }
   return { captures, failures, findings };
+}
+
+/**
+ * A check, run before each signed-in view, that signs in again once the
+ * session is older than the e2e suite's safe age for it: its access token
+ * lives fifteen minutes, and a long batch of views outlasts that. Starts
+ * from a session signed in at the moment it is made.
+ */
+export function sessionRenewer({
+  baseURL,
+  file,
+  signIn,
+  now = Date.now,
+  maxAgeMs = SESSION_MAX_AGE_MS,
+}) {
+  let signedInAt = now();
+  return async () => {
+    if (now() - signedInAt <= maxAgeMs) return;
+    await signIn(baseURL, file);
+    signedInAt = now();
+  };
 }

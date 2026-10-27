@@ -36,6 +36,17 @@ function unwrapped(node) {
     : node;
 }
 
+/** What the variable `name` is declared as in `program`, its assertions unwrapped. */
+function declared(program, name) {
+  let init;
+  walk(program, node => {
+    if (node.type === "VariableDeclarator" && node.id?.name === name) {
+      init = unwrapped(node.init);
+    }
+  });
+  return init;
+}
+
 /** The name a property is keyed by, written bare or quoted. */
 function keyName(property) {
   return property.key?.type === "Identifier"
@@ -52,12 +63,7 @@ function keyName(property) {
  * so a renamed table or a computed path fails the run instead of being guessed.
  */
 export function routeFromTable(text, fileName, key) {
-  let table;
-  walk(parseSource(text, fileName).program, node => {
-    if (node.type === "VariableDeclarator" && node.id?.name === "ROUTES") {
-      table = unwrapped(node.init);
-    }
-  });
+  const table = declared(parseSource(text, fileName).program, "ROUTES");
   if (table?.type !== "ObjectExpression") {
     throw new Error(
       `${fileName} declares no ROUTES object to read ${key} from.`
@@ -76,11 +82,56 @@ export function routeFromTable(text, fileName, key) {
  * (`ROUTES.LOGIN`). A capture of it in place of the route asked for is a
  * capture of the wrong page.
  */
+const ROUTE_TABLE_TEXT = readFileSync(ROUTE_TABLE, "utf8");
+
 export const SIGN_IN_PATH = routeFromTable(
-  readFileSync(ROUTE_TABLE, "utf8"),
+  ROUTE_TABLE_TEXT,
   ROUTE_TABLE,
   "LOGIN"
 );
+
+/**
+ * The paths a route table's `PUBLIC_ROUTE_PATHS` lists, each `ROUTES.<KEY>`
+ * entry resolved through the table's `ROUTES`, as the admin declares the
+ * screens a visitor reaches without a session. A list that is missing, or an
+ * entry that is not one of those keys or a literal path, is refused.
+ */
+export function publicRoutesFromTable(text, fileName) {
+  const list = declared(
+    parseSource(text, fileName).program,
+    "PUBLIC_ROUTE_PATHS"
+  );
+  if (list?.type !== "ArrayExpression") {
+    throw new Error(`${fileName} declares no PUBLIC_ROUTE_PATHS list to read.`);
+  }
+  return list.elements.map(element => {
+    const literal = literalText(element);
+    if (literal !== null) return literal;
+    const isRoutesKey =
+      element?.type === "MemberExpression" &&
+      element.object?.name === "ROUTES" &&
+      element.property?.type === "Identifier";
+    if (!isRoutesKey) {
+      throw new Error(
+        `${fileName} lists a public route that is not a ROUTES key or a path.`
+      );
+    }
+    return routeFromTable(text, fileName, element.property.name);
+  });
+}
+
+/** The admin's public screens, from its route table. */
+const PUBLIC_PATHS = new Set(
+  publicRoutesFromTable(ROUTE_TABLE_TEXT, ROUTE_TABLE)
+);
+
+/**
+ * Whether a visitor reaches `route` without a session: its path, the query
+ * aside, is one the admin lists, matched exactly as the admin matches it.
+ */
+export function isPublicRoute(route) {
+  return PUBLIC_PATHS.has(new URL(route, "http://localhost").pathname);
+}
 
 /** The impacts worth failing a run over; axe's "moderate" and "minor" are left to the reader. */
 const FAILING_IMPACTS = new Set(["serious", "critical"]);

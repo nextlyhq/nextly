@@ -30,15 +30,19 @@ export const SCREENSHOT_BRANCHES = "pr-screenshots/";
 /** A wrong invocation, answered with the usage rather than a stack. */
 export class UsageError extends Error {}
 
-export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --keep] [--publish <topic> [--allow-findings]] [--out <dir>]
+export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --keep] [--prepare <module.mjs>]
+         [--publish <topic> [--allow-findings] [--raw-base <url>]] [--out <dir>]
        pnpm visual-check --unpublish <topic> [--owner <branch>]
 
   <route>              an admin path, such as /admin or /admin/collections/posts
   --full               capture the whole page, not only the first screen
   --reuse              use the server already running on this checkout's port; build nothing
   --keep               leave the server this run starts running, for later runs with --reuse
+  --prepare <file>     a module whose default export, async (page, { route, width, scheme }), stages each view
+                       (opens a dialog, a menu, a sheet) after it settles and before it is read and captured
   --publish <topic>    push the captures to pr-screenshots/<topic> and print "The look"
   --allow-findings     publish despite findings that predate the change; they are listed with the captures
+  --raw-base <url>     the raw address captures are linked under, when origin is not a GitHub URL
   --out <dir>          where the captures go (default e2e/.playwright/visual-check)
   --unpublish <topic>  delete pr-screenshots/<topic>, once its pull request is merged or closed
   --owner <branch>     the branch that published it, when that is not the branch checked out
@@ -118,6 +122,8 @@ function readArgs(argv) {
         unpublish: { type: "string" },
         owner: { type: "string" },
         "allow-findings": { type: "boolean", default: false },
+        "raw-base": { type: "string" },
+        prepare: { type: "string" },
         out: { type: "string" },
         help: { type: "boolean", default: false },
       },
@@ -162,9 +168,13 @@ export function parseOptions(argv) {
   const { values, positionals: routes } = readArgs(argv);
   if (values.help) return { help: true, routes: [] };
   if (values.unpublish !== undefined) {
-    if (routes.length > 0 || values.publish !== undefined) {
+    if (
+      routes.length > 0 ||
+      values.publish !== undefined ||
+      values.prepare !== undefined
+    ) {
       throw new UsageError(
-        "--unpublish deletes a published topic, and takes no route and no --publish."
+        "--unpublish deletes a published topic, and takes no route, --publish or --prepare."
       );
     }
     checkTopic(values.unpublish);
@@ -176,8 +186,20 @@ export function parseOptions(argv) {
       "--owner names who published a topic --unpublish deletes."
     );
   }
-  if (values["allow-findings"] && values.publish === undefined) {
-    throw new UsageError("--allow-findings is for --publish.");
+  if (
+    (values["allow-findings"] || values["raw-base"] !== undefined) &&
+    values.publish === undefined
+  ) {
+    throw new UsageError("--allow-findings and --raw-base are for --publish.");
+  }
+  // Linked from a pull request, so an address a reader's browser fetches as is.
+  if (
+    values["raw-base"] !== undefined &&
+    !/^https:\/\/[^\s/]+\/\S+$/.test(values["raw-base"])
+  ) {
+    throw new UsageError(
+      "--raw-base is an https address, such as https://raw.githubusercontent.com/<owner>/<repo>."
+    );
   }
   checkRoutes(routes);
   // With --reuse this run starts no server, so there would be nothing to keep.
@@ -194,6 +216,8 @@ export function parseOptions(argv) {
     keep: values.keep,
     publish: values.publish,
     allowFindings: values["allow-findings"],
+    rawBase: values["raw-base"]?.replace(/\/+$/, ""),
+    prepare: values.prepare,
     out: values.out,
   };
 }

@@ -24,9 +24,6 @@ import { SCREENSHOT_BRANCHES } from "./options.mjs";
  */
 export const MAX_CAPTURE_BYTES = 1024 * 1024;
 
-/** Where a capture is linked from when the remote is not on GitHub: nextly's own repository. */
-const DEFAULT_RAW_BASE = "https://raw.githubusercontent.com/nextlyhq/nextly";
-
 /** The branch a topic's captures are published to. */
 function branchFor(topic) {
   return `${SCREENSHOT_BRANCHES}${topic}`;
@@ -40,16 +37,28 @@ export function oversizedCaptures(files) {
 }
 
 /**
- * The raw-content address of the repository a remote URL names, so a fork's
- * captures link to the fork. Anything not on GitHub links to nextly's own.
+ * The forms a GitHub remote URL takes: a URL (https, ssh, git) whose host is
+ * github.com, and git's scp-like `git@github.com:owner/repo`. The host must
+ * be github.com exactly; an ssh alias or another host is not matched.
+ */
+const GITHUB_REMOTES = [
+  /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?github\.com(?::\d+)?\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+  /^(?:[^@/:]+@)?github\.com:([^/]+)\/([^/]+?)(?:\.git)?\/?$/,
+];
+
+/**
+ * The raw-content address of the GitHub repository a remote URL names, so a
+ * fork's captures link to the fork, or null for a remote it cannot map to
+ * GitHub. Null rather than a guess: a link to the wrong repository shows a
+ * reviewer nothing, or another branch's images.
  */
 export function rawBaseFor(remoteUrl) {
-  const match = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
-    remoteUrl.trim()
-  );
-  return match
-    ? `https://raw.githubusercontent.com/${match[1]}/${match[2]}`
-    : DEFAULT_RAW_BASE;
+  for (const form of GITHUB_REMOTES) {
+    const match = form.exec(remoteUrl.trim());
+    if (match)
+      return `https://raw.githubusercontent.com/${match[1]}/${match[2]}`;
+  }
+  return null;
 }
 
 /** A capture name's parts: the route's slug, the width and the scheme. */
@@ -226,13 +235,15 @@ function treeOf(cwd, files) {
  * The first publish of a topic is a commit with no parent; a later one sits on
  * the branch's tip, so the push is an ordinary fast-forward and needs no force.
  * Either way nothing of `main` is in its history. Everything that can refuse
- * the publish (a capture over the size limit, a detached HEAD, a topic another
- * branch owns) is checked before anything is written.
+ * the publish (a capture over the size limit, a remote with no raw address it
+ * can read and no `rawBase` given, a detached HEAD, a topic another branch
+ * owns) is checked before anything is written.
  */
 export async function publishCaptures({
   cwd,
   topic,
   files,
+  rawBase,
   remote = "origin",
 }) {
   const oversized = oversizedCaptures(files);
@@ -243,6 +254,15 @@ export async function publishCaptures({
     );
     throw new Error(
       `Not published: over the ${MAX_CAPTURE_BYTES / 1024 / 1024} MB limit: ${named.join(", ")}`
+    );
+  }
+  // Where the section links the captures, settled before anything is
+  // written: `--raw-base` when given, else origin's GitHub repository.
+  const remoteUrl = git(cwd, ["remote", "get-url", remote]);
+  const linkedUnder = rawBase ?? rawBaseFor(remoteUrl);
+  if (!linkedUnder) {
+    throw new Error(
+      `Not published: ${remote} is ${remoteUrl}, which is not a GitHub URL its raw address can be read from. Pass --raw-base https://raw.githubusercontent.com/<owner>/<repo> for the repository it pushes to.`
     );
   }
   const source = currentBranch(cwd);
@@ -270,7 +290,7 @@ export async function publishCaptures({
   return {
     branch: branchFor(topic),
     commit,
-    rawBase: rawBaseFor(git(cwd, ["remote", "get-url", remote])),
+    rawBase: linkedUnder,
   };
 }
 

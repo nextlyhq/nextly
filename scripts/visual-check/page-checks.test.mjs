@@ -10,6 +10,8 @@ import {
   readOverflow,
   routeFailure,
   routeFromTable,
+  publicRoutesFromTable,
+  isPublicRoute,
   seriousViolations,
   SIGN_IN_PATH,
 } from "./page-checks.mjs";
@@ -175,6 +177,41 @@ describe("where the admin sends a visitor with no session", () => {
 
   it("is the admin's own sign-in route", () => {
     expect(SIGN_IN_PATH).toMatch(/^\/admin\/\w/);
+  });
+});
+
+describe("which admin screens a visitor reaches without a session", () => {
+  const TABLE = "routes.ts";
+  const source = [
+    'export const ROUTES = { SETUP: "/a/setup", LOGIN: "/a/sign-in", HOME: "/a" } as const;',
+    'export const PUBLIC_ROUTE_PATHS: readonly ["/a/sign-in", "/a/setup"] = [ROUTES.LOGIN, ROUTES.SETUP] as const;',
+  ].join("\n");
+
+  it("is read from the route table's public list, each entry resolved through ROUTES", () => {
+    expect(publicRoutesFromTable(source, TABLE)).toEqual([
+      "/a/sign-in",
+      "/a/setup",
+    ]);
+  });
+
+  it("refuses a table with no public list, or an entry it cannot resolve", () => {
+    expect(() => publicRoutesFromTable(source.split("\n")[0], TABLE)).toThrow(
+      /PUBLIC_ROUTE_PATHS/
+    );
+    expect(() =>
+      publicRoutesFromTable(
+        `export const ROUTES = { LOGIN: "/a" };\nexport const PUBLIC_ROUTE_PATHS = [ROUTES.GONE];`,
+        TABLE
+      )
+    ).toThrow(/GONE/);
+  });
+
+  it("matches a route by its path alone, as the admin does", () => {
+    expect(isPublicRoute("/admin/login")).toBe(true);
+    expect(isPublicRoute("/admin/reset-password?token=x")).toBe(true);
+    expect(isPublicRoute("/admin/accept-invite")).toBe(true);
+    expect(isPublicRoute("/admin")).toBe(false);
+    expect(isPublicRoute("/admin/login/extra")).toBe(false);
   });
 });
 

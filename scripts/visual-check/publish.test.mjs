@@ -37,12 +37,30 @@ describe("the pull request's look section", () => {
     ]);
   });
 
-  it("reads the repository from a GitHub remote, and falls back to nextly's own", () => {
-    expect(rawBaseFor("git@github.com:someone/nextly.git")).toBe(
-      "https://raw.githubusercontent.com/someone/nextly"
-    );
-    expect(rawBaseFor("https://github.com/nextlyhq/nextly")).toBe(RAW);
-    expect(rawBaseFor("/tmp/bare.git")).toBe(RAW);
+  it("reads the repository from origin's URL in each form GitHub gives it", () => {
+    for (const url of [
+      "https://github.com/someone/nextly",
+      "https://github.com/someone/nextly.git",
+      "https://user@github.com/someone/nextly.git",
+      "git@github.com:someone/nextly.git",
+      "ssh://git@github.com/someone/nextly.git",
+      "ssh://git@github.com:22/someone/nextly",
+    ]) {
+      expect(rawBaseFor(url), url).toBe(
+        "https://raw.githubusercontent.com/someone/nextly"
+      );
+    }
+  });
+
+  it("answers nothing for a remote it cannot map to GitHub, rather than guessing", () => {
+    for (const url of [
+      "/tmp/bare.git",
+      "git@github-work:someone/nextly.git",
+      "https://gitlab.com/someone/nextly.git",
+      "https://github.com.example.org/someone/nextly.git",
+    ]) {
+      expect(rawBaseFor(url), url).toBeNull();
+    }
   });
 });
 
@@ -90,7 +108,12 @@ describe("publishing the captures", () => {
     );
 
   it("pushes the captures to a branch that shares no history with main", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     const branch = "refs/heads/pr-screenshots/posts-list";
     expect(
       git(bare, "ls-tree", "--name-only", branch).split("\n").sort()
@@ -109,16 +132,27 @@ describe("publishing the captures", () => {
       status: git(author, "status", "--porcelain"),
       branches: git(author, "branch", "--list"),
     };
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     expect(git(author, "rev-parse", "HEAD")).toBe(before.head);
     expect(git(author, "status", "--porcelain")).toBe(before.status);
     expect(git(author, "branch", "--list")).toBe(before.branches);
   });
 
   it("publishes again on top of its own branch, without a forced push", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     writeFileSync(path.join(captures, "admin-390-light.png"), "png again");
     await publishCaptures({
+      rawBase: RAW,
       cwd: author,
       topic: "posts-list",
       files: [path.join(captures, "admin-390-light.png")],
@@ -134,6 +168,24 @@ describe("publishing the captures", () => {
     expect(() => git(bare, "merge-base", "main", branch)).toThrow();
   });
 
+  it("refuses a remote whose raw address it cannot work out, before pushing, and says how to state it", async () => {
+    await expect(
+      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+    ).rejects.toThrow(/--raw-base/);
+    expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
+  });
+
+  it("links the captures under a raw address it is given", async () => {
+    const given = "https://raw.githubusercontent.com/someone/fork";
+    const { rawBase } = await publishCaptures({
+      rawBase: given,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
+    expect(rawBase).toBe(given);
+  });
+
   it("refuses a capture over 1 MB, naming it, and pushes nothing", async () => {
     const big = path.join(captures, "admin-1440-light.png");
     writeFileSync(big, Buffer.alloc(MAX_CAPTURE_BYTES + 1));
@@ -143,6 +195,7 @@ describe("publishing the captures", () => {
     ]);
     await expect(
       publishCaptures({
+        rawBase: RAW,
         cwd: author,
         topic: "posts-list",
         files: [...files(), big],
@@ -162,16 +215,31 @@ describe("publishing the captures", () => {
     );
 
   it("records which branch published the captures", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     expect(sourceOf(BRANCH)).toBe("main");
   });
 
   it("refuses a topic another branch published, naming that branch, and pushes nothing", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     const tip = git(bare, "rev-parse", BRANCH);
     git(author, "checkout", "--quiet", "-b", "other-change");
     await expect(
-      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+      publishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+        files: files(),
+      })
     ).rejects.toThrow(/pr-screenshots\/posts-list.*\bmain\b/);
     expect(git(bare, "rev-parse", BRANCH)).toBe(tip);
   });
@@ -181,7 +249,12 @@ describe("publishing the captures", () => {
     const untagged = git(author, "commit-tree", tree, "-m", "made by hand");
     git(author, "push", "--quiet", "origin", `${untagged}:${BRANCH}`);
     await expect(
-      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+      publishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+        files: files(),
+      })
     ).rejects.toThrow(/records no source branch/);
     expect(git(bare, "rev-parse", BRANCH)).toBe(untagged);
   });
@@ -189,15 +262,29 @@ describe("publishing the captures", () => {
   it("refuses to publish from a detached HEAD, which names no branch to record", async () => {
     git(author, "checkout", "--quiet", "--detach");
     await expect(
-      publishCaptures({ cwd: author, topic: "posts-list", files: files() })
+      publishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+        files: files(),
+      })
     ).rejects.toThrow(/branch/);
     expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
   });
 
   it("deletes a published topic, saying which branch had published it", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     expect(
-      await unpublishCaptures({ cwd: author, topic: "posts-list" })
+      await unpublishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+      })
     ).toEqual({
       deleted: true,
       source: "main",
@@ -207,17 +294,28 @@ describe("publishing the captures", () => {
   });
 
   it("refuses to delete a topic another branch published, unless --owner names that branch", async () => {
-    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    await publishCaptures({
+      rawBase: RAW,
+      cwd: author,
+      topic: "posts-list",
+      files: files(),
+    });
     git(author, "checkout", "--quiet", "-b", "after-merge");
     await expect(
-      unpublishCaptures({ cwd: author, topic: "posts-list" })
+      unpublishCaptures({ rawBase: RAW, cwd: author, topic: "posts-list" })
     ).rejects.toThrow(/published from main/);
     await expect(
-      unpublishCaptures({ cwd: author, topic: "posts-list", owner: "mian" })
+      unpublishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+        owner: "mian",
+      })
     ).rejects.toThrow(/published from main/);
     expect(git(bare, "branch", "--list")).toMatch(/pr-screenshots\/posts-list/);
     expect(
       await unpublishCaptures({
+        rawBase: RAW,
         cwd: author,
         topic: "posts-list",
         owner: "main",
@@ -231,14 +329,23 @@ describe("publishing the captures", () => {
     const untagged = git(author, "commit-tree", tree, "-m", "made by hand");
     git(author, "push", "--quiet", "origin", `${untagged}:${BRANCH}`);
     await expect(
-      unpublishCaptures({ cwd: author, topic: "posts-list", owner: "main" })
+      unpublishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+        owner: "main",
+      })
     ).rejects.toThrow(/records no source branch/);
     expect(git(bare, "rev-parse", BRANCH)).toBe(untagged);
   });
 
   it("deletes nothing, and says so, for a topic not published", async () => {
     expect(
-      await unpublishCaptures({ cwd: author, topic: "posts-list" })
+      await unpublishCaptures({
+        rawBase: RAW,
+        cwd: author,
+        topic: "posts-list",
+      })
     ).toEqual({
       deleted: false,
     });
