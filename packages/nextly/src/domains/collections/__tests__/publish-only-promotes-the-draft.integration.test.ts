@@ -12,6 +12,7 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
+import { Nextly } from "../../../direct-api/nextly";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -61,6 +62,10 @@ function handlerOf(t: TestNextly): CollectionsHandler {
   return t.getService("collectionsHandler") as CollectionsHandler;
 }
 
+/** The Direct API as `id`, judged by that user's own grants. */
+const as = (id: string) =>
+  new Nextly({ overrideAccess: false, user: { id } as never });
+
 async function liveDoc(
   t: TestNextly,
   id: string
@@ -86,29 +91,19 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id?: string }).id as string;
 
       // The editor's change to the published entry is held as a draft.
-      const saved = await h.updateEntry(
-        {
-          collectionName: SLUG,
-          entryId: id,
-          routeAuthorized: true,
-          user: EDITOR,
-        },
-        { body: "finished draft" }
-      );
-      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      await as(EDITOR.id).update({
+        collection: SLUG,
+        id,
+        data: { body: "finished draft" },
+      } as never);
       // POPULATION CONTROL: the change is held, not live.
       expect((await liveDoc(t, id)).body).toBe("live");
 
-      const published = await h.updateEntry(
-        {
-          collectionName: SLUG,
-          entryId: id,
-          routeAuthorized: true,
-          user: PUBLISHER,
-        },
-        { status: "published" }
-      );
-      expect(published.success, JSON.stringify(published)).toBe(true);
+      await as(PUBLISHER.id).update({
+        collection: SLUG,
+        id,
+        data: { status: "published" },
+      } as never);
       expect((await liveDoc(t, id)).body).toBe("finished draft");
     });
 
@@ -122,16 +117,13 @@ describe.each(getConfiguredTestDialects())(
         { body: "live", status: "published" }
       );
       const id = (created.data as { id?: string }).id as string;
-      const edited = await h.updateEntry(
-        {
-          collectionName: SLUG,
-          entryId: id,
-          routeAuthorized: true,
-          user: PUBLISHER,
-        },
-        { body: "not theirs", status: "published" }
-      );
-      expect(edited.success).toBe(false);
+      await expect(
+        as(PUBLISHER.id).update({
+          collection: SLUG,
+          id,
+          data: { body: "not theirs", status: "published" },
+        } as never)
+      ).rejects.toThrow();
       expect((await liveDoc(t, id)).body).toBe("live");
     });
   }
