@@ -81,7 +81,7 @@ describe("the issue on main", () => {
     expect(created.body.labels).toEqual([LABEL]);
     expect(created.body.title).toBe(`main is red: Browser tests on ${SHA.slice(0, 9)}`);
     expect(created.body.body).toContain(`https://github.com/${REPO}/actions/runs/${RUN}`);
-    expect(created.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"]} -->`);
+    expect(created.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"],"run":${RUN}} -->`);
     expect(writes()).toHaveLength(1);
   });
 
@@ -124,14 +124,14 @@ describe("the issue on main", () => {
     const first = api({ [labelled]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(untested), { fetchImpl: first.fetchImpl })).toBe(0);
     const [updated] = first.writes();
-    expect(updated.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e","dev-reload"]} -->`);
+    expect(updated.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e","dev-reload"],"run":${RUN}} -->`);
     expect(updated.body.title).toBe(`main is red: Browser tests, Dev reload applies a saved schema edit on ${SHA.slice(0, 9)}`);
 
     // Once dev reload has run its test and passed, only the job still failing stays named.
     const retested = all("success", { e2e: "failure" }, { "dev-reload": { tested: "true" } });
     const second = api({ [labelled]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(retested), { fetchImpl: second.fetchImpl })).toBe(0);
-    expect(second.writes()[0].body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"]} -->`);
+    expect(second.writes()[0].body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"],"run":${RUN}} -->`);
   });
 
   it("records each job that passed though others are not tested yet, so runs that each prove one can close it", async () => {
@@ -142,7 +142,7 @@ describe("the issue on main", () => {
     expect(await main(env(proves), { fetchImpl: first.fetchImpl })).toBe(0);
     const [narrowed] = first.writes();
     expect(narrowed.key).toBe(`PATCH repos/${REPO}/issues/7`);
-    expect(narrowed.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e-production"]} -->`);
+    expect(narrowed.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e-production"],"run":${RUN}} -->`);
     expect(narrowed.body.title).toBe(`main is red: Production browser tests on ${OLDER.slice(0, 9)}`);
     expect(narrowed.body.state).toBeUndefined();
 
@@ -155,7 +155,7 @@ describe("the issue on main", () => {
   it("records the commit it closed on, so an older run finishing later opens no stale issue", async () => {
     const closing = api({ [labelled]: [issue(["e2e"])], ...placed("ahead") });
     expect(await main(env(all("skipped", { e2e: "success" })), { fetchImpl: closing.fetchImpl })).toBe(0);
-    expect(closing.writes().at(-1).body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":[]} -->`);
+    expect(closing.writes().at(-1).body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":[],"run":${RUN}} -->`);
 
     // The newest issue is closed, recording a commit this run is behind.
     const late = api({ ...label, [labelled]: [issue([], OLDER, "closed")], ...placed("behind"), [runJobs]: { jobs: [] } });
@@ -167,6 +167,20 @@ describe("the issue on main", () => {
     const { fetchImpl, writes } = api({ ...label, [labelled]: [issue([], OLDER, "closed")], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl })).toBe(0);
     expect(writes().map(call => call.key)).toEqual([`POST repos/${REPO}/issues`]);
+  });
+
+  it("orders runs of the same commit by run id, so re-running an older run's reporter replays nothing", async () => {
+    // A re-run keeps its run's commit and id; a later dispatch on the same
+    // commit has a higher id.
+    const newerRun = { number: 7, state: "open", title: "", body: `<!-- main-red {"sha":"${SHA}","jobs":["e2e"],"run":${Number(RUN) + 1}} -->` };
+    const replay = api({ [labelled]: [newerRun] });
+    expect(await main(env(all("success")), { fetchImpl: replay.fetchImpl })).toBe(0);
+    expect(replay.writes()).toEqual([]);
+
+    const olderRun = { ...newerRun, body: `<!-- main-red {"sha":"${SHA}","jobs":["e2e"],"run":${Number(RUN) - 1}} -->` };
+    const current = api({ [labelled]: [olderRun] });
+    expect(await main(env(all("success")), { fetchImpl: current.fetchImpl })).toBe(0);
+    expect(current.writes().at(-1).body).toMatchObject({ state: "closed" });
   });
 
   it("leaves it alone when this run's commit is older than the one it records", async () => {
@@ -245,7 +259,9 @@ describe("the job that runs it", () => {
   it("runs one at a time across main's runs, never cancelling one under way", () => {
     // Each main commit's run has a concurrency group of its own, so without
     // one here two reporters could read the issue and write it interleaved.
-    expect(job.concurrency).toEqual({ group: "main-red-issue", "cancel-in-progress": false });
+    // `queue: max` keeps every waiting reporter: by default a newly queued
+    // one cancels the one already waiting, and its verdict is lost.
+    expect(job.concurrency).toEqual({ group: "main-red-issue", "cancel-in-progress": false, queue: "max" });
   });
 
   it("is none of the jobs CI gate needs: reporting main's state never blocks a merge", () => {

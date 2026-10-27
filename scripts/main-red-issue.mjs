@@ -72,9 +72,14 @@ function recorded(issue) {
   }
 }
 
-/** Whether `sha` is older than the commit the issue records, by GitHub's own comparison. */
-async function olderThan(sha, state, { repository, context }) {
-  if (!state?.sha || state.sha === sha) return false;
+/**
+ * Whether this run is older than the one the issue records: by GitHub's own
+ * comparison of their commits, or by run id when both ran one commit (a later
+ * dispatch on it, or a re-run, which keeps its run's id).
+ */
+async function olderThan(sha, runId, state, { repository, context }) {
+  if (!state?.sha) return false;
+  if (state.sha === sha) return Number.isInteger(state.run) && Number(runId) < state.run;
   const { status } = await githubJson(`repos/${repository}/compare/${state.sha}...${sha}`, context);
   return status === "behind";
 }
@@ -98,7 +103,7 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
       await githubJson(`repos/${repository}/issues?labels=${LABEL}&state=all&sort=created&direction=desc&per_page=10`, context)
     ).filter(issue => !issue.pull_request);
     const state = newest ? recorded(newest) : null;
-    if (newest && (await olderThan(sha, state, { repository, context }))) {
+    if (newest && (await olderThan(sha, env.GITHUB_RUN_ID, state, { repository, context }))) {
       console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${newest.number}'s ${state.sha.slice(0, 9)}; leaving it`);
       return 0;
     }
@@ -122,7 +127,7 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
  * not yet tested, so runs that each prove a different job close it between
  * them. Either way the issue records this commit, to order later runs.
  */
-async function closeIfProven(current, state, passed, { sha, runUrl, repository, context }) {
+async function closeIfProven(current, state, passed, { sha, runUrl, runId, repository, context }) {
   const named = state?.jobs ?? Object.keys(ADVISORY);
   const unproven = named.filter(id => !passed.includes(id));
   const path = `repos/${repository}/issues/${current.number}`;
@@ -130,7 +135,7 @@ async function closeIfProven(current, state, passed, { sha, runUrl, repository, 
     if (unproven.length < named.length) {
       await write(path, context, "PATCH", {
         title: retitled(current.title, unproven),
-        body: withMarker(current.body, { sha, jobs: unproven }),
+        body: withMarker(current.body, { sha, jobs: unproven, run: Number(runId) }),
       });
     }
     console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
@@ -142,7 +147,7 @@ async function closeIfProven(current, state, passed, { sha, runUrl, repository, 
   await write(path, context, "PATCH", {
     state: "closed",
     state_reason: "completed",
-    body: withMarker(current.body, { sha, jobs: [] }),
+    body: withMarker(current.body, { sha, jobs: [], run: Number(runId) }),
   });
   console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
 }
@@ -170,7 +175,7 @@ async function report(current, state, { failed, passed }, { sha, runUrl, runId, 
   const names = failed.map(id => ADVISORY[id]);
   const tests = await failingTests(runId, names, { repository, context });
   const title = `main is red: ${jobs.map(id => ADVISORY[id]).join(", ")} on ${sha.slice(0, 9)}`;
-  const body = issueBody({ sha, jobs }, names, carried.map(id => ADVISORY[id]), runUrl, tests);
+  const body = issueBody({ sha, jobs, run: Number(runId) }, names, carried.map(id => ADVISORY[id]), runUrl, tests);
   if (current) {
     await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { title, body });
     console.log(`main-red-issue: updated #${current.number}: ${title}`);

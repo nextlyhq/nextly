@@ -2153,13 +2153,16 @@ jobs:
   # the one that tests main.
   # One at a time across main's runs: each commit's run has a concurrency
   # group of its own, and two reporters reading and writing the issue
-  # interleaved could write an older verdict over a newer one.
+  # interleaved could write an older verdict over a newer one. `queue: max`
+  # keeps every waiting reporter (up to 100): by default a newly queued one
+  # cancels the one already waiting, and that run's verdict is lost.
   main-red:
     name: Report main's advisory jobs
     if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     concurrency:
       group: main-red-issue
       cancel-in-progress: false
+      queue: max
     needs:
       - e2e
       - e2e-production
