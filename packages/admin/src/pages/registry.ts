@@ -15,6 +15,7 @@ import {
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
   collectionScreen,
+  emailHubScreen,
   railScreen,
   settingsScreen,
   singleScreen,
@@ -610,49 +611,49 @@ export const routeConfig: Record<string, RouteConfig> = {
   // ============================================================
   [ROUTES.EMAIL]: {
     component: EmailMessagesPage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_HUB_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_DESIGN]: {
     component: EmailDesignPage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_DESIGN),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING]: {
     component: EmailProvidersPage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_MESSAGES_CREATE]: {
     component: CreateEmailTemplatePage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_MESSAGES_EDIT]: {
     component: EditEmailTemplatePage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING_CREATE]: {
     component: CreateEmailProviderPage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
     section: "email",
   },
   [ROUTES.EMAIL_SENDING_EDIT]: {
     component: EditEmailProviderPage,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
     section: "email",
@@ -671,37 +672,37 @@ export const routeConfig: Record<string, RouteConfig> = {
   // anything.
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
     component: EmailSettingsRedirect,
-    screenName: railScreen("email"),
+    screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     section: "email",
   },
@@ -845,7 +846,9 @@ export const routeConfig: Record<string, RouteConfig> = {
   // plugin list has arrived; see `PluginSettingsGate`.
   [ROUTES.PLUGIN_SETTINGS]: {
     component: PluginSettingsPage,
-    screenName: railScreen("plugins"),
+    // Named as the page's breadcrumb ends, so with the plugin's name before it
+    // the tab reads "Acme Forms · Settings", apart from the plugin's details.
+    screenName: "Settings",
     type: "private",
     section: "plugins",
   },
