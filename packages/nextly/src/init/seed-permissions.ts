@@ -13,16 +13,29 @@
  * @module init/seed-permissions
  */
 
+import type { AccessTarget } from "../auth/access/decide";
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
-import { seedPublicRole } from "../domains/auth/services/public-role";
+import { PermissionService } from "../domains/auth/services/permission-service";
+import {
+  permissionIdsBySlug,
+  seedPublicReadGrants,
+} from "../domains/auth/services/public-read-grant";
+import {
+  PUBLIC_ROLE_SLUG,
+  publicRoleMade,
+  seedPublicRole,
+} from "../domains/auth/services/public-role";
 import { RoleMutationService } from "../domains/auth/services/role/role-mutation-service";
+import { RoleQueryService } from "../domains/auth/services/role/role-query-service";
+import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
+import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -210,7 +223,7 @@ async function seedEverything(): Promise<void> {
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
-  await seedingStep("public role", async () => {
+  const publicRoleSeeded = await seedingStep("public role", async () => {
     const roles = new RoleMutationService(
       getService("adapter"),
       getService("logger")
@@ -247,6 +260,13 @@ async function seedEverything(): Promise<void> {
       throw error;
     }
   });
+  // Public's read where code lets anyone read, granted once per entity so an
+  // owner's change to it stands, and the startup listing of what it lacks.
+  // Only after every permission seeded: a read whose permission is missing
+  // could be neither granted nor listed, so a later boot does it whole.
+  if (publicRoleSeeded && permissionsSeeded) {
+    await seedingStep("public role's reads", seedPublicRoleReads);
+  }
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
   // after a permission step that failed part-way, it would lack the grants that
@@ -261,6 +281,63 @@ async function seedEverything(): Promise<void> {
       collectRoles(config, config.plugins ?? []),
       getService("logger")
     );
+  });
+}
+
+function seedPublicRoleReads(): Promise<void> {
+  const adapter = getService("adapter");
+  const logger = getService("logger");
+  const grants = new RolePermissionService(adapter, logger);
+  return seedPublicReadGrants({
+    // Only once the Public role is made and recorded: before that, another
+    // boot may still be moving a site's own role off the slug.
+    publicRoleId: async () =>
+      (await publicRoleMade(getService("metaService")))
+        ? ((
+            await new RoleQueryService(adapter, logger).findRoleIdBySlug(
+              PUBLIC_ROLE_SLUG
+            )
+          )?.id ?? null)
+        : null,
+    targets: async () => {
+      const rbac = getService("rbacAccessControlService");
+      const [collections, singles] = await Promise.all([
+        getService("collectionRegistryService").getAllLabels(),
+        getService("singleRegistryService").getAllLabels(),
+      ]);
+      // Each slug once, as a request finds it: the target the rules are
+      // registered under, kind and rules together. Boot keeps one slug to
+      // one kind, so this is the entity itself.
+      const bySlug = new Map<string, AccessTarget>();
+      for (const target of [
+        ...collections
+          .filter(
+            ({ slug }) =>
+              !(SYSTEM_RESOURCES as readonly string[]).includes(slug)
+          )
+          .map(({ slug }) => ({ kind: "collection" as const, slug })),
+        ...singles.map(({ slug }) => ({ kind: "single" as const, slug })),
+      ]) {
+        if (bySlug.has(target.slug)) continue;
+        bySlug.set(
+          target.slug,
+          rbac.getRegisteredTarget(target.slug) ?? target
+        );
+      }
+      return [...bySlug.values()];
+    },
+    permissionIds: () =>
+      permissionIdsBySlug(new PermissionService(adapter, logger)),
+    publicHolds: async roleId =>
+      new Set(
+        (await grants.listRolePermissions(roleId)).map(({ action, resource }) =>
+          permissionSlug(action, resource)
+        )
+      ),
+    addOnce: (roleId, wanted, pick) =>
+      grants.addRolePermissionsOnce(roleId, wanted, pick),
+    meta: getService("metaService"),
+    logger,
   });
 }
 
