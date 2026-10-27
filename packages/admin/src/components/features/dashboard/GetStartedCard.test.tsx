@@ -324,6 +324,11 @@ describe("the Get started card", () => {
     );
 
     expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    // The room goes to what is still to do: the done Collection step, first in the server's
+    // order, is folded behind the control while three steps to do are drawn.
+    for (const row of screen.getAllByRole("listitem")) {
+      expect(row).toHaveTextContent("still to do");
+    }
     const control = screen.getByRole("button", { name: "Show 4 more" });
     expect(control).toHaveAttribute("aria-expanded", "false");
     expect(reports.at(-1)).toBeUndefined();

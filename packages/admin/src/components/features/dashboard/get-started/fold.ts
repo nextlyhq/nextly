@@ -11,6 +11,7 @@
  * @module components/features/dashboard/get-started/fold
  */
 
+import type { GetStartedStep } from "nextly/config";
 import {
   useContext,
   useEffect,
@@ -21,6 +22,23 @@ import {
 } from "react";
 
 import { CardGrowContext } from "../../widgets/frame/grow";
+
+/**
+ * The steps in the order the card draws them: those still to do first, then those done or
+ * skipped, each in the server's own order.
+ *
+ * 🔴 The card draws as many steps as its rows hold and folds the rest, so the room goes to what
+ * the person still has to do. In the server's order a folded card showed steps already done while
+ * open ones sat behind "Show N more"; the progress line already says how many are done. A step
+ * whose status is not known is not finished, so it stays with the steps to do.
+ */
+export function stepsToDoFirst(
+  steps: readonly GetStartedStep[]
+): GetStartedStep[] {
+  const finished = (step: GetStartedStep) =>
+    step.status === "done" || step.status === "skipped";
+  return [...steps.filter(step => !finished(step)), ...steps.filter(finished)];
+}
 
 /**
  * How many steps fit, whole: every one when the last ends within `limit`, or else those that end

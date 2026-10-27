@@ -34,7 +34,7 @@ import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
 
-import { useStepFold } from "./get-started/fold";
+import { stepsToDoFirst, useStepFold } from "./get-started/fold";
 import { isSkippable, stepPresentation } from "./get-started/step-presentation";
 import {
   useGetStartedWrite,
@@ -239,7 +239,7 @@ function StepList({
   write: GetStartedWrite;
 }) {
   const singleLabels = useSingleLabels();
-  const steps = answer.steps;
+  const steps = stepsToDoFirst(answer.steps);
   const fold = useStepFold(steps.length);
   const listId = useId();
   return (
@@ -264,8 +264,9 @@ function StepList({
           {answer.done} of {answer.total} done
         </p>
       </div>
-      {/* The server's list in its own order. Only whole steps are drawn, as many as the card
-          holds (`useStepFold`); the rest are one click away, and that click grows the card. */}
+      {/* The steps to do first, then those finished (`stepsToDoFirst`). Only whole steps are
+          drawn, as many as the card holds (`useStepFold`); the rest are one click away, and that
+          click grows the card. */}
       <ul id={listId} className="grid divide-y divide-border">
         {steps.slice(0, fold.shown).map(step => (
           <StepRow
