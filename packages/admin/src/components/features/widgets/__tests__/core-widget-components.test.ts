@@ -3,7 +3,7 @@
  *
  * 🔴 The two halves live in packages that do not depend on each other. A core
  * card declares its body as a string in `packages/nextly`
- * (`core-widgets.ts`), and the component behind that string is bound here
+ * (`core-widgets/`), and the component behind that string is bound here
  * (`core-components.ts`) -- so no type, no import and no build step can notice
  * that one names something the other never registered. That is the same
  * two-halves-of-one-name hazard `system-source-ids.ts` exists to manage for a
