@@ -65,9 +65,9 @@ export function familyOf(key) {
 /**
  * What to delete from a cache listing, each with its reason; everything else
  * is kept. `closed` are the merge refs of pull requests known to be closed:
- * all of their caches go. Of a family on an open pull request's ref the
- * newest by creation is kept, and an entry whose key `main` also holds goes
- * whatever its age.
+ * all of their caches go. Of a family and version on an open pull request's
+ * ref the newest by creation is kept, and an entry whose key and version `main`
+ * also holds goes whatever its age.
  */
 export function sweepPlan(caches, { closed = new Set() } = {}) {
   const identity = cache => `${cache.key}\u0000${cache.version}`;
@@ -85,7 +85,9 @@ export function sweepPlan(caches, { closed = new Set() } = {}) {
     }
     const family = familyOf(cache.key);
     if (family === null) continue;
-    const group = `${cache.ref} ${family}`;
+    // By version too: a restore matches key and version, so a newer entry of
+    // another version (other paths or compression) does not stand in for this one.
+    const group = `${cache.ref} ${family} ${cache.version}`;
     families.set(group, [...(families.get(group) ?? []), cache]);
   }
   for (const group of families.values()) {

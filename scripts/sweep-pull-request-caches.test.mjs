@@ -54,6 +54,12 @@ describe("sweepPlan", () => {
     ]);
   });
 
+  it("supersedes only within one version, since an entry of another version is another cache", () => {
+    const older = cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z", 1024, "v-old-paths");
+    const newer = cache(PR, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T02:00:00Z", 1024, "v-new-paths");
+    expect(planned([older, newer])).toEqual([]);
+  });
+
   it("judges each pull request's family on its own", () => {
     const caches = [
       cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z"),
