@@ -15,7 +15,11 @@
  *
  * @module hooks/queries/useAuthSession
  */
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useQuery,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   isAuthenticated as checkIsAuthenticated,
@@ -74,4 +78,19 @@ export function useAuthSession(): UseQueryResult<AuthSession> {
     refetchOnWindowFocus: false,
     refetchOnMount: false, // trust the cache within staleTime
   });
+}
+
+/**
+ * Asks the server again with a new request, even while one is still out.
+ *
+ * A plain refetch joins the request already in flight when the query has no
+ * data yet, and that is exactly the request a starting server is holding, so
+ * "Try again" would only reset the message. Cancelling first makes the
+ * refetch start a request of its own.
+ */
+export async function restartSessionCheck(
+  queryClient: QueryClient
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: authSessionKey });
+  await queryClient.refetchQueries({ queryKey: authSessionKey });
 }

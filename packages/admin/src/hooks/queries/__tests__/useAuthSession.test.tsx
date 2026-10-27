@@ -25,10 +25,10 @@ vi.mock("@admin/lib/auth/setup-status", () => ({
   readSetupState: (...args: unknown[]) => mockReadSetupState(...args),
 }));
 
-import { useAuthSession } from "../useAuthSession";
+import { restartSessionCheck, useAuthSession } from "../useAuthSession";
 
+let client: QueryClient;
 function wrapper({ children }: { children: React.ReactNode }) {
-  const client = new QueryClient();
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
@@ -44,6 +44,7 @@ async function settle() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
+  client = new QueryClient();
 });
 
 afterEach(() => {
@@ -95,6 +96,31 @@ describe("useAuthSession", () => {
     const { result } = renderHook(() => useAuthSession(), { wrapper });
     await settle();
 
+    expect(result.current.data).toEqual({
+      isSetup: true,
+      isAuthenticated: true,
+    });
+  });
+
+  it("restarts a hung check with a new request, rather than joining the one still out", async () => {
+    // The first request never answers, as a starting server holds it.
+    mockReadSetupState.mockResolvedValue({ answered: true, isSetup: true });
+    mockIsAuthenticated
+      .mockReturnValueOnce(new Promise<boolean>(() => {}))
+      .mockResolvedValue(true);
+
+    const { result } = renderHook(() => useAuthSession(), { wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(mockIsAuthenticated).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await restartSessionCheck(client);
+    });
+    await settle();
+
+    expect(mockIsAuthenticated).toHaveBeenCalledTimes(2);
     expect(result.current.data).toEqual({
       isSetup: true,
       isAuthenticated: true,

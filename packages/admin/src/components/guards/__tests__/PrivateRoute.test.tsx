@@ -7,6 +7,7 @@
  * The destination and the message it shows come from ONE derivation, so a test
  * that pins the message is also pinning where the browser is being sent.
  */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,8 +19,10 @@ import {
 import { ROUTES } from "@admin/constants/routes";
 
 const mockUseAuthSession = vi.fn();
+const mockRestart = vi.fn();
 vi.mock("@admin/hooks/queries/useAuthSession", () => ({
   useAuthSession: () => mockUseAuthSession(),
+  restartSessionCheck: (...args: unknown[]) => mockRestart(...args),
   authSessionKey: ["auth", "session"],
 }));
 
@@ -32,13 +35,13 @@ import { PrivateRoute } from "../PrivateRoute";
 
 function renderGuard() {
   return render(
-    <PrivateRoute>
-      <span>protected</span>
-    </PrivateRoute>
+    <QueryClientProvider client={new QueryClient()}>
+      <PrivateRoute>
+        <span>protected</span>
+      </PrivateRoute>
+    </QueryClientProvider>
   );
 }
-
-const mockRefetch = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -54,7 +57,6 @@ function pendingSession() {
     status: "pending",
     fetchStatus: "fetching",
     data: undefined,
-    refetch: mockRefetch,
   };
 }
 
@@ -163,7 +165,7 @@ describe("PrivateRoute", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
-    expect(mockRefetch).toHaveBeenCalledTimes(1);
+    expect(mockRestart).toHaveBeenCalledTimes(1);
     // The new request starts a new wait.
     expect(screen.getByRole("status")).toHaveTextContent("Loading the admin");
   });
@@ -173,7 +175,6 @@ describe("PrivateRoute", () => {
       status: "error",
       fetchStatus: "idle",
       data: undefined,
-      refetch: mockRefetch,
     });
 
     renderGuard();
@@ -182,7 +183,7 @@ describe("PrivateRoute", () => {
       "can't reach the server"
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(mockRefetch).toHaveBeenCalledTimes(1);
+    expect(mockRestart).toHaveBeenCalledTimes(1);
     expect(mockNavigateTo).not.toHaveBeenCalled();
   });
 
@@ -192,7 +193,6 @@ describe("PrivateRoute", () => {
       status: "error",
       fetchStatus: "fetching",
       data: undefined,
-      refetch: mockRefetch,
     });
 
     renderGuard();
