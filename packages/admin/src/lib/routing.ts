@@ -1,6 +1,7 @@
 import React from "react";
 
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
+import { PluginPageHold } from "@admin/components/shared/plugin-page-hold";
 import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
@@ -9,7 +10,11 @@ import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { routedDocumentView } from "./plugins/document-view-registry";
-import { matchPluginPage } from "./plugins/plugin-route-registry";
+import {
+  arePluginPagesKnown,
+  isPluginPageAddress,
+  matchPluginPage,
+} from "./plugins/plugin-route-registry";
 import { parseSearchParams } from "./search-params";
 
 /**
@@ -284,6 +289,19 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
+    };
+  }
+
+  // A plugin page's address before plugin pages are known: it may yet be one,
+  // so it is held rather than called missing. Private, as the page would be,
+  // so the session check and the permissions request start during the hold.
+  if (isPluginPageAddress(pathname) && !arePluginPagesKnown()) {
+    return {
+      Component: () => React.createElement(PluginPageHold),
+      params: {},
+      searchParams: parseSearchParams(rawSearch),
+      routeType: "private",
+      section: "plugins",
     };
   }
 

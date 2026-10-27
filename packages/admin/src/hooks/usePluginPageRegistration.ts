@@ -7,9 +7,11 @@ import {
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 import {
+  arePluginPagesKnown,
   registerPluginPages,
   clearPluginPages,
   pluginPagePath,
+  setPluginPagesKnown,
 } from "@admin/lib/plugins/plugin-route-registry";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
@@ -152,7 +154,17 @@ export function usePluginPageRegistration(
     const signature = routeSignature(registeredRoutes);
     const previousSignature = registeredRoutesRef.current;
     registeredRoutesRef.current = signature;
-    if (signature !== previousSignature && typeof window !== "undefined") {
+    // Once admin-meta has answered, the registry is known, whatever it listed:
+    // a plugin-prefixed address held while it was unknown is now either a page
+    // or genuinely not found. The first answer re-resolves even when it added
+    // no route, or a held address would wait for a change that never comes.
+    const wasKnown = arePluginPagesKnown();
+    if (plugins !== undefined) setPluginPagesKnown(true);
+    const becameKnown = !wasKnown && arePluginPagesKnown();
+    if (
+      (signature !== previousSignature || becameKnown) &&
+      typeof window !== "undefined"
+    ) {
       window.dispatchEvent(new Event("locationchange"));
     }
   }, [plugins]);
