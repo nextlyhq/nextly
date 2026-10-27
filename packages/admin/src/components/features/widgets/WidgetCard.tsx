@@ -69,6 +69,7 @@ import {
 } from "./frame/card-state";
 import {
   CARD_FOOTER_LINK_CLASS,
+  CardFooterClaimProvider,
   CardFooterSlotProvider,
 } from "./frame/footer-slot";
 import { frameIds } from "./frame/ids";
@@ -258,6 +259,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
+  const footer = useFooterClaims();
   const report = useCallback((next: CardState | null) => setReported(next), []);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
@@ -326,14 +328,16 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
                     <CardFooterSlotProvider value={footerSlot}>
-                      {props.children}
+                      <CardFooterClaimProvider value={footer.claim}>
+                        {props.children}
+                      </CardFooterClaimProvider>
                     </CardFooterSlotProvider>
                   </CardStateReportProvider>
                 ) : null}
               </CardContent>
 
               <WidgetCardFooter
-                link={flags.footer ? props.link : undefined}
+                link={ownFooterLink(flags.footer, footer.held, props.link)}
                 inert={customizing}
                 slotRef={setFooterSlot}
               />
@@ -525,6 +529,28 @@ function WidgetCardHeader({
       {headerAction && <span className="shrink-0">{headerAction}</span>}
     </CardHeader>
   );
+}
+
+/**
+ * Whether a body's link holds the card's footer, and how one claims it while it is drawn: the
+ * footer holds one link, so while any is held the widget's own is not drawn.
+ */
+function useFooterClaims(): { held: boolean; claim: () => () => void } {
+  const [claims, setClaims] = useState(0);
+  const claim = useCallback(() => {
+    setClaims(count => count + 1);
+    return () => setClaims(count => count - 1);
+  }, []);
+  return { held: claims > 0, claim };
+}
+
+/** The widget's own footer link, where the frame draws a footer and no body's link holds it. */
+function ownFooterLink(
+  drawn: boolean,
+  held: boolean,
+  link: { label: string; href: string } | undefined
+): { label: string; href: string } | undefined {
+  return drawn && !held ? link : undefined;
 }
 
 /** The single footer link, on the right. */

@@ -16,8 +16,10 @@
  * @module components/features/widgets/charts/chart-colour
  */
 
-/** One of the five shared chart colours, `--nx-chart-1` to `--nx-chart-5`. */
-export type ChartSlot = 1 | 2 | 3 | 4 | 5;
+import { chartColour, type ChartSlot } from "@nextlyhq/ui/format";
+
+// The slots and their tokens are the theme's, so a server names them as the admin does.
+export { chartColour, type ChartSlot };
 
 /** The status values' fixed slots. */
 const STATUS_SLOTS: Readonly<Record<string, ChartSlot>> = {
@@ -46,11 +48,6 @@ export function chartSlotsFor(values: readonly (string | null)[]): ChartSlot[] {
   return pinned.every((slot): slot is ChartSlot => slot !== undefined)
     ? pinned
     : values.map((): ChartSlot => 1);
-}
-
-/** The token a slot is drawn in. A chart never sets a colour of its own. */
-export function chartColour(slot: ChartSlot): string {
-  return `var(--nx-chart-${slot})`;
 }
 
 /** A group of a grouped result, as a chart of groups reads it. */
