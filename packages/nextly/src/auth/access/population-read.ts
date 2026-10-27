@@ -72,16 +72,13 @@ function keyActorOf(
 }
 
 /** Population's answer for a visitor. */
-async function visitorReads(
-  target: AccessTarget,
-  rbac: RBACAccessControlService | undefined
-): Promise<boolean> {
+async function visitorReads(target: AccessTarget): Promise<boolean> {
   // A failed read of Public's grants withholds the row rather than failing
   // the read, as a user's failed lookup does here.
   const visitor = await actorForVisitorFailingClosed();
-  // Without the service nothing is asked, and the visitor is admitted.
-  if (!rbac) return deviate("no-service", true, () => decided(visitor, target));
-  // The decision: the Public role's read, then a read rule answering `true`.
+  // The decision, with or without the service: the Public role's read, then
+  // a read rule answering `true`. Without the service no rule is registered,
+  // so Public's read decides, as it does for the visitor's direct read.
   return decided(visitor, target);
 }
 
@@ -179,7 +176,7 @@ export function relatedRowReads(
   }
   // A read with no user is a visitor's, a key scope included, as it was
   // before: no door populates for a key without naming the user it acts for.
-  if (!caller.user) return visitorReads(target, rbac);
+  if (!caller.user) return visitorReads(target);
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);
 }
