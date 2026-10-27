@@ -13,8 +13,11 @@
 import { z } from "zod";
 
 import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
-import type { ARCHETYPE_OPS } from "../definition";
-import { DATA_ARCHETYPES, type DataWidgetArchetype } from "../definition";
+import {
+  type ARCHETYPE_OPS,
+  DATA_ARCHETYPES,
+  type DataWidgetArchetype,
+} from "../definition";
 import type { WidgetResult } from "../result";
 import { WIDGET_SOURCE_FIELD_TYPES, type WidgetOp } from "../sources";
 
