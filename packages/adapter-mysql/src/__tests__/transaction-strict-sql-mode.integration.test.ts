@@ -10,7 +10,7 @@
 // Self-skips when TEST_MYSQL_URL is unset.
 
 import mysql from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMySqlAdapter, type MySqlAdapter } from "../index";
 
@@ -52,6 +52,51 @@ describe("MySQL transaction strictSqlMode", async () => {
       "SELECT @@SESSION.sql_mode AS mode"
     );
     return row.mode;
+  };
+
+  const connectionId = async (): Promise<number> => {
+    const [row] = await adapter.executeQuery<{ id: number }>(
+      "SELECT CONNECTION_ID() AS id"
+    );
+    return Number(row.id);
+  };
+
+  // Runs `run` with each connection the adapter opens of its own starting as a server configured
+  // by `setup` would start it: the statements run on it as it opens. The server's own settings are
+  // left alone, since other suites share it while this one runs.
+  const withNewSessions = async <T>(
+    setup: string[],
+    run: () => Promise<T>
+  ): Promise<T> => {
+    const open = mysql.createConnection.bind(mysql);
+    const opened = vi
+      .spyOn(mysql, "createConnection")
+      .mockImplementation((async (config: unknown) => {
+        const connection = await open(config as never);
+        for (const statement of setup) await connection.query(statement);
+        return connection;
+      }) as never);
+    try {
+      const result = await run();
+      // The case ran on a connection set up this way, not on the server's own defaults.
+      expect(opened).toHaveBeenCalled();
+      return result;
+    } finally {
+      opened.mockRestore();
+    }
+  };
+
+  // Whether the server has dropped connection `id`; a closed socket can take a moment to reach it.
+  const closed = async (id: number): Promise<boolean> => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const rows = await adapter.executeQuery<{ id: number }>(
+        "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE ID = ?",
+        [id]
+      );
+      if (rows.length === 0) return true;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return false;
   };
 
   const stored = async (): Promise<string[]> =>
@@ -124,5 +169,124 @@ describe("MySQL transaction strictSqlMode", async () => {
     // The control: the same narrowing, unguarded, cuts the value — so the refusal above is the
     // option's doing, not the server's.
     expect(await stored()).toEqual(["abcde"]);
+  });
+
+  // A migration file marked to run outside a transaction runs statement by statement, each
+  // committing as it runs; `withSession` keeps them on one connection of its own so its session's
+  // mode can be set for all of them. That connection is new, so it starts with the server's mode,
+  // which these cases stand in for (`withNewSessions`).
+  it("runs a session outside a transaction in strict mode, refusing a narrowing that would cut a value, on a connection of its own", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
+    await adapter.executeQuery(`INSERT INTO ${TABLE} (v) VALUES ('abcdefgh')`);
+
+    let inside = "";
+    let sessionId = 0;
+    await withNewSessions(["SET SESSION sql_mode = ''"], async () => {
+      await expect(
+        adapter.withSession(
+          async session => {
+            const [row] = await session.execute<{ mode: string; id: number }>(
+              "SELECT @@SESSION.sql_mode AS mode, CONNECTION_ID() AS id"
+            );
+            inside = row.mode;
+            sessionId = Number(row.id);
+            await session.execute(
+              `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(5)`
+            );
+          },
+          { strictSqlMode: true }
+        )
+      ).rejects.toThrow(/Data too long/);
+    });
+
+    // mysql2's client flags add IGNORE_SPACE to every connection's mode.
+    expect(inside.split(",")).toContain("STRICT_ALL_TABLES");
+    // The session started without the server's default strict flag, as a lax server's would.
+    expect(inside.split(",")).not.toContain("STRICT_TRANS_TABLES");
+    expect(await stored()).toEqual(["abcdefgh"]);
+    // Not the pool's connection, and closed once the session ended.
+    expect(sessionId).not.toBe(await connectionId());
+    expect(await closed(sessionId)).toBe(true);
+  });
+
+  it("keeps every flag the server's mode has in a session outside a transaction", async () => {
+    let inside = "";
+    await withNewSessions(["SET SESSION sql_mode = 'PIPES_AS_CONCAT'"], () =>
+      adapter.withSession(
+        async session => {
+          const [row] = await session.execute<{ mode: string }>(
+            "SELECT @@SESSION.sql_mode AS mode"
+          );
+          inside = row.mode;
+        },
+        { strictSqlMode: true }
+      )
+    );
+    expect(inside.split(",")).toEqual(
+      expect.arrayContaining(["PIPES_AS_CONCAT", "STRICT_ALL_TABLES"])
+    );
+  });
+
+  it("leaves a write another caller left uncommitted on a pooled connection uncommitted", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    // The pool's only connection as a server whose sessions start with autocommit off leaves it
+    // after an ordinary write: inside a transaction nobody has committed. A session that took
+    // that connection and turned autocommit on would commit the write.
+    await adapter.executeQuery("SET SESSION autocommit = 0");
+    await adapter.executeQuery(`INSERT INTO ${TABLE} (v) VALUES ('pending')`);
+    try {
+      await adapter.withSession(async session => {
+        await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('session')`);
+      });
+      // Read from a connection of its own: an uncommitted row is invisible there.
+      const other = await mysql.createConnection(TEST_DB_URL as string);
+      try {
+        const [rows] = await other.query<mysql.RowDataPacket[]>(
+          `SELECT v FROM ${TABLE}`
+        );
+        expect(rows.map(r => r.v as string)).toEqual(["session"]);
+      } finally {
+        await other.end();
+      }
+    } finally {
+      await adapter.executeQuery("ROLLBACK");
+      await adapter.executeQuery("SET SESSION autocommit = 1");
+    }
+  });
+
+  it("commits a session's statements on a server whose sessions start with autocommit off", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await withNewSessions(["SET SESSION autocommit = 0"], () =>
+      adapter.withSession(async session => {
+        await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('committed')`);
+      })
+    );
+    // Read from a connection of its own: a row left in the session's open transaction is
+    // invisible there.
+    const other = await mysql.createConnection(TEST_DB_URL as string);
+    try {
+      const [rows] = await other.query<mysql.RowDataPacket[]>(
+        `SELECT v FROM ${TABLE}`
+      );
+      expect(rows.map(r => r.v as string)).toEqual(["committed"]);
+    } finally {
+      await other.end();
+    }
+  });
+
+  it("commits each statement of a session outside a transaction as it runs", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
+    await expect(
+      adapter.withSession(async session => {
+        await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('kept')`);
+        await session.execute(
+          "INSERT INTO int_txmysql_missing (v) VALUES ('x')"
+        );
+      })
+    ).rejects.toThrow();
+    // No transaction to roll back: the first statement stayed.
+    expect(await stored()).toEqual(["kept"]);
   });
 });

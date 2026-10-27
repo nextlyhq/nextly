@@ -46,11 +46,13 @@ import {
   useStoredEntry,
   useWithStoredReferences,
 } from "@admin/hooks/queries/useStoredReferences";
+import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -272,6 +274,9 @@ export default function EditEntryPage({
   // On a localized app, request the per-locale translation-status overview so the editor
   // can show per-language status pills. Inert (param omitted) for non-localized apps.
   const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+  // The overview reads every language's state, so it is asked only of a user
+  // the server lets read them all; otherwise the editor would be refused.
+  const asksTranslationStatus = useAsksTranslationStatus(slug ?? "");
 
   const populatedEntry = useEntry({
     collectionSlug: slug || "",
@@ -288,7 +293,7 @@ export default function EditEntryPage({
     // as this locale's translation). sourceEntry (below) supplies the default-language
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
-    translationStatus: localizationEnabled,
+    translationStatus: asksTranslationStatus,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,
@@ -486,9 +491,10 @@ export default function EditEntryPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see posts."). */}
           <AlertDescription>
-            Failed to load entry:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The entry couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">

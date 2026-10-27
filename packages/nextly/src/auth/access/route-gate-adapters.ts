@@ -55,6 +55,7 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
+import { allowsSome } from "./rule-answer";
 import {
   askEachLanguage,
   withRuleLanguage,
@@ -697,7 +698,10 @@ async function decidedOne(
     kind: "collection",
     slug: resource,
   };
-  return (await decide(actor, action as AccessOperation, target)).allowed;
+  return allowsSome(
+    await decide(actor, action as AccessOperation, target),
+    action
+  );
 }
 
 /**

@@ -32,6 +32,7 @@ import {
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   toastMutationResult,
   type MutationResult,
@@ -202,7 +203,9 @@ export function useDeleteEntry<T = Entry>({
 
     onError: (error: Error) => {
       if (showToast) {
-        toast.error(`Failed to delete entry: ${error.message}`);
+        // The server's message already says what was refused ("You can't
+        // delete this post."), so it is shown as it is, with nothing in front.
+        toast.error(apiErrorMessage(error, "The entry couldn't be deleted."));
       }
 
       onError?.(error);
