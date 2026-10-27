@@ -326,13 +326,32 @@ export function measureBundle({
   const reachableSet = reachableClosure(graph, entryChunk);
   const otherEntrySet = otherEntryClosure(graph, entryChunk);
 
+  // The shell's own size, so each route's direct visit can be stated as
+  // shell + the route's remainder without re-walking the closure.
+  let firstScreenGzipped = 0;
+  let firstScreenMinified = 0;
+  for (const rel of firstScreenSet) {
+    firstScreenGzipped += graph.get(rel).gzippedBytes;
+    firstScreenMinified += graph.get(rel).minifiedBytes;
+  }
+
   // What a DIRECT visit to each lazily loaded route must fetch before that
   // route renders: the route root's static closure, shared shell included.
   // The entry's eager graph alone understates that visit, which fetches the
   // route's closure too before it can show anything.
-  const routeRoots = (graph.get(entryChunk)?.dynamicImports ?? []).filter(
-    root => graph.has(root)
-  );
+  //
+  // Route roots are every dynamic-import target anywhere in the entry's
+  // reachable graph, not just the entry chunk's own direct ones: the bundler
+  // hoists shared registries into eager chunks, so a page the entry reaches
+  // only through such a chunk would otherwise vanish from the route list.
+  const routeRoots = [];
+  for (const rel of reachableSet) {
+    for (const target of graph.get(rel).dynamicImports) {
+      if (graph.has(target) && !routeRoots.includes(target)) {
+        routeRoots.push(target);
+      }
+    }
+  }
   const routes = routeRoots
     .map(root => {
       const closure = closureFrom(graph, root, ["staticImports"]);
@@ -345,12 +364,30 @@ export function measureBundle({
         (sum, rel) => sum + graph.get(rel).gzippedBytes,
         0
       );
+      const beyond = [...closure].filter(rel => !firstScreenSet.has(rel));
+      const beyondGzipped = beyond.reduce(
+        (sum, rel) => sum + graph.get(rel).gzippedBytes,
+        0
+      );
+      const beyondMinified = beyond.reduce(
+        (sum, rel) => sum + graph.get(rel).minifiedBytes,
+        0
+      );
       return {
         root,
         chunks: chunks.length,
         minifiedBytes,
         gzippedBytes,
-        beyondFirstScreen: [...closure].filter(rel => !firstScreenSet.has(rel)),
+        beyondFirstScreen: beyond,
+        // A direct visit downloads the shell once and then this route's own
+        // remainder: the union of the entry's pre-render closure and the
+        // route's closure. Shared chunks count once — the browser fetches
+        // them once — so a route is judged by the union, not by a closure
+        // that double-counts everything the shell already carried.
+        directVisit: {
+          minifiedBytes: firstScreenMinified + beyondMinified,
+          gzippedBytes: firstScreenGzipped + beyondGzipped,
+        },
       };
     })
     .sort((a, b) => b.minifiedBytes - a.minifiedBytes);

@@ -1476,6 +1476,14 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # The R-3 gate: the shipped bundle holds the two budgets the merged
+      # spec states, failing with each measured size and the budget it
+      # exceeded. It measures THIS release-mode build — the same bytes the
+      # pack check below reads — so the numbers a PR shows are the numbers a
+      # merge would ship.
+      - name: Check the shipped bundle against the spec's budgets
+        run: pnpm --filter @nextlyhq/admin check:budgets
+
       # Packs the package as `pnpm publish` would, and reads the packed files.
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
