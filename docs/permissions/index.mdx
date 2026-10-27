@@ -9,10 +9,10 @@ collection or Single, and which fields inside its documents it may see or change
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required, and not gated behind a paid tier |
-| Admin | A **Roles** screen for managing roles and their grants |
+|            |                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required, and not gated behind a paid tier                                                                                              |
+| Admin      | A **Roles** screen for managing roles and their grants                                                                                            |
 | Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection, Single and field rules by default** — see below |
 
 ## Roles and grants
@@ -89,7 +89,9 @@ defineCollection({
     // Update and delete need no rule: a visitor is refused, and a signed-in
     // user needs the grant.
   },
-  fields: [/* ... */],
+  fields: [
+    /* ... */
+  ],
 });
 ```
 
@@ -154,9 +156,9 @@ and component fields aren't keys. Where the checker can't know the field names, 
 fields are built at runtime or typed as `FieldConfig[]`, the filter is untyped and is checked
 when the rule runs.
 
-Only a collection's `read` rule may answer a filter. Its `create`, `update`, `delete`,
-`publish` and `unpublish` rules, a Single's rules and a field's rules answer `true` or
-`false`: a filter from one is a type error, and is refused when the rule runs.
+A collection's `create` rule, a Single's rules and a field's rules answer `true` or
+`false`: a filter from one is a type error, and is refused when the rule runs. A
+collection's write rules may answer a filter too, described next.
 
 The filter is part of every read of the collection, so index the fields it names
 (`index: true` on a field you declare).
@@ -167,7 +169,44 @@ keys a list's `where` reserves for a request's own view: `_translated`, `_pendin
 filter does is refused, and the refusal is logged once with the collection and the
 operation.
 
-## Related rows
+### Write rules that answer with a filter (experimental)
+
+A collection's `update`, `delete`, `publish` and `unpublish` rules may return a filter as
+its `read` rule may, typed by the collection's fields in the same way. The write then
+changes an entry only if the filter matches it. An entry outside the filter is refused and
+left as it was: with a 403 where the caller may read the entry, and as a missing entry
+(404) where it may not.
+
+```ts
+import { defineCollection, relationship, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  fields: [
+    text({ name: "title" }),
+    relationship({ name: "author", relationTo: "users" }),
+  ],
+  access: {
+    read: () => true,
+    // An author edits and deletes only their own posts.
+    update: ({ user }) => (user ? { author: { equals: user.id } } : false),
+    delete: ({ user }) => (user ? { author: { equals: user.id } } : false),
+  },
+});
+```
+
+- An update may not move an entry out of its filter: one that would leave the entry
+  outside it is refused, and nothing changes. On a collection with drafts, an edit held as a
+  pending change is refused when it changes a field the update filter names.
+- A publish or unpublish of one language is matched in that language. A publish of every
+  language asks the rule in each language it puts live and matches the entry in each; an
+  unpublish of every language is matched in the default language.
+- The Direct API, a plugin service and REST apply these filters, REST for an entry's
+  update, delete, publish and unpublish, and for restoring a version, discarding or
+  autosaving a held edit, and taking the live shared values into it.
+- Bulk and batch writes, and a release's members, still refuse a write rule's filter.
+
+## Related rows## Related rows
 
 A populated relationship is read with the same check as reading the related collection
 directly. Reading `posts` at a depth that populates `author` returns the author only to a
@@ -251,9 +290,10 @@ const posts = await nextly.find({
 ```
 
 <Callout type="warn">
-**Leaving `overrideAccess` at its default is the case that leaks.** Reading on behalf of a
-visitor without setting `overrideAccess: false` returns rows that visitor was not allowed to
-see. This is the easiest way to expose data with Nextly.
+  **Leaving `overrideAccess` at its default is the case that leaks.** Reading on
+  behalf of a visitor without setting `overrideAccess: false` returns rows that
+  visitor was not allowed to see. This is the easiest way to expose data with
+  Nextly.
 </Callout>
 
 Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
