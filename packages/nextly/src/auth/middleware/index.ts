@@ -896,9 +896,10 @@ export async function requireCollectionAccess(
  * Whether authentication refused a visitor: a request carrying no credential
  * at all, neither a session cookie nor a key. One whose credential is not
  * valid is not a visitor, and is asked to sign in again whatever the Public
- * role grants. The one test every gate that may serve a visitor asks.
+ * role grants. The one test every gate that may serve a visitor asks, to be
+ * exported where a gate outside this module asks it.
  */
-export function isVisitorRefusal(refused: ErrorResponse): boolean {
+function isVisitorRefusal(refused: ErrorResponse): boolean {
   return refused.noCredential === true;
 }
 
