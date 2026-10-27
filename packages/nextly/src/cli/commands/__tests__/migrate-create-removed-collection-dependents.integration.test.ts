@@ -33,6 +33,7 @@ import {
   plainTags,
   settings,
 } from "../../../domains/collections/__tests__/helpers/collection-dependents-fixtures";
+import { defineCollection, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
 import { createContext } from "../../program";
@@ -132,6 +133,32 @@ describeEachDialect(
       expect(run.exited).toBe("process.exit(1)");
       expect(run.errors.join("\n")).toContain(
         `"${TAGS}" cannot be deleted while other schema depends on it. Fields that point at it: the Single ${SETTINGS}.featured. Remove those fields, or point them at another collection, then delete "${TAGS}".`
+      );
+      expect(await migrationFiles()).toEqual(before);
+    });
+
+    it("refuses to drop a collection stored under its own table name that a remaining Single points at", async () => {
+      // The snapshot knows the removed table by its name alone, which a
+      // `dbName` makes unrelated to the slug the Single's field names.
+      const labelled = defineCollection({
+        slug: TAGS,
+        dbName: "dep_labels",
+        fields: [text({ name: "label" })],
+      });
+      await generate(dialect, "initial", {
+        collections: [labelled],
+        singles: [settings],
+      });
+      const before = await migrationFiles();
+
+      const run = await generate(dialect, "drop_tags", {
+        collections: [],
+        singles: [settings],
+      });
+
+      expect(run.exited).toBe("process.exit(1)");
+      expect(run.errors.join("\n")).toContain(
+        `Fields that point at it: the Single ${SETTINGS}.featured.`
       );
       expect(await migrationFiles()).toEqual(before);
     });

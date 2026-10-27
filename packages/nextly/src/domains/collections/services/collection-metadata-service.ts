@@ -26,6 +26,7 @@ import {
   assertNothingDependsOn,
   databaseDependentsSources,
 } from "./collection-dependents";
+import { dropOrder } from "./collection-drop-order";
 import { deleteResourcePermissions } from "./delete-resource-permissions";
 
 /** The parts of a collection's registry row its delete reads. */
@@ -1014,8 +1015,21 @@ export class CollectionMetadataService extends BaseService {
         )
       );
 
-      for (const [index, slug] of slugs.entries()) {
-        await this.deleteCheckedCollection(slug, collections[index]);
+      // Holder first, so no database refuses a drop over a key another
+      // member of the set still holds; refused here, still before anything
+      // is removed, when no such order exists (`collection-drop-order`).
+      const order = dropOrder(
+        slugs.map((slug, index) => ({
+          slug,
+          tableName: collections[index].tableName,
+          keys: this.collectionService.relationshipForeignKeys(
+            collections[index].tableName,
+            collections[index].fields ?? []
+          ),
+        }))
+      );
+      for (const index of order) {
+        await this.deleteCheckedCollection(slugs[index], collections[index]);
       }
 
       return {

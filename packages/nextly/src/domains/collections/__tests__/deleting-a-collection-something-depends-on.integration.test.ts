@@ -23,7 +23,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { DELETE as deleteCollectionRoute } from "../../../api/collections-schema-detail";
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -415,6 +415,133 @@ describeEachDialect("deleting a collection something depends on", dialect => {
 
     expect(await registryOf(current).getCollectionBySlug(TAGS)).toBeNull();
     expect(await registryOf(current).getCollectionBySlug(POSTS)).toBeNull();
+  }, 120_000);
+
+  /**
+   * TAGS and POSTS made in the Builder, whose relationships carry a foreign
+   * key: POSTS's required `tag` restricts a TAGS row's delete. With `cycle`,
+   * TAGS's optional `featured` points back at POSTS. One row each, linked.
+   */
+  async function builderPair(cycle: boolean): Promise<TestNextly> {
+    const t = await createTestNextly({ dialect });
+    // The Builder runs a create's statements only in development.
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      await buildPair(t, cycle);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    return t;
+  }
+
+  async function buildPair(t: TestNextly, cycle: boolean): Promise<void> {
+    const relation = (name: string, target: string, required: boolean) => ({
+      name,
+      type: "relationship",
+      required,
+      options: { relationType: "manyToOne", target },
+    });
+    const handler = handlerOf(t) as unknown as {
+      createCollection(data: Record<string, unknown>): Promise<{
+        success: boolean;
+        message?: string;
+      }>;
+      updateCollection(
+        params: { collectionName: string },
+        body: Record<string, unknown>
+      ): Promise<{ success: boolean; message?: string }>;
+    };
+    const made = [
+      await handler.createCollection({
+        name: TAGS,
+        label: "Tag",
+        fields: [{ name: "label", type: "text" }],
+      }),
+      await handler.createCollection({
+        name: POSTS,
+        label: "Post",
+        fields: [relation("tag", TAGS, true)],
+      }),
+    ];
+    expect(made.map(result => result.success)).toEqual([true, true]);
+    const tag = await t.nextly.create({
+      collection: TAGS,
+      data: { label: "kept" },
+    });
+    const post = await t.nextly.create({
+      collection: POSTS,
+      data: { tag: tag.item.id },
+    });
+    if (cycle) {
+      const updated = await handler.updateCollection(
+        { collectionName: TAGS },
+        {
+          fields: [
+            { name: "label", type: "text" },
+            relation("featured", POSTS, false),
+          ],
+        }
+      );
+      expect(updated).toMatchObject({ success: true });
+      await t.nextly.update({
+        collection: TAGS,
+        id: String(tag.item.id),
+        data: { featured: post.item.id },
+      });
+    }
+  }
+
+  /** The Builder's bulk delete as development runs it: the drops run here. */
+  async function bulkDeleteInDevelopment(slugs: readonly string[]) {
+    vi.stubEnv("NODE_ENV", "development");
+    try {
+      await builderBulkDelete(slugs);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  async function expectBothGone(t: TestNextly) {
+    expect(await t.adapter.tableExists(TAGS_TABLE)).toBe(false);
+    expect(await t.adapter.tableExists(`dc_${POSTS}`)).toBe(false);
+    expect(await registryOf(t).getCollectionBySlug(TAGS)).toBeNull();
+    expect(await registryOf(t).getCollectionBySlug(POSTS)).toBeNull();
+  }
+
+  it("drops, in development, a collection and the one whose rows require it, in the order the key allows", async () => {
+    // Selected referenced-first: the key refuses TAGS's drop while a POSTS
+    // row still points at it, so the set must be dropped POSTS first.
+    current = await builderPair(false);
+
+    await bulkDeleteInDevelopment([TAGS, POSTS]);
+
+    await expectBothGone(current);
+  }, 120_000);
+
+  it("refuses, before anything is removed, two collections whose keys point at each other", async () => {
+    // No order drops a pair of tables keyed to each other on SQLite or
+    // MySQL, so the set is refused on every database, naming both keys.
+    const t = await builderPair(true);
+
+    const refusal = await refusalOf(
+      (async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        try {
+          await builderBulkDelete([TAGS, POSTS]);
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      })()
+    );
+
+    expect(refusal.statusCode).toBe(409);
+    expect(refusal.publicMessage).toBe(
+      `Nothing was deleted, because "${TAGS}", "${POSTS}" hold foreign keys to one another's tables ("fk_${TAGS_TABLE}_featured" on "${TAGS_TABLE}", "fk_dc_${POSTS}_tag" on "dc_${POSTS}"), so no order drops them. Remove one of those relationship fields, then delete them together.`
+    );
+    expect(await t.adapter.tableExists(TAGS_TABLE)).toBe(true);
+    expect(await t.adapter.tableExists(`dc_${POSTS}`)).toBe(true);
+    expect(await registryOf(t).getCollectionBySlug(TAGS)).not.toBeNull();
+    expect(await registryOf(t).getCollectionBySlug(POSTS)).not.toBeNull();
   }, 120_000);
 
   it("refuses a Builder bulk delete whole while something outside it points at one of them", async () => {

@@ -2725,12 +2725,14 @@ ${allColumnDefs.join(",\n")}
       junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
     );
 
-    const migrationSQL = [
-      `-- Drop dynamic collection: ${collectionName}`,
+    // One statement per breakpoint, as every other file this service writes:
+    // the runner splits on the breakpoint line, and MySQL refuses several
+    // statements sent as one.
+    const migrationSQL = `-- Drop dynamic collection: ${collectionName}\n${[
       ...dropJunctionStatements,
       dropCompanionStatement,
       dropStatement,
-    ].join("\n");
+    ].join("\n--> statement-breakpoint\n")}`;
 
     return {
       migrationSQL,

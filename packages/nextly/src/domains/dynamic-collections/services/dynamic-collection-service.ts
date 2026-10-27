@@ -48,6 +48,7 @@ import {
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
+import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
@@ -1892,6 +1893,25 @@ export class DynamicCollectionService extends BaseService {
       metadataUpdates,
       needsArchive,
     };
+  }
+
+  /**
+   * The foreign keys a collection's own relationship columns hold, as the
+   * schema service declares them. Read for a stored definition, so an action
+   * the current rules would refuse is reported rather than refused.
+   */
+  relationshipForeignKeys(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): ForeignKeySpec[] {
+    return fields.flatMap(field => {
+      const key = this.schemaService.relationshipForeignKey(
+        tableName,
+        field,
+        false
+      );
+      return key === null ? [] : [key];
+    });
   }
 
   generateDropTableMigration(
