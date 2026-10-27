@@ -20,7 +20,7 @@ import { createContext, useContext, type RefObject, type Context } from "react";
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
-import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
+import { bandForWidth, drawnSpan, gridColumnGapPx } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -46,7 +46,8 @@ export function cardOuterWidth(
   dashboardWidth: number
 ): number {
   const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
-  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+  const gap = gridColumnGapPx(dashboardWidth);
+  return ((dashboardWidth + gap) * tracks) / 12 - gap;
 }
 
 /**

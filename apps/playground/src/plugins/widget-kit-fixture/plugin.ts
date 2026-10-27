@@ -52,11 +52,32 @@ const throwingCardWidget = defineWidget({
   display: { component: THROWING_CARD_COMPONENT },
 });
 
+/**
+ * A card whose answer is always empty and whose widget hides when empty: off the dashboard at
+ * rest, and shown marked "Hidden while empty" in customise mode, where it can still be removed.
+ * Drawn by core's bars display, whose own rule reads no groups as empty, so it needs no component
+ * of its own in the generated map.
+ */
+const hidesWhenEmptyWidget = defineWidget({
+  id: "widget-kit-fixture/hides-when-empty",
+  title: "Test fixture: hidden while empty",
+  description:
+    "Exists for the e2e suite: always empty, so it leaves the dashboard at rest.",
+  category: "Fixtures",
+  widths: ["half", "full"],
+  width: "half",
+  hidesWhenEmpty: true,
+  data: async () => ({ buckets: [] }),
+  display: "bars",
+});
+
 export const widgetKitFixturePlugin = definePlugin({
   name: "widget-kit-fixture",
   version: "0.0.0",
   nextly: "*",
   contributes: {
-    dashboard: { widgets: [kitCardWidget, throwingCardWidget] },
+    dashboard: {
+      widgets: [kitCardWidget, throwingCardWidget, hidesWhenEmptyWidget],
+    },
   },
 });

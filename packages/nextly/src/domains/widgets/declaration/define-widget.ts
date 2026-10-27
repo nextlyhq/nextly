@@ -210,6 +210,13 @@ export interface WidgetDeclarationInput<
   permission?: string;
   /** Whether a person may add it more than once. Once, unless it says so. */
   several?: boolean;
+  /**
+   * Whether the card leaves the dashboard while its answer is empty, by its
+   * `empty` rule or its display's own, rather than saying so. A card that
+   * failed, or whose source the reader may not see, is never hidden, and
+   * customise mode still shows it, marked.
+   */
+  hidesWhenEmpty?: boolean;
   /** The core display whose sketch the add panel borrows. */
   sketch?: CoreDisplay;
   settings?: S;

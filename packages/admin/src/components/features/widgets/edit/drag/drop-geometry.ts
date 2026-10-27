@@ -12,7 +12,7 @@
  * @module components/features/widgets/edit/drag/drop-geometry
  */
 
-import { drawnSpan, GRID_GAP_PX } from "../../sizes";
+import { drawnSpan, gridColumnGapPx, GRID_ROW_GAP_PX } from "../../sizes";
 
 /** The grid's columns, which a row's spans fill: as many as a full-width card spans. */
 const COLUMNS = drawnSpan("full", "wide");
@@ -117,7 +117,7 @@ export function dropLineFor(
   if (before !== undefined && !startsRow(others, moved, final)) {
     return {
       orientation: "vertical",
-      x: before.rect.right + GRID_GAP_PX / 2,
+      x: before.rect.right + gridColumnGapPx(gridWidth) / 2,
       top: before.rect.top,
       length: before.rect.bottom - before.rect.top,
     };
@@ -126,7 +126,7 @@ export function dropLineFor(
   if (next !== undefined) {
     return {
       orientation: "horizontal",
-      y: next.rect.top - GRID_GAP_PX / 2,
+      y: next.rect.top - GRID_ROW_GAP_PX / 2,
       x: 0,
       length: gridWidth,
     };
@@ -136,7 +136,7 @@ export function dropLineFor(
     ? undefined
     : {
         orientation: "horizontal",
-        y: last.rect.bottom + GRID_GAP_PX / 2,
+        y: last.rect.bottom + GRID_ROW_GAP_PX / 2,
         x: 0,
         length: gridWidth,
       };

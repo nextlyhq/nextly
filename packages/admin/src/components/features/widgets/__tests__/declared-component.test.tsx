@@ -168,7 +168,6 @@ describe("a declared widget drawn by its own component", () => {
           definition={declared}
           slot={dataSlot(1)}
           placement={{ id: "card-1", settings: {} }}
-          updatedAt={new Date()}
           onRetry={vi.fn()}
         />
         <WidgetRenderer

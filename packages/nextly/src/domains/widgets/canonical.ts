@@ -142,6 +142,8 @@ export interface CanonicalWidget {
   visibleWhen?: string | readonly string[];
   /** Whether the reader may send this card away; see `WidgetDefinition`. */
   dismissible?: boolean;
+  /** Whether the card leaves the grid while its answer is empty; see `WidgetDefinition`. */
+  hidesWhenEmpty?: boolean;
   /**
    * The bounds the declaration's textarea settings state, from either channel,
    * so the layout write holds a placement's text to them whichever channel
@@ -219,6 +221,7 @@ const REGISTRATION_FIELDS = [
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "hidesWhenEmpty",
   "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
@@ -401,6 +404,28 @@ function addPanelFallback(
   };
 }
 
+/**
+ * The registration's card flags, with the contribution's wherever the registration states none.
+ *
+ * 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a contributed `dismissible`
+ * colliding with a registration that states nothing is dropped HERE and kept THERE -- the browser
+ * draws a card its reader can send away while the server's canonical copy of the same declaration
+ * says nothing about it, which is exactly the two-implementations divergence the merge exists to
+ * prevent. `hidesWhenEmpty` falls back the same way, for the same reason.
+ */
+function flagFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "dismissible" | "hidesWhenEmpty"> {
+  const dismissible = registration.dismissible ?? contribution.dismissible;
+  const hidesWhenEmpty =
+    registration.hidesWhenEmpty ?? contribution.hidesWhenEmpty;
+  return {
+    ...(dismissible === undefined ? {} : { dismissible }),
+    ...(hidesWhenEmpty === undefined ? {} : { hidesWhenEmpty }),
+  };
+}
+
 function mergeCanonical(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -408,13 +433,6 @@ function mergeCanonical(
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
   const defaultHeight =
     registration.defaultHeight ?? contribution.defaultHeight;
-  // 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a
-  // contributed `dismissible` colliding with a registration that states
-  // nothing is dropped HERE and kept THERE -- the browser draws a card its
-  // reader can send away while the server's canonical copy of the same
-  // declaration says nothing about it, which is exactly the two-implementations
-  // divergence this function exists to prevent.
-  const dismissible = registration.dismissible ?? contribution.dismissible;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -425,7 +443,7 @@ function mergeCanonical(
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
-    ...(dismissible === undefined ? {} : { dismissible }),
+    ...flagFallback(contribution, registration),
     ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),

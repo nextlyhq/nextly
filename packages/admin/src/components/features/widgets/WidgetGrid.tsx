@@ -62,7 +62,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { bandForWidth, drawnWidth } from "./sizes";
+import { bandForWidth, drawnWidth, GRID_GAP_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -117,8 +117,8 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The gaps a card's predicted width counts (`GRID_GAP_CLASS`).
+        className={`grid grid-cols-12 ${GRID_GAP_CLASS}`}
       >
         {[0, 1, 2].map(row => (
           <div

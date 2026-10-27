@@ -75,6 +75,7 @@ const FIELDS = new Set([
   "width",
   "permission",
   "several",
+  "hidesWhenEmpty",
   "sketch",
   "settings",
   "data",
@@ -141,6 +142,10 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
     d.several === undefined || typeof d.several === "boolean"
       ? undefined
       : "several must be true or false",
+  d =>
+    d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
+      ? undefined
+      : "hidesWhenEmpty must be true or false",
   d =>
     d.sketch === undefined || isCoreDisplay(d.sketch)
       ? undefined

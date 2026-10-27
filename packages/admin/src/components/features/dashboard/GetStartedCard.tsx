@@ -32,7 +32,7 @@ import { useSeedStatus } from "@admin/hooks/queries/useSeedStatus";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { cn } from "@admin/lib/utils";
 
-import { CardSkeleton } from "../widgets/frame/states";
+import { FrameState } from "../widgets/frame/card-state";
 
 import {
   isSkippable,
@@ -70,25 +70,6 @@ const STATUS_TEXT: Record<GetStartedStep["status"], string> = {
   open: "still to do",
   unknown: "could not be checked",
 };
-
-function SetupNotChecked({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div
-      className="grid justify-items-start gap-2"
-      data-testid="get-started-unknown"
-    >
-      <p className="text-sm font-semibold text-foreground">
-        We couldn&apos;t check your setup.
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Some of what this card checks could not be read just now.
-      </p>
-      <Button variant="outline" size="sm" onClick={onRetry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
 
 /** The sample-content offer, inline in the first-entry step while it is open. */
 /**
@@ -370,10 +351,25 @@ export const GetStartedCard: React.FC<WidgetComponentProps> = ({
   const write = useGetStartedWrite(placementId, answer, acted);
   const [showSteps, setShowSteps] = useState(false);
 
-  if (isPending) return <CardSkeleton shape="rows" rows={4} />;
-  // Not known is its own answer: never drawn as steps waiting, nor as finished.
+  if (isPending) {
+    return (
+      <FrameState
+        state={{ kind: "loading", skeleton: { shape: "rows", rows: 4 } }}
+      />
+    );
+  }
+  // Not known is its own answer: never drawn as steps waiting, nor as finished,
+  // but as the frame's error, with Retry.
   if (isUnavailable || answer === undefined || answer.unknown) {
-    return <SetupNotChecked onRetry={retry} />;
+    return (
+      <FrameState
+        state={{
+          kind: "error",
+          message: "Some of what this card checks could not be read just now.",
+          retry,
+        }}
+      />
+    );
   }
   if (answer.done === answer.total && !showSteps) {
     return <AllSet onShowSteps={() => setShowSteps(true)} />;

@@ -111,6 +111,18 @@ describe("registering declared widgets", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("publishes hidesWhenEmpty only for a widget that declares it", () => {
+    registerWidgetDeclarations([
+      {
+        owner: SHOP,
+        declarations: [{ ...revenue, hidesWhenEmpty: true }, ordersByState],
+      },
+    ]);
+    expect(getWidget("acme/revenue")?.hidesWhenEmpty).toBe(true);
+    // The control: a widget that says nothing is not published as hiding.
+    expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
+  });
+
   it("keeps each declaration, with its server code, for the server's own use", () => {
     registerWidgetDeclarations([{ owner: SHOP, declarations: [recentOrders] }]);
     expect(declaredWidget("acme/recent-orders")).toMatchObject({
