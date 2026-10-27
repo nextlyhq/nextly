@@ -9,10 +9,17 @@
  * `NEXTLY_ALLOW_CORE_DESTRUCTIVE` flow dropped nothing and reported nothing.
  * The schema-ledger cases check what each drop leaves on record.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { getCoreSchema } from "../../../../schemas";
 import { reconcileCore } from "../core-reconcile";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // The schema ledger, written after a successful apply and after each drop.
 // Spies rather than a database, so the rows a drop records can be read back.

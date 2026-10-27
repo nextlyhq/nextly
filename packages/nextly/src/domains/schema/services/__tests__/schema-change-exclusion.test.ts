@@ -9,7 +9,7 @@
  * The exclusion primitive itself is covered where it lives; what can be forgotten, and what these
  * exist for, is a service method that never asks for it.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 /** Everything the service did, in order: the lock, then whatever ran inside it. */
 const trace: string[] = [];
@@ -69,6 +69,13 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../singles/services/single-registry-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 const logger: Logger = {
   debug: vi.fn(),
