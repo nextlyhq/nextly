@@ -81,7 +81,10 @@ describe("card states from a widget's answer", () => {
     };
     expect(resolveWidgetOutcome(list, needs)).toEqual({
       state: "empty",
-      empty: { title: "Choose Collection in the card's settings" },
+      empty: {
+        title: "Choose Collection in the card's settings",
+        action: { label: "Choose collection", opensSettings: true },
+      },
     });
     render(
       <WidgetRenderer definition={list} slot={needs} onRetry={() => {}} />
@@ -91,6 +94,25 @@ describe("card states from a widget's answer", () => {
     );
     // Retrying would ask the same unanswerable question again.
     expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    // And with no way to open the card's settings here, no button that would.
+    expect(
+      screen.queryByRole("button", { name: "Choose collection" })
+    ).toBeNull();
+  });
+
+  it("opens the card's settings from a missing setting's empty state, in one click", async () => {
+    const needs: WidgetSlot = {
+      ok: false,
+      error: "Choose Collection in the card's settings",
+      code: "needs-setting",
+      setting: "Collection",
+    };
+    const open = vi.fn();
+    render(
+      <WidgetRenderer definition={list} slot={needs} onOpenSettings={open} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose collection" }));
+    expect(open).toHaveBeenCalledOnce();
   });
 
   it("takes a card its widget does not show for this person off the dashboard", () => {

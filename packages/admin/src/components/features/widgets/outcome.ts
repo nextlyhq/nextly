@@ -238,15 +238,28 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
  * widget needs a setting asks for it as its empty state, and one its widget does not show for
  * this person is left out. Only the rest are failures.
  */
+/**
+ * What a card missing a setting says, with the one step that fixes it: its own settings, opened
+ * on their first field. The button is drawn only where the card can open them
+ * (`WidgetRenderer`); elsewhere the sentence alone still says where the setting is chosen.
+ */
+function needsSettingEmpty(setting: string): OutcomeEmpty {
+  return {
+    title: `Choose ${setting} in the card's settings`,
+    action: { label: `Choose ${lowerFirst(setting)}`, opensSettings: true },
+  };
+}
+
+/** A setting's label as it reads inside a sentence: "Collection" becomes "collection". */
+const lowerFirst = (label: string) =>
+  label.charAt(0).toLowerCase() + label.slice(1);
+
 function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
   switch (slot.code) {
     case "unavailable":
       return { state: "unavailable" };
     case "needs-setting":
-      return {
-        state: "empty",
-        empty: { title: `Choose ${slot.setting} in the card's settings` },
-      };
+      return { state: "empty", empty: needsSettingEmpty(slot.setting) };
     case "not-shown":
       return { state: "not-shown" };
     default:
