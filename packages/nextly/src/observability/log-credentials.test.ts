@@ -191,12 +191,23 @@ describe("credentials anywhere in a log value", () => {
     const out = receivedBy({
       idempotencyKey: "order-42",
       cacheKey: "posts:list",
-      maxTokens: 512,
+      maxTokens: 51234,
+      tokenCount: 61234,
+      hasPassword: true,
     });
     expect(out).toContain("order-42");
     expect(out).toContain("posts:list");
-    expect(out).toContain("512");
+    expect(out).toContain("51234");
+    expect(out).toContain("61234");
+    expect(out).toContain("hasPassword: true");
   });
+
+  it.each(["password", "pin", "otp", "passcode", "sessionCode", "secret"])(
+    "takes out a number under %s",
+    field => {
+      expect(receivedBy({ [field]: 482913 })).not.toContain("482913");
+    }
+  );
 
   it("takes them out of a field's name, keeping fields apart", () => {
     // Keyed by a credential, as a token-indexed record is: the names lose the

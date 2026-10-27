@@ -48,6 +48,7 @@ const CREDENTIAL_NAME_PARTS: readonly string[] = [
   "privatekey",
   "csrf",
   "session",
+  "passcode",
 ];
 
 /**
@@ -59,13 +60,28 @@ const CREDENTIAL_KEY_NAME =
   /(?:raw|full|api|private|secret|signing|access|master|encryption|license)key$/;
 
 /**
- * Whether a field holds a credential, judged by its name. Only text can be a
- * credential: a number or a flag under such a name (`maxTokens: 512`) is kept.
+ * Short names that are credentials only whole: `pin` and `otp` as parts
+ * would catch `mapping` and `footprint`.
+ */
+const CREDENTIAL_WHOLE_NAMES: ReadonlySet<string> = new Set(["pin", "otp"]);
+
+/**
+ * A count of tokens (`maxTokens`, `tokenCount`, `promptTokens`), the one
+ * credential-sounding name a number is kept under: a count is not a token.
+ */
+const TOKEN_COUNT_NAME = /(?:tokens|tokencount|tokenlimit|tokenusage)$/;
+
+/**
+ * Whether a field holds a credential, judged by its name. A flag never is
+ * (`hasPassword: true`), and a number is kept only under a token count; a
+ * number under any other credential name (`password: 123456`, an OTP) is not.
  */
 function isCredentialField(key: string, value: unknown): boolean {
-  if (typeof value === "number" || typeof value === "boolean") return false;
+  if (typeof value === "boolean") return false;
   const name = key.toLowerCase().replace(/[-_\s]/g, "");
+  if (typeof value === "number" && TOKEN_COUNT_NAME.test(name)) return false;
   return (
+    CREDENTIAL_WHOLE_NAMES.has(name) ||
     CREDENTIAL_NAME_PARTS.some(part => name.includes(part)) ||
     CREDENTIAL_KEY_NAME.test(name)
   );
