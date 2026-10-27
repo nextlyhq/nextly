@@ -14,6 +14,7 @@
 import { container } from "../di/container";
 
 import { holdsPermission, isSuperAdmin } from "./access/actor";
+import { storedSlugHolds } from "./access/answering-permissions";
 import { decidePermission } from "./access/decide";
 import { deviate } from "./access/deviations";
 import {
@@ -24,7 +25,6 @@ import {
 } from "./access/resolve-actor";
 import { readsSystemResource } from "./access/system-resource-read";
 import {
-  apiKeyScopeAllows,
   scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
@@ -80,12 +80,16 @@ export async function canReadSystemResource(
     // A key carrying its maker's super-admin authority reads what a
     // super-admin's session does.
     if (isSuperAdmin(actor)) return readsSystemResource(actor, read);
-    // A key holds the read by its stored slug, `read-<resource>`. The
-    // decision reads a grant's action and resource, which agree with the slug
-    // unless the scope carries no rows or the grant was stored under a slug of
-    // its own; then the stored slug answers, as before.
-    const today =
-      apiKeyScopeAllows(authenticatedScope, "read", resource) === true;
+    // A key holds the read by its stored slug, `read-<resource>`, or the
+    // resource's `manage-` slug where that counts as its read, as at every
+    // gate. The decision reads a grant's action and resource, which agree
+    // with the slug unless the scope carries no rows or the grant was stored
+    // under a slug of its own; then the stored slug answers, as before.
+    const today = storedSlugHolds(
+      authenticatedScope.permissions,
+      "read",
+      resource
+    );
     if (!rows || today !== holdsPermission(actor, "read", resource)) {
       return deviate("key-slug-string-match", today, () =>
         readsSystemResource(actor, read)

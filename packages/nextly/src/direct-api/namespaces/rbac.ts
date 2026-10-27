@@ -97,18 +97,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         limit: args.limit ?? 10,
       });
 
-      // The query selects `slug` at runtime but the RoleQueryService return
-      // type doesn't declare it (type gap in the service layer); widen the
-      // runtime shape to the full Role record the mapper expects.
-      const data = result.data as Array<{
-        id: string;
-        name: string;
-        slug: string;
-        description: string | null;
-        level: number;
-        isSystem: boolean;
-      }>;
-      const items = data.map(r => mapRole(r));
+      const items = result.data.map(r => mapRole(r));
       const total = result.meta?.total ?? items.length;
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;

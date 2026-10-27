@@ -81,6 +81,20 @@ test("a Note draws its reader's Markdown, and runs none of it", async ({
   ).toBeUndefined();
 });
 
+test("an unwritten Note is empty by its declaration, saying where to write it", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  // Whitespace alone is no note: judged on the server by the declaration's
+  // `isEmpty`, and drawn by the frame with the declared message.
+  await ok(await putNote(page, "   "));
+  await gotoAdmin(page, "/");
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await expect(card.getByTestId("card-empty")).toHaveText(
+    "Nothing written yet. Write it in the card's settings."
+  );
+});
+
 test("a Note over its bound is refused by the layout write", async ({
   page,
 }) => {

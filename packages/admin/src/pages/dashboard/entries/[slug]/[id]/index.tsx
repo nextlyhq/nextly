@@ -50,8 +50,9 @@ import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
-import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -395,8 +396,12 @@ export default function EditEntryPage({
    * own claim.
    */
   // A reader gets the custom view read-only too, through the same gates a
-  // colleague's claim hands it, with no claim made.
-  const customViewReader = useReadOnlyForReader(slug ?? "");
+  // colleague's claim hands it, with no claim made. While a language switch's
+  // answer is on its way the view and the edit slots hold their writes as the
+  // editor does, since the answer on screen grants nothing in the new one.
+  const customViewAnswer = useUpdateAnswer(slug ?? "");
+  const customViewReader = customViewAnswer === "refused";
+  const customViewWritesHeld = !editsOffered(customViewAnswer);
   const customViewLock = useDocumentLockSurface({
     readOnlyForReader: customViewReader,
     scopeKind: "collection",
@@ -490,9 +495,10 @@ export default function EditEntryPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see posts."). */}
           <AlertDescription>
-            Failed to load entry:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The entry couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
@@ -583,11 +589,11 @@ export default function EditEntryPage({
       // colleague holds this. Passing the same decision the banner was derived
       // from is what keeps that sentence true.
       documentLock: {
-        readOnly: customViewLock.readOnly,
+        readOnly: customViewLock.readOnly || customViewWritesHeld,
         // A view knows only these two gates, and its own writes (a save
         // among them) follow `actionsDisabled`, so a reader's view has them
-        // withheld too.
-        actionsDisabled: customViewLock.actionsDisabled || customViewReader,
+        // withheld too, and so does one waiting on a language's answer.
+        actionsDisabled: customViewLock.actionsDisabled || customViewWritesHeld,
       },
     };
 
@@ -654,8 +660,8 @@ export default function EditEntryPage({
     // change the entry is told to hold its writes. A colleague's claim is the
     // form's, below, and not stated here.
     documentLock: {
-      readOnly: customViewReader,
-      actionsDisabled: customViewReader,
+      readOnly: customViewWritesHeld,
+      actionsDisabled: customViewWritesHeld,
     },
   };
 

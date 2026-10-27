@@ -57,8 +57,9 @@ const revenue = defineWidget({
   description: "Takings per day",
   category: "Shop",
   size: { default: { w: 12, h: 4 } },
-  data: async () => ({ total: 1 }),
-  display: { component: "@acme/shop/admin#Revenue" },
+  load: async () => ({ total: 1 }),
+  view: { component: "@acme/shop/admin#Revenue" },
+  isEmpty: data => data.total === 0,
 });
 
 const visits = defineWidget({
@@ -67,8 +68,9 @@ const visits = defineWidget({
   description: "Visits per day",
   category: "Stats",
   size: { default: { w: 12, h: 4 } },
-  data: async () => ({ total: 1 }),
-  display: { component: "@acme/stats/admin#Visits" },
+  load: async () => ({ total: 1 }),
+  view: { component: "@acme/stats/admin#Visits" },
+  isEmpty: data => data.total === 0,
 });
 
 /** A plugin a `setup` transformer adds, so only a full resolution sees it. */

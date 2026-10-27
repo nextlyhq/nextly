@@ -117,7 +117,7 @@ function startingQueryFault(
   if (query === undefined) return undefined;
   // What a core display draws is fixed by the code, whatever the database
   // holds: the types refuse the pairing, and plain JavaScript is refused here.
-  const mismatch = declaredQueryProblem(declared.declaration.display, query);
+  const mismatch = declaredQueryProblem(declared.display, query);
   if (mismatch !== undefined) return mismatch;
   return contentFault(declared, query, content);
 }

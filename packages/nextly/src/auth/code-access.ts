@@ -19,7 +19,11 @@ import type {
 } from "../shared/types/access";
 
 import type { AccessTarget } from "./access/decide";
-import { reportRuleFilterMisuse, ruleAnswer } from "./access/rule-answer";
+import {
+  noteFilterNotApplied,
+  reportRuleFilterMisuse,
+  ruleAnswer,
+} from "./access/rule-answer";
 import { buildRuleContext } from "./access/rule-context";
 import type { GrantedPermission } from "./authenticated-scope";
 
@@ -121,5 +125,8 @@ export async function codeAccessAllows(
   // apply, refuses, and one that is misused is reported as such.
   const meaning = ruleAnswer(answer);
   reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  // Asked only once the caller holds the permission, so the decision would
+  // let it read the entries a filter matches.
+  await noteFilterNotApplied(target.kind, operation, meaning, true);
   return meaning.kind === "allow";
 }

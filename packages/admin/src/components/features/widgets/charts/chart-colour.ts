@@ -1,28 +1,23 @@
 /**
- * Which of the five shared chart colours a category takes, and the order a
+ * Which of the five shared chart colours a chart's groups take, and the order a
  * chart of groups draws them in.
  *
- * By the category's STORED value, never its position in a result or its
- * label: the same value is the same colour on every card, whatever order the
- * groups arrive in and whatever language their labels are in. Status values
- * sit on fixed slots, so Published looks the same everywhere; any other value
- * takes a slot by a stable hash, over slots 1 to 4 only. Slot 5 is red, the
- * hue the theme uses for errors and destructive actions, so a value that
- * means nothing alarming never lands on it; it stays for archived. Four
- * colours cannot name fifty groups, so colours repeat, and the name beside
- * each bar is what identifies it.
- *
- * The hash is part of the contract: changing it would recolour every
- * category on every site, so a test pins it.
+ * A chart of statuses colours each bar by its status's pinned slot, so
+ * Published is the same colour on every card and a status is recognised at a
+ * glance. Slot 5 is red, the hue the theme uses for errors and destructive
+ * actions, and is archived's alone. Any other chart of groups, an arbitrary
+ * select or a column of text, draws every bar in slot 1: five colours cannot
+ * name arbitrary values, and a card of them would be colour that says nothing.
+ * So is a chart that mixes a status-like value with others, since the
+ * status's colour would claim a meaning the field does not have. Either way
+ * the name and count beside each bar are what identify it, never the colour
+ * alone.
  *
  * @module components/features/widgets/charts/chart-colour
  */
 
 /** One of the five shared chart colours, `--nx-chart-1` to `--nx-chart-5`. */
 export type ChartSlot = 1 | 2 | 3 | 4 | 5;
-
-/** How many slots a hashed value may take: 1 to 4, never the alarm-red 5. */
-const HASHED_SLOTS = 4;
 
 /** The status values' fixed slots. */
 const STATUS_SLOTS: Readonly<Record<string, ChartSlot>> = {
@@ -33,26 +28,24 @@ const STATUS_SLOTS: Readonly<Record<string, ChartSlot>> = {
   archived: 5,
 };
 
-/**
- * A 32-bit FNV-1a hash of the value's code points: deterministic on every
- * engine, cheap, and spread well enough over five slots.
- */
-function hashOf(value: string): number {
-  let hash = 0x811c9dc5;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash;
+/** A status's pinned slot, or `undefined` for a value that is no status. */
+function statusSlot(value: string | null): ChartSlot | undefined {
+  return value !== null &&
+    Object.prototype.hasOwnProperty.call(STATUS_SLOTS, value)
+    ? STATUS_SLOTS[value]
+    : undefined;
 }
 
-/** The slot a stored value takes. `null`, the group with no value, hashes as "". */
-export function chartSlotFor(value: string | null): ChartSlot {
-  const key = value ?? "";
-  if (Object.prototype.hasOwnProperty.call(STATUS_SLOTS, key)) {
-    return STATUS_SLOTS[key];
-  }
-  return ((hashOf(key) % HASHED_SLOTS) + 1) as ChartSlot;
+/**
+ * The slot of each of one chart's groups, by their stored values, in order:
+ * every status's pinned slot where all of them are statuses, and slot 1 for
+ * all of them otherwise. `null`, the group with no value, is no status.
+ */
+export function chartSlotsFor(values: readonly (string | null)[]): ChartSlot[] {
+  const pinned = values.map(statusSlot);
+  return pinned.every((slot): slot is ChartSlot => slot !== undefined)
+    ? pinned
+    : values.map((): ChartSlot => 1);
 }
 
 /** The token a slot is drawn in. A chart never sets a colour of its own. */

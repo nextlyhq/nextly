@@ -262,7 +262,7 @@ export function CardEmpty({
   action,
 }: CardEmptyContent): JSX.Element {
   return (
-    <div className="grid justify-items-start gap-1" data-testid="card-empty">
+    <div className="grid justify-items-center gap-1" data-testid="card-empty">
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
       {action && (
@@ -289,7 +289,7 @@ export const UNAVAILABLE_DETAIL =
 export function CardUnavailable(): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="card-unavailable"
     >
       <Lock className="mb-1 h-5 w-5 text-muted-foreground" aria-hidden="true" />
@@ -317,7 +317,7 @@ export function CardError({
 }): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
       <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />

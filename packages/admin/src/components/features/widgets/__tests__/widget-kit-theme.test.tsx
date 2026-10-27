@@ -3,10 +3,11 @@
  * plugin's card matches core's beside it in light and dark: every state and
  * both charts, drawn in dark mode, name no colour of their own.
  */
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
+import { sizeChartsInTests } from "../charts/__tests__/chart-env";
 import { GroupsChart } from "../charts/groups-chart";
 import { OverTimeChart } from "../charts/over-time-chart";
 import {
@@ -21,12 +22,22 @@ import { CardTierContext } from "../frame/tier";
 const LITERAL_COLOUR =
   /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\[(?:#|rgb|hsl)/i;
 
-/** The markup `node` draws inside a dark root, at a medium card's tier. */
-function drawnDark(node: ReactNode): string {
+// Sized, so a chart's engine draws its marks: the markup read is the drawing's own.
+sizeChartsInTests();
+
+/**
+ * The markup `node` draws inside a dark root, at a medium card's tier, once any chart in it has
+ * its drawing: before then a chart holds only its place, and a check of that passes for any
+ * colours the drawing would use.
+ */
+async function drawnDark(node: ReactNode): Promise<string> {
   const { container } = render(
     <div className="dark">
       <CardTierContext.Provider value="medium">{node}</CardTierContext.Provider>
     </div>
+  );
+  await waitFor(() =>
+    expect(container.querySelector('[data-testid="chart-pending"]')).toBeNull()
   );
   return container.innerHTML;
 }
@@ -80,20 +91,22 @@ const cases: Array<[string, ReactNode]> = [
 ];
 
 describe("the widget kit in dark mode", () => {
-  it.each(cases)("draws %s in theme tokens only", (_name, node) => {
-    const html = drawnDark(node);
+  it.each(cases)("draws %s in theme tokens only", async (_name, node) => {
+    const html = await drawnDark(node);
     expect(html.length).toBeGreaterThan(0);
     expect(html).not.toMatch(LITERAL_COLOUR);
   });
 
-  it("draws the charts' colours from the shared chart tokens", () => {
+  it("draws the charts' colours from the shared chart tokens", async () => {
     // The positive half: a bar's colour is a token, so dark mode restyles it.
-    expect(drawnDark(cases[4]![1])).toMatch(/var\(--nx-chart-\d\)/);
+    const html = await drawnDark(cases[4]![1]);
+    expect(html).toContain('data-testid="chart-drawing"');
+    expect(html).toMatch(/var\(--nx-chart-\d\)/);
   });
 
-  it("would catch a colour written as a value", () => {
+  it("would catch a colour written as a value", async () => {
     // The control: the check above is only evidence if it can fail.
-    expect(drawnDark(<p style={{ color: "#ff0000" }}>x</p>)).toMatch(
+    expect(await drawnDark(<p style={{ color: "#ff0000" }}>x</p>)).toMatch(
       LITERAL_COLOUR
     );
   });

@@ -11,6 +11,7 @@ import { toast } from "@admin/components/ui";
 import { debugError, debugLog } from "@admin/lib/debug";
 import { navigateTo } from "@admin/lib/navigation";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
+import { assignableRoles } from "@admin/lib/roles/assignable";
 
 import { PAGINATION } from "../constants/pagination";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
@@ -504,14 +505,17 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           populate: ["permissions"],
         } as FetchRolesParams);
 
-        const rolesWithPermissions = (res?.items || []).map(r => ({
-          id: r.id,
-          name: r.roleName,
-          slug: r.slug,
-          permissions: normalizePermissions(r.permissions),
-          description: r.description,
-          isSystem: r.type === "System",
-        }));
+        // Only roles another role may build on: never the Public role.
+        const rolesWithPermissions = assignableRoles(res?.items || []).map(
+          r => ({
+            id: r.id,
+            name: r.roleName,
+            slug: r.slug,
+            permissions: normalizePermissions(r.permissions),
+            description: r.description,
+            isSystem: r.type === "System",
+          })
+        );
 
         const filteredRoles = rolesWithPermissions.filter(r => {
           // A role cannot be built on itself.

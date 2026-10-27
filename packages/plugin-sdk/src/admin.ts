@@ -362,7 +362,7 @@ export type {
 /**
  * @experimental The widget kit: the parts core's own dashboard cards are drawn
  * from, for a widget's own component (`defineWidget` with
- * `display: { component }`). The host always draws the card's frame and every
+ * `view: { component }`). The host always draws the card's frame and every
  * state; these are the body-level parts, reading the card's size tier and the
  * admin's theme tokens, so a plugin card matches core's beside it in light and
  * dark.
