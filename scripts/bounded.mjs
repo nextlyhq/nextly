@@ -657,6 +657,8 @@ export function signalGroup(pgid, signal) {
   try {
     sendSignal(-pgid, signal);
   } catch (error) {
+    // Not a permission problem: macOS's answer for a group of zombies only.
+    // Rethrowing it crashes the runner after the run has already stopped.
     if (error.code !== "EPERM") throw error;
   }
 }
