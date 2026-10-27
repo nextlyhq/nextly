@@ -17,6 +17,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -39,7 +40,7 @@ const orders: DashboardWidget = {
   id: "acme/orders",
   title: "Open orders",
   archetype: "custom",
-  size: "full",
+  size: gridBounds(12),
   serverData: true,
 };
 

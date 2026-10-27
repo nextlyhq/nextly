@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
+import { loadDialectTables } from "../database/dialect-tables";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 import {
@@ -58,6 +59,22 @@ process.env.NEXTLY_SECRET ??= "nextly-test-encryption-secret-at-least-32-chars";
 // that supplies its own dialect keeps it, and a file testing the unset case can
 // still delete it.
 process.env.DB_DIALECT ??= "sqlite";
+
+// The tables of that dialect, loaded as `createAdapter` loads them for an app.
+// Unit fixtures read tables without creating an adapter, so the run's dialect
+// is loaded here, before any test file is imported; a file that reads another
+// dialect's tables loads that one itself.
+await loadDialectTables(process.env.DB_DIALECT);
+
+// An integration run boots on every dialect it has a server for, and its
+// fixtures read those dialects' tables over connections of their own, so it
+// loads all three. Only the unit run, which loads one, is the check that
+// product code loads a dialect before reading it.
+if (claims) {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(dialect => loadDialectTables(dialect))
+  );
+}
 
 /**
  * Fail any test that leaves a PostgreSQL transaction aborted.

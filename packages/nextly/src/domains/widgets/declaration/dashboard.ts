@@ -11,8 +11,9 @@
  */
 
 import type { CoreWidgetId } from "../core-widgets";
+import type { WidgetSizeDeclaration } from "../grid-size";
 
-import type { AnyWidget, WidgetDataInput, WidgetWidth } from "./define-widget";
+import type { AnyWidget, WidgetDataInput } from "./define-widget";
 
 /**
  * The ids of core's own widgets, read from core's widget list, so a plugin
@@ -31,7 +32,7 @@ export type AttentionCount = number | { count: number; atLeast: true };
 /**
  * One line of the Needs attention card, from a plugin.
  *
- * It has no title, widths, settings or display: the card that draws it owns
+ * It has no title, size, settings or display: the card that draws it owns
  * those. Who may see it is either a permission, or the collections it counts,
  * in which case it shows to anyone who may read one of them.
  */
@@ -91,14 +92,20 @@ export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
 export type WidgetRef = CoreWidgetId | (string & {});
 
 /**
- * A card of the site's own default dashboard: a widget, at a width it allows,
+ * A card of the site's own default dashboard: a widget, at a size it allows,
  * with starting values for its settings.
+ *
+ * `w` and `h` are in grid units, each within the widget's bounds; either left
+ * out is the widget's starting size in that direction.
  *
  * @experimental While the dashboard widget SDK is being built.
  */
 export interface DefaultLayoutCard {
   widget: WidgetRef;
-  width?: WidgetWidth;
+  /** Columns, of twelve. */
+  w?: number;
+  /** Rows. */
+  h?: number;
   settings?: Readonly<Record<string, unknown>>;
 }
 
@@ -110,10 +117,12 @@ export interface DefaultLayoutCard {
 export interface WidgetOverride {
   title?: string;
   description?: string;
-  /** The starting width. */
-  width?: WidgetWidth;
-  /** Narrows the widths the widget allows; never widens them. */
-  widths?: readonly WidgetWidth[];
+  /**
+   * A new starting size, smallest or largest size, each within the widget's
+   * own bounds: an override narrows the sizes a widget allows and never
+   * widens them. An end left out keeps the widget's own.
+   */
+  size?: Partial<WidgetSizeDeclaration>;
   /** New starting values, for everyone who has not changed them. */
   settings?: Readonly<Record<string, unknown>>;
 }
@@ -136,7 +145,7 @@ export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
    * longer hidden.
    */
   hide?: readonly WidgetRef[];
-  /** Title, description, starting width and settings, and narrowed widths. */
+  /** Title, description, starting settings, and a narrowed size. */
   overrides?: Partial<Record<WidgetRef, WidgetOverride>>;
   /**
    * The default dashboard, in place of core's, for everyone who has not
@@ -148,7 +157,7 @@ export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
   suggestions?: boolean;
   /**
    * A plugin's offered alternative, in the place of the built-in it names, at
-   * the alternative's own starting width.
+   * the alternative's own starting size.
    */
   replace?: { readonly [Core in CoreWidgetId]?: string };
 }

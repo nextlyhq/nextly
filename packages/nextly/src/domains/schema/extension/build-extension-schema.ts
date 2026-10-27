@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 
 import { getColumns, isTable, type Table } from "drizzle-orm";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import {
   type DynamicRelationEdge,
   staticRelationTables,
@@ -804,6 +805,10 @@ async function refuseNondeterministicHooks(
 export async function buildExtensionSchema(
   input: ExtensionSchemaInput
 ): Promise<ExtensionSchema> {
+  // The draft reads this dialect's static tables, and a compile can name a
+  // dialect no adapter in this process was created for: `migrate:create
+  // --plugin` compiles every dialect. Already loaded at boot, this is a no-op.
+  await loadDialectTables(input.dialect);
   const store = draftStoreFor(input);
 
   if (input.refuseNondeterministicHooks === true) {

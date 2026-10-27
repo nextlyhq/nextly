@@ -16,6 +16,8 @@
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import { consoleLogger } from "../../shared/types";
 
+import type { RuleAnswer } from "./rule-answer";
+
 /** What was refused, already named, so each is logged once per process. */
 const named = new Set<string>();
 
@@ -45,17 +47,25 @@ export function noticeRuleNoLongerAllows(
   slug: string,
   action: string,
   caller: string,
-  value: unknown
+  value: unknown,
+  /** What `value` was read as when the rule was asked. */
+  answer: RuleAnswer
 ): void {
+  // A filter that is not well formed is reported as that instead.
+  if (answer.kind === "malformed-filter") return;
   const key = `${slug}:${action}:${caller}`;
   if (named.has(key)) return;
   named.add(key);
-  consoleLogger.warn(
-    `[rbac] The ${action} rule of "${slug}" answered ${describe(value)}, ` +
-      `so a ${caller} is now refused where it was allowed before. ` +
-      `A code access rule allows only by returning true; return true to allow, ` +
-      `false to refuse.`
-  );
+  // A well-formed filter is a rule answering as it may, so its notice says
+  // why it refuses here rather than telling the rule to answer a boolean.
+  const said =
+    answer.kind === "filter"
+      ? `answered a filter, so a ${caller} is now refused where it was allowed before. ` +
+        `This check does not apply a rule's filter; return true to allow every entry.`
+      : `answered ${describe(value)}, so a ${caller} is now refused where it was allowed before. ` +
+        `A code access rule allows only by returning true; return true to allow, ` +
+        `false to refuse.`;
+  consoleLogger.warn(`[rbac] The ${action} rule of "${slug}" ${said}`);
 }
 
 /**

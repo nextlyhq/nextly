@@ -13,7 +13,7 @@
  * refuses a caller that omits them. These cover the other half — that the
  * commands actually call them, in the right order.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeAll } from "vitest";
 
 import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
@@ -23,6 +23,13 @@ import {
   type LifecyclePlugin,
   type PluginLifecycleDeps,
 } from "../plugin-lifecycle";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 const plugin: LifecyclePlugin = {
   name: "@acme/fx",

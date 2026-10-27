@@ -17,6 +17,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, select, text } from "../../../config";
 import {
   createTestNextly,
@@ -101,7 +102,8 @@ describe.each(getConfiguredTestDialects())("a Breakdown card (%s)", dialect => {
         }),
       ],
     });
-    caller = { user: { id: "bd-reader", roles: ["super-admin"] } };
+    // A reader the gate finds holding super-admin.
+    caller = { user: { id: await superAdminUser(handle, "bd-reader") } };
     for (const kind of ["book", "book", "film"]) {
       await handle.nextly.create({
         collection: ITEMS,

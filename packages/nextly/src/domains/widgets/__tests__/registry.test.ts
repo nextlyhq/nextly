@@ -19,7 +19,7 @@ const def = (
   id,
   title: id,
   archetype: "metric",
-  defaultSize: "sm",
+  size: { default: { w: 3, h: 2 } },
   query: { source: "collection:posts", op: "count" },
   ...over,
 });
@@ -87,11 +87,14 @@ describe("widget registry", () => {
 
   it("lets a plugin patch named fields of a core widget", () => {
     registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
-    extendWidget("core/totals", { title: "Revenue totals", defaultSize: "lg" });
+    extendWidget("core/totals", {
+      title: "Revenue totals",
+      size: { default: { w: 6, h: 4 } },
+    });
 
     const patched = getWidget("core/totals");
     expect(patched?.title).toBe("Revenue totals");
-    expect(patched?.defaultSize).toBe("lg");
+    expect(patched?.size).toEqual({ default: { w: 6, h: 4 } });
     // Untouched fields survive.
     expect(patched?.archetype).toBe("metric");
   });
@@ -105,15 +108,16 @@ describe("widget registry", () => {
   it("re-validates the result of a patch, leaving the store unmutated", () => {
     registerWidget(def("core/totals"), { source: "core" });
     expect(() =>
-      extendWidget("core/totals", { minSize: "xl", maxSize: "sm" })
-    ).toThrow(/minSize/);
+      extendWidget("core/totals", {
+        size: { default: { w: 8, h: 2 }, max: { w: 6, h: 2 } },
+      })
+    ).toThrow(/size\.default must not be larger than size\.max/);
 
     // A rejected patch must not be written even partially: the stored widget
-    // still has no minSize/maxSize bounds, not the invalid ones the patch
-    // tried to set. This would stay green if validation ran AFTER the write.
+    // keeps its own size, not the invalid one the patch tried to set. This
+    // would stay green if validation ran AFTER the write.
     const survivor = getWidget("core/totals");
-    expect(survivor?.minSize).toBeUndefined();
-    expect(survivor?.maxSize).toBeUndefined();
+    expect(survivor?.size).toEqual({ default: { w: 3, h: 2 } });
   });
 
   it("stores a snapshot, so mutating the registered object changes nothing", () => {

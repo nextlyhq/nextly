@@ -22,6 +22,7 @@ import { NextlyError } from "../../errors";
 import { systemColumnNames } from "../../lib/system-columns";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
+import { rowPairing } from "./denied-change";
 
 /** The minimal field shape both FieldConfig and FieldDefinition satisfy. */
 interface NamedField {
@@ -339,18 +340,26 @@ function keepsInstance(
 function instanceFields(
   instance: Record<string, unknown>,
   { single, many }: { single?: string; many?: string[] },
-  walk: PasswordWalk
+  { reach, untypedZoneRows }: Pick<PasswordWalk, "reach" | "untypedZoneRows">
 ): readonly NamedField[] | undefined {
-  if (single !== undefined) return walk.reach.fieldsOf(single);
-  const candidates = many ?? [];
   const typed = readFieldGroupType(instance);
-  if (typed !== undefined) {
-    return candidates.includes(typed) ? walk.reach.fieldsOf(typed) : undefined;
+  // A snapshot (`direct`) is the server's own record of an instance, and
+  // tags it with the field group it held when captured, which the field
+  // may have been pointed away from since: it is read by that one. A live
+  // value's tag is the writer's to set, so there it names only one of the
+  // field's own field groups.
+  if (reach.direct === true && typed !== undefined) {
+    return reach.fieldsOf(typed);
   }
-  if (walk.untypedZoneRows === "unknown") return undefined;
+  if (single !== undefined) return reach.fieldsOf(single);
+  const candidates = many ?? [];
+  if (typed !== undefined) {
+    return candidates.includes(typed) ? reach.fieldsOf(typed) : undefined;
+  }
+  if (untypedZoneRows === "unknown") return undefined;
   const union: NamedField[] = [];
   for (const slug of candidates) {
-    const found = walk.reach.fieldsOf(slug);
+    const found = reach.fieldsOf(slug);
     if (found === undefined) return undefined;
     union.push(...found);
   }
@@ -514,6 +523,308 @@ export function storedPasswordValues(
     },
   });
   return found;
+}
+
+/**
+ * Put back in `data` the stored hash of each password an update leaves out of
+ * a container it writes whole, or sends blank, and return those hashes, which
+ * the hashing pass then keeps rather than hashing again (`keep` in
+ * {@link hashPasswordFieldValues}).
+ *
+ * A group, a repeater, or a field group held inline in one is stored as one
+ * value and written whole, so a password the update does not resend would
+ * otherwise be dropped with the rest of the old value. Reads never return a
+ * stored password, so every edit that does not set one sends its container
+ * without it. A password left out at the entry's own level is a column the
+ * update does not write, and is kept already. `null` still clears the stored
+ * value, and a new value replaces it.
+ *
+ * `stored` is the row as stored, hashes included, never a read shape: those
+ * withhold passwords. Repeater rows, and the instances of a list of field
+ * groups, pair with stored ones as the field-rule carry-forward pairs them
+ * (`rowPairing`): by id where rows carry one, so a reordered row keeps its
+ * own, and a new row, or one repeating an id, takes none.
+ */
+export function carryStoredPasswords(
+  data: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach
+): Set<string> {
+  const kept = new Set<string>();
+  if (stored) carryLevel(data, stored, fields, reach, true, kept);
+  return kept;
+}
+
+/** {@link carryStoredPasswords} at one level of the value. */
+function carryLevel(
+  level: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  atEntry: boolean,
+  kept: Set<string>
+): void {
+  for (const field of fields) {
+    carryField(level, stored, field, reach, atEntry, kept);
+  }
+}
+
+/** {@link carryLevel} through one field of a level. */
+function carryField(
+  level: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  field: NamedField,
+  reach: FieldGroupReach,
+  atEntry: boolean,
+  kept: Set<string>
+): void {
+  if (!field.name) {
+    // A layout container keeps its fields on this level.
+    if (field.fields) {
+      carryLevel(level, stored, field.fields, reach, atEntry, kept);
+    }
+    return;
+  }
+  if (field.type === "password") {
+    // At the entry's own level, a password left out is a column the update
+    // does not write, and is kept already.
+    if (!atEntry) carryPassword(level, field.name, stored[field.name], kept);
+    return;
+  }
+  // Own keys only: a field may be named like a member every object inherits.
+  if (Object.hasOwn(level, field.name)) {
+    carryHeld(level, stored, field.name, field, reach, atEntry, kept);
+  }
+}
+
+/** {@link carryField} through the value a group, repeater or reference holds. */
+function carryHeld(
+  level: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  name: string,
+  field: NamedField,
+  reach: FieldGroupReach,
+  atEntry: boolean,
+  kept: Set<string>
+): void {
+  const previous = parsedValue(stored[name]);
+  const held = field.fields;
+  if (held && (field.type === "group" || field.type === "repeater")) {
+    rewriteValue(level, name, value => {
+      carryContainer(value, previous, field.type, held, reach, kept);
+      return value;
+    });
+    return;
+  }
+  const references = extractFieldGroupReferences(field);
+  if (references.single === undefined && references.many === undefined) {
+    return;
+  }
+  // One placed directly on the entry is stored, and kept, in its own table.
+  if (atEntry && reach.direct !== true) return;
+  rewriteValue(level, name, value => {
+    carryInstances(value, previous, references, reach, kept);
+    return value;
+  });
+}
+
+/** Put back one password the update left out or sent blank. */
+function carryPassword(
+  level: Record<string, unknown>,
+  name: string,
+  previous: unknown,
+  kept: Set<string>
+): void {
+  // Left out as the hashing pass reads it: anything but `null`, which
+  // clears, or a password to store. A blank, a missing key or a non-string
+  // would be dropped there, and with it the stored hash.
+  const value = Object.hasOwn(level, name) ? level[name] : undefined;
+  const leftOut =
+    value !== null && !(typeof value === "string" && value.trim() !== "");
+  if (!leftOut || typeof previous !== "string" || previous === "") return;
+  level[name] = previous;
+  kept.add(previous);
+}
+
+/** {@link carryLevel} through a group's value, or a repeater's paired rows. */
+function carryContainer(
+  value: unknown,
+  previous: unknown,
+  type: string,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  kept: Set<string>
+): void {
+  if (type === "group") {
+    if (isPlainRecord(value) && isPlainRecord(previous)) {
+      carryLevel(value, previous, fields, reach, false, kept);
+    }
+    return;
+  }
+  forEachPairedRow(value, previous, (row, storedRow) =>
+    carryLevel(row, storedRow, fields, reach, false, kept)
+  );
+}
+
+/** {@link carryLevel} through the instances a field-group field holds. */
+function carryInstances(
+  value: unknown,
+  previous: unknown,
+  references: { single?: string; many?: string[] },
+  reach: FieldGroupReach,
+  kept: Set<string>
+): void {
+  const carryInstance = (
+    instance: Record<string, unknown>,
+    storedInstance: Record<string, unknown>
+  ) => {
+    // An untyped zone row's schema is a guess, so nothing is carried into it.
+    const lookup = { reach, untypedZoneRows: "unknown" as const };
+    const fields = instanceFields(instance, references, lookup);
+    if (fields === undefined) return;
+    if (instanceFields(storedInstance, references, lookup) !== fields) return;
+    carryLevel(instance, storedInstance, fields, reach, false, kept);
+  };
+  if (Array.isArray(value)) {
+    forEachPairedRow(value, previous, carryInstance);
+  } else if (
+    isPlainRecord(value) &&
+    isPlainRecord(previous) &&
+    sameInstance(value, previous)
+  ) {
+    carryInstance(value, previous);
+  }
+}
+
+/** Each row of `value` with the stored row `rowPairing` pairs it with. */
+function forEachPairedRow(
+  value: unknown,
+  previous: unknown,
+  visit: (row: Record<string, unknown>, stored: Record<string, unknown>) => void
+): void {
+  if (!Array.isArray(value) || !Array.isArray(previous)) return;
+  const pairOf = rowPairing(value, previous);
+  // Where rows carry ids, a row without one is new and takes no stored
+  // password: pairing it by position could hand it another record's. Only a
+  // list whose rows carry none at all pairs by position.
+  const identified = [...value, ...previous].some(hasRowId);
+  value.forEach((row, index) => {
+    if (identified && !hasRowId(row)) return;
+    const at = pairOf(index);
+    const storedRow = at === undefined ? undefined : previous[at];
+    // Paired by id only, on both sides: an id the stored rows never carried
+    // pairs by position, which names no record.
+    if (identified && !hasRowId(storedRow)) return;
+    if (isPlainRecord(row) && isPlainRecord(storedRow)) visit(row, storedRow);
+  });
+}
+
+/**
+ * Read a stored value's passwords for {@link storedPlainPasswords} and
+ * {@link hashStoredPlainPasswords}: each one `isHashed` doesn't recognise, in
+ * the order the walk meets them. A blank value is not a password, as a write
+ * reads one. An instance of a field group `reach` has no fields for, or an
+ * untyped zone row, is left as it is, since its passwords cannot be told
+ * from its other values.
+ */
+function visitStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean,
+  visit: (level: Record<string, unknown>, name: string, value: string) => void
+): void {
+  walkPasswordLevels(data, fields, {
+    reach,
+    onUnknown: () => false,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (typeof value !== "string" || value.trim() === "") continue;
+        if (!isHashed(value)) visit(level, name, value);
+      }
+    },
+  });
+}
+
+/**
+ * Whether a single instance is the stored one: the same id, or none on
+ * either side. One with another id replaces it and takes none of its values.
+ */
+function sameInstance(
+  instance: Record<string, unknown>,
+  stored: Record<string, unknown>
+): boolean {
+  if (!hasRowId(instance) && !hasRowId(stored)) return true;
+  return hasRowId(instance) && instance.id === stored.id;
+}
+
+/** Whether a row carries an id of its own. */
+function hasRowId(row: unknown): boolean {
+  return isPlainRecord(row) && typeof row.id === "string";
+}
+
+/** A stored value, parsed where the dialect holds it as JSON text. */
+function parsedValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The passwords `data` holds as given, at every depth: one entry for each
+ * value `isHashed` does not recognise as a hash. What
+ * {@link hashStoredPlainPasswords} would hash, without changing anything.
+ */
+export function storedPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): string[] {
+  const found: string[] = [];
+  visitStoredPlainPasswords(
+    detachForReading(data),
+    fields,
+    reach,
+    isHashed,
+    (_level, _name, value) => found.push(value)
+  );
+  return found;
+}
+
+/**
+ * Hash in place each password {@link storedPlainPasswords} finds in `data`, so
+ * it still verifies, and return how many. Each occurrence gets a hash, and a
+ * salt, of its own. A container held as JSON text is written back as text.
+ */
+export async function hashStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): Promise<number> {
+  // Hashing is asynchronous and the walk is not, so the values are read
+  // first and hashed, then put in place by a second walk, as
+  // `hashPasswordFieldValues` does.
+  const plain = storedPlainPasswords(data, fields, reach, isHashed);
+  if (plain.length === 0) return 0;
+  const hashes: string[] = [];
+  for (const value of plain) hashes.push(await hashPassword(value));
+  let next = 0;
+  visitStoredPlainPasswords(data, fields, reach, isHashed, (level, name) => {
+    level[name] = hashes[next++];
+  });
+  return plain.length;
 }
 
 /** A copy to walk, so reading what a value holds never rewrites it. */

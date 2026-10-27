@@ -377,11 +377,28 @@ function failedAsking(
  * archetype can be handed one safely.
  */
 function asSlot(value: unknown): WidgetSlot {
-  if (value === undefined || value === null) {
-    return { ok: false, error: MISSING_SLOT_ERROR };
-  }
-  if (!isObject(value)) return malformed();
+  if (value === undefined || value === null) return MISSING_SLOT;
+  if (!isObject(value)) return MALFORMED_SLOT;
+  // 🔴 The SAME slot for the same cached answer, on every render. This hook
+  // rebuilds its dictionaries each render, and a card keys its component's
+  // draw on the slot it is handed: a new object reads as a new answer. Read
+  // afresh each time, a component that threw was caught, re-rendered the grid
+  // by reporting it, met a "new" answer and threw again until React stopped
+  // it, and every component card remounted whenever the grid re-rendered. The
+  // raw slot is the cache's own object, kept across renders and across the
+  // copies a stream makes, so it is the key.
+  const read = readSlots.get(value);
+  if (read !== undefined) return read;
+  const slot = readSlot(value);
+  readSlots.set(value, slot);
+  return slot;
+}
 
+/** Each raw slot the cache holds, as read once: see `asSlot`. */
+const readSlots = new WeakMap<object, WidgetSlot>();
+
+/** One raw slot read as a `WidgetSlot`, by the rules `asSlot` documents. */
+function readSlot(value: Record<string, unknown>): WidgetSlot {
   const slot = value as {
     ok?: unknown;
     error?: unknown;
@@ -797,9 +814,26 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * The answers no raw slot carries, one object each, so a card handed one keeps
+ * the same answer across renders as `asSlot` keeps every other.
+ */
+const MISSING_SLOT: WidgetSlot = Object.freeze({
+  ok: false,
+  error: MISSING_SLOT_ERROR,
+});
+const MALFORMED_SLOT: WidgetSlot = Object.freeze({
+  ok: false,
+  error: MALFORMED_SLOT_ERROR,
+});
+const BATCH_FAILED_SLOT: WidgetSlot = Object.freeze({
+  ok: false,
+  error: BATCH_FAILED_ERROR,
+});
+
 /** The refusal a member gets when it is not a slot at all. */
 function malformed(): WidgetSlot {
-  return { ok: false, error: MALFORMED_SLOT_ERROR };
+  return MALFORMED_SLOT;
 }
 
 /**
@@ -1057,7 +1091,7 @@ export function useWidgetQueries(
           cellSlots,
           entry,
           slot === undefined && answer.isError
-            ? { ok: false, error: BATCH_FAILED_ERROR }
+            ? BATCH_FAILED_SLOT
             : asSlot(slot)
         );
       });
@@ -1075,10 +1109,7 @@ export function useWidgetQueries(
     // reader was looking at.
     if (answer.isError) {
       partition.filter(isSent).forEach(entry => {
-        fileAnswer(slots, cellSlots, entry, {
-          ok: false,
-          error: BATCH_FAILED_ERROR,
-        });
+        fileAnswer(slots, cellSlots, entry, BATCH_FAILED_SLOT);
       });
       // A settled failure was asked with something too, which a change of settings is judged
       // against; a first request still in flight has neither, and its answer will say.
