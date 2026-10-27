@@ -16,6 +16,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -45,9 +46,24 @@ async function placeFixtures(page: Page): Promise<void> {
     await page.request.put(`${API}/dashboard/layout`, {
       data: {
         placements: [
-          { id: "e2e-kit", widgetId: KIT, width: "half", removed: false },
-          { id: "e2e-throws", widgetId: THROWS, width: "half", removed: false },
-          { id: "e2e-hides", widgetId: HIDES, width: "half", removed: false },
+          {
+            id: "e2e-kit",
+            widgetId: KIT,
+            ...(await defaultSizeOf(page, KIT)),
+            removed: false,
+          },
+          {
+            id: "e2e-throws",
+            widgetId: THROWS,
+            ...(await defaultSizeOf(page, THROWS)),
+            removed: false,
+          },
+          {
+            id: "e2e-hides",
+            widgetId: HIDES,
+            ...(await defaultSizeOf(page, HIDES)),
+            removed: false,
+          },
           ...others,
         ],
         version: layout.version,
@@ -90,7 +106,7 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(kit.getByText("Test fixture: widget kit")).toBeVisible();
     const body = kit.getByTestId("kit-card");
     await expect(body).toBeVisible();
-    // Handed its size: a half-width card at desktop width is medium.
+    // Handed its size: a card at its default size at desktop width is medium.
     await expect(body).toHaveAttribute("data-size", "medium");
     await expect(body.getByTestId("chart-group")).toHaveCount(2);
     await expectNoAxeViolations(page, {

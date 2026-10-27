@@ -34,10 +34,15 @@ export const NO_STORED_LAYOUT_VERSION = 0;
 /**
  * What one scope currently has stored.
  *
- * `layout` is `undefined` both when no row exists and when the row could not be
- * decoded, and `unreadable` is what tells those apart. The caller needs the
- * distinction: the first is an ordinary new reader, the second is a fault an
- * operator should see.
+ * `layout` is `undefined` when no row exists, when the row is of an earlier
+ * format, and when the row could not be decoded, and `unreadable` is what tells
+ * the last apart. The caller needs the distinction: the first two are a reader
+ * with no saved arrangement, who follows the default, and the third is a fault
+ * an operator should see.
+ *
+ * `version` is the row's own whenever there is a row, an earlier-format one
+ * included, so the reader's next write takes the guarded UPDATE that replaces
+ * it rather than an INSERT that would collide with it.
  */
 export interface StoredLayoutRow {
   layout: StoredLayout | undefined;
@@ -128,6 +133,8 @@ export class WidgetLayoutService extends BaseService {
       typeof row.version === "number" ? row.version : NO_STORED_LAYOUT_VERSION;
 
     try {
+      // `undefined` for a row of an earlier format: no saved arrangement, and
+      // left exactly as it is, since a read never writes.
       const layout = readStoredLayout(String(row.layout));
       // 🔴 The repair is invisible to the reader and must not be invisible to
       // an operator. Resolving the repeat per caller keeps the dashboard whole,
@@ -135,7 +142,7 @@ export class WidgetLayoutService extends BaseService {
       // malformed -- and the row stays malformed until this reader's next save.
       // Whatever wrote the duplicate would otherwise go on writing them
       // unobserved, so the one place the defect can still be found is here.
-      if (layout.duplicatePlacementIds !== undefined) {
+      if (layout?.duplicatePlacementIds !== undefined) {
         this.logger.warn("Stored dashboard layout holds a placement id twice", {
           scopeKind: kind,
           scopeId,

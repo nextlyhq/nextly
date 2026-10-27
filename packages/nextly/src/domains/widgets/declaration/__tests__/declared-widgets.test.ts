@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { clearWidgets, getWidget } from "../../registry";
-import { isWidgetWidth } from "../../widths";
 import {
   cardQueryFor,
   clearDeclaredWidgets,
@@ -54,8 +53,11 @@ describe("registering declared widgets", () => {
       archetype: "bars",
       sketch: "bars",
       requiredPermission: "read-orders",
-      allowedWidths: ["third", "half", "twoThirds"],
-      defaultWidth: "half",
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 8, h: 6 },
+      },
       serverData: true,
     });
     // Data only: no query, no data function and no empty test reach what the admin is sent,
@@ -63,11 +65,12 @@ describe("registering declared widgets", () => {
     expect(published?.query).toBeUndefined();
     expect(JSON.parse(JSON.stringify(published))).toEqual(published);
     expect(Object.keys(published ?? {})).not.toContain("data");
-    // The widths as declared, a gap included: `recent-orders` takes half and full, not two thirds.
-    expect(getWidget("acme/recent-orders")?.allowedWidths).toEqual([
-      "half",
-      "full",
-    ]);
+    // Each widget's own size, in grid units, as it declares it.
+    expect(getWidget("acme/recent-orders")?.size).toEqual({
+      default: { w: 12, h: 5 },
+      min: { w: 6, h: 4 },
+      max: { w: 12, h: 8 },
+    });
     // A declared empty state: its words and action are published, its test is not, and the
     // action's permission is the gate's own name.
     registerWidgetDeclarations([
@@ -165,25 +168,32 @@ describe("registering declared widgets", () => {
     );
   });
 
-  it("keeps a declared set of widths with gaps, in core's own words", () => {
-    // Two widths that are not neighbours: no smallest-to-largest range could
-    // say this, and the set is read back exactly as declared, in the
-    // vocabulary a stored placement and the admin use.
-    const gapped = defineWidget({
-      id: "acme/gapped",
-      title: "Gapped",
-      description: "Allowed at a quarter or at two thirds, nothing between",
+  it("publishes a size stated by its default alone with every end filled in", () => {
+    // 🔴 Filled in once, here, by the grid's own rule: the smallest size is
+    // the default, the largest the full width at the default's height. A
+    // reader of the registry then has no missing end to fill its own way.
+    const small = defineWidget({
+      id: "acme/small",
+      title: "Small",
+      description: "Starts small and may grow only wider",
       category: "Test",
-      widths: ["quarter", "twoThirds"],
-      width: "quarter",
+      size: { default: { w: 3, h: 2 } },
       data: async () => ({ total: 3 }),
       display: "metric",
     });
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [gapped] }]);
-    const widths = declaredWidget("acme/gapped")?.declaration.widths;
-    expect(widths).toEqual(["quarter", "twoThirds"]);
-    // Every one is a width the arrangement itself stores.
-    expect(widths?.every(isWidgetWidth)).toBe(true);
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [small] }]);
+    const published = getWidget("acme/small")?.size;
+    expect(published).toEqual({
+      default: { w: 3, h: 2 },
+      min: { w: 3, h: 2 },
+      max: { w: 12, h: 2 },
+    });
+    // A copy: what is published shares no object with the declaration kept
+    // for the server.
+    expect(published?.default).not.toBe(small.size.default);
+    expect(declaredWidget("acme/small")?.declaration.size).toEqual({
+      default: { w: 3, h: 2 },
+    });
   });
 
   it("registers nothing when any declaration cannot work, and names every fault", () => {

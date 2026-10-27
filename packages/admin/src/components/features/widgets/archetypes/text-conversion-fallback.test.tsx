@@ -19,6 +19,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { textBody } from "./text";
+import { gridBounds } from "../__tests__/grid-bounds";
 
 vi.mock("@lexical/markdown", async importOriginal => {
   const actual = await importOriginal<typeof import("@lexical/markdown")>();
@@ -47,7 +48,7 @@ describe("a text card the library cannot convert", () => {
       id: "acme/notes",
       title: "Notes",
       archetype: "text",
-      size: "md",
+      size: gridBounds(4),
       content: "## Runbook\n\nRotate the keys before a release.",
     } as DashboardWidget);
     if (!outcome.ok) throw new Error(outcome.message);

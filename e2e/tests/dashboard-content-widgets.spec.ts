@@ -9,6 +9,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -24,7 +25,7 @@ interface Layout {
   placements: Array<{ widgetId: string }>;
 }
 
-/** Put one card of `widgetId`, set to posts, on the reader's dashboard, full width. */
+/** Put one card of `widgetId`, set to posts, on the reader's dashboard, as wide as it may be. */
 async function place(page: Page, widgetId: string): Promise<void> {
   const layout = await ok<Layout>(
     await page.request.get(`${API}/dashboard/layout`)
@@ -37,7 +38,7 @@ async function place(page: Page, widgetId: string): Promise<void> {
           {
             id: `e2e-${widgetId.replace("/", "-")}`,
             widgetId,
-            width: "full",
+            ...(await widestSizeOf(page, widgetId)),
             removed: false,
             config: { collection: "posts" },
           },

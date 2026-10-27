@@ -34,7 +34,8 @@ const FINISHED = answerOf([step("collection", "done", "collection")]);
 const card = (patch: Partial<WidgetPlacement> = {}): WidgetPlacement => ({
   id: "started",
   widgetId: "core/get-started",
-  width: "full",
+  w: 12,
+  h: 3,
   removed: false,
   ...patch,
 });
@@ -111,7 +112,8 @@ describe("a dormant card", () => {
   const others = {
     id: "team",
     widgetId: "core/team",
-    width: "half",
+    w: 4,
+    h: 4,
     removed: false,
   } as const;
 

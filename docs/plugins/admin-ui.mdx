@@ -5,9 +5,9 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 
 A plugin can extend the Nextly admin in two complementary ways:
 
-- **`contributes.admin`.** The *declarative* surface: menu entries, custom pages,
+- **`contributes.admin`.** The _declarative_ surface: menu entries, custom pages,
   a settings panel, and per-collection view overrides (D19–D23).
-- **`admin`** (on the plugin definition) — *placement & appearance*: where the
+- **`admin`** (on the plugin definition) — _placement & appearance_: where the
   plugin's items sit in the sidebar and how they look (D20).
 
 Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
@@ -165,12 +165,20 @@ means your styles do not depend on the host's build at all.
 
 ```jsonc
 // package.json
-{ "scripts": { "build:css": "nextly-build-admin-css src/admin.css dist/admin.css" } }
+{
+  "scripts": {
+    "build:css": "nextly-build-admin-css src/admin.css dist/admin.css",
+  },
+}
 ```
 
 ```ts
 // your plugin definition
-contributes: { admin: { styles: "@acme/plugin/dist/admin.css" } }
+contributes: {
+  admin: {
+    styles: "@acme/plugin/dist/admin.css";
+  }
+}
 ```
 
 Then side-effect-import the built file from your admin entry so the host app's bundler
@@ -282,14 +290,14 @@ build any of it yourself:
 Your component replaces the form's body and receives `DocumentViewProps` from
 `@nextlyhq/plugin-sdk/admin`:
 
-| Prop | What it is |
-|---|---|
-| `collectionSlug`, `entryId` | The collection entry being shown. |
-| `singleSlug` | The Single being shown, instead of the two above. |
-| `control` | The document form's react-hook-form `control`. Write to the fields through it. |
-| `readOnly` | `true` while someone else holds the document. Don't offer edits then. |
-| `exit` | Goes back to the document's edit form. Commit any state you hold into the form first. |
-| `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                                      |
+| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                                      |
+| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                                         |
+| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                                  |
+| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                                  |
+| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
 A field-type view also opens only for a field the edit form would let the
@@ -346,7 +354,7 @@ runs the query for the signed-in user and renders the card.
 >   id: "acme/shortcuts",
 >   title: "Shortcuts",
 >   archetype: "actions",
->   defaultSize: "sm",
+>   size: { default: { w: 3, h: 3 } },
 >   actions: [
 >     { label: "New post", href: "/admin/collections/posts/create" },
 >     { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
@@ -369,7 +377,7 @@ contributes: {
         id: "reports-summary",
         title: "Published reports",
         archetype: "metric",                 // metric | list | table | stats | bars | timeseries | actions | text
-        defaultSize: "sm",                   // sm | md | lg | xl | full
+        size: { default: { w: 3, h: 2 } },   // 12-column grid units: w 1–12, h 2–12
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
         defaultOrder: 40,                    // optional; lower sits higher
@@ -429,10 +437,10 @@ Every card is framed: there is no way to decline the frame, and a widget that na
 refused at startup.
 
 <Callout type="info">
-  `core#` is reserved. Core's own dashboard cards resolve their components under that
-  prefix, and the admin refuses to let anything else register or unregister one — a
-  plugin claiming the path would replace the body drawn for a card the registry still
-  attributes to core.
+  `core#` is reserved. Core's own dashboard cards resolve their components under
+  that prefix, and the admin refuses to let anything else register or unregister
+  one — a plugin claiming the path would replace the body drawn for a card the
+  registry still attributes to core.
 </Callout>
 
 ### Draw it yourself
@@ -447,7 +455,7 @@ contributes: {
       {
         id: "reports-chart",
         component: "@acme/nextly-plugin-reports/admin#ChartWidget",
-        size: "half",                        // "full" | "half"
+        size: { default: { w: 6, h: 4 } },   // 12-column grid units: w 1–12, h 2–12
         requiredPermission: "read-reports",  // client-gated
       },
     ],
@@ -473,13 +481,13 @@ export function ChartWidget({ slot, isFetching }: WidgetComponentProps) {
 }
 ```
 
-| Prop | Type | What it is |
-|---|---|---|
-| `widgetId` | `string` | The id you registered the widget under. |
-| `placementId` | `string` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
-| `settings` | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else. |
-| `slot` | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below. |
-| `isFetching` | `boolean` | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query. |
+| Prop          | Type                      | What it is                                                                                                                                                          |
+| ------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `widgetId`    | `string`                  | The id you registered the widget under.                                                                                                                             |
+| `placementId` | `string`                  | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
+| `settings`    | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else.                                   |
+| `slot`        | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below.                        |
+| `isFetching`  | `boolean`                 | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query.                                                      |
 
 An absent `slot` has two causes and they need different UI: `isFetching` is `true` only
 for a card whose query is in the batch, so `slot === undefined && isFetching` is the
