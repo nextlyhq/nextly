@@ -12,18 +12,15 @@ import { describe, expect, it } from "vitest";
 
 import { addPanelFacts, inAddPanelOrder } from "../add-panel";
 import type { CanonicalWidget } from "../canonical";
-import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_WIDGET_IDS } from "../core-widgets";
 
 const core = (id: string): CanonicalWidget => ({ id });
 
 describe("the group each widget is listed in", () => {
   it("puts the team's two built-ins under Team, the content widgets under Content, and every other built-in under Overview", () => {
+    // Every one of core's, its declarations included: the group is read by id.
     const groups = Object.fromEntries(
-      CORE_WIDGETS.map(definition => [
-        definition.id,
-        addPanelFacts({ id: definition.id, archetype: definition.archetype })
-          ?.group,
-      ])
+      CORE_WIDGET_IDS.map(id => [id, addPanelFacts(core(id))?.group])
     );
     expect(groups).toEqual({
       "core/get-started": "overview",

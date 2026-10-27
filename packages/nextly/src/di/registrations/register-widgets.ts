@@ -40,11 +40,16 @@
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  CORE_DECLARATIONS,
+  CORE_WIDGET_IDS,
+  CORE_WIDGETS,
+} from "../../domains/widgets/core-widgets";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
-  registerWidgetDeclarations,
+  CORE_OWNER,
+  registerDashboardWidgets,
   type DeclaredWidgetGroup,
 } from "../../domains/widgets/declaration/declared-widgets";
 import {
@@ -54,7 +59,7 @@ import {
   siteDashboardKeysNotApplied,
   siteDashboardSnapshot,
 } from "../../domains/widgets/declaration/site-dashboard";
-import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
+import { clearWidgets } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import { getNextlyLogger } from "../../observability/logger";
@@ -130,33 +135,36 @@ export function resetWidgetRegistries(
   registerSummaryWidgetSources();
   registerRecentEditsWidgetSource();
 
-  for (const definition of CORE_WIDGETS) {
-    registerWidget(definition);
-  }
-
-  // Plugins' widgets declared with `defineWidget()`, after core's, so an id
-  // that collides with one of core's fails here, by name. Every declaration is
-  // checked together with everything that names one (the site config's
-  // dashboard, the plugins' suggestions and alternatives), and startup stops on
-  // any fault, all of them reported at once; today's shape is passed for the id
-  // rules it still keeps (`declared-widgets.ts`). Each plugin's contribution
-  // and the site config are read once, here, and every check reads the copy.
-  // The site's own widgets are checked with the plugins' but not registered yet.
-  const coreIds = new Set(CORE_WIDGETS.map(widget => widget.id));
+  // Every widget, through the one call: core's own list, the plugins' widgets
+  // declared with `defineWidget()`, and the site's. Each is checked together
+  // with everything that names one (the site config's dashboard, the plugins'
+  // suggestions and alternatives), and startup stops on any fault of any owner,
+  // all of them reported at once, before any widget is kept; today's shape is
+  // passed for the id rules it still keeps (`declared-widgets.ts`). Each
+  // plugin's contribution and the site config are read once, here, and every
+  // check reads the copy. The site's own widgets are checked with the plugins'
+  // but not registered yet.
+  const coreIds = new Set<string>(CORE_WIDGET_IDS);
   const dashboards = pluginDashboardSnapshots(plugins);
   const site = siteDashboardSnapshot(dashboard);
-  registerWidgetDeclarations(
-    pluginWidgetDeclarationGroups(dashboards),
-    pluginLegacyWidgetIds(plugins),
-    (declared, groups) => [
+  registerDashboardWidgets({
+    core: CORE_WIDGETS,
+    // Core's own declarations first, through the same checks as a plugin's,
+    // so a plugin claiming one of their ids is the one named.
+    groups: [
+      { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
+      ...pluginWidgetDeclarationGroups(dashboards),
+    ],
+    legacy: pluginLegacyWidgetIds(plugins),
+    references: (declared, groups) => [
       ...pluginSuggestionFaults(dashboards, groups, coreIds),
       ...siteDashboardFaults(
         site,
         siteDashboardContext(declared, pluginAlternatives(dashboards))
       ),
     ],
-    siteWidgetGroup(site)
-  );
+    checkedOnly: siteWidgetGroup(site),
+  });
   warnSiteDashboardKeysNotApplied(site);
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
