@@ -23,6 +23,7 @@ vi.mock("@admin/lib/auth/session", () => ({
 const mockReadSetupState = vi.fn();
 vi.mock("@admin/lib/auth/setup-status", () => ({
   readSetupState: (...args: unknown[]) => mockReadSetupState(...args),
+  resetSetupStatusCache: () => {},
 }));
 
 import { restartSessionCheck, useAuthSession } from "../useAuthSession";

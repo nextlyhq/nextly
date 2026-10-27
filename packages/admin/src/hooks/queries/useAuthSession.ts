@@ -25,7 +25,10 @@ import {
   isAuthenticated as checkIsAuthenticated,
   SessionUnavailableError,
 } from "@admin/lib/auth/session";
-import { readSetupState } from "@admin/lib/auth/setup-status";
+import {
+  readSetupState,
+  resetSetupStatusCache,
+} from "@admin/lib/auth/setup-status";
 
 /** The cache key every reader of the session shares. */
 export const authSessionKey = ["auth", "session"] as const;
@@ -86,11 +89,14 @@ export function useAuthSession(): UseQueryResult<AuthSession> {
  * A plain refetch joins the request already in flight when the query has no
  * data yet, and that is exactly the request a starting server is holding, so
  * "Try again" would only reset the message. Cancelling first makes the
- * refetch start a request of its own.
+ * refetch start a request of its own. Setup status keeps its own pending
+ * request for every reader to share, so it is dropped too, or a hung
+ * setup-status request would be joined the same way.
  */
 export async function restartSessionCheck(
   queryClient: QueryClient
 ): Promise<void> {
   await queryClient.cancelQueries({ queryKey: authSessionKey });
+  resetSetupStatusCache();
   await queryClient.refetchQueries({ queryKey: authSessionKey });
 }
