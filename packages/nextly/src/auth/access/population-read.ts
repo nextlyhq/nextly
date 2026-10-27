@@ -17,7 +17,6 @@
  */
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { Principal } from "../../plugins/principals/types";
-import { isSuperAdminContext } from "../../services/access";
 import {
   apiKeyScopeAllows,
   scopeRowsAgree,
@@ -68,13 +67,6 @@ function keyActorOf(
     grants: slugGrants(scope.permissions),
     roles: scope.roles ?? user.roles ?? [],
   });
-}
-
-/** The actor for a caller that is no key. */
-async function actorOf(caller: RelatedRowCaller): Promise<Actor> {
-  if (caller.principal) return actorForPrincipal(caller.principal);
-  if (caller.user) return actorForUserFailingClosed(caller.user.id);
-  return actorForVisitor();
 }
 
 /** Population's answer for a visitor. */
@@ -192,15 +184,9 @@ export async function relatedRowReads(
     ? (rbac.getRegisteredTarget(slug) ?? { kind: "collection" as const, slug })
     : targetAsDeclared({ kind: "collection", slug });
   const scope = caller.scope?.actorType === "apiKey" ? caller.scope : undefined;
-  // A caller that names the super-admin role is admitted on that name, and a
-  // key never is, whatever its maker holds.
-  if (!scope && isSuperAdminContext(caller.user)) {
-    return readOf(
-      await deviate("claimed-super-admin", true, async () =>
-        decided(await actorOf(caller), target)
-      )
-    );
-  }
+  // A plugin's person is judged first, as the person, whatever user the read
+  // also names; a user is judged by the roles their lookup finds, never by
+  // role names handed in with them.
   if (caller.principal) {
     const person = actorForPrincipal(caller.principal);
     // A plugin's person is judged by the target's rule alone; without the

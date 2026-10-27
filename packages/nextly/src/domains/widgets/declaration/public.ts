@@ -21,7 +21,14 @@ export {
   type WidgetRenderSize,
   type WidgetWidth,
 } from "./define-widget";
-export type { CoreWidgetId, DashboardContribution } from "./dashboard";
+export type {
+  AdminDashboardConfig,
+  CoreWidgetId,
+  DashboardContribution,
+  DefaultLayoutCard,
+  WidgetOverride,
+  WidgetRef,
+} from "./dashboard";
 export type { ComponentDisplay, CoreDisplay, WidgetDisplay } from "./displays";
 export {
   settings,

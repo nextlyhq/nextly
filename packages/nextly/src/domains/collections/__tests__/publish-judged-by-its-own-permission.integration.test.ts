@@ -66,6 +66,20 @@ let refuseFirstPublish = false;
 let transactionDepth = 0;
 /** For each ask of the filtered publish rule, whether a transaction was open. */
 let publishAskedInside: boolean[] = [];
+/**
+ * How a `beforeChange` hook rewrites an update, if at all: it names a field,
+ * keeping the status or dropping it.
+ */
+let hookEdits: "keeps-status" | "drops-status" | undefined;
+/** The value the rewriting hook sets. */
+const SET_BY_A_HOOK = "set by a hook";
+
+/** Rewrites `data` as {@link hookEdits} says, naming `field`. */
+function editByHook(data: Record<string, unknown>, field: string): void {
+  if (hookEdits === undefined) return;
+  data[field] = SET_BY_A_HOOK;
+  if (hookEdits === "drops-status") delete data.status;
+}
 
 afterEach(async () => {
   resetSessionStandingForTests();
@@ -78,6 +92,7 @@ afterEach(async () => {
   refuseFirstPublish = false;
   transactionDepth = 0;
   publishAskedInside = [];
+  hookEdits = undefined;
   // Single hooks register into the global registry.
   resetHookRegistry();
 });
@@ -104,6 +119,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                 handedToHooks.push((args as { data?: unknown }).data);
               }
               return args;
+            },
+          ],
+          beforeChange: [
+            context => {
+              if (context.operation === "update") {
+                editByHook(context.data as Record<string, unknown>, "title");
+              }
+              return context.data;
             },
           ],
         },
@@ -147,6 +170,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           beforeChange: [
             context => {
               handedToHooks.push(context.data);
+              editByHook(context.data as Record<string, unknown>, "headline");
               return context.data;
             },
           ],
@@ -881,5 +905,95 @@ describe.each(getConfiguredTestDialects())(
       expect(publishAskedInside.length).toBeGreaterThan(0);
       expect(publishAskedInside).not.toContain(true);
     });
+
+    describe.each(["keeps-status", "drops-status"] as const)(
+      "a hook that names a field, and %s",
+      edits => {
+        it("asks update of an entry's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          const id = await draft(POSTS, "t");
+          hookEdits = edits;
+
+          await expect(
+            as(PUBLISHER).update({
+              collection: POSTS,
+              id,
+              data: { status: "published" },
+            } as never)
+          ).rejects.toThrow();
+          expect(await stored(POSTS, id)).toMatchObject({
+            title: "t",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: the hook does name the field on this write.
+          await trusted().update({
+            collection: POSTS,
+            id,
+            data: { status: "published" },
+          } as never);
+          expect((await stored(POSTS, id)).title).toBe(SET_BY_A_HOOK);
+        });
+
+        it("asks update of a batch row's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          const id = await draft(POSTS, "t");
+          hookEdits = edits;
+
+          const result = await pluginServices().collections.updateMany(
+            POSTS,
+            [{ id, data: { status: "published" } }],
+            asPlugin(PUBLISHER)
+          );
+
+          expect(result.failed).toBe(1);
+          expect(await stored(POSTS, id)).toMatchObject({
+            title: "t",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: without the hook's edit the row publishes.
+          hookEdits = undefined;
+          const plain = await pluginServices().collections.updateMany(
+            POSTS,
+            [{ id, data: { status: "published" } }],
+            asPlugin(PUBLISHER)
+          );
+          expect(plain.successful).toBe(1);
+        });
+
+        it("asks update of a Single's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          await trusted().updateSingle({
+            slug: HOME,
+            data: { headline: "h", status: "draft" },
+          } as never);
+          const home = async () =>
+            (await trusted().findSingle({ slug: HOME } as never)) as {
+              headline?: unknown;
+              status?: unknown;
+            };
+          hookEdits = edits;
+
+          expect(
+            await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+              status: "published",
+            })
+          ).toBe(403);
+          expect(await home()).toMatchObject({
+            headline: "h",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: without the hook's edit the Single publishes.
+          hookEdits = undefined;
+          expect(
+            await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+              status: "published",
+            })
+          ).toBe(200);
+        });
+      }
+    );
   }
 );

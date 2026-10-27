@@ -19,7 +19,7 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 import { lazy, Suspense } from "react";
 
-import { CardEmpty } from "@admin/components/features/widgets/frame/states";
+import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 
 const TextMarkdown = lazy(() =>
   import("@admin/components/features/widgets/archetypes/TextMarkdown").then(
@@ -42,9 +42,14 @@ export const NoteCard: React.FC<WidgetComponentProps> = ({ settings }) => {
   // Blank as well as absent is an empty note: whitespace alone draws nothing.
   if (text.trim() === "") {
     return (
-      <CardEmpty
-        title="An empty note"
-        detail="Write it in the card's settings."
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: {
+            title: "An empty note",
+            detail: "Write it in the card's settings.",
+          },
+        }}
       />
     );
   }

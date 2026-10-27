@@ -62,6 +62,7 @@ import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
+  isStatusOnlyWrite,
   stripImmutableSystemFields,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -8925,6 +8926,24 @@ export class CollectionMutationService extends BaseService {
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
 
+      // A status-only write was judged by its publish or unpublish gate in
+      // place of update. A hook that made it an edit, naming a field or
+      // dropping the status, asks update now, before anything is written, as
+      // the same edit sent by the caller would have been.
+      if (statusOnly && !isStatusOnlyWrite(finalData, "collection")) {
+        const editDenied = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "update",
+          entryId: params.entryId,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          // The route admitted a status change, not this edit.
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        });
+        if (editDenied) return editDenied;
+      }
+
       // Many-to-many field defs drive both the extraction inside shapeWriteParts
       // and the junction rewrite later in this transaction, so they are resolved
       // once here and reused rather than recomputed.
@@ -13063,6 +13082,28 @@ export class CollectionMutationService extends BaseService {
       // the transition classification and the write, so the write payload and the
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
+
+      // A row its own gate judged as a publish or an unpublish in place of
+      // update that a hook made an edit, naming a field or dropping the
+      // status, asks update now, before anything is written. Asked on this
+      // transaction's connection, which the row lock already holds.
+      if (
+        rowAllowed !== undefined &&
+        !isStatusOnlyWrite(finalData, "collection")
+      ) {
+        const editDenied = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "update",
+          entryId,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          // The route admitted a status change, not this edit.
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+          executor: tx.getDrizzle(),
+        });
+        if (editDenied) return editDenied;
+      }
 
       // Normalize relationship field values (extract IDs from objects with display properties)
       // This must happen before many-to-many extraction and JSON serialization

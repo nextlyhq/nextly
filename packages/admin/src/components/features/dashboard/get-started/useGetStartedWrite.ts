@@ -22,8 +22,11 @@ const TITLE = "Get started";
 export interface GetStartedWrite {
   /** Skip a waiting step, or restore one the reader skipped. */
   setSkipped: (key: string, skipped: boolean) => void;
-  /** Record that the reader acted on the card, once, before they leave it for a step. */
-  markActed: () => void;
+  /**
+   * Record that the reader acted on the card, once, before they leave it for a step; `then`
+   * runs once that record has landed, or at once when there is nothing to record.
+   */
+  markActed: (then?: () => void) => void;
   /** Why the card's controls cannot save now, or `undefined` when they can. */
   unavailable: string | undefined;
   isWriting: boolean;
@@ -47,15 +50,23 @@ export function useGetStartedWrite(
   const settings = useAtRestSettingsWrite();
 
   const write = useCallback(
-    (skipped: readonly string[]) => {
-      settings?.write(
+    (skipped: readonly string[], then?: () => void) => {
+      if (settings === undefined) {
+        then?.();
+        return;
+      }
+      settings.write(
         placementId,
         TITLE,
         {
           acted: true,
           ...(skipped.length > 0 ? { skipped: [...skipped] } : {}),
         },
-        {}
+        // 🔴 After the record lands, not beside it: an action that finishes first (loading sample
+        // content) changes what the reader is shown, the write is then refused as stale, and the
+        // card goes instead of saying "You're all set". A write that fails says so itself; the
+        // action the reader asked for still runs.
+        then === undefined ? {} : { onLanded: then, onFailed: () => then() }
       );
     },
     [settings, placementId]
@@ -70,10 +81,16 @@ export function useGetStartedWrite(
     [answer, write]
   );
 
-  const markActed = useCallback(() => {
-    if (acted || !answer) return;
-    write(skippedIn(answer));
-  }, [acted, answer, write]);
+  const markActed = useCallback(
+    (then?: () => void) => {
+      if (acted || !answer) {
+        then?.();
+        return;
+      }
+      write(skippedIn(answer), then);
+    },
+    [acted, answer, write]
+  );
 
   return {
     setSkipped,

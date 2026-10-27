@@ -5,8 +5,10 @@
  * fit, a latest point labelled at small where the figures above say it, a legend on a single
  * series, a series coloured outside the shared slots.
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
@@ -242,6 +244,49 @@ describe("bars", () => {
       expect(bar.x).toBeGreaterThanOrEqual(0);
       expect(bar.x + bar.width).toBeLessThanOrEqual(240);
       expect(bar.width).toBeCloseTo(bars[0]?.width ?? 0);
+    }
+  });
+});
+
+describe("bars and the pointer", () => {
+  it("stands the pointer's rule on each bar's centre, the first and last included", async () => {
+    // 🔴 Bars clamped inside the drawing, with the strips and the rule left on the line's
+    // edge-to-edge scale, would pass the test above and miss the first and last bars.
+    // Under the shell's shortcut owner, which a hovered chart's Escape binding needs.
+    const { container } = render(
+      <ShortcutProvider>
+        <CardTierContext.Provider value="medium">
+          <OverTimeChart
+            title="Posts created"
+            intervals={days(7)}
+            series={[series("Posts", [1, 2, 3, 4, 5, 6, 7])]}
+            chartStyle="bars"
+          />
+        </CardTierContext.Provider>
+      </ShortcutProvider>
+    );
+    // Each bar's centre, as a percentage across the drawing, where the rule is placed.
+    const centres = [
+      ...container.querySelectorAll('[data-chart-style="bars"] rect'),
+    ].map(
+      rect =>
+        ((Number(rect.getAttribute("x")) +
+          Number(rect.getAttribute("width")) / 2) /
+          240) *
+        100
+    );
+    expect(centres).toHaveLength(7);
+    const user = userEvent.setup();
+    for (const index of [0, 3, 6]) {
+      await user.hover(
+        screen.getAllByTestId("chart-interval")[index] as HTMLElement
+      );
+      const rule = container.querySelector<HTMLElement>('span[class*="w-px"]');
+      expect(rule, `the rule for interval ${index}`).not.toBeNull();
+      expect(Number.parseFloat(rule!.style.left)).toBeCloseTo(
+        centres[index]!,
+        6
+      );
     }
   });
 });

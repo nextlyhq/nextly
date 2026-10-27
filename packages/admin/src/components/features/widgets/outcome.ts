@@ -158,11 +158,15 @@ export function coreDraws(definition: DeclaredWidget): boolean {
  * renderer can draw.
  *
  * `self-drawn` is neither success nor failure and must not be counted as
- * either: the plugin's component decides what it shows, and core has no way to
- * know whether it worked.
+ * either: the component draws the answer, and reports to the frame anything its
+ * data says beyond it (`FrameState`), which the grid does not see. A failed
+ * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
  */
 export type WidgetOutcome =
   | { state: "self-drawn" }
+  // A widget declared with `defineWidget` and drawn by its own component, with
+  // its data: the frame draws every other state, and the component this one.
+  | { state: "answered"; data: unknown }
   | { state: "loading" }
   | { state: "failed"; message: string }
   // The source is forbidden, gone, or kept off the dashboard: one state for all three.
@@ -208,6 +212,60 @@ function slotlessOutcome(
   return undefined;
 }
 
+/**
+ * Whether a card is a widget declared with `defineWidget` and drawn by its own
+ * component: a custom card whose data core builds on the server. Core's own
+ * custom cards ask their own queries and draw their own states.
+ */
+function drawsDeclaredComponent(definition: DashboardWidget): boolean {
+  return definition.archetype === "custom" && definition.serverData === true;
+}
+
+/** A failed slot as the grid's outcome: one code marks every "not available". */
+function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
+  return slot.code === "unavailable"
+    ? { state: "unavailable" }
+    : { state: "failed", message: slot.error };
+}
+
+/**
+ * A declared widget drawn by its own component: core builds its data, so the
+ * frame draws loading, no permission and error as for any card core answers,
+ * and the component is called only once there is data (`WidgetProps`).
+ *
+ * Its data is what the declaration types it as: a data function's answer,
+ * carried as an `op: "data"` result and unwrapped here, or, for a widget
+ * whose data is `{ query }`, the query's own answer as it is, a count, a list
+ * or a grouped result (`QueryAnswer`).
+ */
+function declaredComponentOutcome(slot: WidgetSlot | undefined): WidgetOutcome {
+  if (!slot) return { state: "loading" };
+  if (!slot.ok) return slotFailure(slot);
+  return {
+    state: "answered",
+    data: slot.result.op === "data" ? slot.result.data : slot.result,
+  };
+}
+
+/**
+ * The outcome of a card drawn by a component, or `undefined` for one core draws.
+ *
+ * A declared widget's component is handed its data once there is some, the frame drawing every
+ * other state. A custom card's own component is reached with an answer or while one is on the
+ * way: a failed answer is the frame's to draw and the grid's to count, like any other card's, and
+ * what its answer says beyond that, the component reports to the frame (`FrameState`).
+ */
+function componentOutcome(
+  definition: DashboardWidget,
+  slot: WidgetSlot | undefined
+): WidgetOutcome | undefined {
+  if (drawsDeclaredComponent(definition)) {
+    return declaredComponentOutcome(slot);
+  }
+  if (definition.archetype !== "custom") return undefined;
+  return slot?.ok === false ? slotFailure(slot) : { state: "self-drawn" };
+}
+
 export function resolveWidgetOutcome(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined,
@@ -228,8 +286,8 @@ export function resolveWidgetOutcome(
     return { state: "empty", empty: emptyFor(definition) };
   }
 
-  // The escape hatch. A plugin component owns its own body and its own states.
-  if (definition.archetype === "custom") return { state: "self-drawn" };
+  const component = componentOutcome(definition, slot);
+  if (component !== undefined) return component;
 
   // Everything knowable WITHOUT a payload, decided first: an archetype with no
   // renderer, and a declaration the renderer refuses. Both are settled before
@@ -283,12 +341,7 @@ export function resolveWidgetOutcome(
     return { state: "loading" };
   }
 
-  if (!slot.ok) {
-    // The server marks every "not available" answer with one code; anything else failed.
-    return slot.code === "unavailable"
-      ? { state: "unavailable" }
-      : { state: "failed", message: slot.error };
-  }
+  if (!slot.ok) return slotFailure(slot);
 
   const drawn = asOutcome(renderer.body(slot.result, definition));
   // A display that finds nothing in its answer draws its empty state with the

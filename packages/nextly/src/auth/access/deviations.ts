@@ -33,9 +33,6 @@ export const DEVIATIONS = [
   // A Single asked by a route that authorized no user falls through to the
   // visitor's answer, where a collection refuses.
   "single-route-authorized-visitor",
-  // A super-admin role named on a server-supplied `user` passes without a
-  // lookup.
-  "claimed-super-admin",
   // A key's permission is matched on its stored slug, so a scope carrying
   // slugs without grant rows is judged on the slugs.
   "key-slug-string-match",
