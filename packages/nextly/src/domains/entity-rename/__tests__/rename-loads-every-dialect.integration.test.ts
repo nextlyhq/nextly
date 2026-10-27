@@ -4,9 +4,10 @@
  * own dialect's tables when its adapter is created. The rename loads the
  * other two itself.
  *
- * A unit run loads only SQLite, as an app would, and this file removes any
- * PostgreSQL or MySQL load an earlier file left, so a rename that read the
- * other dialects without loading them would fail here.
+ * It boots an instance, so it runs in the integration lane, whose setup loads
+ * every dialect. Before each test it removes PostgreSQL's and MySQL's loads,
+ * leaving a process with only SQLite loaded, as an app's would be, so a rename
+ * that read the other dialects without loading them fails here.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
