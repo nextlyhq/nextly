@@ -5,16 +5,19 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import type { FieldGroupMetadataService } from "../../field-groups/services/field-group-metadata-service";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
+import { readIndexUniqueness } from "../../schema/pipeline/live-table-facts";
 import * as bootCheck from "../runtime/translated-unique-boot-check";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 describeEachDialect("a translated unique field", dialect => {
@@ -284,6 +287,227 @@ describeEachDialect("a translated unique field", dialect => {
       /unique|duplicate/i
     );
   });
+
+  // A schema dialog pushes the entity's main table through the schema pipeline, which on SQLite and
+  // MySQL reads every table in the database for any change that is not purely additive, the
+  // companion's per-language unique index included. That index has to survive being read, and
+  // still hold after the push.
+  const TRANSLATED_UNIQUE_DIALOGS = [
+    {
+      entity: "a field group",
+      change: "adds a shared field",
+      companion: "comp_banner_locales",
+      column: "heading",
+      create: () =>
+        dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "banner",
+            label: "Banner",
+            localized: true,
+            fields: [
+              { name: "heading", type: "text", unique: true },
+              { name: "note", type: "text", localized: false },
+            ],
+          }
+        ),
+      apply: async () =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: [
+              { name: "heading", type: "text", unique: true },
+              { name: "note", type: "text", localized: false },
+              { name: "subtitle", type: "text", localized: false },
+            ],
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        ),
+    },
+    {
+      entity: "a field group",
+      change: "makes a shared field Required",
+      companion: "comp_banner_locales",
+      column: "heading",
+      create: () =>
+        dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "banner",
+            label: "Banner",
+            localized: true,
+            fields: [
+              { name: "heading", type: "text", unique: true },
+              { name: "note", type: "text", localized: false },
+            ],
+          }
+        ),
+      apply: async () =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: [
+              { name: "heading", type: "text", unique: true },
+              { name: "note", type: "text", localized: false, required: true },
+            ],
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        ),
+    },
+    {
+      entity: "a collection",
+      change: "makes a shared field Required",
+      companion: "dc_pages_locales",
+      column: "handle",
+      create: async () => {
+        const created = await handler().createCollection({
+          name: "pages",
+          label: "Page",
+          localized: true,
+          fields: [
+            { name: "handle", type: "text", unique: true },
+            { name: "note", type: "text", localized: false },
+          ],
+        });
+        expect(created.success, JSON.stringify(created)).toBe(true);
+      },
+      apply: async () =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "pages" },
+          {
+            fields: [
+              { name: "handle", type: "text", unique: true },
+              { name: "note", type: "text", localized: false, required: true },
+            ],
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "pages"
+            ),
+          }
+        ),
+    },
+    {
+      entity: "a field group",
+      change: "removes a shared field",
+      companion: "comp_banner_locales",
+      column: "heading",
+      create: () =>
+        dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "banner",
+            label: "Banner",
+            localized: true,
+            fields: [
+              { name: "heading", type: "text", unique: true },
+              { name: "note", type: "text", localized: false },
+            ],
+          }
+        ),
+      apply: async () =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: [{ name: "heading", type: "text", unique: true }],
+            confirmed: true,
+            localized: true,
+            resolutions: { note: { action: "confirm_drop" } },
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        ),
+    },
+    {
+      entity: "a collection",
+      change: "removes a shared field",
+      companion: "dc_pages_locales",
+      column: "handle",
+      create: async () => {
+        const created = await handler().createCollection({
+          name: "pages",
+          label: "Page",
+          localized: true,
+          fields: [
+            { name: "handle", type: "text", unique: true },
+            { name: "note", type: "text", localized: false },
+          ],
+        });
+        expect(created.success, JSON.stringify(created)).toBe(true);
+      },
+      apply: async () =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "pages" },
+          {
+            fields: [{ name: "handle", type: "text", unique: true }],
+            confirmed: true,
+            localized: true,
+            resolutions: { note: { action: "confirm_drop" } },
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "pages"
+            ),
+          }
+        ),
+    },
+  ];
+
+  it.each(TRANSLATED_UNIQUE_DIALOGS)(
+    "keeps $entity's translated unique field indexed through a schema dialog that $change",
+    async ({ companion, column, create, apply }) => {
+      await create();
+      const index = companionUniqueIndexName(companion, column);
+      expect((await liveIndexes(companion)).get(index)?.unique).toBe(true);
+
+      await apply();
+
+      expect((await liveIndexes(companion)).get(index)?.unique).toBe(true);
+      // On SQLite the index leaves blanks out by its WHERE; a push that rewrote it without one
+      // would count every untranslated document as a duplicate of the others.
+      if (dialect === "sqlite") {
+        const [row] = await query<{ sql: string }>(
+          `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = '${index}'`
+        );
+        expect(row?.sql).toMatch(/WHERE .+ IS NOT NULL AND .+ <> ''/);
+      }
+    }
+  );
+
+  /** The registry's schema version of an entity, as a schema dialog sends it back. */
+  async function schemaVersionOf(registry: string, slug: string) {
+    const [row] = await query<{ version: number | string | null }>(
+      `SELECT ${quoted("schema_version")} AS version FROM ${quoted(registry)} WHERE ${quoted("slug")} = '${slug}'`
+    );
+    return Number(row?.version ?? 1);
+  }
+
+  /** The indexes `table` holds now, read as the live reconcile reads them. */
+  function liveIndexes(table: string) {
+    return readIndexUniqueness(current.adapter.getDrizzle(), dialect, table);
+  }
 
   it("refuses the save that would index a field marked unique before the rule held, over duplicates", async () => {
     // As a database from before the rule was enforced: the field is unique and translated, its
