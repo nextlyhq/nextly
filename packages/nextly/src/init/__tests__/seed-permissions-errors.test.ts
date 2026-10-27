@@ -214,6 +214,22 @@ describe("seedPermissionsAndRolePresets", () => {
     }
   });
 
+  it("tries again a while after making the Public role fails", async () => {
+    vi.useFakeTimers();
+    try {
+      seedPublicRole.mockRejectedValueOnce(new Error("connection reset"));
+      await seedPermissionsAndRolePresets();
+      expect(seedPublicRole).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await awaitBootSeeding();
+
+      expect(seedPublicRole).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not seed again for services registered anew meanwhile", async () => {
     vi.useFakeTimers();
     try {

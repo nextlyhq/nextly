@@ -71,6 +71,8 @@ interface PublicRoleSeeding {
   moveRoleOffPublicSlug: (id: string) => Promise<string | null>;
   /** Makes the Public role where no role holds the slug. */
   ensurePublicRole: () => Promise<unknown>;
+  /** Removes any inheritance link the Public role is part of. */
+  unlinkPublicRole: () => Promise<void>;
   meta: {
     get<T>(key: string): Promise<T | null>;
     set(key: string, value: unknown): Promise<void>;
@@ -128,10 +130,11 @@ const isClaim = (value: unknown): value is Claim =>
 export async function seedPublicRole(
   seeding: PublicRoleSeeding
 ): Promise<PublicRoleSeeded> {
-  const { ensurePublicRole, meta } = seeding;
+  const { ensurePublicRole, unlinkPublicRole, meta } = seeding;
   const state = await meta.get<unknown>(PUBLIC_ROLE_META_KEY);
   if (state === MADE) {
     await ensurePublicRole();
+    await unlinkPublicRole();
     return { made: true };
   }
   const mine: Claim = { claim: randomUUID(), at: new Date().toISOString() };
@@ -152,6 +155,7 @@ export async function seedPublicRole(
   const holder = await meta.get<unknown>(PUBLIC_ROLE_META_KEY);
   if (holder === MADE) {
     await ensurePublicRole();
+    await unlinkPublicRole();
     return { made: true };
   }
   // Another boot is making it. Should that boot stop, its claim lapses, and
@@ -165,6 +169,7 @@ export async function seedPublicRole(
   }
   await makePublicRole(seeding);
   await meta.set(PUBLIC_ROLE_META_KEY, MADE);
+  await unlinkPublicRole();
   return { made: true };
 }
 

@@ -89,6 +89,9 @@ export async function seedAllPermissions(): Promise<void> {
   }
 }
 
+/** How long after a failure to make the Public role it is tried again. */
+const RETRY_AFTER_FAILURE_MS = 60_000;
+
 /** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
 const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 
@@ -212,14 +215,37 @@ async function seedEverything(): Promise<void> {
       getService("adapter"),
       getService("logger")
     );
-    const seeded = await seedPublicRole({
-      publicSlugHolder: () => roles.publicSlugHolder(),
-      moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
-      ensurePublicRole: () => roles.ensurePublicRole(),
-      meta: getService("metaService"),
-      logger: getService("logger"),
-    });
-    if (!seeded.made) retrySeedingAt(seeded.retryAt);
+    const config = getService("config");
+    // The names roles the app and its plugins declare go by, which the
+    // built-in role leaves to them though they are made after it.
+    const declaredNames = [
+      ...(config.roles ?? []),
+      ...(config.plugins ?? []).flatMap(
+        plugin => plugin.contributes?.roles ?? []
+      ),
+    ].map(role => role.name);
+    try {
+      const seeded = await seedPublicRole({
+        publicSlugHolder: () => roles.publicSlugHolder(),
+        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+        unlinkPublicRole: async () => {
+          const holder = await roles.publicSlugHolder();
+          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+        },
+        meta: getService("metaService"),
+        logger: getService("logger"),
+      });
+      if (!seeded.made) retrySeedingAt(seeded.retryAt);
+    } catch (error) {
+      // Not left unmade until the next start: tried again in a while, as
+      // when another boot holds the claim. A table not created yet is the
+      // migrations' to make, not this retry's.
+      if (!isMissingTableOnThisDatabase(error)) {
+        retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
+      }
+      throw error;
+    }
   });
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created

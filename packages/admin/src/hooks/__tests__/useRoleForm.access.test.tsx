@@ -133,4 +133,32 @@ describe("useRoleForm", () => {
       expect.objectContaining({ slug: "editor" })
     );
   });
+
+  it("saves a role whose stored slug a new role could not take", async () => {
+    // Declared by a plugin, outside the grammar the form gives a new slug.
+    vi.mocked(roleApi.getRoleDetails).mockResolvedValueOnce({
+      role: {
+        id: "role-1",
+        roleName: "Content Editor",
+        name: "Content Editor",
+        subtitle: "",
+        slug: "Content-Editor",
+        description: "",
+        type: "Custom",
+        permissions: [],
+      },
+      childRoleIds: [],
+      childRolePermissionsMap: {},
+    });
+    const { result } = await editingRole("Content Editor");
+
+    await act(async () => {
+      await result.current.onSubmit();
+    });
+
+    expect(roleApi.updateRole).toHaveBeenCalledWith(
+      "role-1",
+      expect.objectContaining({ slug: "Content-Editor" })
+    );
+  });
 });

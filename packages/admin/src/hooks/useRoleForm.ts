@@ -112,6 +112,15 @@ const roleFormSchema: z.ZodObject<{
   baseRoleId: z.string().optional(),
 });
 
+/**
+ * The form for an existing role: its slug is the one stored, which this form
+ * never changes, so the grammar a new slug is held to does not apply. A role
+ * an app or plugin declared may hold one outside it.
+ */
+const roleEditFormSchema: typeof roleFormSchema = roleFormSchema.extend({
+  slug: z.string(),
+});
+
 export type RoleFormValuesType = z.infer<typeof roleFormSchema>;
 
 export interface UseRoleFormReturn {
@@ -151,7 +160,7 @@ export interface UseRoleFormReturn {
 export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const queryClient = useQueryClient();
   const form = useForm<RoleFormValuesType>({
-    resolver: zodResolver(roleFormSchema),
+    resolver: zodResolver(roleId ? roleEditFormSchema : roleFormSchema),
     defaultValues: {
       name: "",
       slug: "",

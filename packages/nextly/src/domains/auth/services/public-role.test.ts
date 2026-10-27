@@ -66,6 +66,7 @@ describe("seedPublicRole", () => {
         }
         onSlug ??= { id: "public", builtIn: true };
       },
+      unlinkPublicRole: async () => undefined,
       meta,
       logger: quiet,
     });
@@ -87,6 +88,7 @@ describe("seedPublicRole", () => {
       ensurePublicRole: async () => {
         made = true;
       },
+      unlinkPublicRole: async () => undefined,
       meta,
       logger: quiet,
     });
