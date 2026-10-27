@@ -28,9 +28,9 @@ import type {
   NoInfer,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
-import { isKnownSingle } from "@admin/hooks/current-user-access";
+import { useIsKnownSingle } from "@admin/hooks/current-user-access";
 import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
@@ -173,7 +173,11 @@ export function useEntry<T = Entry>({
   translationStatus,
   queryOptions,
 }: UseEntryOptions<T>): UseQueryResult<NoInfer<T>, Error> {
-  const queryClient = useQueryClient();
+  // Part of the key, so a read that answered 404 before the capabilities
+  // answer named the slug a Single is asked again once it does. Only a known
+  // Single's key carries it: a collection's key stays the one the mutation
+  // hooks write to.
+  const knownSingle = useIsKnownSingle(collectionSlug);
   return useQuery<T, Error>({
     // Locale is part of the cache identity — switching languages must refetch the
     // entry (the localized field values differ per locale), not serve the previous language.
@@ -184,12 +188,15 @@ export function useEntry<T = Entry>({
     // in the key the stale-time would keep serving the live row and hide an
     // existing working draft (and the Changed / Publish / Discard affordances).
     queryKey: entryId
-      ? entryKeys.detailScoped(collectionSlug, entryId, {
-          locale,
-          fallbackLocale,
-          translationStatus,
-          draft,
-        })
+      ? [
+          ...entryKeys.detailScoped(collectionSlug, entryId, {
+            locale,
+            fallbackLocale,
+            translationStatus,
+            draft,
+          }),
+          ...(knownSingle ? ["single"] : []),
+        ]
       : entryKeys.detailsByCollection(collectionSlug),
     queryFn: async () => {
       // Safety check: This shouldn't execute due to `enabled` flag,
@@ -216,7 +223,7 @@ export function useEntry<T = Entry>({
         collectionSlug,
         entryId,
         Object.keys(options).length > 0 ? options : undefined,
-        { knownSingle: isKnownSingle(queryClient, collectionSlug) }
+        { knownSingle }
       );
       return result as T;
     },

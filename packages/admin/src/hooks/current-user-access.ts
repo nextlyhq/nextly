@@ -8,7 +8,8 @@
  *
  * @module hooks/current-user-access
  */
-import type { QueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useCallback, useSyncExternalStore } from "react";
 
 import type {
   BulkMutationResult,
@@ -44,12 +45,27 @@ export function currentUserCapabilitiesKey(
  * language, so the answer of any language says. With no answer held, nothing
  * says the slug is a Single, and it is not taken for one.
  */
-export function isKnownSingle(queryClient: QueryClient, slug: string): boolean {
+function isKnownSingle(queryClient: QueryClient, slug: string): boolean {
   return queryClient
     .getQueriesData<CapabilitiesResponse>({
       queryKey: CURRENT_USER_CAPABILITIES_KEY,
     })
     .some(([, answer]) => answer?.entities[slug]?.kind === "single");
+}
+
+/**
+ * {@link isKnownSingle}, kept current: the caller renders again when a
+ * capabilities answer arrives or changes. A read that asked before the answer
+ * was in can then be asked again with what it says.
+ */
+export function useIsKnownSingle(slug: string): boolean {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient]
+  );
+  const read = () => isKnownSingle(queryClient, slug);
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 /**
