@@ -24,12 +24,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import {
-  getColumns,
-  getTableName,
-  isTable,
-  type Table,
-} from "drizzle-orm";
+import { getColumns, getTableName, isTable, type Table } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Only the storage backend is stubbed, so an upload runs the real media
@@ -945,9 +940,7 @@ describe.each(getConfiguredTestDialects())(
         ).write({ kind: "password-changed" });
 
         const columnNames = (table: unknown): string[] =>
-          Object.values(getColumns(table as Table)).map(
-            column => column.name
-          );
+          Object.values(getColumns(table as Table)).map(column => column.name);
         const bundle = Object.values(getDialectTables(dialect));
         const registry = t.getService(
           "schemaRegistry" as keyof ServiceMap
