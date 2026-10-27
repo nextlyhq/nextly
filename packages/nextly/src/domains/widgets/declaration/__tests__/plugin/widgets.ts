@@ -60,8 +60,8 @@ export const recentOrders = defineWidget({
       limit: settings.items,
       signal,
     });
-    // Each row as the list draws it: its title, read from the one field selected.
-    return { items: items.map(row => ({ title: String(row.title ?? "") })) };
+    // The rows as read: typed as transportable already, so answered without restating them.
+    return { items };
   },
   view: "list",
 });
