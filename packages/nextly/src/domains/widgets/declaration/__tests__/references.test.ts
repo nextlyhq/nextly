@@ -45,7 +45,7 @@ function listing(id: string, collection: string | undefined, sort: string) {
         ...(collection === undefined ? {} : { defaultValue: collection }),
       },
     },
-    data: {
+    load: {
       query: ({ settings }) => ({
         collection: settings.collection,
         op: "list",
@@ -55,7 +55,7 @@ function listing(id: string, collection: string | undefined, sort: string) {
         sort,
       }),
     },
-    display: "list",
+    view: "list",
   });
 }
 
@@ -160,7 +160,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     // As a plain JavaScript plugin could write them: no types stop either.
     const throwing = {
       ...listing("acme/throws", "orders", "state"),
-      data: {
+      load: {
         query: () => {
           throw new Error("settings.colection is undefined");
         },
@@ -168,7 +168,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     };
     const answersNothing = {
       ...listing("acme/null", "orders", "state"),
-      data: { query: () => null },
+      load: { query: () => null },
     };
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [throwing, answersNothing] }],
@@ -194,7 +194,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     // Plain JavaScript: the types refuse a metric over a list at compile time.
     const metricOfList = {
       ...listing("acme/a", "orders", "state"),
-      display: "metric",
+      view: "figure",
     };
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [metricOfList] }],
@@ -294,7 +294,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     // Plain JavaScript: the types require a list's query to select a field.
     const selectsNothing = {
       ...listing("acme/a", "orders", "state"),
-      data: { query: () => ({ collection: "orders", op: "list" }) },
+      load: { query: () => ({ collection: "orders", op: "list" }) },
     };
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [selectsNothing] }],
@@ -313,7 +313,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     clearDeclaredWidgets();
     const selectsEmpty = {
       ...listing("acme/a", "orders", "state"),
-      data: { query: () => ({ collection: "orders", op: "list", select: [] }) },
+      load: { query: () => ({ collection: "orders", op: "list", select: [] }) },
     };
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [selectsEmpty] }],
@@ -328,7 +328,7 @@ describe("a declared widget's starting query, once content is synced", () => {
     // is reported with the others, not thrown while it is being described.
     const badOp = {
       ...listing("acme/a", "orders", "state"),
-      data: { query: () => ({ collection: "orders", op: 1n }) },
+      load: { query: () => ({ collection: "orders", op: 1n }) },
     };
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [badOp] }],

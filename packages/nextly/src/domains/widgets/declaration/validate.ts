@@ -23,7 +23,13 @@ import { sizeDeclarationProblems } from "../grid-size";
 import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
 
 import { cardAnswerProblem } from "./card-answer";
-import { CORE_DISPLAYS, isCoreDisplay } from "./displays";
+import {
+  CORE_VIEWS,
+  displayOfView,
+  isComponentView,
+  isCoreView,
+  viewOfDisplay,
+} from "./displays";
 import { quote } from "./quote";
 
 /** One thing wrong with one declaration, said where an author reads it. */
@@ -64,18 +70,38 @@ const FIELDS = new Set([
   "id",
   "title",
   "description",
+  "icon",
   "category",
   "size",
-  "permission",
+  "access",
+  "shows",
   "several",
   "hidesWhenEmpty",
-  "sketch",
   "settings",
-  "data",
-  "display",
+  "load",
+  "view",
+  "isEmpty",
   "empty",
-  "example",
+  "preview",
+  "summary",
 ]);
+
+/**
+ * The fields a declaration had before this shape, each with what took its
+ * place, so a declaration written the old way is told the new name rather
+ * than only that the old one is wrong.
+ */
+const RENAMED_FIELDS: Readonly<Record<string, string>> = {
+  data: 'it is now "load"',
+  display: 'it is now "view"',
+  example: 'it is now "preview", a list of named cases',
+  permission: 'it is now "access"',
+  sketch:
+    "it is removed: the add panel draws the view's own skeleton until it draws the preview cases",
+};
+
+/** Said of a field this core types but does not apply yet, so a declaration fails closed. */
+const LATER_RELEASE = "available in a later release";
 
 const nonBlank = z.string().trim().min(1);
 const isFunction = (value: unknown): boolean => typeof value === "function";
@@ -121,16 +147,24 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
   d =>
     Object.keys(d)
       .filter(key => !FIELDS.has(key))
-      .map(key => `${quote(key)} is not a field of a widget declaration`),
+      .map(key =>
+        key in RENAMED_FIELDS
+          ? `${quote(key)} is not a field of a widget declaration; ${RENAMED_FIELDS[key]}`
+          : `${quote(key)} is not a field of a widget declaration`
+      ),
   d => idProblem(d.id),
   d => requiredTextProblem("title", d.title),
-  d => requiredTextProblem("category", d.category),
   d => descriptionProblem(d.description),
+  d => optionalTextProblem("icon", d.icon),
+  d => optionalTextProblem("category", d.category),
   d => sizeProblems(d.size),
+  d => accessProblem(d.access),
   d =>
-    d.permission === undefined || isPermissionName(d.permission)
+    d.shows === undefined
       ? undefined
-      : `permission must be a permission name such as "read-orders", got ${quote(d.permission)}`,
+      : isFunction(d.shows)
+        ? `shows is ${LATER_RELEASE}: until then a widget that declares it is not started, so it is never shown to someone it should not be`
+        : "shows must be a function of the person asking",
   d =>
     d.several === undefined || typeof d.several === "boolean"
       ? undefined
@@ -139,15 +173,13 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
     d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
       ? undefined
       : "hidesWhenEmpty must be true or false",
-  d =>
-    d.sketch === undefined || isCoreDisplay(d.sketch)
-      ? undefined
-      : `sketch must name one of core's displays (${CORE_DISPLAYS.join(", ")}), got ${quote(d.sketch)}`,
   d => settingsProblems(d.settings),
-  d => dataProblem(d.data),
-  d => displayProblem(d.display),
-  d => emptyProblems(d.empty, d.display),
-  d => exampleProblem(d.example, d.display),
+  d => loadProblem(d.load),
+  d => viewProblem(d.view),
+  d => isEmptyProblem(d.isEmpty, d.view),
+  d => emptyProblems(d.empty),
+  d => previewProblems(d.preview, d.view),
+  d => summaryProblems(d.summary),
 ];
 
 /** The problems with a declaration that is at least an object. */
@@ -170,21 +202,84 @@ export function requiredTextProblem(
     : `${field} must be a non-empty string`;
 }
 
-/**
- * An example is drawn as the card's preview, so it is held to the rule every
- * card's data is held to (`cardAnswerProblem`): it reaches the browser as
- * itself, and a core display's example has the shape that display draws.
- */
-function exampleProblem(
-  example: unknown,
-  display: unknown
+/** Why `value` is not a usable optional text `field`, or `undefined`. */
+function optionalTextProblem(
+  field: string,
+  value: unknown
 ): string | undefined {
-  if (example === undefined) return undefined;
-  const problem = cardAnswerProblem(display, example);
-  if (problem === undefined) return undefined;
-  return problem.kind === "untransportable"
-    ? `example cannot be sent to the browser as it is: ${problem.detail.replace("the value", "example")}`
-    : `example does not have the shape the "${problem.display}" display draws (${problem.detail})`;
+  return value === undefined || nonBlank.safeParse(value).success
+    ? undefined
+    : `${field} must be a non-empty string when given`;
+}
+
+/**
+ * Who may be offered the widget: a permission name today. The collections it
+ * reads and a predicate of the person are typed, and refused at startup until
+ * they are applied, so a declared rule is never silently ignored and the card
+ * shown to everyone.
+ */
+function accessProblem(access: unknown): string | undefined {
+  if (access === undefined || isPermissionName(access)) return undefined;
+  if (isFunction(access) || (isRecord(access) && "collections" in access)) {
+    return `access as ${isFunction(access) ? "a predicate of the person" : "the collections it reads"} is ${LATER_RELEASE}; until then name a permission such as "read-orders"`;
+  }
+  return `access must be a permission name such as "read-orders", got ${quote(access)}`;
+}
+
+/**
+ * Every problem with a widget's preview cases. Each is drawn as the card's
+ * ready state on the preview page, so its data is held to the rule every
+ * card's data is held to (`cardAnswerProblem`): it reaches the browser as
+ * itself, and a core view's data has the shape that view draws.
+ */
+function previewProblems(preview: unknown, view: unknown): string[] {
+  if (preview === undefined) return [];
+  if (!Array.isArray(preview)) {
+    return ["preview must be a list of cases, each { name, data, settings? }"];
+  }
+  const display =
+    isCoreView(view) || isComponentView(view) ? displayOfView(view) : view;
+  const names = new Set<string>();
+  return preview.flatMap((entry: unknown, index): string[] => {
+    const at = `preview[${index}]`;
+    if (!isRecord(entry)) return [`${at} must be { name, data, settings? }`];
+    const problems: string[] = [];
+    const name = nonBlank.safeParse(entry.name);
+    if (!name.success) problems.push(`${at}.name must be a non-empty string`);
+    else if (names.has(name.data)) {
+      problems.push(`${at}.name "${name.data}" is used by another case`);
+    } else names.add(name.data);
+    if (entry.settings !== undefined && !isRecord(entry.settings)) {
+      problems.push(`${at}.settings must be an object of setting values`);
+    }
+    const problem = cardAnswerProblem(display, entry.data);
+    if (problem !== undefined) {
+      problems.push(
+        problem.kind === "untransportable"
+          ? `${at}.data cannot be sent to the browser as it is: ${problem.detail.replace("the value", `${at}.data`)}`
+          : `${at}.data does not have the shape the "${viewOfDisplay(problem.display)}" view draws (${problem.detail})`
+      );
+    }
+    return problems;
+  });
+}
+
+/** Every problem with a widget's summary: a label and a count, run as the person. */
+function summaryProblems(summary: unknown): string[] {
+  if (summary === undefined) return [];
+  if (!isRecord(summary)) return ["summary must be { label, count }"];
+  return [
+    ...optional(
+      nonBlank.safeParse(summary.label).success
+        ? undefined
+        : "summary.label must be a non-empty string"
+    ),
+    ...optional(
+      isFunction(summary.count)
+        ? undefined
+        : "summary.count must be a function that counts, as the person asking"
+    ),
+  ];
 }
 
 function idProblem(id: unknown): string | undefined {
@@ -267,50 +362,59 @@ function settingsProblems(settings: unknown): string[] {
   return [...malformed, ...shared];
 }
 
-function dataProblem(data: unknown): string | undefined {
-  if (data === undefined) return "data is required";
-  if (isFunction(data)) return undefined;
-  if (isRecord(data) && "query" in data) {
-    return isFunction(data.query)
+function loadProblem(load: unknown): string | undefined {
+  if (load === undefined) return "load is required";
+  if (isFunction(load)) return undefined;
+  if (isRecord(load) && "query" in load) {
+    return isFunction(load.query)
       ? undefined
-      : "data.query must be a function that writes the query from the settings";
+      : "load.query must be a function that writes the query from the settings";
   }
-  return "data must be a data function, or { query } with a function that writes the query from the settings";
+  return "load must be a load function, or { query } with a function that writes the query from the settings";
 }
 
-function displayProblem(display: unknown): string | undefined {
-  if (display === undefined) return "display is required";
-  if (isCoreDisplay(display)) return undefined;
-  if (isRecord(display) && "component" in display) {
-    return nonBlank.safeParse(display.component).success
+function viewProblem(view: unknown): string | undefined {
+  if (view === undefined) return "view is required";
+  if (isCoreView(view)) return undefined;
+  if (isRecord(view) && "component" in view) {
+    return nonBlank.safeParse(view.component).success
       ? undefined
-      : "display.component must name where the admin loads the component from";
+      : 'view.component must name where the admin loads the component from, as "<module>#<Export>"';
   }
-  return `display must be one of core's displays (${CORE_DISPLAYS.join(", ")}) or { component: "<path>" }, got ${quote(display)}`;
+  return `view must be one of core's views (${Object.keys(CORE_VIEWS).join(", ")}) or { component: "<module>#<Export>" }, got ${quote(view)}`;
 }
 
-/** Every problem with a declaration's empty state. */
-function emptyProblems(empty: unknown, display: unknown): string[] {
+/** Every problem with a declaration's empty state: its message and its one action. */
+function emptyProblems(empty: unknown): string[] {
   if (empty === undefined) return [];
-  if (!isRecord(empty)) return ["empty must be an object"];
+  if (!isRecord(empty)) return ["empty must be { message?, action? }"];
   return [
-    ...optional(emptyWhenProblem(empty.when, display)),
+    // `when` was where the test lived; left there it would never run, so it
+    // is named with where it went rather than ignored.
+    ...Object.keys(empty)
+      .filter(key => key !== "message" && key !== "action")
+      .map(key =>
+        key === "when"
+          ? `${quote(key)} is not a field of empty; the test is now "isEmpty", beside it`
+          : `${quote(key)} is not a field of empty, which holds a message and an action`
+      ),
     ...optional(emptyMessageProblem(empty.message)),
     ...emptyActionProblems(empty.action),
   ];
 }
 
-function emptyWhenProblem(when: unknown, display: unknown): string | undefined {
-  if (when !== undefined) {
-    return isFunction(when)
+function isEmptyProblem(isEmpty: unknown, view: unknown): string | undefined {
+  if (isEmpty !== undefined) {
+    return isFunction(isEmpty)
       ? undefined
-      : "empty.when must be a function of the widget's data";
+      : "isEmpty must be a function of the widget's data";
   }
-  // A core display has its own rule for when its data is empty; a component
-  // has none, so its message and action could never be shown.
-  return isCoreDisplay(display)
-    ? undefined
-    : "empty.when is required for a widget drawn by its own component: core cannot tell when its data is empty";
+  // A core view has its own rule for when its data is empty; a component has
+  // none, so the empty state could never be shown. A view that is neither is
+  // named by its own check, not here as well.
+  return isComponentView(view)
+    ? "isEmpty is required for a view with its own component: core cannot tell when its data is empty"
+    : undefined;
 }
 
 function emptyMessageProblem(message: unknown): string | undefined {

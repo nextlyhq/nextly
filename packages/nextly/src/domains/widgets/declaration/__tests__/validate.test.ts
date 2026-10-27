@@ -20,7 +20,7 @@ import {
   widgetDeclarationFaults,
 } from "../validate";
 
-/** A valid declaration drawn by a core display, as plain JavaScript. */
+/** A valid declaration drawn by a core view, as plain JavaScript. */
 function valid(overrides: Record<string, unknown> = {}): unknown {
   return {
     id: "acme/orders-by-state",
@@ -37,8 +37,8 @@ function valid(overrides: Record<string, unknown> = {}): unknown {
       by: { type: "groupBy", of: "collection", defaultValue: "state" },
       top: { type: "number", defaultValue: 5, min: 1, max: 25 },
     },
-    data: async () => ({ buckets: [] }),
-    display: "bars",
+    load: async () => ({ buckets: [] }),
+    view: "bars",
     ...overrides,
   };
 }
@@ -51,15 +51,43 @@ function validComponent(overrides: Record<string, unknown> = {}): unknown {
     description: "Takings per day",
     category: "Shop",
     size: { default: { w: 12, h: 4 } },
-    data: { query: () => ({ collection: "orders", op: "count" }) },
-    display: { component: "@acme/shop/admin#RevenueCard" },
+    load: { query: () => ({ collection: "orders", op: "count" }) },
+    view: { component: "@acme/shop/admin#RevenueCard" },
+    isEmpty: (data: { total: number }) => data.total === 0,
     ...overrides,
   };
 }
 
+/**
+ * A valid declaration carrying every field startup accepts today, each
+ * written correctly: `shows` is the one it does not, as it is refused until a
+ * later release.
+ */
+function everyField(): Record<string, unknown> {
+  return {
+    ...(valid() as Record<string, unknown>),
+    icon: "chart-bar",
+    access: "read-orders",
+    several: true,
+    hidesWhenEmpty: true,
+    isEmpty: (data: { buckets: unknown[] }) => data.buckets.length === 0,
+    empty: {
+      message: "No orders yet",
+      action: { label: "Add an order", link: "collections/orders/create" },
+    },
+    preview: [
+      { name: "Some paid", data: { buckets: [{ value: "paid", count: 3 }] } },
+    ],
+    summary: { label: "Orders", count: async () => 3 },
+  };
+}
+
 /** The same declaration with one field taken out. */
-function without(field: string): unknown {
-  const declaration = { ...(valid() as Record<string, unknown>) };
+function without(
+  field: string,
+  from: Record<string, unknown> = valid() as Record<string, unknown>
+): unknown {
+  const declaration = { ...from };
   delete declaration[field];
   return declaration;
 }
@@ -78,15 +106,30 @@ describe("a widget declaration as startup receives it", () => {
     expect(problemsOf(validComponent())).toEqual([]);
   });
 
-  describe("refuses each required field left out", () => {
-    it.each(["id", "title", "description", "category", "data", "display"])(
-      "%s",
-      field => {
-        const problems = problemsOf(without(field));
-        expect(problems).toHaveLength(1);
-        expect(problems[0]).toContain(field);
+  describe("refuses each required field left out, and only those", () => {
+    const required = ["id", "title", "description", "size", "load", "view"];
+    // Every field in turn, from a declaration that has them all: the control
+    // is the whole one passing, so each refusal is the missing field's doing.
+    it("passes with every field", () => {
+      expect(problemsOf(everyField())).toEqual([]);
+    });
+    it.each(Object.keys(everyField()))("%s", field => {
+      const problems = problemsOf(without(field, everyField()));
+      if (required.includes(field)) {
+        expect(problems).toEqual([`${field} is required`]);
+      } else {
+        expect(problems).toEqual([]);
       }
-    );
+    });
+    it("names isEmpty as required for a view with its own component", () => {
+      expect(
+        problemsOf(
+          without("isEmpty", validComponent() as Record<string, unknown>)
+        )
+      ).toEqual([
+        "isEmpty is required for a view with its own component: core cannot tell when its data is empty",
+      ]);
+    });
   });
 
   it("refuses a size left out, or one the grid cannot draw", () => {
@@ -155,13 +198,55 @@ describe("a widget declaration as startup receives it", () => {
     ["a sentence", "Read orders"],
     ["a number", 3],
     ["the rule-facing spelling", "orders:read"],
-  ])("refuses a permission that is %s", (_label, permission) => {
-    expect(problemsOf(valid({ permission }))[0]).toContain("permission");
+  ])("refuses access that is %s", (_label, access) => {
+    expect(problemsOf(valid({ access }))[0]).toContain(
+      "access must be a permission name"
+    );
   });
 
-  it("accepts a permission name, and refuses `several` that is not a boolean", () => {
-    expect(problemsOf(valid({ permission: "read-orders" }))).toEqual([]);
+  it("accepts access as a permission name, and refuses `several` that is not a boolean", () => {
+    expect(problemsOf(valid({ access: "read-orders" }))).toEqual([]);
     expect(problemsOf(valid({ several: "yes" }))[0]).toContain("several");
+  });
+
+  it("refuses access and shows in the forms a later release judges, failing closed", () => {
+    // 🔴 Typed already, but not yet applied: a declaration that states one is
+    // refused rather than started with it ignored, which would show the card
+    // to everyone its rule meant to leave out.
+    expect(problemsOf(valid({ access: () => true }))).toEqual([
+      'access as a predicate of the person is available in a later release; until then name a permission such as "read-orders"',
+    ]);
+    expect(problemsOf(valid({ access: { collections: ["orders"] } }))).toEqual([
+      'access as the collections it reads is available in a later release; until then name a permission such as "read-orders"',
+    ]);
+    expect(problemsOf(valid({ shows: () => true }))).toEqual([
+      "shows is available in a later release: until then a widget that declares it is not started, so it is never shown to someone it should not be",
+    ]);
+    expect(problemsOf(valid({ shows: "always" }))).toEqual([
+      "shows must be a function of the person asking",
+    ]);
+  });
+
+  it("refuses an icon or a category that is given but blank", () => {
+    expect(problemsOf(valid({ icon: " " }))).toEqual([
+      "icon must be a non-empty string when given",
+    ]);
+    expect(problemsOf(valid({ category: "" }))).toEqual([
+      "category must be a non-empty string when given",
+    ]);
+  });
+
+  it("refuses a summary without its label or its count", () => {
+    expect(
+      problemsOf(valid({ summary: { label: "Orders", count: async () => 1 } }))
+    ).toEqual([]);
+    expect(problemsOf(valid({ summary: "Orders" }))).toEqual([
+      "summary must be { label, count }",
+    ]);
+    expect(problemsOf(valid({ summary: { label: "", count: 3 } }))).toEqual([
+      "summary.label must be a non-empty string",
+      "summary.count must be a function that counts, as the person asking",
+    ]);
   });
 
   it("accepts hidesWhenEmpty as a boolean, and refuses anything else", () => {
@@ -172,46 +257,106 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
-  it("refuses a sketch that names no core display", () => {
-    expect(problemsOf(valid({ sketch: "pie" }))[0]).toContain("sketch");
-    expect(problemsOf(valid({ sketch: "bars" }))).toEqual([]);
+  it.each([
+    ["data", "load"],
+    ["display", "view"],
+    ["example", "preview"],
+    ["permission", "access"],
+  ])("names the old field %s by the one that took its place", (old, now) => {
+    expect(problemsOf(valid({ [old]: "x" }))).toEqual([
+      `"${old}" is not a field of a widget declaration; it is now "${now}"${old === "example" ? ", a list of named cases" : ""}`,
+    ]);
   });
 
-  it("refuses a display that is neither a core display nor a component", () => {
-    expect(problemsOf(valid({ display: "pie" }))[0]).toContain("display");
-    expect(
-      problemsOf(validComponent({ display: { component: " " } }))[0]
-    ).toContain("component");
+  it("names sketch as removed, the view drawing its own skeleton", () => {
+    expect(problemsOf(valid({ sketch: "bars" }))).toEqual([
+      '"sketch" is not a field of a widget declaration; it is removed: the add panel draws the view\'s own skeleton until it draws the preview cases',
+    ]);
   });
 
-  it("refuses data that is neither a data function nor a query", () => {
-    expect(problemsOf(valid({ data: "orders" }))[0]).toContain("data");
-    expect(problemsOf(valid({ data: { query: "orders" } }))[0]).toContain(
-      "query"
+  it("accepts each core view by its name, and refuses one that is neither a core view nor a component", () => {
+    for (const view of ["figure", "list", "table", "bars", "series"]) {
+      expect(problemsOf(valid({ view })), view).toEqual([]);
+    }
+    // Today's display names are not view names.
+    expect(problemsOf(valid({ view: "metric" }))).toEqual([
+      'view must be one of core\'s views (figure, list, table, bars, series) or { component: "<module>#<Export>" }, got "metric"',
+    ]);
+    expect(problemsOf(validComponent({ view: { component: " " } }))).toEqual([
+      'view.component must name where the admin loads the component from, as "<module>#<Export>"',
+    ]);
+  });
+
+  it("refuses a load that is neither a load function nor a query", () => {
+    expect(problemsOf(valid({ load: "orders" }))[0]).toContain("load must be");
+    expect(problemsOf(valid({ load: { query: "orders" } }))[0]).toContain(
+      "load.query"
     );
   });
 
-  it("refuses example data without the shape a core display draws", () => {
-    expect(problemsOf(valid({ example: { total: 3 } }))[0]).toContain(
-      "example"
+  it("refuses preview data without the shape a core view draws, naming the view as declared", () => {
+    expect(
+      problemsOf(valid({ preview: [{ name: "One", data: { total: 3 } }] }))[0]
+    ).toContain(
+      'preview[0].data does not have the shape the "bars" view draws'
     );
     expect(
-      problemsOf(valid({ example: { buckets: [{ value: "paid", count: 1 }] } }))
+      problemsOf(
+        valid({
+          view: "figure",
+          preview: [{ name: "One", data: { buckets: [] } }],
+        })
+      )[0]
+    ).toContain('the "figure" view draws');
+    expect(
+      problemsOf(
+        valid({
+          preview: [
+            { name: "One", data: { buckets: [{ value: "paid", count: 1 }] } },
+          ],
+        })
+      )
     ).toEqual([]);
   });
 
-  it("refuses an example that cannot be sent to the browser as it is", () => {
-    const row = (value: unknown) =>
-      valid({ display: "list", example: { items: [{ id: value }] } });
+  it("refuses preview cases that are not a list of named, distinct cases", () => {
+    const data = { buckets: [] };
+    expect(problemsOf(valid({ preview: { name: "One", data } }))).toEqual([
+      "preview must be a list of cases, each { name, data, settings? }",
+    ]);
+    expect(
+      problemsOf(
+        valid({
+          preview: [
+            { name: "One", data },
+            { name: "One", data },
+            { name: "", data },
+            { name: "Two", data, settings: "7d" },
+            null,
+          ],
+        })
+      )
+    ).toEqual([
+      'preview[1].name "One" is used by another case',
+      "preview[2].name must be a non-empty string",
+      "preview[3].settings must be an object of setting values",
+      "preview[4] must be { name, data, settings? }",
+    ]);
+  });
+
+  it("refuses a preview case that cannot be sent to the browser as it is", () => {
+    const listOf = (data: unknown) =>
+      valid({ view: "list", preview: [{ name: "Case", data }] });
+    const row = (value: unknown) => listOf({ items: [{ id: value }] });
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     // The control: a row of plain values passes.
     expect(problemsOf(row("a"))).toEqual([]);
     // A sparse array: JSON writes its hole as `null`, so it does not arrive
     // as it was.
-    expect(
-      problemsOf(valid({ display: "list", example: { items: Array(1) } }))[0]
-    ).toContain("example cannot be sent to the browser");
+    expect(problemsOf(listOf({ items: Array(1) }))[0]).toContain(
+      "preview[0].data cannot be sent to the browser"
+    );
     // An array judged by its indices, as JSON reads it, not by an iterator
     // that answers something else.
     const disguised: unknown[] = [1n];
@@ -220,62 +365,61 @@ describe("a widget declaration as startup receives it", () => {
         yield "safe";
       },
     });
-    expect(
-      problemsOf(
-        valid({ display: "list", example: { items: [{ tags: disguised }] } })
-      )[0]
-    ).toContain("example.items[0].tags[0] is a bigint");
+    expect(problemsOf(listOf({ items: [{ tags: disguised }] }))[0]).toContain(
+      "preview[0].data.items[0].tags[0] is a bigint"
+    );
     for (const value of [1n, new Date(0), circular, () => 1, Symbol("s")]) {
       const [problem] = problemsOf(row(value));
       expect(problem, String(typeof value)).toContain(
-        "example cannot be sent to the browser"
+        "preview[0].data cannot be sent to the browser"
       );
     }
   });
 
-  it("refuses an example holding NaN or an infinity, as it refuses a card's data", () => {
+  it("refuses preview data holding NaN or an infinity, as it refuses a card's data", () => {
     // JSON writes NaN and both infinities as `null`, so the preview would draw a number the
-    // example does not hold. The same rule a card's data is held to says so, in the same words.
+    // case does not hold. The same rule a card's data is held to says so, in the same words.
     for (const [value, said] of [
       [NaN, "NaN"],
       [Infinity, "Infinity"],
       [-Infinity, "-Infinity"],
     ] as const) {
       expect(
-        problemsOf(valid({ display: "metric", example: { total: value } }))
+        problemsOf(
+          valid({
+            view: "figure",
+            preview: [{ name: "N", data: { total: value } }],
+          })
+        )
       ).toEqual([
-        `example cannot be sent to the browser as it is: example.total is ${said}`,
+        `preview[0].data cannot be sent to the browser as it is: preview[0].data.total is ${said}`,
       ]);
     }
   });
 
-  it("refuses an example with a symbol-keyed property, which JSON drops", () => {
+  it("refuses preview data with a symbol-keyed property, which JSON drops", () => {
     const tag = Symbol("tag");
+    const listOf = (data: unknown) =>
+      valid({ view: "list", preview: [{ name: "Case", data }] });
     // The value is safe; the KEY is what JSON throws away, so this is a
     // different refusal from a symbol held as a value.
-    const [problem] = problemsOf(
-      valid({ display: "list", example: { items: [{ [tag]: "paid" }] } })
-    );
+    const [problem] = problemsOf(listOf({ items: [{ [tag]: "paid" }] }));
     expect(problem).toContain(
-      "example.items[0] has a property keyed by Symbol(tag), which JSON drops"
+      "preview[0].data.items[0] has a property keyed by Symbol(tag), which JSON drops"
     );
     // A non-enumerable symbol key is not data JSON would have carried, as the
     // array's own iterator above is not, so it is not refused.
     const hidden = { id: "a" };
     Object.defineProperty(hidden, tag, { value: "paid", enumerable: false });
-    expect(
-      problemsOf(valid({ display: "list", example: { items: [hidden] } }))
-    ).toEqual([]);
+    expect(problemsOf(listOf({ items: [hidden] }))).toEqual([]);
   });
 
   it("names a value it cannot write out without failing to report it", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     // `JSON.stringify` throws on both; the fault must still be reported.
-    expect(problemsOf(valid({ permission: 1n }))[0]).toContain("got 1n");
-    expect(problemsOf(valid({ permission: circular }))[0]).toContain(
-      "permission"
-    );
+    expect(problemsOf(valid({ access: 1n }))[0]).toContain("got 1n");
+    expect(problemsOf(valid({ access: circular }))[0]).toContain("access");
   });
 
   it("refuses a description of more than one line, and never over its length", () => {
@@ -390,15 +534,18 @@ describe("a widget declaration as startup receives it", () => {
 
   describe("refuses a malformed empty state", () => {
     it("with a test that is not a function", () => {
-      expect(problemsOf(valid({ empty: { when: "never" } }))[0]).toContain(
-        "empty.when"
-      );
+      expect(problemsOf(valid({ isEmpty: "never" }))).toEqual([
+        "isEmpty must be a function of the widget's data",
+      ]);
     });
 
-    it("on a component widget, with no test", () => {
-      expect(
-        problemsOf(validComponent({ empty: { message: "Nothing yet" } }))[0]
-      ).toContain("empty.when");
+    it("with the test written inside it, where it was before", () => {
+      expect(problemsOf(valid({ empty: { when: () => true } }))).toEqual([
+        '"when" is not a field of empty; the test is now "isEmpty", beside it',
+      ]);
+      expect(problemsOf(valid({ empty: { title: "None" } }))).toEqual([
+        '"title" is not a field of empty, which holds a message and an action',
+      ]);
     });
 
     it("with a message of more than one line", () => {
@@ -454,13 +601,13 @@ describe("a widget declaration as startup receives it", () => {
         valid({
           title: "",
           size: { default: { w: 8, h: 4 }, max: { w: 6, h: 6 } },
-          sketch: "pie",
+          view: "pie",
         })
       )
     ).toEqual([
       "title must be a non-empty string",
       "size.default must not be larger than size.max",
-      'sketch must name one of core\'s displays (metric, table, list, bars, timeseries), got "pie"',
+      'view must be one of core\'s views (figure, list, table, bars, series) or { component: "<module>#<Export>" }, got "pie"',
     ]);
   });
 

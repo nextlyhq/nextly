@@ -37,7 +37,12 @@ import {
 import type { AnyWidgetSetting } from "../settings";
 
 import { buildCardQuery } from "./card-query";
-import { declaredQueryProblem } from "./displays";
+import {
+  declaredQueryProblem,
+  displayOfView,
+  type WidgetDisplay,
+  type WidgetView,
+} from "./displays";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -58,32 +63,39 @@ export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
 /** A declaration as startup kept it, with who declared it. */
 export interface DeclaredWidget {
   readonly owner: string;
+  /** The declaration as its author wrote it, its server code included. */
   readonly declaration: DeclaredWidgetShape;
+  /** The display that draws its view (`displayOfView`), read once, here. */
+  readonly display: WidgetDisplay;
   /** The owner's renamed collections, as its group carried them. */
   readonly collections?: Readonly<Record<string, string>>;
 }
 
-/** The fields of a declaration this module reads, checked at startup. */
+/** A declaration as its author writes it (`defineWidget`), checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
-  /** The card's size and the bounds it may be resized within, in grid units. */
-  readonly size: WidgetSizeDeclaration;
-  readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
-  readonly data: unknown;
-  readonly display?: unknown;
-  /** What publishing reads: the card's words and its gates. */
   readonly title: string;
   readonly description: string;
-  readonly category: string;
-  readonly several?: boolean;
-  readonly hidesWhenEmpty?: boolean;
-  readonly permission?: string;
-  readonly sketch?: WidgetDefinition["sketch"];
+  readonly icon?: string;
+  readonly category?: string;
+  /** The card's size and the bounds it may be resized within, in grid units. */
+  readonly size: WidgetSizeDeclaration;
+  /** A permission name: the only form startup admits until the others apply. */
+  readonly access?: string;
+  readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
+  readonly load: unknown;
+  readonly view: WidgetView;
+  readonly isEmpty?: (data: unknown) => boolean;
   readonly empty?: {
     readonly message?: string;
     readonly action?: { label: string; link: string; permission?: string };
   };
+  readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
 }
+
+/** The add panel's category for a widget that names none. */
+const DEFAULT_CATEGORY = "Other";
 
 /**
  * A declaration's empty state as published: its words and its action, never
@@ -126,7 +138,7 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * one reading of a declared size, so no reader fills a missing end its own way.
  */
 function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
-  const display = declaration.display;
+  const display = displayOfView(declaration.view);
   const settings = Object.entries(declaration.settings ?? {}).map(
     // Each was checked at startup by the rules a definition's settings are
     // held to (`widgetSettingsProblems`), so it is one, named.
@@ -136,21 +148,21 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
     id: declaration.id,
     title: declaration.title,
     description: declaration.description,
-    category: declaration.category,
+    ...(declaration.icon === undefined ? {} : { icon: declaration.icon }),
+    category: declaration.category ?? DEFAULT_CATEGORY,
     ...(typeof display === "string"
-      ? { archetype: display as WidgetDefinition["archetype"] }
+      ? { archetype: display }
       : {
           archetype: "custom" as const,
-          component: (display as { component: string }).component,
+          component: display.component,
         }),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
     ...(declaration.several === true ? { allowsSeveral: true } : {}),
     ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
-    ...(declaration.permission === undefined
+    ...(declaration.access === undefined
       ? {}
-      : { requiredPermission: declaration.permission }),
-    ...(declaration.sketch === undefined ? {} : { sketch: declaration.sketch }),
+      : { requiredPermission: declaration.access }),
     ...withEmpty(publishedEmpty(declaration.empty)),
     serverData: true,
   };
@@ -341,6 +353,7 @@ export function registerDashboardWidgets({
       store().set(declaration.id, {
         owner,
         declaration,
+        display: displayOfView(declaration.view),
         ...(collections === undefined ? {} : { collections }),
       });
       // Published as it is kept, so every declared widget the admin is offered
@@ -456,7 +469,7 @@ export function checkedCardQuery(
     declared.collections
   );
   if (query === undefined) return undefined;
-  const problem = declaredQueryProblem(declared.declaration.display, query);
+  const problem = declaredQueryProblem(declared.display, query);
   if (problem !== undefined) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",

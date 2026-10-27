@@ -21,15 +21,23 @@ export { definePlugin } from "nextly";
  * settings, its data, its size and how it draws. A widget drawn by its own
  * component is handed `WidgetProps<typeof widget>`; the types are here and in
  * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
- * on a grid twelve columns wide, the one way a card's size is stated.
+ * on a grid twelve columns wide, the one way a card's size is stated. The
+ * types its other fields are written in (`view`, `access`, `preview`,
+ * `summary`) come from here too, so an author annotating one imports it from
+ * where `defineWidget` came from.
  */
 export { defineWidget } from "nextly";
 export type {
+  CoreView,
   GridSize,
+  WidgetAccess,
   WidgetData,
+  WidgetPreviewCase,
   WidgetProps,
   WidgetRenderSize,
   WidgetSizeDeclaration,
+  WidgetSummary,
+  WidgetView,
 } from "nextly";
 
 /**

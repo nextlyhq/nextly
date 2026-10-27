@@ -176,7 +176,7 @@ function collectAdminEntries(
 /**
  * The component each widget declared under `contributes.dashboard` draws
  * with, for the same reason as today's shape: the map is the only importer
- * the admin's registry can rely on. A widget drawn by one of core's displays
+ * the admin's registry can rely on. A widget drawn by one of core's views
  * ships no component.
  *
  * Read as plain JavaScript hands it over, since generation runs before
@@ -191,8 +191,8 @@ function collectDeclaredWidgetEntries(
   const widgets: unknown = isRecord(dashboard) ? dashboard.widgets : undefined;
   if (!Array.isArray(widgets)) return [];
   return widgets.flatMap((widget: unknown): ComponentMapEntry[] => {
-    const display = isRecord(widget) ? widget.display : undefined;
-    const component = isRecord(display) ? display.component : undefined;
+    const view = isRecord(widget) ? widget.view : undefined;
+    const component = isRecord(view) ? view.component : undefined;
     if (typeof component !== "string" || component.trim() === "") return [];
     const id = isRecord(widget) ? widget.id : undefined;
     return [

@@ -96,7 +96,6 @@ describe("registering declared widgets", () => {
       description: "How many orders sit in each state",
       category: "Shop",
       archetype: "bars",
-      sketch: "bars",
       requiredPermission: "read-orders",
       size: {
         default: { w: 6, h: 4 },
@@ -110,6 +109,7 @@ describe("registering declared widgets", () => {
     expect(published?.query).toBeUndefined();
     expect(JSON.parse(JSON.stringify(published))).toEqual(published);
     expect(Object.keys(published ?? {})).not.toContain("data");
+    expect(Object.keys(published ?? {})).not.toContain("load");
     // Each widget's own size, in grid units, as it declares it.
     expect(getWidget("acme/recent-orders")?.size).toEqual({
       default: { w: 12, h: 5 },
@@ -157,10 +157,40 @@ describe("registering declared widgets", () => {
     // built on the server.
     expect(getWidget("acme/revenue")).toMatchObject({
       archetype: "custom",
-      component: (revenue.display as { component: string }).component,
+      component: revenue.view.component,
       serverData: true,
     });
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("publishes a core view by the display that draws it, under Other when it names no category", () => {
+    // Its bars-shaped preview goes too: a figure draws a total, not groups.
+    const {
+      category: _category,
+      preview: _preview,
+      ...uncategorised
+    } = ordersByState;
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            { ...uncategorised, id: "acme/figure", view: "figure" as const },
+            ordersByState,
+          ],
+        },
+      ],
+    });
+    // `figure` is drawn by the metric display; the add panel sketches it by that archetype.
+    expect(getWidget("acme/figure")).toMatchObject({
+      archetype: "metric",
+      category: "Other",
+    });
+    // The control: a category the declaration names is kept as written.
+    expect(getWidget(ordersByState.id)).toMatchObject({
+      archetype: "bars",
+      category: "Shop",
+    });
   });
 
   it("publishes hidesWhenEmpty only for a widget that declares it", () => {
@@ -198,7 +228,7 @@ describe("registering declared widgets", () => {
     const unselected = {
       ...recentOrders,
       id: "acme/unselected",
-      data: {
+      load: {
         query: ({ settings }: { settings: Record<string, unknown> }) => ({
           collection: settings.collection,
           op: "list",
@@ -233,8 +263,8 @@ describe("registering declared widgets", () => {
       description: "Starts small and may grow only wider",
       category: "Test",
       size: { default: { w: 3, h: 2 } },
-      data: async () => ({ total: 3 }),
-      display: "metric",
+      load: async () => ({ total: 3 }),
+      view: "figure",
     });
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [small] }],

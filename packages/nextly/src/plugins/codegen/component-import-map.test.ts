@@ -738,10 +738,10 @@ describe("widgets declared under contributes.dashboard", () => {
     const shop = declaring([
       {
         id: "acme/revenue",
-        display: { component: "@acme/shop/admin#Revenue" },
+        view: { component: "@acme/shop/admin#Revenue" },
       },
-      // A core display ships no component, so it contributes no path.
-      { id: "acme/orders", display: "list" },
+      // A core view ships no component, so it contributes no path.
+      { id: "acme/orders", view: "list" },
     ]);
     expect(collectAdminComponentPaths(shop)).toEqual([
       "@acme/shop/admin#Revenue",
@@ -755,7 +755,7 @@ describe("widgets declared under contributes.dashboard", () => {
     expect(
       collectAdminComponentPaths(
         declaring(
-          [{ id: "a/b", display: { component: "@acme/shop/admin#Revenue" } }],
+          [{ id: "a/b", view: { component: "@acme/shop/admin#Revenue" } }],
           false
         )
       )
@@ -765,9 +765,12 @@ describe("widgets declared under contributes.dashboard", () => {
       collectAdminComponentPaths(
         declaring([
           null,
-          { display: { component: "" } },
-          { display: { component: 3 } },
-          { display: null },
+          { view: { component: "" } },
+          { view: { component: 3 } },
+          { view: null },
+          // The field a declaration named its component under before `view`:
+          // startup refuses it by name, and the map does not read it.
+          { id: "a/old", display: { component: "@acme/shop/admin#Old" } },
         ])
       )
     ).toEqual([]);
@@ -822,7 +825,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/revenue",
-              display: { component: "@acme/shop/admin#Revenue" },
+              view: { component: "@acme/shop/admin#Revenue" },
             },
           ],
         },
@@ -894,7 +897,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/shared",
-              display: { component: "@acme/shop/admin#Shared" },
+              view: { component: "@acme/shop/admin#Shared" },
             },
           ],
         },
