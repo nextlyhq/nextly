@@ -14,7 +14,7 @@ import {
   walk,
 } from "@nextlyhq/module-specifiers/parse-source";
 
-import { scanAxe } from "../../e2e/tests/support/axe-scan.mjs";
+import { emptyScanReason, scanAxe } from "../../e2e/tests/support/axe-scan.mjs";
 
 import { ROOT } from "./browser.mjs";
 
@@ -195,8 +195,16 @@ export async function readOverflow(page) {
 
 /** axe's serious and critical AA violations, one per rule and element. */
 export async function seriousViolations(page) {
-  const { findings } = await scanAxe(page);
-  return findings
+  return (await axeRead(page)).violations;
+}
+
+/**
+ * axe's serious and critical violations, one per rule and element, and why
+ * the scan checked nothing, or null when it judged the page.
+ */
+async function axeRead(page) {
+  const { results, findings } = await scanAxe(page);
+  const violations = findings
     .filter(finding => FAILING_IMPACTS.has(finding.impact))
     .flatMap(finding =>
       finding.targets.map(selector => ({
@@ -205,9 +213,14 @@ export async function seriousViolations(page) {
         selector,
       }))
     );
+  return { violations, unread: emptyScanReason(results) };
 }
 
-/** Every finding on the page as it is drawn now. */
+/**
+ * Every finding on the page as it is drawn now, and why axe could judge
+ * nothing on it, or null. A page axe checked nothing on reported no
+ * violations either, so it is not a clean page but one that was not read.
+ */
 export async function checkPage(page) {
   const overflow = await readOverflow(page);
   const findings = [];
@@ -220,9 +233,10 @@ export async function checkPage(page) {
   }
   for (const element of overflow.pastRightEdge)
     findings.push({ kind: "past-edge", ...element });
-  for (const violation of await seriousViolations(page))
+  const { violations, unread } = await axeRead(page);
+  for (const violation of violations)
     findings.push({ kind: "axe", ...violation });
-  return findings;
+  return { findings, unread };
 }
 
 /** One finding as a line, after `where` it was seen (route, width and scheme). */

@@ -6,7 +6,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { startDetached, stopperFor } from "./server.mjs";
+import {
+  BUILD_COMMAND,
+  PREPARE_COMMANDS,
+} from "../../e2e/production-server.mjs";
+
+import { buildCommands, startDetached, stopperFor } from "./server.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,6 +42,21 @@ function recorder({ killThrows, taskkillStatus = 0 } = {}) {
     groupAlive: () => false,
   };
 }
+
+/*
+ * The workspace build comes first: the playground imports the packages' built
+ * output (the admin's CSS among it), so a build of the playground alone
+ * serves whatever those were last built from.
+ */
+describe("what a run builds before it serves", () => {
+  it("builds the workspace, then readies and builds the playground", () => {
+    expect(buildCommands()).toEqual([
+      "pnpm build",
+      ...PREPARE_COMMANDS,
+      BUILD_COMMAND,
+    ]);
+  });
+});
 
 describe("stopping the server's process tree", () => {
   it("ends the whole tree with taskkill on Windows, and signals nothing", async () => {

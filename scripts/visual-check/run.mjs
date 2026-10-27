@@ -80,6 +80,7 @@ async function serveAndCapture({
   startServer,
   signIn,
   log,
+  drawnMs,
 }) {
   const baseURL = `http://localhost:${port}`;
   // The session holds a live sign-in, so it is kept out of the capture folder
@@ -105,6 +106,7 @@ async function serveAndCapture({
         full: options.full,
         outDir,
         storageState,
+        drawnMs,
       });
     } finally {
       await browser.close();
@@ -137,7 +139,14 @@ function report({ captures, failures, findings }, outDir, log) {
  * Publishes the captures and prints the section that shows them, saying
  * whether it did; a refusal or a failed push is printed rather than thrown.
  */
-async function publishAndPrint({ captures, topic, repoDir, publish, log }) {
+async function publishAndPrint({
+  captures,
+  findings,
+  topic,
+  repoDir,
+  publish,
+  log,
+}) {
   try {
     const { branch, rawBase } = await publish({
       cwd: repoDir,
@@ -150,6 +159,7 @@ async function publishAndPrint({ captures, topic, repoDir, publish, log }) {
         rawBase,
         topic,
         files: captures.map(capture => capture.file),
+        findings,
       })
     );
     return true;
@@ -160,13 +170,31 @@ async function publishAndPrint({ captures, topic, repoDir, publish, log }) {
 }
 
 /**
+ * Why a run's captures may not be published, or null when they may.
+ *
+ * A route not captured always refuses it: the section would show part of the
+ * change as the whole. Findings refuse it unless `allowFindings` says they
+ * predate the change, and then the section lists them for the reviewer. Both
+ * are decided before anything reaches the remote.
+ */
+function publishRefusal({ failures, findings }, allowFindings) {
+  if (failures.length > 0) {
+    return `Not published: ${failures.length} route(s) not captured. Fix them and capture again.`;
+  }
+  if (findings.length > 0 && !allowFindings) {
+    return `Not published: ${findings.length} finding(s). Fix them and capture again, or pass --allow-findings if they predate this change, and they are listed with the captures.`;
+  }
+  return null;
+}
+
+/**
  * Deletes a published topic and says what was deleted: a teardown, so a
  * topic never published is said and is not a failure, and a failed delete is.
  */
-async function unpublishAndSay({ topic, repoDir, unpublish, log }) {
+async function unpublishAndSay({ topic, owner, repoDir, unpublish, log }) {
   const branch = `${SCREENSHOT_BRANCHES}${topic}`;
   try {
-    const { deleted, source } = await unpublish({ cwd: repoDir, topic });
+    const { deleted, source } = await unpublish({ cwd: repoDir, topic, owner });
     if (!deleted) log(`${branch} is not published: nothing to delete.`);
     else
       log(
@@ -196,6 +224,7 @@ export async function visualCheck(argv, deps = {}) {
     publish = publishCaptures,
     unpublish = unpublishCaptures,
     repoDir = ROOT,
+    drawnMs,
   } = deps;
 
   let options;
@@ -213,6 +242,7 @@ export async function visualCheck(argv, deps = {}) {
   if (options.unpublish !== undefined) {
     return unpublishAndSay({
       topic: options.unpublish,
+      owner: options.owner,
       repoDir,
       unpublish,
       log,
@@ -235,19 +265,25 @@ export async function visualCheck(argv, deps = {}) {
     startServer,
     signIn,
     log,
+    drawnMs,
   });
   report(result, outDir, log);
 
-  const published =
-    options.publish === undefined ||
-    result.captures.length === 0 ||
-    (await publishAndPrint({
-      captures: result.captures,
-      topic: options.publish,
-      repoDir,
-      publish,
-      log,
-    }));
+  let published = true;
+  if (options.publish !== undefined) {
+    const refusal = publishRefusal(result, options.allowFindings);
+    if (refusal) log(refusal);
+    published =
+      !refusal &&
+      (await publishAndPrint({
+        captures: result.captures,
+        findings: result.findings,
+        topic: options.publish,
+        repoDir,
+        publish,
+        log,
+      }));
+  }
   const clean = result.failures.length === 0 && result.findings.length === 0;
   return clean && published ? 0 : 1;
 }

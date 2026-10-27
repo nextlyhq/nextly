@@ -30,31 +30,37 @@ const DRAWN_MS = 30_000;
 
 /**
  * Waits until the page shows what a reader would see: loaded, quiet on the
- * network, and, on an admin screen, drawn in the scheme asked for.
+ * network, drawn, and, on an admin screen, in the scheme asked for. Answers
+ * whether a screen was drawn at all.
  *
- * The admin is served empty and drawn after hydration, so its `main` appearing
- * is the sign it has drawn a screen; a redirect to sign-in has no such screen,
- * which ends the wait too. Its palette hangs off `.nextly-admin.dark`, applied
- * after mount, so that is awaited before the capture. Every wait is bounded and
- * a page that outlasts one is captured as it is: the capture then shows what is
- * wrong, which says more than a timeout.
+ * The admin is served empty and drawn after hydration, so a visible `main` is
+ * the sign it has drawn a screen; a redirect to sign-in ends the wait too, and
+ * is judged as such afterwards. A page with no visible `main` by `drawnMs` drew
+ * nothing, and is not captured: a capture of it would pass every check, since
+ * a blank page has nothing past the edge and nothing for axe to fault. The
+ * admin's palette hangs off `.nextly-admin.dark`, applied after mount, so that
+ * is awaited too; a page still loading or easing its colours by then is
+ * captured as it stands.
  */
-async function settle(page, scheme) {
+async function settle(page, scheme, drawnMs) {
   // The functions handed to the page run there, so they read the page's globals off
   // `globalThis` rather than from this node module's scope.
   await page
     .waitForLoadState("networkidle", { timeout: NETWORK_QUIET_MS })
     .catch(() => undefined);
-  if ((await page.locator(".nextly-admin").count()) > 0) {
-    await page
-      .waitForFunction(
-        signIn =>
-          globalThis.location.pathname.startsWith(signIn) ||
-          globalThis.document.querySelector("main")?.checkVisibility() === true,
-        SIGN_IN_PATH,
-        { timeout: DRAWN_MS }
-      )
-      .catch(() => undefined);
+  const drawn = await page
+    .waitForFunction(
+      signIn =>
+        globalThis.location.pathname.startsWith(signIn) ||
+        globalThis.document.querySelector("main")?.checkVisibility() === true,
+      SIGN_IN_PATH,
+      { timeout: drawnMs }
+    )
+    .then(
+      () => true,
+      () => false
+    );
+  if (drawn && (await page.locator(".nextly-admin").count()) > 0) {
     await page
       .waitForFunction(
         dark =>
@@ -62,9 +68,7 @@ async function settle(page, scheme) {
             .querySelector(".nextly-admin")
             ?.classList.contains("dark") === dark,
         scheme === "dark",
-        {
-          timeout: DRAWN_MS,
-        }
+        { timeout: drawnMs }
       )
       .catch(() => undefined);
   }
@@ -72,6 +76,49 @@ async function settle(page, scheme) {
     globalThis.document.fonts.ready.then(() => undefined)
   );
   await settleTransitions(page);
+  return drawn;
+}
+
+/**
+ * One view of one route: opened, judged, captured into `outDir` and read.
+ * Answers why the route cannot be captured, or the capture and its findings.
+ */
+async function captureView(context, step, { full, outDir, drawnMs }) {
+  const { route } = step;
+  await context.addInitScript(
+    ([key, value]) => globalThis.localStorage.setItem(key, value),
+    [THEME_STORAGE_KEY, step.scheme]
+  );
+  const page = await context.newPage();
+  const response = await page.goto(route, { waitUntil: "load" });
+  const drawn = await settle(page, step.scheme, drawnMs);
+  // No response is a same-document navigation, which answered by definition.
+  const failure =
+    routeFailure({
+      route,
+      status: response?.status() ?? 200,
+      finalUrl: page.url(),
+    }) ??
+    (drawn
+      ? null
+      : `${route} answered, but drew no visible <main> within ${drawnMs / 1000}s`);
+  if (failure) return { failure };
+  const file = path.join(outDir, step.file);
+  await page.screenshot({ path: file, fullPage: full });
+  const capture = {
+    route,
+    width: step.width,
+    scheme: step.scheme,
+    file: step.file,
+    path: file,
+  };
+  const where = `${route} ${step.width} ${step.scheme}`;
+  const { findings, unread } = await checkPage(page);
+  if (unread) return { failure: `${where}: ${unread}`, capture };
+  return {
+    capture,
+    seen: findings.map(finding => describeFinding(where, finding)),
+  };
 }
 
 /**
@@ -80,8 +127,9 @@ async function settle(page, scheme) {
  *
  * Each view has a browser context of its own, opened with the stored session,
  * the viewport, and the scheme both as the system preference and as the
- * admin's stored choice. A route that fails any view keeps none of its
- * captures: half a set would read as the whole of it.
+ * admin's stored choice. A route that fails any view (an error status, a
+ * redirect to sign-in, no screen drawn, or nothing axe could judge) keeps none
+ * of its captures: half a set would read as the whole of it.
  *
  * @returns {Promise<{ captures: Array<{ route: string, width: number, scheme: string, file: string, path: string }>,
  *   failures: string[], findings: string[] }>}
@@ -93,6 +141,7 @@ export async function captureRoutes({
   full,
   outDir,
   storageState,
+  drawnMs = DRAWN_MS,
 }) {
   const captures = [];
   const failures = [];
@@ -109,34 +158,15 @@ export async function captureRoutes({
         colorScheme: step.scheme,
       });
       try {
-        await context.addInitScript(
-          ([key, value]) => globalThis.localStorage.setItem(key, value),
-          [THEME_STORAGE_KEY, step.scheme]
-        );
-        const page = await context.newPage();
-        const response = await page.goto(route, { waitUntil: "load" });
-        await settle(page, step.scheme);
-        // No response is a same-document navigation, which answered by definition.
-        failure = routeFailure({
-          route,
-          status: response?.status() ?? 200,
-          finalUrl: page.url(),
+        const view = await captureView(context, step, {
+          full,
+          outDir,
+          drawnMs,
         });
+        if (view.capture) made.push(view.capture);
+        failure = view.failure ?? null;
         if (failure) break;
-        const file = path.join(outDir, step.file);
-        await page.screenshot({ path: file, fullPage: full });
-        made.push({
-          route,
-          width: step.width,
-          scheme: step.scheme,
-          file: step.file,
-          path: file,
-        });
-        for (const finding of await checkPage(page)) {
-          seen.push(
-            describeFinding(`${route} ${step.width} ${step.scheme}`, finding)
-          );
-        }
+        seen.push(...view.seen);
       } finally {
         await context.close();
       }

@@ -134,6 +134,100 @@ describe("the visual check, run against a stubbed server", () => {
     expect(lines.join("\n")).toMatch(/pr-screenshots\/posts-list.*feature-x/);
   });
 
+  it("captures nothing for a route that answers but never draws its screen", async () => {
+    const code = await visualCheck(["/admin/blank", "--reuse", "--out", out], {
+      ...deps(),
+      drawnMs: 500,
+    });
+    expect(code).not.toBe(0);
+    expect(captured()).toEqual([]);
+    expect(lines.join("\n")).toMatch(/\/admin\/blank.*drew no/);
+  });
+
+  it("captures nothing for a route axe could check nothing on", async () => {
+    const code = await run("/admin/bare", "--reuse");
+    expect(code).not.toBe(0);
+    expect(captured()).toEqual([]);
+    expect(lines.join("\n")).toMatch(/\/admin\/bare.*scanned nothing/);
+  });
+
+  /** A publish that records what it was asked to push, in place of a push. */
+  const recordedPublish = () => {
+    const pushed = [];
+    return {
+      pushed,
+      publish: async ({ topic, files }) => {
+        pushed.push({ topic, files: files.length });
+        return {
+          branch: `pr-screenshots/${topic}`,
+          rawBase: "https://raw.example/o/r",
+        };
+      },
+    };
+  };
+  const runPublishing = (record, ...argv) =>
+    visualCheck([...argv, "--reuse", "--out", out], {
+      ...deps(),
+      publish: record.publish,
+    });
+
+  it("publishes a clean run with every route captured", async () => {
+    const record = recordedPublish();
+    expect(await runPublishing(record, "/admin", "--publish", "t")).toBe(0);
+    expect(record.pushed).toEqual([{ topic: "t", files: 6 }]);
+    expect(lines.join("\n")).toMatch(/^## The look/m);
+  });
+
+  it("publishes nothing for a run with findings", async () => {
+    const record = recordedPublish();
+    expect(
+      await runPublishing(record, "/admin/wide", "--publish", "t")
+    ).not.toBe(0);
+    expect(record.pushed).toEqual([]);
+    expect(lines.join("\n")).toMatch(
+      /Not published.*finding.*--allow-findings/
+    );
+  });
+
+  it("with --allow-findings publishes it, and lists the findings under the captures", async () => {
+    const record = recordedPublish();
+    const code = await runPublishing(
+      record,
+      "/admin/wide",
+      "--publish",
+      "t",
+      "--allow-findings"
+    );
+    expect(code).not.toBe(0);
+    expect(record.pushed).toEqual([{ topic: "t", files: 6 }]);
+    const text = lines.join("\n");
+    const look = text.indexOf("## The look");
+    const listed = text.indexOf(
+      "/admin/wide 390 light: div.wide-box ends past the right edge",
+      look
+    );
+    expect(look).toBeGreaterThanOrEqual(0);
+    expect(listed).toBeGreaterThan(text.indexOf("![", look));
+  });
+
+  it("never publishes a run with a route not captured, flag or not", async () => {
+    for (const flags of [[], ["--allow-findings"]]) {
+      const record = recordedPublish();
+      expect(
+        await runPublishing(
+          record,
+          "/admin",
+          "/admin/missing",
+          "--publish",
+          "t",
+          ...flags
+        )
+      ).not.toBe(0);
+      expect(record.pushed).toEqual([]);
+    }
+    expect(lines.join("\n")).toMatch(/Not published.*not captured/);
+  });
+
   it("captures the whole page with --full", async () => {
     expect(await run("/admin", "--full")).toBe(0);
     expect(pngHeight(path.join(out, "admin-390-light.png"))).toBeGreaterThan(

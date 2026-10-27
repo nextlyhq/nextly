@@ -97,6 +97,21 @@ describe("what the visual check is asked to do", () => {
     );
   });
 
+  it("takes --owner only with --unpublish, and --allow-findings only with --publish", () => {
+    expect(parseOptions(["--unpublish", "t", "--owner", "feature-x"])).toEqual(
+      expect.objectContaining({ unpublish: "t", owner: "feature-x" })
+    );
+    expect(() => parseOptions(["/admin", "--owner", "feature-x"])).toThrow(
+      UsageError
+    );
+    expect(
+      parseOptions(["/admin", "--publish", "t", "--allow-findings"])
+    ).toEqual(expect.objectContaining({ publish: "t", allowFindings: true }));
+    expect(() => parseOptions(["/admin", "--allow-findings"])).toThrow(
+      UsageError
+    );
+  });
+
   it("answers --help with the usage, and nothing else to do", () => {
     expect(parseOptions(["--help"])).toEqual(
       expect.objectContaining({ help: true })

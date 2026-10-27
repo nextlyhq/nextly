@@ -14,33 +14,20 @@ import { expect, type Page } from "@playwright/test";
 
 // The scan itself, its rules and the known defect live in plain JavaScript,
 // which the visual check loads too.
-import { scanAxe } from "./axe-scan.mjs";
+import { emptyScanReason, scanAxe } from "./axe-scan.mjs";
 
 type AxeResults = Awaited<ReturnType<AxeBuilder["analyze"]>>;
 
 /**
- * Refuse a scan of nothing, which reports no violations too. Enough passing
- * rules shows a whole-page scan looked at a drawn page; a scoped scan must at
- * least have measured the contrast of something inside its scope.
+ * Refuse a scan of nothing, which reports no violations too. What counts as
+ * nothing is `emptyScanReason`'s to say, shared with the visual check.
  */
 function expectScannedSomething(
   results: AxeResults,
   scope: { include: string } | undefined
 ): void {
-  if (!scope) {
-    expect(
-      results.passes.length,
-      "axe reported no passing rules, so it scanned nothing"
-    ).toBeGreaterThan(10);
-    return;
-  }
-  const measured = [...results.passes, ...results.violations]
-    .filter(rule => rule.id === "color-contrast")
-    .reduce((count, rule) => count + rule.nodes.length, 0);
-  expect(
-    measured,
-    `axe measured no contrast inside ${scope.include}, so it scanned nothing`
-  ).toBeGreaterThan(0);
+  const empty = emptyScanReason(results, scope);
+  expect(empty, empty ?? undefined).toBeNull();
 }
 
 /**

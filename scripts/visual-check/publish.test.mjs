@@ -206,6 +206,36 @@ describe("publishing the captures", () => {
     expect(git(bare, "branch", "--list")).toMatch(/main/);
   });
 
+  it("refuses to delete a topic another branch published, unless --owner names that branch", async () => {
+    await publishCaptures({ cwd: author, topic: "posts-list", files: files() });
+    git(author, "checkout", "--quiet", "-b", "after-merge");
+    await expect(
+      unpublishCaptures({ cwd: author, topic: "posts-list" })
+    ).rejects.toThrow(/published from main/);
+    await expect(
+      unpublishCaptures({ cwd: author, topic: "posts-list", owner: "mian" })
+    ).rejects.toThrow(/published from main/);
+    expect(git(bare, "branch", "--list")).toMatch(/pr-screenshots\/posts-list/);
+    expect(
+      await unpublishCaptures({
+        cwd: author,
+        topic: "posts-list",
+        owner: "main",
+      })
+    ).toEqual({ deleted: true, source: "main" });
+    expect(git(bare, "branch", "--list")).not.toMatch(/pr-screenshots/);
+  });
+
+  it("refuses to delete a topic that records no source branch", async () => {
+    const tree = git(author, "write-tree");
+    const untagged = git(author, "commit-tree", tree, "-m", "made by hand");
+    git(author, "push", "--quiet", "origin", `${untagged}:${BRANCH}`);
+    await expect(
+      unpublishCaptures({ cwd: author, topic: "posts-list", owner: "main" })
+    ).rejects.toThrow(/records no source branch/);
+    expect(git(bare, "rev-parse", BRANCH)).toBe(untagged);
+  });
+
   it("deletes nothing, and says so, for a topic not published", async () => {
     expect(
       await unpublishCaptures({ cwd: author, topic: "posts-list" })

@@ -106,3 +106,28 @@ export async function scanAxe(page, scope) {
   }
   return { results, findings };
 }
+
+/**
+ * Why a scan checked nothing, or null when it judged something. A scan of
+ * nothing reports no violations too, so its silence is no pass: a whole-page
+ * scan needs more than ten passing rules to show it looked at a drawn page,
+ * and a scoped one must at least have measured the contrast of something
+ * inside its scope.
+ *
+ * @param {{ passes: Array<{ id: string, nodes: unknown[] }>, violations: Array<{ id: string, nodes: unknown[] }> }} results
+ * @param {{ include: string }} [scope]
+ * @returns {string | null}
+ */
+export function emptyScanReason(results, scope) {
+  if (!scope) {
+    return results.passes.length > 10
+      ? null
+      : `axe reported ${results.passes.length} passing rules, so it scanned nothing`;
+  }
+  const measured = [...results.passes, ...results.violations]
+    .filter(rule => rule.id === "color-contrast")
+    .reduce((count, rule) => count + rule.nodes.length, 0);
+  return measured > 0
+    ? null
+    : `axe measured no contrast inside ${scope.include}, so it scanned nothing`;
+}

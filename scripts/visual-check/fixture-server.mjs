@@ -11,8 +11,18 @@
 import { createServer } from "node:http";
 
 /** A whole page around `body`, labelled and titled so axe's AA rules have nothing else to say. */
+const HEAD = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixture</title><style>body{margin:0;font:16px sans-serif;background:#fff;color:#111}a{color:inherit}nav ul{display:flex;gap:8px;list-style:none;margin:0;padding:0}nav a{display:inline-block;min-width:24px;min-height:24px;padding:4px}@media (prefers-color-scheme: dark){body{background:#111;color:#eee}}</style>`;
+
+/**
+ * The chrome an admin screen draws round its content: a labelled navigation
+ * list, a labelled search field and a logo. Enough for axe to judge, as it
+ * judges a real screen; a page with less is one axe checked nothing on.
+ */
+const CHROME = `<header><img alt="Fixture" width="16" height="16" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><nav aria-label="Main"><ul><li><a href="/admin">Dashboard</a></li><li><a href="/admin/media">Media</a></li></ul></nav><form role="search"><label for="q">Search</label><input id="q" type="search"></form></header>`;
+
+/** A whole admin-like page around `body`, titled and labelled so axe's AA rules have nothing else to say. */
 function page(body, head = "") {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fixture</title><style>body{margin:0;font:16px sans-serif;background:#fff;color:#111}@media (prefers-color-scheme: dark){body{background:#111;color:#eee}}</style>${head}</head><body><main><h1>Fixture</h1>${body}</main></body></html>`;
+  return `<!doctype html><html lang="en"><head>${HEAD}${head}</head><body>${CHROME}<main><h1>Fixture</h1>${body}</main></body></html>`;
 }
 
 /** What each path answers: a status, and a page or a redirect target. */
@@ -45,6 +55,16 @@ const FIXTURE_PAGES = {
   "/admin/login": { status: 200, html: page("<p>Sign in</p>") },
   // Answers its first request and is gone after, so a route can fail part way through its views.
   "/admin/once": { status: 200, html: page("<p>Here once</p>"), once: true },
+  // Answers 200 and never draws a screen: the chrome, and no `main`.
+  "/admin/blank": {
+    status: 200,
+    html: `<!doctype html><html lang="en"><head>${HEAD}</head><body>${CHROME}<p>Loading</p></body></html>`,
+  },
+  // Draws a `main`, and nothing else axe could judge.
+  "/admin/bare": {
+    status: 200,
+    html: `<!doctype html><html lang="en"><head><title>Bare</title></head><body><main>Bare</main></body></html>`,
+  },
 };
 
 /**

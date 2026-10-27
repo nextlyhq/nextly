@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { emptyScanReason } from "../../e2e/tests/support/axe-scan.mjs";
+
 import { chromium } from "./browser.mjs";
 import { startFixtureServer } from "./fixture-server.mjs";
 import {
@@ -94,7 +96,8 @@ describe("what is read of each page", () => {
   it("gathers every finding of a page, each described with where it was seen", async () => {
     const page = await open("/admin/wide", 390);
     try {
-      const findings = await checkPage(page);
+      const { findings, unread } = await checkPage(page);
+      expect(unread).toBeNull();
       const lines = findings.map(finding =>
         describeFinding("/admin/wide 390 light", finding)
       );
@@ -109,6 +112,39 @@ describe("what is read of each page", () => {
     } finally {
       await page.close();
     }
+  });
+});
+
+/*
+ * The control the e2e suite holds every scan to: a whole page judged by ten
+ * passing rules or fewer, or a scoped scan that measured no contrast, was not
+ * a page axe could judge, and its silence is no pass.
+ */
+describe("an axe scan that checked nothing", () => {
+  const rules = (count, id = "rule") =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `${id}-${index}`,
+      nodes: [{}],
+    }));
+
+  it("is named for a whole page with ten passing rules or fewer", () => {
+    expect(emptyScanReason({ passes: rules(10), violations: [] })).toMatch(
+      /scanned nothing/
+    );
+    expect(emptyScanReason({ passes: rules(11), violations: [] })).toBeNull();
+  });
+
+  it("is named for a scoped scan that measured no contrast inside its scope", () => {
+    const scope = { include: "main" };
+    expect(
+      emptyScanReason({ passes: rules(20), violations: [] }, scope)
+    ).toMatch(/inside main/);
+    expect(
+      emptyScanReason(
+        { passes: [{ id: "color-contrast", nodes: [{}] }], violations: [] },
+        scope
+      )
+    ).toBeNull();
   });
 });
 

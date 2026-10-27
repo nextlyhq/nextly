@@ -65,7 +65,7 @@ function partsOf(file) {
  * since a pull request is often read on a phone, with a row per screen and light
  * and dark side by side, each image linked by its raw address.
  */
-export function lookSection({ rawBase, topic, files }) {
+export function lookSection({ rawBase, topic, files, findings = [] }) {
   const url = file =>
     `${rawBase}/${branchFor(topic)}/${encodeURIComponent(file)}`;
   const byWidth = new Map();
@@ -96,6 +96,18 @@ export function lookSection({ rawBase, topic, files }) {
           : "";
       lines.push(`| \`${screen}\` | ${cell("light")} | ${cell("dark")} |`);
     }
+  }
+  // Findings published by choice are listed under the captures, so the reader
+  // judges the screens knowing what the checks found on them.
+  if (findings.length > 0) {
+    lines.push(
+      "",
+      "### Findings",
+      "",
+      "Published with `--allow-findings`: the checks found these, and they predate the change.",
+      "",
+      ...findings.map(finding => `- ${finding}`)
+    );
   }
   return `${lines.join("\n")}\n`;
 }
@@ -136,16 +148,14 @@ function remoteTip(cwd, remote, ref) {
 const SOURCE_TRAILER = "Source-Branch";
 
 /**
- * The branch checked out in `cwd`, which a publish records as its source. A
- * detached HEAD names none, so it is refused rather than recorded as nothing.
+ * The branch checked out in `cwd`, or null on a detached HEAD, which names
+ * none: a publish records it as its source, and an unpublish claims it.
  */
 function currentBranch(cwd) {
   try {
     return git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   } catch {
-    throw new Error(
-      "Not published: HEAD is detached, so there is no branch to record as the source. Check out the change's branch first."
-    );
+    return null;
   }
 }
 
@@ -160,25 +170,29 @@ function sourceBranchOf(cwd, commit) {
 }
 
 /**
- * Refuses to publish over a topic another branch owns.
+ * Why `claimed` may not act on a topic whose tip is `tip`, or null when it
+ * may: the topic records no source branch, or another one.
  *
  * Topics are short and readable, so two changes can pick the same one, and a
- * publish over another change's captures would replace the images its pull
- * request shows without a word. A branch that records no source (one made by
- * hand) could belong to anyone, so it is refused too.
+ * publish over, or a delete of, another change's captures would change the
+ * images its pull request shows without a word. A branch that records no
+ * source (one made by hand) could belong to anyone, so it is refused too.
  */
-function checkOwner(cwd, topic, tip, source) {
+function ownerProblem(cwd, topic, tip, claimed) {
   const owner = sourceBranchOf(cwd, tip);
   if (!owner) {
-    throw new Error(
-      `Not published: ${branchFor(topic)} exists and records no source branch, so it may hold another change's captures. Choose another topic.`
-    );
+    return {
+      owner,
+      problem: `${branchFor(topic)} records no source branch, so it may hold another change's captures`,
+    };
   }
-  if (owner !== source) {
-    throw new Error(
-      `Not published: ${branchFor(topic)} was published from ${owner}, not ${source}. Choose another topic.`
-    );
+  if (owner !== claimed) {
+    return {
+      owner,
+      problem: `${branchFor(topic)} was published from ${owner}, not ${claimed}`,
+    };
   }
+  return null;
 }
 
 /** Builds a tree of `files`, by their base names, in a temporary index. */
@@ -232,9 +246,17 @@ export async function publishCaptures({
     );
   }
   const source = currentBranch(cwd);
+  if (!source) {
+    throw new Error(
+      "Not published: HEAD is detached, so there is no branch to record as the source. Check out the change's branch first."
+    );
+  }
   const ref = `refs/heads/${branchFor(topic)}`;
   const parent = remoteTip(cwd, remote, ref);
-  if (parent) checkOwner(cwd, topic, parent, source);
+  const refused = parent && ownerProblem(cwd, topic, parent, source);
+  if (refused) {
+    throw new Error(`Not published: ${refused.problem}. Choose another topic.`);
+  }
   const commit = git(cwd, [
     "commit-tree",
     treeOf(cwd, files),
@@ -256,14 +278,32 @@ export async function publishCaptures({
  * Deletes `pr-screenshots/<topic>` from `remote`, once a pull request that
  * showed it is merged or closed, and says which branch had published it.
  *
+ * Only the branch that published it may: the one checked out, or `owner`,
+ * named explicitly for the usual case of deleting from `main` after a merge.
+ * Naming it proves the intent and catches a typo, since it must match the
+ * branch the topic records.
+ *
  * The delete is leased on the tip just read, so a publish that lands in
  * between is not deleted unseen. A topic never published deletes nothing.
  */
-export async function unpublishCaptures({ cwd, topic, remote = "origin" }) {
+export async function unpublishCaptures({
+  cwd,
+  topic,
+  owner,
+  remote = "origin",
+}) {
   const ref = `refs/heads/${branchFor(topic)}`;
   const tip = remoteTip(cwd, remote, ref);
   if (!tip) return { deleted: false };
-  const source = sourceBranchOf(cwd, tip) || undefined;
+  const claimed = owner ?? currentBranch(cwd) ?? "a detached HEAD";
+  const refused = ownerProblem(cwd, topic, tip, claimed);
+  if (refused) {
+    const how = refused.owner
+      ? `Run it from ${refused.owner}, or pass --owner ${refused.owner}.`
+      : "Delete it by hand if it is yours.";
+    throw new Error(`Not deleted: ${refused.problem}. ${how}`);
+  }
+  const source = sourceBranchOf(cwd, tip);
   git(cwd, [
     "push",
     "--quiet",

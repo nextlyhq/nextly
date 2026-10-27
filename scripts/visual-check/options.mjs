@@ -30,16 +30,18 @@ export const SCREENSHOT_BRANCHES = "pr-screenshots/";
 /** A wrong invocation, answered with the usage rather than a stack. */
 export class UsageError extends Error {}
 
-export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --keep] [--publish <topic>] [--out <dir>]
-       pnpm visual-check --unpublish <topic>
+export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --keep] [--publish <topic> [--allow-findings]] [--out <dir>]
+       pnpm visual-check --unpublish <topic> [--owner <branch>]
 
   <route>              an admin path, such as /admin or /admin/collections/posts
   --full               capture the whole page, not only the first screen
   --reuse              use the server already running on this checkout's port; build nothing
   --keep               leave the server this run starts running, for later runs with --reuse
   --publish <topic>    push the captures to pr-screenshots/<topic> and print "The look"
+  --allow-findings     publish despite findings that predate the change; they are listed with the captures
   --out <dir>          where the captures go (default e2e/.playwright/visual-check)
   --unpublish <topic>  delete pr-screenshots/<topic>, once its pull request is merged or closed
+  --owner <branch>     the branch that published it, when that is not the branch checked out
   --help               print this`;
 
 /**
@@ -114,6 +116,8 @@ function readArgs(argv) {
         keep: { type: "boolean", default: false },
         publish: { type: "string" },
         unpublish: { type: "string" },
+        owner: { type: "string" },
+        "allow-findings": { type: "boolean", default: false },
         out: { type: "string" },
         help: { type: "boolean", default: false },
       },
@@ -164,7 +168,16 @@ export function parseOptions(argv) {
       );
     }
     checkTopic(values.unpublish);
-    return { unpublish: values.unpublish, routes: [] };
+    return { unpublish: values.unpublish, owner: values.owner, routes: [] };
+  }
+  // Each of these qualifies one action, and means nothing without it.
+  if (values.owner !== undefined) {
+    throw new UsageError(
+      "--owner names who published a topic --unpublish deletes."
+    );
+  }
+  if (values["allow-findings"] && values.publish === undefined) {
+    throw new UsageError("--allow-findings is for --publish.");
   }
   checkRoutes(routes);
   // With --reuse this run starts no server, so there would be nothing to keep.
@@ -180,6 +193,7 @@ export function parseOptions(argv) {
     reuse: values.reuse,
     keep: values.keep,
     publish: values.publish,
+    allowFindings: values["allow-findings"],
     out: values.out,
   };
 }

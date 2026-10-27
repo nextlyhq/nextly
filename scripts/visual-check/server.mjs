@@ -34,6 +34,20 @@ async function answers(baseURL) {
 }
 
 /**
+ * What a run builds before it serves, in order: the workspace, then the
+ * playground's database and its production build.
+ *
+ * The workspace build comes first because the playground imports the
+ * packages' built output, the admin's CSS among it, and a build of the
+ * playground alone would serve whatever those were last built from. It is
+ * `pnpm build`, which turbo caches, so a tree that has not changed costs
+ * little.
+ */
+export function buildCommands() {
+  return ["pnpm build", ...PREPARE_COMMANDS, BUILD_COMMAND];
+}
+
+/**
  * A shell command line as the arguments that run it: `sh -c` here, and
  * `cmd.exe /d /s /c` on Windows, which has no `sh`.
  */
@@ -246,9 +260,9 @@ export function stopCommand(pid) {
 }
 
 /**
- * Readies the database, builds the playground for production and starts it on
- * `port`, resolving once it answers, with a way to stop it or to leave it
- * running after this process exits.
+ * Builds the workspace, readies the database, builds the playground for
+ * production and starts it on `port`, resolving once it answers, with a way
+ * to stop it or to leave it running after this process exits.
  *
  * The preparation and build run under `scripts/bounded.mjs`, as every heavy
  * command here does, so a build in another checkout is waited for rather than
@@ -267,8 +281,10 @@ export async function startProductionServer({ port, keep, log }) {
     );
   }
   const env = { ...process.env, ...productionServerEnv(port) };
-  log(`Building the playground for production (this takes minutes) …`);
-  const chain = [...PREPARE_COMMANDS, BUILD_COMMAND].join(" && ");
+  log(
+    `Building the workspace and the playground for production (this takes minutes) …`
+  );
+  const chain = buildCommands().join(" && ");
   const built = spawnSync(
     process.execPath,
     ["scripts/bounded.mjs", ...shellArgs(chain)],
