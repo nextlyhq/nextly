@@ -88,6 +88,13 @@ export interface WidgetSourceField {
    */
   groupable?: false;
   /**
+   * `false` when a row cannot print this field's value: a structured or
+   * multi-value field, or a type whose value is no name or number, as the
+   * printable-title rule decides. A card's Fields setting offers only fields
+   * a row can show. Only the refusal is stated.
+   */
+  presentable?: false;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest

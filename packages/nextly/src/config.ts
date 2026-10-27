@@ -336,6 +336,8 @@ export type {
 export {
   applyWidgetSettings,
   effectiveWidgetSettings,
+  // How many fields a Fields setting may choose: the settings sheet stops at it.
+  MAX_CHOSEN_FIELDS,
   naturalGroupBy,
   resolveWidgetSettings,
   type AppliedQuery,

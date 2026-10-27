@@ -1,6 +1,6 @@
 /**
  * What the settings sheet needs to know about a card's content settings
- * (Collection, Filter, Sort, Group by) beyond drawing them: which settings
+ * (Collection, Filter, Sort, Group by, Fields) beyond drawing them: which settings
  * follow a collection, and which stored values name a field the reader may no
  * longer be offered.
  *
@@ -26,7 +26,8 @@ export function isContentSetting(
     setting.type === "collection" ||
     setting.type === "filter" ||
     setting.type === "sort" ||
-    setting.type === "groupBy"
+    setting.type === "groupBy" ||
+    setting.type === "fields"
   );
 }
 
@@ -47,16 +48,30 @@ export function dependentsOf(
   );
 }
 
-/** The one field a dependent setting's value names, or none when unset. */
-export function fieldNamedBy(
+/**
+ * The fields a dependent setting's value names: a filter's, sort's or
+ * grouping's one, or each of a Fields setting's, and none when unset.
+ */
+export function fieldsNamedBy(
   setting: DependentSetting,
   value: unknown
-): string | undefined {
+): string[] {
   if (setting.type === "filter") {
-    return whereToCondition(value, () => undefined)?.field;
+    const field = whereToCondition(value, () => undefined)?.field;
+    return field === undefined ? [] : [field];
   }
-  if (typeof value !== "string" || value === "") return undefined;
-  return setting.type === "sort" ? value.replace(/^-/, "") : value;
+  if (setting.type === "fields") {
+    return Array.isArray(value)
+      ? value.filter((name): name is string => typeof name === "string")
+      : [];
+  }
+  if (typeof value !== "string" || value === "") return [];
+  return [setting.type === "sort" ? value.replace(/^-/, "") : value];
+}
+
+/** A dependent setting's value when it names nothing: no fields, or no field. */
+function noneFor(setting: DependentSetting): unknown {
+  return setting.type === "fields" ? [] : "";
 }
 
 /**
@@ -93,25 +108,40 @@ type SourceField = PublishedContentSource["fields"][number];
 
 /**
  * Whether a source field may be what this dependent setting names: offered at
- * all, and for Group by, one the read will group by.
+ * all; for Group by, one the read will group by; and for Fields, one a row can
+ * print that is not the collection's title, which every row already leads with.
  */
 export function fieldFits(
   setting: DependentSetting,
-  field: SourceField
+  field: SourceField,
+  titleField?: string
 ): boolean {
-  return setting.type !== "groupBy" || field.groupable !== false;
+  if (setting.type === "groupBy") return field.groupable !== false;
+  if (setting.type === "fields") {
+    return field.presentable !== false && field.name !== titleField;
+  }
+  return true;
 }
 
-/** Whether a dependent setting's value names a field it may use here. */
+/** The first field a dependent setting's value names that it may not use here. */
+function unfitField(
+  setting: DependentSetting,
+  value: unknown,
+  source: PublishedContentSource
+): string | undefined {
+  return fieldsNamedBy(setting, value).find(name => {
+    const field = source.fields.find(candidate => candidate.name === name);
+    return field === undefined || !fieldFits(setting, field, source.titleField);
+  });
+}
+
+/** Whether every field a dependent setting's value names is one it may use here. */
 function valueFits(
   setting: DependentSetting,
   value: unknown,
   source: PublishedContentSource
 ): boolean {
-  const name = fieldNamedBy(setting, value);
-  if (name === undefined) return true;
-  const field = source.fields.find(candidate => candidate.name === name);
-  return field !== undefined && fieldFits(setting, field);
+  return unfitField(setting, value, source) === undefined;
 }
 
 /**
@@ -125,12 +155,12 @@ export function startingValue(
   collection: unknown,
   sources: readonly PublishedContentSource[] | undefined
 ): unknown {
-  const fallback = setting.defaultValue ?? "";
+  const fallback = setting.defaultValue ?? noneFor(setting);
   const source = sources?.find(
     candidate => candidate.collection === collection
   );
   if (source === undefined) return fallback;
-  return valueFits(setting, fallback, source) ? fallback : "";
+  return valueFits(setting, fallback, source) ? fallback : noneFor(setting);
 }
 
 /** A value the sheet replaces, what it replaces it with, and why. */
@@ -185,7 +215,7 @@ function staleDependent(
   if (source === undefined || valueFits(setting, value, source)) {
     return undefined;
   }
-  const field = fieldNamedBy(setting, value);
+  const field = unfitField(setting, value, source);
   const label = setting.label ?? setting.name;
   const isDefault = sameSettingValue(value, setting.defaultValue);
   return {
@@ -194,7 +224,7 @@ function staleDependent(
       ? `${label}'s default, ${field}, is not available for ${source.label}`
       : `${label} was reset: ${field} is no longer available`,
     replacement: isDefault
-      ? ""
+      ? noneFor(setting)
       : startingValue(setting, values[setting.of], sources),
   };
 }

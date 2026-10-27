@@ -214,6 +214,14 @@ export const settings = {
   /** Sort: a field of the collection it names; newest edit first by default. */
   sort: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "sort", On>("sort", options),
+  /**
+   * Fields: the fields each row of a list shows after its title, in order, from
+   * the collection it names; only fields the reader may read are offered.
+   *
+   * @experimental
+   */
+  fields: <const On extends string>(options: { of: On }) =>
+    declare<string[], "fields", On>("fields", options),
   /** Group by: status, or a choice field of the collection it names. */
   groupBy: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "groupBy", On>("groupBy", options),
