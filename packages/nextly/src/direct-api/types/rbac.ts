@@ -41,9 +41,10 @@ export interface Role {
   isSystem: boolean;
   /**
    * Whether this role may be given to a user or an API key, or built on by
-   * another role. False for the built-in Public role.
+   * another role. False for the built-in Public role. Every role the Direct
+   * API returns carries it; optional so a Role built by hand still compiles.
    */
-  assignable: boolean;
+  assignable?: boolean;
 }
 
 /**
