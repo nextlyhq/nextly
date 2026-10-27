@@ -488,6 +488,40 @@ describe("plugins uninstall against a real database", () => {
   });
 });
 
+describe("plugins uninstall names a column it added to another owner's table", () => {
+  it("only while the column is still there", async () => {
+    // fx records a column on the app's table, as a module that added one
+    // would. Its ownership row outlives a rollback that removed the column.
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+    ]);
+    state.migrations = [init, more];
+    const refusal = async () => {
+      const error: unknown = await runPluginUninstall(
+        PLUGIN,
+        { keepData: false, yes: false },
+        context
+      ).catch((caught: unknown) => caught);
+      return (error as { publicMessage: string }).publicMessage;
+    };
+
+    expect(await refusal()).not.toContain("app_notes.fx_flag");
+
+    state.sqlite.exec("ALTER TABLE app_notes ADD COLUMN fx_flag TEXT");
+    expect(await refusal()).toContain("column app_notes.fx_flag");
+  });
+});
+
 describe("migrate:down --plugin against a real database", () => {
   it("rolls the newest module back under its own ledger key", async () => {
     state.migrations = [init, more];

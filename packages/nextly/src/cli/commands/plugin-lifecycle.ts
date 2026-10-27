@@ -204,6 +204,15 @@ export interface PluginLifecycleDeps {
   interactive?: boolean;
   /** Asks that person a yes-or-no question; only called when `interactive`. */
   askToDelete?: (question: string) => Promise<boolean>;
+  /**
+   * The columns each named table has now. An uninstall lists a column the
+   * plugin added to another owner's table only while it is still there: its
+   * ownership row outlives a `migrate:down --plugin` that removed it. Absent,
+   * every recorded column is listed, which asks for more consent, never less.
+   */
+  liveColumns?: (
+    tables: readonly string[]
+  ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 }
 
 /** How an uninstall was asked for: whether it keeps the data, and the consent to lose it. */
@@ -485,9 +494,20 @@ async function decideUninstall(
       : [];
 
   assertDownsDropTables(plugin, plan, downs, deps.dialect);
+  const columnTables = [
+    ...new Set(
+      owned
+        .filter(row => row.elementKind === "column")
+        .map(row => row.tableName)
+    ),
+  ];
+  const liveColumns =
+    columnTables.length > 0 && deps.liveColumns !== undefined
+      ? await deps.liveColumns(columnTables)
+      : undefined;
   const deletions = await consentToDeletions(
     plugin,
-    uninstallDeletions(plugin, plan, owned, downs),
+    uninstallDeletions(plugin, plan, owned, downs, liveColumns),
     plan,
     opts,
     deps,
@@ -566,15 +586,19 @@ function assertTablesCanBeUndone(
  *
  * Read from the plan: only its DOWNs delete, so a plan that runs none — an
  * uninstall keeping its data — deletes nothing and needs no consent, whatever
- * the plugin owns.
+ * the plugin owns, and neither does one whose DOWNs are all judged to lose no
+ * data (dropping an index, say). A recorded column is listed only while it is
+ * still in its table (`liveColumns`).
  */
 function uninstallDeletions(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
   owned: readonly OwnerRecord[],
-  downs: readonly PreparedModuleDown[]
+  downs: readonly PreparedModuleDown[],
+  liveColumns: ReadonlyMap<string, ReadonlySet<string>> | undefined
 ): Deletion[] {
   if (plan.downModules.length === 0) return [];
+  if (!downs.some(down => down.destructive)) return [];
   const dropped = new Set(plan.tablesDropped);
   const named: Deletion[] = [
     ...plan.tablesDropped.map(table => ({ kind: "table" as const, table })),
@@ -583,7 +607,9 @@ function uninstallDeletions(
         row =>
           row.elementKind === "column" &&
           row.ownerId === plugin.name &&
-          !dropped.has(row.tableName)
+          !dropped.has(row.tableName) &&
+          (liveColumns === undefined ||
+            liveColumns.get(row.tableName)?.has(row.elementName ?? "") === true)
       )
       .map(row => ({
         kind: "column" as const,

@@ -1259,6 +1259,52 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
     );
   });
 
+  it("lists no column whose record outlived it, nor any when no DOWN loses data", async () => {
+    // The column an earlier `migrate:down --plugin` already removed: its
+    // ownership row stays as history, and the column is gone.
+    const column = {
+      tableName: "dep__notes",
+      elementKind: "column",
+      elementName: "fx_flag",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const ownsColumn = {
+      select: () => ({
+        from: () => Object.assign([column], { where: () => [column] }),
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const runDown = vi.fn(async () => 1);
+    // Gone from the table, so a DOWN that loses data still deletes nothing named.
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false },
+        deps({
+          db: ownsColumn as never,
+          prepareDowns: prepared(true),
+          runDown,
+          liveColumns: async () => new Map([["dep__notes", new Set(["id"])]]),
+        })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("dep__notes.fx_flag"),
+    });
+    // DOWNs that lose no data (dropping an index, say) need no consent at all.
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false },
+      deps({ db: ownsColumn as never, prepareDowns: prepared(false), runDown })
+    );
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
   it("runs a DOWN that loses no data without asking", async () => {
     // The control: the same uninstall, its DOWNs judged not destructive.
     const runDown = vi.fn(async () => 1);

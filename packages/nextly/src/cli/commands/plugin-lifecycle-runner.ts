@@ -752,6 +752,24 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     // refused at once where nobody is there to answer.
     interactive: isInteractiveTerminal(),
     askToDelete: askToDeleteInTerminal,
+    // Read through the schema pipeline's own introspection, so a column is
+    // judged present exactly as a push would see it.
+    liveColumns: async (tables: readonly string[]) => {
+      const { introspectLiveColumns } = await import(
+        "../../domains/schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveColumns(
+        drizzleAdapter.getDrizzle(),
+        dialect,
+        [...tables]
+      );
+      return new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          new Set(table.columns.map(column => column.name)),
+        ])
+      );
+    },
   };
 }
 

@@ -26,6 +26,7 @@ import {
   deprecationNotices,
   judgeDataLoss,
   resolveDataLossConsent,
+  type Deletion,
 } from "../../migrate/data-loss-consent";
 import { nonEmptyValuesOf } from "../classifier/classifier";
 import type {
@@ -46,6 +47,26 @@ export { PromptCancelledError, TTYRequiredError };
 
 function hasTTY(): boolean {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+/**
+ * The columns whose rename candidates were answered "drop and add": each
+ * candidate's source column that no confirmed rename consumed, once.
+ */
+function keptDrops(
+  candidates: readonly RenameCandidate[],
+  confirmed: readonly RenameCandidate[]
+): Deletion[] {
+  const renamed = new Set(
+    confirmed.map(c => `${c.tableName}::${c.fromColumn}`)
+  );
+  const kept = new Map<string, Deletion>();
+  for (const c of candidates) {
+    const key = `${c.tableName}::${c.fromColumn}`;
+    if (renamed.has(key) || kept.has(key)) continue;
+    kept.set(key, { kind: "column", table: c.tableName, column: c.fromColumn });
+  }
+  return [...kept.values()];
 }
 
 function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
@@ -78,25 +99,36 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
    * consent does not cover is refused, naming it, before any DDL: with no
    * terminal by a `TTYRequiredError` that names the consent covering it,
    * and under a consent naming other targets by a refusal of its own.
+   *
+   * `chosen` are the columns a rename prompt was answered "drop and add" for:
+   * their drops stay in the plan without an event of their own, so they are
+   * judged here too. The answer agreed to them, unless the consent names its
+   * targets, which then has to cover them like any other drop.
    */
   private async judgeDrops(
     drops: readonly DestructiveDropEvent[],
-    interactive: boolean
+    interactive: boolean,
+    chosen: readonly Deletion[] = []
   ): Promise<Resolution[] | null> {
-    if (drops.length === 0) return [];
+    if (drops.length === 0 && chosen.length === 0) return [];
     const consent = resolveDataLossConsent({
       env: process.env,
       honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
     });
     for (const notice of deprecationNotices(consent)) this.print(notice);
+    const named = consent.given !== null && consent.given.targets !== "all";
     const verdict = await judgeDataLoss({
-      deletions: drops.map(drop => ({
-        kind: "column" as const,
-        table: drop.tableName,
-        column: drop.columnName,
-        count: nonEmptyValuesOf(drop),
-      })),
+      deletions: [
+        ...drops.map(drop => ({
+          kind: "column" as const,
+          table: drop.tableName,
+          column: drop.columnName,
+          count: nonEmptyValuesOf(drop),
+        })),
+        ...chosen,
+      ],
       consent,
+      approved: named ? [] : chosen,
       interactive,
       ask: askInTerminal,
       print: this.print,
@@ -212,8 +244,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           };
     if (!renameResult.proceed) return renameResult;
 
-    // Phase 2: F5/F6 events.
-    const eventResult = await this.runEventPrompts(events);
+    // Phase 2: F5/F6 events, with the drops the rename answers kept.
+    const eventResult = await this.runEventPrompts(
+      events,
+      keptDrops(candidates, renameResult.confirmedRenames)
+    );
 
     return {
       confirmedRenames: renameResult.confirmedRenames,
@@ -226,9 +261,10 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   // (select kind -> text value if provide_default -> next event); type_change
   // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
   private async runEventPrompts(
-    events: ClassifierEvent[]
+    events: ClassifierEvent[],
+    chosen: readonly Deletion[] = []
   ): Promise<{ resolutions: Resolution[]; proceed: boolean }> {
-    if (events.length === 0) {
+    if (events.length === 0 && chosen.length === 0) {
       return { resolutions: [], proceed: true };
     }
 
@@ -236,7 +272,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     // once, before any other question: the operator sees all that would be
     // lost before agreeing to any of it. Covered by consent, it is listed
     // and confirmed without asking.
-    const drops = await this.judgeDrops(events.filter(isDrop), true);
+    const drops = await this.judgeDrops(events.filter(isDrop), true, chosen);
     if (drops === null) return { resolutions: [], proceed: false };
     const resolutions: Resolution[] = [...drops];
     const others = events.filter(event => !isDrop(event));

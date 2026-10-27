@@ -653,6 +653,36 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     ]);
   });
 
+  it("refuses a drop chosen at a rename prompt that the consent's list leaves out", async () => {
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.summary";
+    mockSelect.mockResolvedValue("drop_and_add");
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [candidate("title", "name")],
+        events: [],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(
+      /does not cover 1 deletion:\n {2}- column dc_posts\.title/
+    );
+  });
+
+  it("takes a drop chosen at a rename prompt as asked, and lists it", async () => {
+    mockSelect.mockResolvedValue("drop_and_add");
+    const { dispatcher, printed } = listingDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [candidate("title", "name")],
+      events: [],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(printed).toContain("  - column dc_posts.title");
+  });
+
   it("refuses, without asking, a drop a consent naming other columns leaves out", async () => {
     process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.byline";
     const { dispatcher } = listingDispatcher();
