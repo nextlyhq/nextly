@@ -94,6 +94,9 @@ export function answerListModel(
         key: column.name,
         label: fieldLabel(column),
         role: column.choices === undefined ? "meta" : "trailing",
+        // A time or a number lines up at its column's end in the table form.
+        align:
+          column.type === "date" || column.type === "number" ? "end" : "start",
         present: item => asPresentedText(item[column.name], column),
       })),
   };

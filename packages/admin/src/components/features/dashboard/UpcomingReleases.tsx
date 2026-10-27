@@ -62,11 +62,21 @@ function attentionHref(reason: Reason): string {
   return `${ROUTES.RELEASES}?tab=attention&reason=${reason}`;
 }
 
+/**
+ * The attention line's height and the gap under it, in pixels: what the rows under it may not
+ * take. One line that never wraps (20 px, `h-5`) and a 12 px gap (`gap-3`), so the room it takes
+ * is known before it is drawn.
+ */
+const ATTENTION_LINE_PX = 20 + 12;
+
 /** "1 stopped · 2 overdue": one part per reason with any, each a link to its list. */
 const AttentionLine: React.FC<{
   counts: readonly { reason: Reason; count: number }[];
 }> = ({ counts }) => (
-  <p className="text-sm text-foreground" data-testid="release-attention">
+  <p
+    className="h-5 truncate whitespace-nowrap text-sm text-foreground"
+    data-testid="release-attention"
+  >
     {counts.map(({ reason, count }, index) => (
       <span key={reason}>
         {index > 0 && <span aria-hidden="true"> · </span>}
@@ -92,6 +102,13 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
   const drawn = useRowsDrawn(tier, query?.limit, density);
+  // With the attention line above them, the rows have its room the less.
+  const drawnUnderLine = useRowsDrawn(
+    tier,
+    query?.limit,
+    density,
+    ATTENTION_LINE_PX
+  );
 
   const read = readListSlot({ slot, isFetching, rows: drawn, onRetry });
   if ("node" in read) return read.node;
@@ -117,7 +134,7 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
     field => field.name === "title" || field.name === "scheduledAt"
   );
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {attention.length > 0 && <AttentionLine counts={attention} />}
       {releases.length > 0 && (
         // The release rows alone, so the footer counts releases and never the attention line's
@@ -125,7 +142,7 @@ export const UpcomingReleasesCard: React.FC<WidgetComponentProps> = ({
         <ListCard
           model={answerListModel(columns, "title", releaseHref)}
           rows={releases}
-          drawn={drawn}
+          drawn={attention.length > 0 ? drawnUnderLine : drawn}
           viewAllHref={ROUTES.RELEASES}
           tier={tier}
           density={density}

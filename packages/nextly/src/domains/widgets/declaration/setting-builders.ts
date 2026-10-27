@@ -178,6 +178,22 @@ function declare<Value, Kind extends string, On extends string = never>(
 const quickFlag = (quick: boolean | undefined) =>
   quick === true ? { quick: true } : {};
 
+/**
+ * What the reader is shown for each density. A record over every density, so one added to
+ * `LIST_DENSITIES` cannot reach a settings sheet unnamed.
+ */
+const DENSITY_LABELS: Readonly<Record<ListDensity, string>> = {
+  default: "Default",
+  compact: "Compact",
+};
+
+/**
+ * A list card's Density options, one for every density, each named for the reader: what
+ * `settings.density()` offers, and what core's own list cards offer, so the two cannot differ.
+ */
+export const DENSITY_OPTIONS: readonly { label: string; value: ListDensity }[] =
+  LIST_DENSITIES.map(value => ({ label: DENSITY_LABELS[value], value }));
+
 /** A fixed set of values, as a select definition lists its options. */
 function choices<Option extends string>(values: readonly Option[]) {
   return values.map(value => ({ label: value, value }));
@@ -240,7 +256,7 @@ export const settings = {
   density: ({ default: start = "default" }: { default?: ListDensity } = {}) =>
     declare<ListDensity, "select">("select", {
       default: start,
-      options: choices(LIST_DENSITIES),
+      options: DENSITY_OPTIONS,
     }),
   /** Only mine: a checkbox, off by default. */
   onlyMine: ({

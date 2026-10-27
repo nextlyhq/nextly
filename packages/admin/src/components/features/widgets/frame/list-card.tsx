@@ -7,10 +7,10 @@
  * and actions, so the two forms never disagree about what a row is.
  *
  * The rows drawn are the ones the body holds (`drawn`, from `rowsDrawn`), never part of a row,
- * and nothing scrolls inside the card. When the list holds more than that, one footer says so,
- * in the card's own footer (`CardFooterContent`), never under the rows: "View all (N)" to the
- * full list the card was drawn from, or "N more" as plain text where there is no such list to
- * open. There is no other way to say "see more".
+ * and nothing scrolls inside the card. A list that has a full list to open says "View all" in the
+ * card's own footer (`CardFooterContent`), never under the rows, with "(N)" when it holds more than
+ * the card draws. A list with nowhere to open has no footer: a footer holds a link, never a bare
+ * count. There is no other way to say "see more".
  *
  * @module components/features/widgets/frame/list-card
  */
@@ -23,13 +23,13 @@ import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
 import {
+  ENTITY_LEADING_CLASS,
   EntityRow,
   EntityRowActions,
   type EntityRowMenuItem,
 } from "./entity-row";
 import { CARD_FOOTER_LINK_CLASS, CardFooterContent } from "./footer-slot";
 import {
-  FOOTER_LINE_CLASS,
   LIST_CLASS,
   ROWS_STACK_CLASS,
   TABLE_CLASS,
@@ -45,6 +45,8 @@ export interface ListField<Row> {
   /** What the field is called, as the table form's column heading. */
   label: string;
   role: "meta" | "trailing";
+  /** Where the table form sets the field's column: at its end for a time or a number. */
+  align?: "start" | "end";
   /** The field's value in `row`, or `undefined` where the row has none. */
   present: (row: Row) => ReactNode | undefined;
 }
@@ -123,9 +125,7 @@ export function ListCard<Row>({
           ))}
         </ul>
       )}
-      {footer !== undefined && (
-        <ListFooter footer={footer} href={viewAllHref} />
-      )}
+      <ListFooter footer={footer} href={viewAllHref} />
     </div>
   );
 }
@@ -199,34 +199,21 @@ export function countSpoken(count: number, atLeast: boolean): string {
 }
 
 /**
- * A list's one footer: "View all (N)" to the full list, N being how many it holds in all; or,
- * where there is no list to open, "N more" as plain text, N being how many the card did not
- * draw. Used by every list card, and by a card of tiles that also holds more than it shows.
- * Drawn in the card's footer, where every card's link is.
+ * A list's one footer: "View all" to the full list it was drawn from, whenever there is one, so
+ * the way there is always in the same place; "(N)" after it when the list holds more than the
+ * card draws, N being how many it holds in all. Nothing where there is no list to open: a footer
+ * holds a link, never a bare count. Used by every list card, and by a card of tiles. Drawn in the
+ * card's footer, where every card's link is.
  */
 export function ListFooter({
   footer,
   href,
 }: {
-  footer: FooterCount;
+  /** How many more the list holds than the card draws; `undefined` when it draws them all. */
+  footer: FooterCount | undefined;
   href: string | undefined;
-}): JSX.Element {
-  if (href === undefined) {
-    const more = footer.count - footer.drawn;
-    return (
-      <CardFooterContent>
-        <p
-          data-testid="list-card-footer"
-          className={cn(FOOTER_LINE_CLASS, "text-muted-foreground")}
-        >
-          <span aria-hidden="true">{countText(more, footer.atLeast)} more</span>
-          <span className="sr-only">
-            {countSpoken(more, footer.atLeast)} more
-          </span>
-        </p>
-      </CardFooterContent>
-    );
-  }
+}): JSX.Element | null {
+  if (href === undefined) return null;
   return (
     <CardFooterContent>
       <Link
@@ -235,10 +222,12 @@ export function ListFooter({
         className={CARD_FOOTER_LINK_CLASS}
       >
         <span aria-hidden="true">
-          View all ({countText(footer.count, footer.atLeast)})
+          View all
+          {footer && ` (${countText(footer.count, footer.atLeast)})`}
         </span>
         <span className="sr-only">
-          View all, {countSpoken(footer.count, footer.atLeast)}
+          View all
+          {footer && `, ${countSpoken(footer.count, footer.atLeast)}`}
         </span>
       </Link>
     </CardFooterContent>
@@ -265,9 +254,10 @@ function ListTable<Row>({
     <table data-testid="list-card-table" className={TABLE_CLASS}>
       <thead>
         <tr className={TABLE_HEAD_ROW_CLASS}>
+          {/* The title takes the width the other columns leave; they size to what they hold. */}
           <th
             scope="col"
-            className={cn(TABLE_HEADING_CLASS, "text-muted-foreground")}
+            className={cn(TABLE_HEADING_CLASS, "w-full text-muted-foreground")}
           >
             {model.titleLabel}
           </th>
@@ -275,7 +265,11 @@ function ListTable<Row>({
             <th
               key={field.key}
               scope="col"
-              className={cn(TABLE_HEADING_CLASS, "text-muted-foreground")}
+              className={cn(
+                TABLE_HEADING_CLASS,
+                "w-px whitespace-nowrap text-muted-foreground",
+                field.align === "end" && "text-right"
+              )}
             >
               {field.label}
             </th>
@@ -295,7 +289,14 @@ function ListTable<Row>({
           const titleBody = (
             <span className="flex min-w-0 items-center gap-2">
               {leading !== undefined && (
-                <span className="flex shrink-0 items-center">{leading}</span>
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center",
+                    ENTITY_LEADING_CLASS[density]
+                  )}
+                >
+                  {leading}
+                </span>
               )}
               <span className="truncate">{title}</span>
             </span>
@@ -307,7 +308,8 @@ function ListTable<Row>({
               data-testid="list-card-table-row"
               className={cn(TABLE_ROW_CLASS, rowClass)}
             >
-              <td className="pr-4 align-middle">
+              {/* `max-w-0` lets the widest column shorten its title with "…" rather than push. */}
+              <td className="w-full max-w-0 pr-4 align-middle">
                 {href === undefined ? (
                   titleBody
                 ) : (
@@ -323,7 +325,10 @@ function ListTable<Row>({
               {model.fields.map(field => (
                 <td
                   key={field.key}
-                  className="truncate pr-4 align-middle text-foreground last:pr-0"
+                  className={cn(
+                    "w-px whitespace-nowrap pr-4 align-middle text-foreground last:pr-0",
+                    field.align === "end" && "text-right"
+                  )}
                 >
                   {/* An em dash rather than an empty cell, so a missing value is visibly one. */}
                   {field.present(row) ?? "—"}

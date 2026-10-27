@@ -67,6 +67,7 @@ export function recentEntriesModel(
         key: "updatedAt",
         label: column("updatedAt")?.label ?? "Updated",
         role: "meta",
+        align: "end",
         present: item =>
           typeof item.updatedAt === "string"
             ? formatRelativeTime(item.updatedAt, now)

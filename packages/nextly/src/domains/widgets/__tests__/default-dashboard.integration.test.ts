@@ -39,8 +39,8 @@ import { refreshCollectionWidgets } from "../collection-widgets";
  * five rows tall, the height whose body holds five rows, but four beside Team, whose row it shares.
  */
 const AGREED = [
-  ["core/needs-attention", "8x3"],
-  ["core/quick-create", "4x3"],
+  ["core/needs-attention", "8x4"],
+  ["core/quick-create", "4x4"],
   ["core/recently-edited", "6x5"],
   ["core/recent-activity", "6x5"],
   ["core/content", "12x4"],
@@ -144,7 +144,7 @@ describe.each(getConfiguredTestDialects())(
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "8x3"],
+        ["core/needs-attention", "8x4"],
         ["core/recently-edited", "6x5"],
         ["core/recent-activity", "6x5"],
         ["core/content", "12x4"],

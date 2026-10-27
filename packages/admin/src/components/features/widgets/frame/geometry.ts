@@ -55,7 +55,7 @@ export const LIST_LABEL_CLASS = "break-words text-sm";
 export const LIST_DETAIL_CLASS = "break-words text-xs";
 
 /** A table, and the type its rows are set in: a size smaller than a list's, figures aligned. */
-export const TABLE_CLASS = "w-full table-fixed text-xs tabular-nums";
+export const TABLE_CLASS = "w-full text-xs tabular-nums";
 
 /** A table's heading cell: quieter and smaller than the rows it heads. */
 export const TABLE_HEADING_CLASS =
@@ -72,9 +72,6 @@ export const TABLE_HEAD_ROW_CLASS = "align-bottom";
 
 /** A table's body row, ruled above, as a list's rows are divided. */
 export const TABLE_ROW_CLASS = "border-t border-border";
-
-/** The footer line under a list's rows: "View all (N)" or "N more". */
-export const FOOTER_LINE_CLASS = "text-xs";
 
 /** A stats card's cells, as many to a row as fit. */
 export const STATS_GRID_CLASS =

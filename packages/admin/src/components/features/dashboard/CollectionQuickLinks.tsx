@@ -452,9 +452,7 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
           ))}
         </ContentGroup>
       )}
-      {content.footer !== undefined && (
-        <ListFooter footer={content.footer} href={listViewHref(query)} />
-      )}
+      <ListFooter footer={content.footer} href={listViewHref(query)} />
     </div>
   );
 };

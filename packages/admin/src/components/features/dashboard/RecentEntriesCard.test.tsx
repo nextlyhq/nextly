@@ -117,11 +117,14 @@ describe("the Recent entries card", () => {
   });
 
   it.each(["medium", "large"] as const)(
-    "offers no View all when %s and it draws every entry there is",
+    "offers View all with no count when %s and it draws every entry there is",
     tier => {
+      // The way to the collection's list is always in the footer; the count only says more.
       drawAt(tier);
       expect(screen.getAllByRole("link", { name: /^Story/ })).toHaveLength(4);
-      expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+      const footer = screen.getByTestId("list-card-footer");
+      expect(footer).toHaveTextContent(/^View all/);
+      expect(footer.textContent).not.toMatch(/\(\d/);
     }
   );
 

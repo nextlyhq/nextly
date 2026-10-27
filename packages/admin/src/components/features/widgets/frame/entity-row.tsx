@@ -73,8 +73,11 @@ export interface EntityRowProps {
 /** The most fields a meta line holds. */
 export const MAX_META_FIELDS = 3;
 
-/** A row's leading slot's size at each density; its height is the geometry's. */
-const LEADING_CLASS: Readonly<Record<ListDensity, string>> = {
+/**
+ * A row's leading slot's size at each density; its height is the geometry's. The table form sizes
+ * its leading content by the same classes, so a chip or avatar is one size in both forms.
+ */
+export const ENTITY_LEADING_CLASS: Readonly<Record<ListDensity, string>> = {
   default: "size-6.5",
   compact: "size-5",
 };
@@ -99,7 +102,7 @@ export function EntityRow({
           data-testid="entity-row-leading"
           className={cn(
             "flex shrink-0 items-center justify-center",
-            LEADING_CLASS[density]
+            ENTITY_LEADING_CLASS[density]
           )}
         >
           {leading}
@@ -159,14 +162,23 @@ export function EntityRow({
         LIST_ROW_HEIGHT_CLASS[density]
       )}
     >
-      {href === undefined ? (
-        <div className={rowBox}>{content}</div>
-      ) : (
-        // The full title on hover and on focus, since the line may cut it.
-        // Its own provider, so a row draws its tooltip wherever it is used.
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
+      {/* The full title on hover and on focus, since the line may cut it, whether or not the row
+          leads anywhere. Its own provider, so a row draws its tooltip wherever it is used. */}
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {href === undefined ? (
+              // Focusable, so a keyboard reaches the full title as a pointer does.
+              <div
+                tabIndex={0}
+                className={cn(
+                  rowBox,
+                  "h-full rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                )}
+              >
+                {content}
+              </div>
+            ) : (
               <Link
                 href={href}
                 className={cn(
@@ -176,11 +188,11 @@ export function EntityRow({
               >
                 {content}
               </Link>
-            </TooltipTrigger>
-            <TooltipContent>{title}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
+            )}
+          </TooltipTrigger>
+          <TooltipContent>{title}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
       <EntityRowActions title={title} action={action} menu={menu} />
     </div>
   );

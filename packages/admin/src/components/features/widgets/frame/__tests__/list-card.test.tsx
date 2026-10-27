@@ -9,7 +9,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WidgetCard } from "../../WidgetCard";
-import { EntityRow } from "../entity-row";
+import { ENTITY_LEADING_CLASS, EntityRow } from "../entity-row";
 import {
   countSpoken,
   countText,
@@ -126,6 +126,18 @@ describe("EntityRow", () => {
     );
   });
 
+  it("keeps a plain row's full title within reach of hover and focus, as a linked row does", () => {
+    // 🔴 A deletion leads nowhere; cut with "…" and given no tooltip, its title could not be
+    // read whole by pointer or keyboard.
+    render(<EntityRow density="default" title="A very long deleted title" />);
+    const trigger = screen
+      .getByTestId("entity-row-title")
+      .closest('[tabindex="0"]');
+    expect(trigger).not.toBeNull();
+    // The tooltip's trigger, as the linked row's link is.
+    expect(trigger).toHaveAttribute("data-state");
+  });
+
   it("keeps one fixed row height per density", () => {
     const { rerender } = render(<EntityRow density="default" title="A" />);
     expect(screen.getByTestId("entity-row")).toHaveClass("h-13");
@@ -149,7 +161,8 @@ describe("ListCard", () => {
     expect(screen.queryByText("Post 6")).toBeNull();
   });
 
-  it("has no footer when it draws everything the list holds", () => {
+  it("offers View all with no count when it draws everything the list holds", () => {
+    // 🔴 Offered only when more exist, a card with one release would have no way to Releases.
     render(
       <ListCard
         model={model}
@@ -161,7 +174,10 @@ describe("ListCard", () => {
         density="default"
       />
     );
-    expect(screen.queryByTestId("list-card-footer")).toBeNull();
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveAttribute("href", "/admin/collections/posts");
+    expect(footer).toHaveTextContent(/^View all/);
+    expect(footer.textContent).not.toMatch(/\(\d/);
   });
 
   it("links to the full list with its whole count when there are more", () => {
@@ -257,8 +273,10 @@ describe("ListCard", () => {
     );
   });
 
-  it("says how many more as plain text where there is no list to open", () => {
-    render(
+  it("has no footer where there is no list to open, however many more exist", () => {
+    // 🔴 A footer holds a link: "37 more" with nowhere to go is a count the reader can do
+    // nothing with.
+    const { rerender } = render(
       <ListCard
         model={model}
         rows={posts(6)}
@@ -267,14 +285,8 @@ describe("ListCard", () => {
         density="default"
       />
     );
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer.tagName).toBe("P");
-    // Only the extra row says more exist, so how many more is a floor: at least one.
-    expect(footer).toHaveTextContent("1+ more");
-  });
-
-  it("counts the rows it did not draw, from a whole total, where there is no list to open", () => {
-    render(
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
+    rerender(
       <ListCard
         model={model}
         rows={posts(6)}
@@ -284,8 +296,53 @@ describe("ListCard", () => {
         density="default"
       />
     );
-    // 🔴 Forty-two in all and five drawn: "37 more", never the total read as a remainder.
-    expect(screen.getByTestId("list-card-footer")).toHaveTextContent("37 more");
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
+  });
+
+  it("sizes a row's leading content in the table form as it is in the stacked one", () => {
+    // 🔴 Given no size, an avatar or chip drawn at its container's full size collapses in a cell.
+    render(
+      <ListCard
+        model={{ ...model, leadingOf: () => <span data-testid="lead" /> }}
+        rows={posts(1)}
+        drawn={1}
+        tier="large"
+        density="default"
+      />
+    );
+    expect(screen.getByTestId("lead").parentElement).toHaveClass(
+      ENTITY_LEADING_CLASS.default
+    );
+  });
+
+  it("gives the table's title the width the other columns leave, a time set at its end", () => {
+    render(
+      <ListCard
+        model={{
+          ...model,
+          fields: [
+            ...model.fields,
+            {
+              key: "at",
+              label: "At",
+              role: "meta",
+              align: "end",
+              present: () => "now",
+            },
+          ],
+        }}
+        rows={posts(2)}
+        drawn={2}
+        tier="large"
+        density="default"
+      />
+    );
+    const [title, status, , at] = screen.getAllByRole("columnheader");
+    // 🔴 Laid out evenly, the status and the time float mid-card on a wide one.
+    expect(title).toHaveClass("w-full");
+    expect(status).toHaveClass("w-px", "whitespace-nowrap");
+    expect(status).not.toHaveClass("text-right");
+    expect(at).toHaveClass("text-right");
   });
 
   it("draws the same rows, in the same order, to the same places as a table when large", () => {

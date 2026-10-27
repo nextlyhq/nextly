@@ -171,17 +171,15 @@ describe("the Recently edited card", () => {
     expect(screen.queryByText(/doc-1/)).toBeNull();
   });
 
-  it("draws its number of items, and says there are more when the answer holds one more", () => {
-    // Asked for 5: the batch asked 6, and the sixth says at least one more exists. Its source
-    // has no list view to open, so the footer is plain text, not View all.
+  it("draws its number of items, and no footer, since its source has no list to open", () => {
+    // Asked for 5: the batch asked 6, and the sixth is not drawn. Its source reads across
+    // collections and has no list view to open, and a footer holds a link, never a bare count.
     const { unmount } = draw(answered([1, 2, 3, 4, 5, 6].map(n => row(n))));
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer).toHaveTextContent("1+ more");
-    expect(footer.closest("a")).toBeNull();
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
     unmount();
 
-    // The must-differ half: an answer no longer than the rows drawn says nothing more.
+    // And an answer no longer than the rows drawn draws them all, and no footer either.
     draw(answered([1, 2, 3, 4, 5].map(n => row(n))));
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
     expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();

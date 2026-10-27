@@ -60,10 +60,10 @@
 
 import { IN_RELEASE_KEY } from "../collections/query/reserved-filter-keys";
 
-import { settings } from "./declaration/setting-builders";
+import { DENSITY_OPTIONS, settings } from "./declaration/setting-builders";
 import type { WidgetDefinition, WidgetSetting } from "./definition";
 import { GET_STARTED_WIDGET_ID } from "./get-started-steps";
-import { type ListDensity, MAX_WIDGET_LIMIT } from "./query-limits";
+import { MAX_WIDGET_LIMIT } from "./query-limits";
 import type { AnyWidgetSetting } from "./settings";
 import {
   ACTIVITY_SOURCE_ID,
@@ -116,11 +116,9 @@ const LIST_DENSITY: WidgetSetting = {
   label: "Density",
   type: "select",
   defaultValue: "default",
-  // Named for the reader; each value is one of the densities the admin sizes rows by.
-  options: [
-    { label: "Default", value: "default" },
-    { label: "Compact", value: "compact" },
-  ] satisfies { label: string; value: ListDensity }[],
+  // The builder's own options, one per density the admin sizes rows by, so core's list cards
+  // and a plugin's offer the same choice.
+  options: [...DENSITY_OPTIONS],
 };
 
 /**
@@ -268,8 +266,10 @@ const CORE_WIDGET_LITERALS = [
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
     // From a third, where its row of create buttons wraps, to the full width.
+    // Four rows tall by default, the height of Needs attention, whose row of the
+    // default dashboard it shares.
     size: {
-      default: { w: 4, h: 3 },
+      default: { w: 4, h: 4 },
       min: { w: 4, h: 2 },
       max: { w: 12, h: 4 },
     },
@@ -307,9 +307,11 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     // Two thirds by default; from a third, where its small tier still names
     // each kind, to the full width, where each kind breaks down per collection.
+    // Four rows tall at the least: a row for each of its three kinds always
+    // fits, with room for a part beneath them.
     size: {
-      default: { w: 8, h: 3 },
-      min: { w: 4, h: 3 },
+      default: { w: 8, h: 4 },
+      min: { w: 4, h: 4 },
       max: { w: 12, h: 6 },
     },
     defaultOrder: 10,

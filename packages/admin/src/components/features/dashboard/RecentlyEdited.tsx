@@ -85,6 +85,7 @@ function recentEditsModel(
         key: "savedAt",
         label: "Saved",
         role: "meta",
+        align: "end",
         present: edit => (
           <time
             dateTime={edit.savedAt}

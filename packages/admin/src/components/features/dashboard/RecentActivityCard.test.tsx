@@ -6,13 +6,23 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
 import { RecentActivityCard } from "./RecentActivity";
+
+/** The collections the workspace payload publishes to the reader, as a test sets them. */
+let mockBranding: { widgetSources?: unknown[] } = {};
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useBranding: () => mockBranding,
+}));
+afterEach(() => {
+  mockBranding = {};
+});
 
 /** One feed row as `system:activity` answers it. */
 function row(n: number, overrides: Record<string, unknown> = {}) {
@@ -107,9 +117,9 @@ describe("the Recent activity card", () => {
     );
   });
 
-  it("draws the rows its reader asked for, and says there are more from the extra row", () => {
-    // Asked for 3: the batch asked 4, and the fourth says at least one more exists. The feed
-    // has no list view to open, so the footer is plain text.
+  it("draws the rows its reader asked for, and no footer, since the feed has no list to open", () => {
+    // Asked for 3: the batch asked 4, and the fourth is not drawn. The feed has no list view to
+    // open, and a footer holds a link, never a bare count.
     const { unmount } = draw({
       slot: {
         ok: true,
@@ -118,12 +128,10 @@ describe("the Recent activity card", () => {
       query: { ...LIST_QUERY, limit: 3 },
     });
     expect(titles()).toEqual(["Doc 1", "Doc 2", "Doc 3"]);
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer).toHaveTextContent("1+ more");
-    expect(footer.closest("a")).toBeNull();
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
     unmount();
 
-    // The must-differ half: an answer no longer than the rows drawn says nothing more.
+    // And an answer no longer than the rows drawn draws them all, and no footer either.
     draw({
       slot: {
         ok: true,
@@ -229,5 +237,38 @@ describe("the Recent activity card", () => {
     expect(
       within(collection!).getByTestId("entity-row-meta")
     ).toHaveTextContent("posts");
+  });
+
+  it("names an untitled entry's collection by the label it shows, in the title and the meta alike", () => {
+    // 🔴 Relabelled on the meta line alone, one row would say "Ana updated blog_posts" over
+    // "Blog Posts".
+    mockBranding = {
+      widgetSources: [
+        {
+          collection: "blog_posts",
+          label: "Blog Posts",
+          lifecycle: true,
+          fields: [],
+        },
+      ],
+    };
+    draw({
+      slot: {
+        ok: true,
+        result: {
+          op: "list",
+          items: [row(1, { collection: "blog_posts", entryTitle: null })],
+        },
+      },
+      query: LIST_QUERY,
+    });
+    const [only] = screen.getAllByTestId("entity-row");
+    expect(within(only!).getByTestId("entity-row-title")).toHaveTextContent(
+      /Blog Posts/
+    );
+    expect(within(only!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "Blog Posts"
+    );
+    expect(only).not.toHaveTextContent("blog_posts");
   });
 });

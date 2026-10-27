@@ -87,12 +87,14 @@ export function predictedTier(
 export function rowsDrawn(
   size: SizeTier | RowsSize,
   items: unknown,
-  density: ListDensity = "default"
+  density: ListDensity = "default",
+  /** Room the body gives something drawn above the rows, in pixels, which no row may take. */
+  reservedPx = 0
 ): number {
   const rows = typeof size === "string" ? { tier: size } : size;
   return Math.min(
     effectiveWidgetLimit(items),
-    rowsThatFit(listBodyHeight(rows), density)
+    rowsThatFit(listBodyHeight(rows) - reservedPx, density)
   );
 }
 
@@ -216,14 +218,19 @@ export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
 export function useRowsDrawn(
   cardTier: SizeTier,
   items: unknown,
-  density: ListDensity
+  density: ListDensity,
+  /** Room the body gives something drawn above the rows; see `rowsDrawn`. */
+  reservedPx = 0
 ): number {
   const h = useContext(CardHeightContext);
   const answer = useContext(AnswerSizeContext);
-  const drawn = rowsDrawn({ tier: cardTier, h }, items, density);
+  const drawn = rowsDrawn({ tier: cardTier, h }, items, density, reservedPx);
   return answer === undefined
     ? drawn
-    : Math.min(drawn, rowsDrawn(answer, items, answer.density ?? density));
+    : Math.min(
+        drawn,
+        rowsDrawn(answer, items, answer.density ?? density, reservedPx)
+      );
 }
 
 /**

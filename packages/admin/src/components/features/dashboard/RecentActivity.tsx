@@ -69,13 +69,21 @@ function repeatText(activity: Activity): string {
 function activitySpoken(activity: Activity): string | undefined {
   const repeat = repeatText(activity);
   if (repeat === "") return undefined;
-  const subject = activity.entryTitle ?? activity.target;
+  const subject = activitySubject(activity);
   return `${activity.user.name} ${activity.action} ${subject}, ${repeat.slice(3)}`;
+}
+
+/**
+ * What a row names: its entry's title, or, for an entry with none, its collection by the label
+ * the row shows on its meta line, so the two never name it differently; a Single by its own name.
+ */
+function activitySubject(activity: Activity): string {
+  return activity.entryTitle ?? activity.collectionLabel ?? activity.target;
 }
 
 /** What a row's title says: who did what to which document, and how many times. */
 function activityTitle(activity: Activity): string {
-  const subject = activity.entryTitle ?? activity.target;
+  const subject = activitySubject(activity);
   return `${activity.user.name} ${activity.action} ${subject}${repeatText(activity)}`;
 }
 
@@ -114,6 +122,7 @@ function activityListModel(now: number): ListModel<ActivityRow> {
         key: "when",
         label: "When",
         role: "trailing",
+        align: "end",
         present: ({ activity }) => (
           <time dateTime={activity.timestamp}>
             {formatRelativeTime(activity.timestamp, now)}

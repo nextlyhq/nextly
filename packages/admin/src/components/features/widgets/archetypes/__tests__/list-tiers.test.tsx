@@ -8,7 +8,7 @@
  * more there are and links nowhere.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
@@ -113,12 +113,14 @@ describe("a list card's rows at each tier", () => {
 });
 
 describe("saying there are more", () => {
-  it("has no footer when the answer holds exactly the rows the tier draws", () => {
-    // 🔴 The separating case: a card that always showed the footer, or showed it on a full
-    // page, fails here; one that never showed it fails the cases below.
+  it("offers View all with no count when the answer holds exactly the rows the tier draws", () => {
+    // 🔴 The separating case: a card that counted a full page as more fails here; one that
+    // never counted fails the cases below.
     drawAt("small", 3);
     expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
-    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveTextContent(/^View all/);
+    expect(footer.textContent).not.toMatch(/\(\d/);
   });
 
   it("links to the collection's list view with the card's filter and sort when there are more", () => {
@@ -139,17 +141,18 @@ describe("saying there are more", () => {
     );
   });
 
-  it("has no footer when the source's total is the rows it draws", () => {
+  it("counts nothing when the source's total is the rows it draws", () => {
     // The total, not the extra row, decides: three in all is everything a small card draws.
     drawAt("small", 3, recentPosts, 3);
-    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveTextContent(/^View all/);
+    expect(footer.textContent).not.toMatch(/\(\d/);
   });
 
-  it("says how many more without a link for a list that is not one collection's", () => {
+  it("has no footer for a list that is not one collection's, however many more it holds", () => {
+    // A footer holds a link, never a bare count, and this list has no list view to open.
     drawAt("medium", 6, recentActivity);
-    const footer = screen.getByTestId("list-card-footer");
-    expect(footer.tagName).toBe("P");
-    expect(within(footer).getByText("1+ more")).toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

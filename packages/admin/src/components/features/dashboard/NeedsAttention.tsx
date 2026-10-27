@@ -2,7 +2,7 @@
 
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 
 import { Link } from "@admin/components/ui/link";
 
@@ -10,7 +10,8 @@ import { CountValue, countLabel } from "../widgets/archetypes/count-value";
 import { FrameState } from "../widgets/frame/card-state";
 import { EntityRow } from "../widgets/frame/entity-row";
 import { CardFigure } from "../widgets/frame/figure";
-import { useCardTier } from "../widgets/frame/tier";
+import { LIST_ROW_HEIGHT_PX, listBodyHeight } from "../widgets/frame/list-rows";
+import { CardHeightContext, useCardTier } from "../widgets/frame/tier";
 
 import {
   attentionTotal,
@@ -33,6 +34,8 @@ import {
  */
 export const NeedsAttention: React.FC<WidgetComponentProps> = ({ slot }) => {
   const tier = useCardTier() ?? "medium";
+  // The room the card's body has, which every kind's row and as many parts as fit share.
+  const bodyPx = listBodyHeight({ tier, h: useContext(CardHeightContext) });
   // Built once per answer, so a "this week" link keeps the week it was drawn
   // with rather than moving on every render.
   const view = useMemo(() => attentionView(slot, Date.now()), [slot]);
@@ -59,10 +62,11 @@ export const NeedsAttention: React.FC<WidgetComponentProps> = ({ slot }) => {
     );
   }
   if (tier === "small") return <SmallAttention kinds={view.kinds} />;
+  const shown = partsShown(view.kinds, tier === "large", bodyPx);
   return (
-    <ul className="grid gap-1" data-testid="needs-attention">
-      {view.kinds.map(kind => (
-        <KindRow key={kind.kind} kind={kind} breakdown={tier === "large"} />
+    <ul className="grid" data-testid="needs-attention">
+      {view.kinds.map((kind, index) => (
+        <KindRow key={kind.kind} kind={kind} partsShown={shown[index] ?? 0} />
       ))}
     </ul>
   );
@@ -170,24 +174,46 @@ function KindLink({ kind, tier }: { kind: AttentionKindRow; tier?: "small" }) {
   );
 }
 
-/** One kind, and at the large tier each collection's or Single's share of it. */
+/**
+ * How many of each kind's parts the card draws: a row for every kind first, so no kind is ever
+ * cut, then parts in the kinds' order while whole compact rows still fit the body. A card never
+ * scrolls, so a part with no room is left out rather than drawn past the card's edge.
+ *
+ * Parts are each collection's or Single's share of a kind: every kind's at the large tier, and a
+ * kind's spread over several lists at any tier, which has no one link of its own.
+ */
+function partsShown(
+  kinds: readonly AttentionKindRow[],
+  breakdown: boolean,
+  bodyPx: number
+): number[] {
+  const kindRows = kinds.length * LIST_ROW_HEIGHT_PX.default;
+  let room = Math.floor(
+    Math.max(0, bodyPx - kindRows) / LIST_ROW_HEIGHT_PX.compact
+  );
+  return kinds.map(kind => {
+    const wanted = breakdown || kind.href === undefined ? kind.parts.length : 0;
+    const given = Math.min(wanted, room);
+    room -= given;
+    return given;
+  });
+}
+
+/** One kind, and the parts of it the card has room for (`partsShown`). */
 function KindRow({
   kind,
-  breakdown,
+  partsShown: shown,
 }: {
   kind: AttentionKindRow;
-  breakdown: boolean;
+  partsShown: number;
 }) {
-  // A kind spread over several lists has no one link, so at the medium tier its
-  // parts are still offered, or the row would lead nowhere.
-  const showParts =
-    kind.parts.length > 0 && (breakdown || kind.href === undefined);
+  const showParts = shown > 0;
   return (
     <li data-testid={`needs-attention-${kind.kind}`}>
       <KindLink kind={kind} />
       {showParts && (
         <ul className="ml-3 border-l border-border pl-2">
-          {kind.parts.map(part => (
+          {kind.parts.slice(0, shown).map(part => (
             <li key={part.key}>
               {/* A part is a row too, set compact under the kind it belongs to. */}
               <EntityRow
