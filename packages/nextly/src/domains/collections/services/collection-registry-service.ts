@@ -35,7 +35,10 @@ import type {
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -48,6 +51,10 @@ import {
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import type { CollectionDbOptions } from "./collection-db-options";
+import {
+  assertNothingDependsOn,
+  databaseDependentsSources,
+} from "./collection-dependents";
 import { resolveDescription } from "./collection-sync-service";
 
 /** Options for updating a collection. */
@@ -562,6 +569,46 @@ export class CollectionRegistryService extends BaseRegistryService<
       stopReleasesHolding({
         scopes: [{ scopeKind: "collection", scopeSlug: slug }],
       })
+    );
+  }
+
+  /**
+   * Refuse, before anything is removed, to delete collections something
+   * outside the set still depends on: a field that points at one, a foreign
+   * key a plugin or the app declares on one of their tables, or another
+   * owner's column, index, foreign key or check on one of them. Also refused
+   * when any of those cannot be read (`collection-dependents`).
+   *
+   * Separate from {@link deleteCollection}, which removes only the registry
+   * row: promotion hands a collection's table and slug to its code-first
+   * definition, so whatever points at it still points at a collection there.
+   * Every path that goes on to drop the table asks this first.
+   *
+   * @param slugs the collections deleted in one operation
+   * @param options where the extension schema comes from; the one this
+   *   process published unless a command compiled its own
+   */
+  async assertNothingDependsOn(
+    slugs: readonly string[],
+    options: {
+      extensionSchema?: () => Promise<ExtensionSchemaRecord | null>;
+    } = {}
+  ): Promise<void> {
+    const collections = [];
+    for (const slug of slugs) {
+      const record = await this.getCollection(slug);
+      collections.push({
+        slug,
+        tables: collectionOwnTables(record.tableName, record.fields ?? []),
+      });
+    }
+    await assertNothingDependsOn(
+      collections,
+      databaseDependentsSources(
+        this.adapter,
+        options.extensionSchema ??
+          (() => Promise.resolve(getActiveExtensionSchema(this.dialect)))
+      )
     );
   }
 

@@ -35,8 +35,11 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 
 import { toast } from "@admin/components/ui";
+import { fetcher } from "@admin/lib/api/fetcher";
+import type { MutationResponse } from "@admin/lib/api/response-types";
 import { collectionApi } from "@admin/services/collectionApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type {
@@ -45,7 +48,12 @@ import type {
   UpdateCollectionPayload,
 } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
-import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
+import type {
+  BulkMutationItemResult,
+  BulkMutationOptions,
+  BulkMutationResult,
+  UseBulkMutationReturn,
+} from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
@@ -527,73 +535,39 @@ export function useDeleteCollection(): UseMutationResult<
 }
 
 /**
- * useBulkDeleteCollections - Bulk mutation hook for deleting multiple collections
+ * Delete `slugs` in one request: the first in the path, the rest in
+ * `?together=`, which the server deletes in the same operation after checking
+ * the whole set.
+ */
+async function deleteCollectionsTogether(
+  slugs: readonly string[]
+): Promise<void> {
+  const [first, ...rest] = slugs;
+  const together =
+    rest.length > 0 ? `?together=${encodeURIComponent(rest.join(","))}` : "";
+  await fetcher<MutationResponse<ApiCollection>>(
+    `/collections/${encodeURIComponent(first)}${together}`,
+    { method: "DELETE" },
+    true
+  );
+}
+
+/**
+ * useBulkDeleteCollections - Delete several collections in one operation
  *
- * Executes parallel delete operations for multiple collections using Promise.allSettled().
- * Allows partial failures where some deletions succeed while others fail.
- * Automatically invalidates the collections cache after all operations complete.
+ * Sends ONE request naming every collection, rather than one delete each.
+ * The server checks the whole set before anything is removed: a collection
+ * that something outside the set depends on (a field pointing at it, a
+ * plugin's foreign key, a plugin's column on its table) refuses the whole
+ * delete, and collections that point only at one another go together, where
+ * deleting each on its own would be refused. So the result is all or
+ * nothing: every collection succeeded, or every one failed with the same
+ * error, and none was removed.
  *
- * ## Features
- * - ✅ Parallel execution with Promise.allSettled()
- * - ✅ Partial failure handling (some succeed, some fail)
- * - ✅ Detailed results with success/failure counts
- * - ✅ Automatic cache invalidation after completion
- * - ✅ TypeScript type safety
+ * Returns the same shape as the other bulk hooks, so callers read
+ * `succeeded`, `failed` and the per-collection results as before.
  *
- * ## Architecture
- *
- * ```
- * useBulkDeleteCollections (Entity-Specific)
- *   ↓
- * useBulkMutation (Generic Hook)
- *   ↓
- * Promise.allSettled() (Parallel Execution)
- * ```
- *
- * ## Result Structure
- *
- * ```ts
- * {
- *   succeeded: 8,        // Number of successful deletions
- *   failed: 2,           // Number of failed deletions
- *   total: 10,           // Total collections attempted
- *   succeededIds: [...], // IDs of successfully deleted collections
- *   failedIds: [...],    // IDs of collections that failed to delete
- *   results: [...]       // Individual results with error details
- * }
- * ```
- *
- * ## Cache Invalidation
- * Automatically invalidates `["collections"]` query keys after all operations complete
- *
- * @returns Bulk mutation interface with mutate function, isPending state, and result
- *
- * @example Basic usage - Delete multiple collections
- * ```tsx
- * function CollectionListActions() {
- *   const { mutate: bulkDelete, isPending } = useBulkDeleteCollections();
- *   const [selectedIds, setSelectedIds] = useState<string[]>([]);
- *
- *   const handleBulkDelete = async () => {
- *     const result = await bulkDelete(selectedIds, undefined);
- *
- *     if (result.failed > 0) {
- *       toast.error(`${result.failed} collections failed to delete`);
- *     }
- *     if (result.succeeded > 0) {
- *       toast.success(`${result.succeeded} collections deleted successfully`);
- *     }
- *   };
- *
- *   return (
- *     <Button onClick={handleBulkDelete} disabled={isPending}>
- *       {isPending ? 'Deleting...' : `Delete ${selectedIds.length} Collections`}
- *     </Button>
- *   );
- * }
- * ```
- *
- * @example With callbacks
+ * @example
  * ```tsx
  * const { mutate: bulkDelete } = useBulkDeleteCollections();
  *
@@ -607,8 +581,7 @@ export function useDeleteCollection(): UseMutationResult<
  * });
  * ```
  *
- * @see useBulkMutation - Generic bulk mutation hook
- * @see useBulkDeleteUsers - Similar pattern for users
+ * @see useDeleteCollection - The single delete
  */
 export function useBulkDeleteCollections(): UseBulkMutationReturn<
   string,
@@ -617,17 +590,71 @@ export function useBulkDeleteCollections(): UseBulkMutationReturn<
   void
 > {
   const queryClient = useQueryClient();
+  const [isPending, setIsPending] = useState(false);
+  const [result, setResult] = useState<BulkMutationResult<void, Error> | null>(
+    null
+  );
 
-  return useBulkMutation<string, void, Error, void>({
-    mutationFn: async (collectionId: string) => {
-      await collectionApi.deleteCollection(collectionId);
-    },
-    defaultOptions: {
-      onComplete: () => {
+  const mutateAsync = useCallback(
+    async (
+      ids: string[],
+      _context: void,
+      options?: BulkMutationOptions<void, Error>
+    ): Promise<BulkMutationResult<void, Error>> => {
+      setResult(null);
+      setIsPending(true);
+      try {
+        let failure: Error | undefined;
+        try {
+          if (ids.length > 0) await deleteCollectionsTogether(ids);
+        } catch (error) {
+          failure = error instanceof Error ? error : new Error(String(error));
+        }
+
+        // One outcome for every collection, since the server removed all of
+        // them or none.
+        const results: BulkMutationItemResult<void, Error>[] = ids.map(id =>
+          failure === undefined
+            ? { id, status: "fulfilled" as const, data: undefined }
+            : { id, status: "rejected" as const, error: failure }
+        );
+        const bulkResult: BulkMutationResult<void, Error> = {
+          succeeded: failure === undefined ? ids.length : 0,
+          failed: failure === undefined ? 0 : ids.length,
+          total: ids.length,
+          results,
+          succeededIds: failure === undefined ? [...ids] : [],
+          failedIds: failure === undefined ? [] : [...ids],
+        };
+        setResult(bulkResult);
+
+        // The same callback order as every other bulk hook.
+        if (options?.onItemComplete) results.forEach(options.onItemComplete);
         void queryClient.invalidateQueries({ queryKey: collectionKeys.all() });
-      },
+        options?.onComplete?.(bulkResult);
+        if (bulkResult.succeeded > 0) options?.onSuccess?.(bulkResult);
+        if (bulkResult.failed > 0) options?.onError?.(bulkResult);
+        return bulkResult;
+      } finally {
+        setIsPending(false);
+      }
     },
-  });
+    [queryClient]
+  );
+
+  const reset = useCallback(() => {
+    setIsPending(false);
+    setResult(null);
+  }, []);
+
+  return {
+    mutate: mutateAsync,
+    mutateAsync,
+    isPending,
+    isIdle: !isPending && result === null,
+    result,
+    reset,
+  };
 }
 
 /**

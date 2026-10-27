@@ -18,6 +18,8 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import { z } from "zod";
+
 import {
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
@@ -31,6 +33,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
@@ -83,6 +86,7 @@ import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
@@ -233,6 +237,39 @@ function allLocalesLifecycle(
       return respondMutation(result.message ?? successMessage, entry);
     },
   };
+}
+
+/**
+ * The `together` query parameter of a collection delete: slugs separated by
+ * commas, each spelled as a slug is. Absent or empty means none.
+ */
+const TogetherParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(slug => slug.trim())
+      .filter(slug => slug !== "")
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .regex(SLUG_PATTERN, "Each collection must be named by its slug.")
+      )
+      .max(500)
+  );
+
+function parseTogetherParam(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  try {
+    return TogetherParam.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }
 
 /**
@@ -564,12 +601,20 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteCollection: {
-    // The deleted record is the `item`.
+    // The deleted record is the `item`. `?together=a,b` names the collections
+    // a bulk delete removes with this one, in the same operation: the whole
+    // set is checked before anything is removed, so collections that point
+    // only at one another can go together where each alone is refused.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      const result = await svc.deleteCollection({
+      // A variable rather than an inline literal: `CollectionsHandler` types
+      // its parameter by the one key it reads and forwards the object, whole,
+      // to the metadata service, which reads `together` from it.
+      const request: { collectionName: string; together: string[] } = {
         collectionName: p.collectionName,
-      });
+        together: parseTogetherParam(p.together),
+      };
+      const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });

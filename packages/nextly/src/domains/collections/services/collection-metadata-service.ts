@@ -17,8 +17,22 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+
+import {
+  assertNothingDependsOn,
+  databaseDependentsSources,
+} from "./collection-dependents";
+import { deleteResourcePermissions } from "./delete-resource-permissions";
+
+/** The parts of a collection's registry row its delete reads. */
+interface DeletedCollectionRow {
+  tableName: string;
+  fields?: FieldDefinition[];
+}
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -953,93 +967,64 @@ export class CollectionMetadataService extends BaseService {
   }
 
   /**
-   * Delete a collection.
+   * Delete a collection, or several in one operation.
    * Generates drop migration, deletes schema file, and unregisters the collection.
    *
-   * @param params - Parameters containing collection name
+   * Refused before anything is removed while something outside the operation
+   * depends on any of them: a field that points at one, a foreign key a plugin
+   * or the app declares on one of their tables, or another owner's column,
+   * index, foreign key or check on one of them (`collection-dependents`).
+   * Collections deleted together are checked as one set, so two that point
+   * only at each other can go, where deleting either alone is refused.
+   *
+   * @param params - The collection to delete, and those deleted with it
    * @returns Deletion result
    */
   async deleteCollection(params: {
     collectionName: string;
+    /** Collections deleted in the same operation, after `collectionName`. */
+    together?: readonly string[];
   }): Promise<MetadataServiceResult> {
     try {
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-
-      // Embedded component instances live in `comp_<slug>` tables keyed by a plain
-      // `_parent_table` string with no FK, so dropping this collection's table cascades
-      // nothing and would strand every instance. Sweep them (and any nested instances)
-      // before the drop.
-      await teardownEntityComponentData({
-        adapter: this.adapter,
-        parentTable: collection.tableName,
-      });
-
-      // Tear down the localization artifacts in-process, before the main table goes.
-      // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
-      // companion holds an FK to `<main>.id` so dropping the child first is safe in every
-      // environment, and the shared-archive purge is DML that no migration file should
-      // carry (the archive table is created lazily and may not exist).
-      await teardownEntityI18n({
-        kind: "collection",
-        adapter: this.adapter,
-        slug: params.collectionName,
-        tableName: collection.tableName,
-      });
-
-      // With the fields, so the collection's own many-to-many junctions go with it.
-      const dropArtifacts = this.collectionService.generateDropTableMigration(
-        params.collectionName,
-        collection.tableName,
-        (collection.fields ?? []) as FieldDefinition[]
-      );
-
-      // Persist the drop migration. It is the durable DDL record applied by
-      // `nextly migrate` in non-dev/deploy flows.
-      await this.fileManager.saveDropMigration(
-        dropArtifacts.migrationSQL,
-        dropArtifacts.migrationFileName
-      );
-
-      // Run drop migration in development
-      if (this.isDevelopment()) {
-        await this.fileManager.runMigration(dropArtifacts.migrationSQL);
+      const slugs = [
+        ...new Set([params.collectionName, ...(params.together ?? [])]),
+      ];
+      const collections: DeletedCollectionRow[] = [];
+      for (const slug of slugs) {
+        collections.push(
+          (await this.collectionService.getCollection(
+            slug
+          )) as DeletedCollectionRow
+        );
       }
 
-      // Unregister from metadata
-      await this.collectionService.unregisterCollection(params.collectionName);
+      // Before anything is torn down, and for the whole set, so a refusal
+      // leaves every collection exactly as it was. The extension schema is the
+      // one this process published at boot or on its last reload.
+      await assertNothingDependsOn(
+        slugs.map((slug, index) => ({
+          slug,
+          tables: collectionOwnTables(
+            collections[index].tableName,
+            collections[index].fields ?? []
+          ),
+        })),
+        databaseDependentsSources(this.adapter, () =>
+          Promise.resolve(getActiveExtensionSchema(this.dialect))
+        )
+      );
 
-      // Delete associated permissions
-      if (this.permissionSeedService) {
-        try {
-          const permissionResult =
-            await this.permissionSeedService.deletePermissionsForResource(
-              params.collectionName
-            );
-
-          if (permissionResult.created > 0) {
-            this.logger.info(
-              `Deleted ${permissionResult.created} permission(s) for collection "${params.collectionName}"`
-            );
-          }
-
-          if (permissionResult.skipped > 0) {
-            this.logger.warn(
-              `${permissionResult.skipped} permission(s) for "${params.collectionName}" could not be deleted (may be assigned to roles)`
-            );
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to cleanup permissions for collection "${params.collectionName}": ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
+      for (const [index, slug] of slugs.entries()) {
+        await this.deleteCheckedCollection(slug, collections[index]);
       }
 
       return {
         success: true,
         statusCode: 200,
-        message: "Collection deleted! Restart the app to complete removal.",
+        message:
+          slugs.length === 1
+            ? "Collection deleted! Restart the app to complete removal."
+            : "Collections deleted! Restart the app to complete removal.",
         data: { deleted: true },
       };
     } catch (error: unknown) {
@@ -1055,5 +1040,66 @@ export class CollectionMetadataService extends BaseService {
         this.dialect
       );
     }
+  }
+
+  /**
+   * Remove one collection that nothing outside its operation depends on: its
+   * field-group values, its translations, its tables, its registry row and
+   * its permissions.
+   */
+  private async deleteCheckedCollection(
+    slug: string,
+    collection: DeletedCollectionRow
+  ): Promise<void> {
+    // Embedded component instances live in `comp_<slug>` tables keyed by a plain
+    // `_parent_table` string with no FK, so dropping this collection's table cascades
+    // nothing and would strand every instance. Sweep them (and any nested instances)
+    // before the drop.
+    await teardownEntityComponentData({
+      adapter: this.adapter,
+      parentTable: collection.tableName,
+    });
+
+    // Tear down the localization artifacts in-process, before the main table goes.
+    // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
+    // companion holds an FK to `<main>.id` so dropping the child first is safe in every
+    // environment, and the shared-archive purge is DML that no migration file should
+    // carry (the archive table is created lazily and may not exist).
+    await teardownEntityI18n({
+      kind: "collection",
+      adapter: this.adapter,
+      slug: slug,
+      tableName: collection.tableName,
+    });
+
+    // With the fields, so the collection's own many-to-many junctions go with it.
+    const dropArtifacts = this.collectionService.generateDropTableMigration(
+      slug,
+      collection.tableName,
+      collection.fields ?? []
+    );
+
+    // Persist the drop migration. It is the durable DDL record applied by
+    // `nextly migrate` in non-dev/deploy flows.
+    await this.fileManager.saveDropMigration(
+      dropArtifacts.migrationSQL,
+      dropArtifacts.migrationFileName
+    );
+
+    // Run drop migration in development
+    if (this.isDevelopment()) {
+      await this.fileManager.runMigration(dropArtifacts.migrationSQL);
+    }
+
+    // Unregister from metadata
+    await this.collectionService.unregisterCollection(slug);
+
+    // Delete associated permissions
+    await deleteResourcePermissions({
+      service: this.permissionSeedService,
+      slug,
+      kind: "collection",
+      logger: this.logger,
+    });
   }
 }

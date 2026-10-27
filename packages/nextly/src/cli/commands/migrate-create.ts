@@ -50,6 +50,7 @@ import { dirname, relative, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { compileExtensionSchemaWith } from "../../domains/collections/services/collection-dependents-schema";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import {
@@ -74,7 +75,11 @@ import {
   generatePluginMigration,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import { assertRemovedCollectionsUnused } from "../../domains/schema/migrate-create/removed-collections";
+import {
+  EMPTY_SNAPSHOT,
+  loadLatestSnapshot,
+} from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -436,13 +441,37 @@ export async function runMigrateCreate(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
+  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+
+  // Before the app stream compiles: a plugin hook still extending a removed
+  // collection's table would stop that compile with a bare "does not exist",
+  // where this names what the hook adds. A drop of a collection something
+  // still depends on is refused with the message a delete gets.
+  try {
+    await assertRemovedCollectionsUnused({
+      previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+      collections,
+      singles,
+      components,
+      dialect,
+      extensionSchema: removed =>
+        compileExtensionSchemaWith({
+          config: configResult.config,
+          dialect,
+          removedCollections: removed,
+          logger: { warn: m => logger.warn(m) },
+        }),
+    });
+  } catch (error) {
+    logger.error(describeError(error, { context: false }));
+    process.exit(1);
+  }
+
   const appStream = await compileAppStreamTables({
     config: configResult.config,
     dialect,
     logger: { warn: m => logger.warn(m) },
   });
-
-  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
   if (
     nothingToGenerate({
       entityCount: collections.length + singles.length + components.length,

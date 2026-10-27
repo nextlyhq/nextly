@@ -20,6 +20,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { compileExtensionSchemaWith } from "../../domains/collections/services/collection-dependents-schema";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
@@ -27,8 +28,10 @@ import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
+import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
+import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -54,7 +57,7 @@ export interface PruneResult {
 interface RunPruneArgs {
   registry: Pick<
     CollectionRegistryService,
-    "findOrphanedCollections" | "deleteCollection"
+    "findOrphanedCollections" | "deleteCollection" | "assertNothingDependsOn"
   >;
   adapter: TeardownI18nAdapter & {
     getCapabilities(): { dialect: string };
@@ -62,6 +65,16 @@ interface RunPruneArgs {
   };
   currentSlugs: string[];
   force: boolean;
+  /**
+   * The extension schema the configuration declares, compiled with the
+   * orphans' tables in it: their entities are no longer configured, so a
+   * plugin hook still extending one would otherwise not compile, and what it
+   * adds to the table could not be named. Without it, the schema this
+   * process published is read, as every other delete reads it.
+   */
+  extensionSchema?: (
+    orphans: readonly DynamicCollectionRecord[]
+  ) => Promise<ExtensionSchemaRecord | null>;
 }
 
 /** The main table a companion belongs to (`dc_pages_locales` -> `dc_pages`). */
@@ -71,8 +84,10 @@ function companionMainTable(companionTable: string): string {
 
 /**
  * Core prune logic (D14): detect orphaned pipeline collections, then either
- * list them (dry-run) or drop their physical table + metadata (`force`). Kept
- * free of CLI/IO concerns for unit/integration testing.
+ * list them (dry-run) or drop their physical table + metadata (`force`). A
+ * forced prune refuses, before its first drop and for the whole set, while
+ * anything outside the orphans depends on one of them (`assertNothingDependsOn`).
+ * Kept free of CLI/IO concerns for unit/integration testing.
  */
 export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   const orphans = await args.registry.findOrphanedCollections(
@@ -97,6 +112,15 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
       droppedCompanions: [],
     };
   }
+
+  // Before the first drop and for the whole set: a refusal part way through
+  // would leave some orphans dropped and the rest not, and orphans that point
+  // only at each other go together.
+  const compile = args.extensionSchema;
+  await args.registry.assertNothingDependsOn(
+    slugs,
+    compile === undefined ? {} : { extensionSchema: () => compile(orphans) }
+  );
 
   // Dialect-safe identifier quoting + FK-safe drop, mirroring the sibling drop
   // sites (collection-sync-service.ts): MySQL uses backticks; Postgres needs
@@ -210,6 +234,15 @@ export async function runPruneCommand(
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
       force: options.force ?? false,
+      // Compiled here, not published: this command serves nothing, and only
+      // reads what the configured plugins and the app declare.
+      extensionSchema: orphans =>
+        compileExtensionSchemaWith({
+          config: configResult.config,
+          dialect,
+          removedCollections: orphans,
+          logger: { warn: message => logger.warn(message) },
+        }),
     });
 
     if (result.orphans.length === 0) {

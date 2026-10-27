@@ -336,7 +336,8 @@ export const PATCH = withErrorHandler(
  *
  * Requires `manage-settings` (or super-admin). The registry throws
  * `NextlyError.forbidden` with `reason: "collection-locked-delete"` if the
- * collection is locked (code-first collections cannot be deleted via API).
+ * collection is locked (code-first collections cannot be deleted via API), and
+ * a conflict naming what depends on it while anything does.
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -350,6 +351,9 @@ export const DELETE = withErrorHandler(
 
     const { slug } = await context.params;
 
+    // The registry row's removal is followed by a drop of the collection's
+    // table, so it is refused while anything still depends on the collection.
+    await registry.assertNothingDependsOn([slug]);
     await registry.deleteCollection(slug);
 
     return new Response(null, { status: 204 });

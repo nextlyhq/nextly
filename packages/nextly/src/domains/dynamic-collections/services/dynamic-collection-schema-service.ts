@@ -65,6 +65,7 @@ import {
 import { backfillDefaultForType } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
+import { junctionTableNameFor, junctionTablesOf } from "./collection-tables";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /**
@@ -2718,13 +2719,11 @@ ${allColumnDefs.join(",\n")}
     // The collection's own many-to-many junctions, for the same reason and in the same
     // position: each holds an FK to `<main>.id`, and nothing else names them. Only this
     // collection's fields are known here; a junction another collection's field points at
-    // this table through is that collection's, and stays until its field goes.
-    const dropJunctionStatements = fields
-      .filter(usesJunctionTable)
-      .map(
-        field =>
-          `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
-      );
+    // this table through is that collection's, and stays until its field goes. Named by
+    // `junctionTablesOf`, the list the check before a delete reads, so both name the same tables.
+    const dropJunctionStatements = junctionTablesOf(tableName, fields).map(
+      junction => `DROP TABLE IF EXISTS ${this.quoteIdentifier(junction)};`
+    );
 
     const migrationSQL = [
       `-- Drop dynamic collection: ${collectionName}`,
@@ -3365,33 +3364,14 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
    * The junction table a many-to-many field's links live in: the author's own
    * name when the field sets one, else the generated one. Asked here by the
    * CREATE, the DROP and the RENAME alike, so the three cannot name different
-   * tables for one field.
+   * tables for one field. The rule itself is `collection-tables`, which the
+   * check before a delete asks too.
    */
   junctionTableNameFor(
     sourceTableName: string,
     field: FieldDefinition
   ): string {
-    return (
-      field.options?.junctionTable ||
-      this.generateJunctionTableName(
-        sourceTableName,
-        `dc_${field.options?.target ?? ""}`,
-        field.name
-      )
-    );
-  }
-
-  /**
-   * Generate junction table name following naming convention
-   */
-  generateJunctionTableName(
-    sourceTable: string,
-    targetTable: string,
-    fieldName: string
-  ): string {
-    // Sort table names alphabetically for consistency
-    const tables = [sourceTable, targetTable].sort();
-    return `${tables[0]}_${tables[1]}_${fieldName}`;
+    return junctionTableNameFor(sourceTableName, field);
   }
 
   // ==================== TYPE MAPPING METHODS ====================

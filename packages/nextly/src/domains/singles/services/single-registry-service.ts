@@ -48,6 +48,7 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import { deleteResourcePermissions } from "../../collections/services/delete-resource-permissions";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -850,28 +851,12 @@ export class SingleRegistryService extends BaseRegistryService<
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
 
-      if (this.permissionSeedService) {
-        try {
-          const permissionResult =
-            await this.permissionSeedService.deletePermissionsForResource(slug);
-
-          if (permissionResult.created > 0) {
-            this.logger.info(
-              `Deleted ${permissionResult.created} permission(s) for single "${slug}"`
-            );
-          }
-
-          if (permissionResult.skipped > 0) {
-            this.logger.warn(
-              `${permissionResult.skipped} permission(s) for "${slug}" could not be deleted (may be assigned to roles)`
-            );
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to cleanup permissions for single "${slug}": ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
+      await deleteResourcePermissions({
+        service: this.permissionSeedService,
+        slug,
+        kind: "single",
+        logger: this.logger,
+      });
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, forbidden
       // above). Raw DB errors map via fromDatabaseError per spec §8.2.
