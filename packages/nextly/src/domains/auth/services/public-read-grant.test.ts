@@ -255,6 +255,35 @@ describe("seedPublicReadGrants asking rules", () => {
   });
 });
 
+describe("seedPublicReadGrants timing", () => {
+  it("gives the rules their whole time after the targets are found", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { seeding, granted } = site();
+      const seeded = seedPublicReadGrants({
+        ...seeding,
+        // A slow registry: the targets take longer to find than a rule has.
+        targets: async () => {
+          await new Promise(resolve => setTimeout(resolve, 2500));
+          return [
+            {
+              kind: "collection" as const,
+              slug: "posts",
+              access: { read: async () => true },
+            },
+          ];
+        },
+      });
+      await vi.advanceTimersByTimeAsync(2500);
+      await seeded;
+
+      expect(granted).toContain("posts");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("permissionIdsBySlug", () => {
   it("reads every page of permissions", async () => {
     const pages = [

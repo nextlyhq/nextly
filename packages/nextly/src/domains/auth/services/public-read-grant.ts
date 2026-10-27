@@ -384,11 +384,14 @@ export async function seedPublicReadGrants({
   const roleId = await publicRoleId();
   if (roleId === null) return;
   // Every rule of every target is asked at once, so one deadline bounds them.
+  // Started once the targets are known, so the time their lookup takes is
+  // not taken from the rules.
+  const found = await targets();
   const { deadline, stop } = sharedDeadline();
   let asked: Asked[];
   try {
     asked = await Promise.all(
-      (await targets()).map(async target => {
+      found.map(async target => {
         // Worked out once per target, and only where a rule reads them.
         let contexts: Array<RuleLanguage | undefined> | undefined;
         const once = () => (contexts ??= languageContexts(target));
