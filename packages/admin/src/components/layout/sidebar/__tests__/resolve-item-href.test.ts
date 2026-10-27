@@ -151,4 +151,12 @@ describe("resolveItemHref", () => {
       )
     ).toBe("#");
   });
+
+  it("gives the Content item the href it is handed, and none by default", () => {
+    const content = makeItem({ id: "content", label: "Content", href: "#" });
+    expect(resolveItemHref(content, [])).toBe("#");
+    expect(resolveItemHref(content, [], undefined, false, ROUTES.SINGLES)).toBe(
+      ROUTES.SINGLES
+    );
+  });
 });

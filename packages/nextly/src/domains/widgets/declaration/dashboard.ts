@@ -10,7 +10,7 @@
  * @module domains/widgets/declaration/dashboard
  */
 
-import type { CoreWidgetId } from "../core-widgets";
+import type { CoreWidgetId } from "../core-widgets/ids";
 import type { WidgetSizeDeclaration } from "../grid-size";
 
 import type { AnyWidget, WidgetDataInput } from "./define-widget";
@@ -21,7 +21,7 @@ import type { AnyWidget, WidgetDataInput } from "./define-widget";
  * misspelt id when it compiles, and the set follows core's widgets with no
  * second edit.
  */
-export type { CoreWidgetId } from "../core-widgets";
+export type { CoreWidgetId } from "../core-widgets/ids";
 
 /**
  * A count for the Needs attention card: a whole number, or one marked as a
