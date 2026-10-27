@@ -40,8 +40,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
-import { settleThenDropLeavingFields } from "../../domains/i18n/migration/held-leaving-drops";
+import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -1013,77 +1012,43 @@ const COLLECTIONS_METHODS: Record<
               companionExists,
             })),
           });
-          // A disable archives non-default translations, so ensure the archive
-          // table exists first. Run each statement individually (executeQuery is
-          // single-statement on some drivers, e.g. sqlite).
-          if (plan.needsArchive) {
-            await ensureI18nArchive(adapter, dialect);
-          }
-          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
-          // would make a half-finished localization ENABLE look like success, because the planner
-          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
-          for (const stmt of plan.statements) {
-            await adapter.executeQuery(stmt);
-          }
           // The settings the first push left off, once the shared columns hold the default
           // language's values, and only then the leaving fields' companion columns dropped. A new
           // desired schema rather than an edit of the first: the pipeline keeps the last one it
           // applied, by reference, to skip a push that changes nothing.
-          if (settingsDeferred) {
-            const settleLeaving = leavingSettingsStep({
-              adapter,
-              entity: String(p.collectionName),
-              tableName,
-              builtBy: "collection",
-              oldFields,
-              newFields,
-              renamed: companionRename,
-              push: () =>
-                apply(
-                  {
-                    ...desired,
-                    collections: {
-                      ...desired.collections,
-                      [p.collectionName]: {
-                        ...desired.collections[p.collectionName],
-                        fields: fields as DesiredCollection["fields"],
+          await applyCompanionTransition({
+            adapter,
+            plan,
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: String(p.collectionName),
+                  tableName,
+                  builtBy: "collection",
+                  oldFields,
+                  newFields,
+                  renamed: companionRename,
+                  push: () =>
+                    apply(
+                      {
+                        ...desired,
+                        collections: {
+                          ...desired.collections,
+                          [p.collectionName]: {
+                            ...desired.collections[p.collectionName],
+                            fields: fields as DesiredCollection["fields"],
+                          },
+                        },
                       },
-                    },
-                  },
-                  "ui",
-                  { promptChannel: "auto" }
-                ),
-            });
-            await settleThenDropLeavingFields({
-              adapter,
-              plan,
-              settleLeaving,
-              entity: "collection",
-            });
-          }
-
-          // The transition record describes a companion that no longer exists, so it stops being true
-          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
-          // source locale — the check that protects a live transition would block a legitimate one.
-          if (plan.companionDropped) {
-            // The other half of "this companion is gone": readiness remembers only that one
-            // exists.
-            const { forgetCompanionReadiness } = await import(
-              "../../domains/i18n/runtime/companion-readiness"
-            );
-            forgetCompanionReadiness(adapter, `${tableName}_locales`);
-            const { resolveTransitionStore } = await import(
-              "../../domains/i18n/migration/transition-recorder"
-            );
-            const { forgetI18nTransition } = await import(
-              "../../domains/i18n/migration/transition-state"
-            );
-            await forgetI18nTransition(
-              await resolveTransitionStore(adapter),
-              "collection",
-              String(p.collectionName)
-            );
-          }
+                      "ui",
+                      { promptChannel: "auto" }
+                    ),
+                })
+              : undefined,
+            kind: "collection",
+            slug: String(p.collectionName),
+            tableName,
+          });
         } catch (err) {
           // A refused setting is the dialog's answer to the admin, naming the field, and nothing
           // has been dropped by then, so it is passed on as it is rather than as a companion out

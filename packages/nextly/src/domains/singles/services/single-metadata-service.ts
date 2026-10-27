@@ -1811,12 +1811,10 @@ export class SingleMetadataService {
       // recorded as the table then holds them, without the settings, and the runtime shape is
       // bound from the same list, so the next save sees the settings as a change and applies them.
       const refused = await this.applyLeavingSettings(adapter, tableName, plan);
-      const recorded = refused
-        ? {
-            ...plan,
-            fields: withoutRefusedSettings(plan.fields, plan.leavingSettings),
-          }
-        : plan;
+      const recorded = {
+        ...plan,
+        fields: withoutRefusedSettings(plan.fields, refused),
+      };
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -1837,7 +1835,7 @@ export class SingleMetadataService {
         input.isLocalized
       );
 
-      if (refused) return { status: "failed", refused: plan.leavingSettings };
+      if (refused.length > 0) return { status: "failed", refused };
 
       // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
       //
@@ -1902,7 +1900,8 @@ export class SingleMetadataService {
   }
 
   /**
-   * Applies the plan's leaving settings, all of them or none, and says whether they were refused.
+   * Applies the plan's leaving settings, all of them or none, and returns those refused: every one
+   * of them, or none.
    * The statements themselves refuse values that cannot take a setting, a value written since the
    * save's first check included. PostgreSQL and SQLite run the steps in one transaction. MySQL
    * commits each schema statement, so a step it refuses has itself and every step before it
@@ -1912,9 +1911,9 @@ export class SingleMetadataService {
     adapter: DrizzleAdapter,
     tableName: string,
     plan: UpdateDdlPlan
-  ): Promise<boolean> {
+  ): Promise<LeavingSettingStep[]> {
     const steps = plan.leavingSettings;
-    if (steps.length === 0) return false;
+    if (steps.length === 0) return [];
     const dialect = adapter.getCapabilities().dialect;
     const run = (migrationSQL: string) =>
       applyMigrationWhole({
@@ -1928,7 +1927,7 @@ export class SingleMetadataService {
         await run(
           steps.map(step => step.forward).join("\n--> statement-breakpoint\n")
         );
-        return false;
+        return [];
       }
       for (const [i, step] of steps.entries()) {
         try {
@@ -1938,7 +1937,7 @@ export class SingleMetadataService {
           throw error;
         }
       }
-      return false;
+      return [];
     } catch (error) {
       this.logger.error(
         `[Singles] The Required and Unique settings of fields leaving translation on ` +
@@ -1946,7 +1945,7 @@ export class SingleMetadataService {
             error instanceof Error ? error.message : String(error)
           }`
       );
-      return true;
+      return steps;
     }
   }
 
