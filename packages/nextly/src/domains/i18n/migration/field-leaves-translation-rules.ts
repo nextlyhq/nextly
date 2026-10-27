@@ -179,6 +179,53 @@ export function withoutLeavingConstraints<F extends LeavingFieldLike>(
   );
 }
 
+/** A Required or Unique setting a field was recorded without, because its statement did not land. */
+export interface LeavingSettingHeldBack {
+  field: string;
+  setting: "required" | "unique";
+}
+
+/**
+ * The settings `requested` asks for that `recorded` holds back: each Required or Unique of a field
+ * leaving translation whose statement did not land, so the field was recorded as the table holds
+ * it, without the setting. Empty when `recorded` is `requested`.
+ */
+export function leavingSettingsHeldBack(
+  requested: readonly LeavingFieldLike[],
+  recorded: readonly LeavingFieldLike[]
+): LeavingSettingHeldBack[] {
+  const held = new Map(recorded.map(f => [f.name, f]));
+  return requested.flatMap(field => {
+    const kept = held.get(field.name);
+    if (kept === undefined || kept === field) return [];
+    const keptSettings = new Set(leavingFieldConstraints(kept, undefined));
+    return leavingFieldConstraints(field, undefined)
+      .filter(setting => !keptSettings.has(setting))
+      .map(setting => ({ field: field.name, setting }));
+  });
+}
+
+/**
+ * What the person saving is told when a setting was held back: which setting, on which field, was
+ * not applied, and that saving the same fields again applies it. Names fields and settings only,
+ * never a value.
+ */
+export function leavingSettingsHeldBackMessage(
+  heldBack: readonly LeavingSettingHeldBack[]
+): string {
+  const named = heldBack
+    .map(
+      h => `${h.setting === "required" ? "Required" : "Unique"} on ${h.field}`
+    )
+    .join(", ");
+  const one = heldBack.length === 1;
+  return (
+    `The fields were saved as shared, but ${named} ${one ? "was" : "were"} not applied: ` +
+    `the database refused ${one ? "it" : "them"} once the values were shared. ` +
+    `Save again to apply ${one ? "it" : "them"}.`
+  );
+}
+
 function reshapedJoiningRefusal(
   name: string,
   surface: Surface

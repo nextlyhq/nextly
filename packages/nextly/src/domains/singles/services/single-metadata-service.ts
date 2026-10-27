@@ -46,6 +46,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { FieldConfig } from "@nextly/collections";
+
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -62,13 +64,18 @@ import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
 } from "../../i18n/migration/archive-preflight";
-import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
+import {
+  type LeavingSettingHeldBack,
+  leavingSettingsHeldBack,
+  withoutLeavingConstraints,
+} from "../../i18n/migration/field-leaves-translation-rules";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -187,6 +194,11 @@ export interface UpdateSingleSchemaInput {
 export interface UpdateSingleSchemaResult {
   record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
+  /**
+   * The Required and Unique settings of fields leaving translation that did not land, so the
+   * fields were recorded without them; empty when every one landed.
+   */
+  heldBack: LeavingSettingHeldBack[];
 }
 
 /**
@@ -692,6 +704,7 @@ export class SingleMetadataService {
     // migration reached, because this request neither confirmed nor changed it.
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
+    let heldBack: LeavingSettingHeldBack[] = [];
 
     if (plan) {
       // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
@@ -705,16 +718,23 @@ export class SingleMetadataService {
       }
       // A leaving field whose Required or Unique setting did not land is recorded without it, as
       // the table holds it: recorded with it, the next save of the same fields would find nothing
-      // to apply, and the setting would never be asked for again.
+      // to apply, and the setting would never be asked for again. Its hash follows the list that is
+      // recorded, so the version moves on and a save planned from before this one is refused.
       if (
         !settingsLanded &&
         plan.deferredSettingsFor.size > 0 &&
         Array.isArray(updateData.fields)
       ) {
-        updateData.fields = withoutLeavingConstraints(
-          updateData.fields as FieldDefinition[],
+        const requested = updateData.fields as FieldDefinition[];
+        const recorded = withoutLeavingConstraints(
+          requested,
           plan.deferredSettingsFor
         );
+        updateData.fields = recorded;
+        updateData.schemaHash = calculateSchemaHash(
+          recorded as unknown as FieldConfig[]
+        );
+        heldBack = leavingSettingsHeldBack(requested, recorded);
       }
     }
 
@@ -723,7 +743,7 @@ export class SingleMetadataService {
       source: "ui",
     });
 
-    return { record, migrationStatus };
+    return { record, migrationStatus, heldBack };
   }
 
   /**

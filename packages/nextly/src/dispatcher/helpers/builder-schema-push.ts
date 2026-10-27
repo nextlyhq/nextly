@@ -16,6 +16,10 @@ import {
   companionUniqueIndexName,
   uniqueTranslatedColumns,
 } from "../../domains/i18n/migration/companion-unique-indexes";
+import {
+  type LeavingSettingHeldBack,
+  leavingSettingsHeldBackMessage,
+} from "../../domains/i18n/migration/field-leaves-translation-rules";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -217,19 +221,24 @@ async function dropLeavingFieldUniqueIndexes(
 /**
  * The error for a schema dialog's second push refused: the one that applies the Required and
  * Unique settings of fields leaving translation after their values were shared. By then the first
- * push and the companion transition have run, so the fields are shared without their settings; the
- * log says so, and the public message stays generic.
+ * push and the companion transition have run, and the dialog has recorded the fields as the table
+ * holds them, shared without those settings. The message names each setting not applied and says
+ * that saving again applies it; the database's own reason stays in the log, as it may quote a
+ * value.
  */
 export function leavingSettingsNotApplied(
   entity: string,
-  result: Pick<PipelineResult, "error">
+  result: Pick<PipelineResult, "error">,
+  heldBack: readonly LeavingSettingHeldBack[]
 ): NextlyError {
-  return NextlyError.internal({
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: leavingSettingsHeldBackMessage(heldBack),
     logContext: {
       op: "leavingFieldSettings",
       entity,
       detail: result.error?.message,
-      note: "fields leaving translation are shared without their Required or Unique settings",
+      heldBack,
     },
   });
 }

@@ -41,6 +41,11 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
+import {
+  type LeavingFieldLike,
+  type LeavingSettingHeldBack,
+  leavingSettingsHeldBack,
+} from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -58,7 +63,10 @@ import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
 } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
+import {
+  type PipelineResult,
+  PushSchemaPipeline,
+} from "../../domains/schema/pipeline/pushschema-pipeline";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
@@ -1053,6 +1061,18 @@ const COLLECTIONS_METHODS: Record<
       // language's values. Whether those values can take them was asked before anything ran.
       // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
       // applied, by reference, to skip a push that changes nothing.
+      //
+      // Refused, the move has still committed: the table holds the shared columns without the
+      // settings. Recorded as it holds them, so the record, its version and the runtime shape all
+      // describe the table, and saving the same fields again applies the settings; the error raised
+      // once that is written names each one not applied.
+      let recordedFields = fields;
+      let settingsRefused:
+        | {
+            result: Pick<PipelineResult, "error">;
+            heldBack: LeavingSettingHeldBack[];
+          }
+        | undefined;
       if (settingsDeferred) {
         const settled = await apply(
           {
@@ -1069,7 +1089,14 @@ const COLLECTIONS_METHODS: Record<
           { promptChannel: "auto" }
         );
         if (!settled.success) {
-          throw leavingSettingsNotApplied(String(p.collectionName), settled);
+          recordedFields = settingsDeferred;
+          settingsRefused = {
+            result: settled,
+            heldBack: leavingSettingsHeldBack(
+              fields as unknown as LeavingFieldLike[],
+              settingsDeferred
+            ),
+          };
         }
       }
 
@@ -1097,7 +1124,7 @@ const COLLECTIONS_METHODS: Record<
         await adapter.update(
           "dynamic_collections",
           {
-            fields: JSON.stringify(fields),
+            fields: JSON.stringify(recordedFields),
             schema_version: newSchemaVersion,
             // i18n: persist the state this apply actually ran with (mirrors
             // the singles apply). The DDL above already performed any
@@ -1170,7 +1197,7 @@ const COLLECTIONS_METHODS: Record<
         // per-language reads/writes resolve in THIS process without a restart.
         const { table: freshTable } = generateRuntimeSchema(
           tableName,
-          fields as FieldDefinition[],
+          recordedFields as FieldDefinition[],
           dialect,
           { localized: isLocalized, status: collection.status === true }
         );
@@ -1183,7 +1210,7 @@ const COLLECTIONS_METHODS: Record<
           const companion = buildCompanionRuntimeTable({
             slug: p.collectionName,
             tableName,
-            fields: fields as FieldDefinition[],
+            fields: recordedFields as FieldDefinition[],
             dialect,
             localized: true,
             status: collection.status === true,
@@ -1225,6 +1252,14 @@ const COLLECTIONS_METHODS: Record<
       // toast summary string. toastSummary may be undefined when the
       // pipeline didn't emit diff counts; the conditional spread drops
       // undefined fields silently.
+      if (settingsRefused) {
+        throw leavingSettingsNotApplied(
+          String(p.collectionName),
+          settingsRefused.result,
+          settingsRefused.heldBack
+        );
+      }
+
       return respondAction(`Schema applied for '${p.collectionName}'`, {
         newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
         ...(result.summary

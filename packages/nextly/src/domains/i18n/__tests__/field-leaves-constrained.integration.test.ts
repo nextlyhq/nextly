@@ -63,6 +63,11 @@ interface Entries {
     },
     data: Record<string, unknown>
   ): Promise<{ success: boolean; data: unknown }>;
+  listEntries(params: {
+    collectionName: string;
+    overrideAccess?: boolean;
+    status?: "published" | "draft" | "all";
+  }): Promise<unknown>;
 }
 
 interface CollectionsHandler {
@@ -594,78 +599,8 @@ describeEachDialect(
 
     /** Whether the registry still describes `code` as translated. */
     async function registryTranslatesCode(entity: string): Promise<unknown> {
-      const { table, slug } = REGISTRY[entity];
-      const [row] = await query<{ fields: unknown }>(
-        `SELECT ${q("fields")} AS fields FROM ${q(table)} WHERE ${q("slug")} = '${slug}'`
-      );
-      const fields = (
-        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
-      ) as { name: string; localized?: boolean }[];
-      return fields.find(f => f.name === "code")?.localized;
+      return (await registryCode(entity))?.localized;
     }
-
-    // A dialog's apply shares the values, drops the companion column and only then pushes the
-    // Unique setting. When that last push fails (here a write landing in between gives a second
-    // entry an existing value), the values already sit on the main table while the registry still
-    // names the field translated, so the same save, retried, has to finish from that state.
-    it.each(
-      PATHS.filter(
-        p => p.path.includes("schema dialog") && p.entity !== "single"
-      )
-    )(
-      "finishes on a retry after the push applying Unique fails once the values are shared, when $path",
-      async path => {
-        const english = ["a1@example.com", "b2@example.com"];
-        await seedConstrained(path, { unique: true }, english);
-        const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
-
-        // The real push, run as it is; before the second one in the save, a row sharing an
-        // entry's value is written to the main table, so that push is refused by the database.
-        const realApply = PushSchemaPipeline.prototype.apply;
-        let pushes = 0;
-        const spy = vi
-          .spyOn(PushSchemaPipeline.prototype, "apply")
-          .mockImplementation(async function (
-            this: PushSchemaPipeline,
-            ...args: Parameters<PushSchemaPipeline["apply"]>
-          ) {
-            pushes += 1;
-            if (pushes === 2) {
-              await query(
-                rowFor(path.table, "concurrent-1", "'a1@example.com'")
-              );
-            }
-            return realApply.apply(this, args);
-          });
-        const failure = await attempt(path.change(change));
-        spy.mockRestore();
-
-        expect(pushes).toBe(2);
-        expect(failure).toBeInstanceOf(NextlyError);
-        expect((failure as NextlyError).logContext?.op).toBe(
-          "leavingFieldSettings"
-        );
-        // The state the retry starts from: values shared, companion column gone, registry behind.
-        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
-        expect(await registryTranslatesCode(path.entity)).not.toBe(false);
-
-        await query(
-          `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
-        );
-        await path.change(change);
-
-        expect(await registryTranslatesCode(path.entity)).toBe(false);
-        expect(await sharedCodes(path.table)).toEqual(english);
-        // The row sharing an entry's value first, then one of the same shape that does not: the
-        // second is taken, so the first was refused for its value, not for its shape.
-        expect(
-          await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
-        ).not.toBe(true);
-        expect(
-          await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
-        ).toBe(true);
-      }
-    );
 
     /** The registry's record of `code` for `entity`. */
     async function registryCode(
@@ -681,16 +616,37 @@ describeEachDialect(
       return fields.find(f => f.name === "code");
     }
 
-    // A Single's save records its field list even when a statement fails, since by then the table
-    // may already have changed. When the one that fails applies a leaving field's setting, after
-    // its value is shared, the record has to say the field holds no setting yet: recorded with it,
-    // the next save of the same fields would find nothing to apply and the setting would never land.
+    /** What a read of the entity's content returns, through the product's own read path. */
+    async function readContent(entity: string): Promise<string> {
+      if (entity === "collection") {
+        return JSON.stringify(
+          await handler().getEntryService().listEntries({
+            collectionName: "posts",
+            overrideAccess: true,
+            status: "all",
+          })
+        );
+      }
+      const singles: SingleEntryService =
+        current.getService("singleEntryService");
+      return JSON.stringify(
+        await singles.get("hero", { overrideAccess: true })
+      );
+    }
+
+    // A leaving field's setting is applied after its values are shared and its companion column is
+    // gone. When that step is refused (here a write landing in between gives a second entry an
+    // existing value), the move has committed, so the field is recorded as the table holds it:
+    // shared, without the setting. The record, its version and the runtime shape all say so, the
+    // admin is told which setting was not applied, and saving again applies it.
     it.each(
-      // A collection's save returns before its record is written when a statement fails, so its
-      // record stays as it was and the same save, retried, finishes the change.
-      PATHS.filter(p => p.path === "a Single's schema is saved")
+      PATHS.filter(
+        p =>
+          p.path.includes("schema dialog") ||
+          p.path === "a Single's schema is saved"
+      )
     )(
-      "records a field without the Unique it did not get, so saving it again applies it, when $path",
+      "records a field without the Unique it did not get, reads it at once, and applies Unique on the next save, when $path",
       async path => {
         const english =
           path.entity === "single"
@@ -698,23 +654,68 @@ describeEachDialect(
             : ["a1@example.com", "b2@example.com"];
         await seedConstrained(path, { unique: true }, english);
         const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
+        const { table: registry, slug } = REGISTRY[path.entity];
+        const versionBefore = await schemaVersionOf(registry, slug);
 
-        // The real statements, run as they are; before the ones applying the leaving field's
-        // settings, a second row holding the entry's value is written, as a concurrent write would.
+        // The real statements, run as they are; just before the one applying Unique, a row sharing
+        // an entry's value is written to the main table. A dialog applies the setting in a second
+        // push; a Single's save, in a statement of its own after the companion reconcile.
+        const concurrent = () =>
+          query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
         let injected = false;
+        const realApply = PushSchemaPipeline.prototype.apply;
+        let pushes = 0;
+        const spy = vi
+          .spyOn(PushSchemaPipeline.prototype, "apply")
+          .mockImplementation(async function (
+            this: PushSchemaPipeline,
+            ...args: Parameters<PushSchemaPipeline["apply"]>
+          ) {
+            pushes += 1;
+            if (pushes === 2 && path.path.includes("schema dialog")) {
+              injected = true;
+              await concurrent();
+            }
+            return realApply.apply(this, args);
+          });
         beforeStatement.run = async (sql: string) => {
           if (injected || !/unique/i.test(sql) || !/code/.test(sql)) return;
           injected = true;
-          await query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
+          await concurrent();
         };
-        await attempt(path.change(change));
+        const failure = await attempt(path.change(change));
+        spy.mockRestore();
         beforeStatement.run = undefined;
 
         expect(injected).toBe(true);
+        // Told which setting, on which field, and what to do.
+        expect(failure).toBeInstanceOf(NextlyError);
+        expect((failure as NextlyError).message).toMatch(
+          /Unique on code was not applied.*Save again to apply it/
+        );
+        // Recorded as the table holds it, under a new version.
+        expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
         expect(await registryCode(path.entity)).toMatchObject({
           localized: false,
         });
         expect((await registryCode(path.entity))?.unique).not.toBe(true);
+        const versionAfterFailure = await schemaVersionOf(registry, slug);
+        expect(versionAfterFailure).toBeGreaterThan(versionBefore);
+        // Read at once through the runtime shape registered for the table as it is. A field
+        // group's rows are read only through the entries that embed them.
+        if (path.entity !== "fieldGroup") {
+          expect(await readContent(path.entity)).toContain("a1@example.com");
+        }
+        if (path.entity === "single") {
+          const singles: SingleEntryService =
+            current.getService("singleEntryService");
+          const rewritten = await singles.update(
+            "hero",
+            { code: "a1@example.com", views: 2 },
+            { overrideAccess: true }
+          );
+          expect(rewritten.success, JSON.stringify(rewritten)).toBe(true);
+        }
 
         await query(
           `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
@@ -725,7 +726,14 @@ describeEachDialect(
           localized: false,
           unique: true,
         });
+        // The save that applies the setting changes what is recorded, so it moves the version on:
+        // a save planned before it is refused.
+        expect(await schemaVersionOf(registry, slug)).toBeGreaterThan(
+          versionAfterFailure
+        );
         expect(await sharedCodes(path.table)).toEqual(english);
+        // The row sharing an entry's value first, then one of the same shape that does not: the
+        // second is taken, so the first was refused for its value, not for its shape.
         expect(
           await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
         ).not.toBe(true);

@@ -36,8 +36,14 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import {
+  type LeavingFieldLike,
+  type LeavingSettingHeldBack,
+  leavingSettingsHeldBack,
+} from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -609,6 +615,18 @@ export const COMPONENTS_METHODS: Record<
           // language's values. Whether those values can take them was asked before anything ran.
           // A new desired schema rather than an edit of the first: the pipeline keeps the last one
           // it applied, by reference, to skip a push that changes nothing.
+          //
+          // Refused, the move has still committed: the table holds the shared columns without the
+          // settings. Recorded as it holds them, so the record, its hash and version, and the
+          // runtime shape all describe the table, and saving the same fields again applies the
+          // settings; the error raised once that is written names each one not applied.
+          let recordedFields = fields;
+          let settingsRefused:
+            | {
+                result: Pick<PipelineResult, "error">;
+                heldBack: LeavingSettingHeldBack[];
+              }
+            | undefined;
           if (settingsDeferred) {
             const settled = await push({
               ...desired,
@@ -621,7 +639,14 @@ export const COMPONENTS_METHODS: Record<
               },
             });
             if (!settled.success) {
-              throw leavingSettingsNotApplied(slug, settled);
+              recordedFields = settingsDeferred;
+              settingsRefused = {
+                result: settled,
+                heldBack: leavingSettingsHeldBack(
+                  fields as unknown as LeavingFieldLike[],
+                  settingsDeferred
+                ),
+              };
             }
           }
 
@@ -644,8 +669,10 @@ export const COMPONENTS_METHODS: Record<
               // runtime schema on the next restart.
               await resolveFieldGroupRegistryName(adapter),
               {
-                fields: JSON.stringify(fields),
-                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+                fields: JSON.stringify(recordedFields),
+                schema_hash: calculateSchemaHash(
+                  recordedFields as FieldConfig[]
+                ),
                 migration_status: "applied",
                 localized: isLocalized,
                 schema_version: newSchemaVersion,
@@ -669,7 +696,9 @@ export const COMPONENTS_METHODS: Record<
             const { recordStrandedTransition } = await import(
               "../../domains/field-groups/services/record-stranded-transition"
             );
-            const expectedHash = calculateSchemaHash(fields as FieldConfig[]);
+            const expectedHash = calculateSchemaHash(
+              recordedFields as FieldConfig[]
+            );
             await recordStrandedTransition({
               registry: svc.registry,
               logger: getLoggerFromDI() ?? DISCARDED_LOG,
@@ -708,7 +737,7 @@ export const COMPONENTS_METHODS: Record<
             adapter,
             dialect,
             tableName,
-            fields as FieldConfig[],
+            recordedFields as FieldConfig[],
             componentTypeColumn,
             isLocalized
           );
@@ -716,6 +745,14 @@ export const COMPONENTS_METHODS: Record<
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so
           // there is no longer a branch that reports a version the database did not persist.
+          if (settingsRefused) {
+            throw leavingSettingsNotApplied(
+              slug,
+              settingsRefused.result,
+              settingsRefused.heldBack
+            );
+          }
+
           return respondAction(`Schema applied for component '${slug}'`, {
             newSchemaVersion,
           });
