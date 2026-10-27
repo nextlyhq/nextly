@@ -15,10 +15,11 @@
  * hand-written extras) are allowed.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
-import type { SupportedDialect } from "../../../../database/index";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveCollectionTableName } from "../../utils/resolve-table-name";
 import { toMinimalEntities } from "../config-entities";
@@ -123,25 +124,28 @@ function typeFamily(type: string): string {
   return t;
 }
 
+/**
+ * One export of a module in the blog template. Loaded by a path built at run
+ * time, which TypeScript does not follow: the template is its own project,
+ * and a static import would pull its files into this package's type check.
+ */
+async function templateExport(file: string, name: string): Promise<unknown> {
+  const module: Record<string, unknown> = await import(
+    fileURLToPath(new URL(file, TEMPLATE))
+  );
+  return module[name];
+}
+
 async function blogEntities() {
-  const { Categories } = await import(
-    "../../../../../../../templates/blog/src/collections/Categories"
-  );
-  const { Tags } = await import(
-    "../../../../../../../templates/blog/src/collections/Tags"
-  );
-  const { Posts } = await import(
-    "../../../../../../../templates/blog/src/collections/Posts/index"
-  );
-  const { Homepage } = await import(
-    "../../../../../../../templates/blog/src/singles/Homepage/index"
-  );
-  const { Navigation } = await import(
-    "../../../../../../../templates/blog/src/singles/Navigation/index"
-  );
-  const { SiteSettings } = await import(
-    "../../../../../../../templates/blog/src/singles/SiteSettings/index"
-  );
+  const [Posts, Categories, Tags, SiteSettings, Navigation, Homepage] =
+    await Promise.all([
+      templateExport("src/collections/Posts/index.ts", "Posts"),
+      templateExport("src/collections/Categories.ts", "Categories"),
+      templateExport("src/collections/Tags.ts", "Tags"),
+      templateExport("src/singles/SiteSettings/index.ts", "SiteSettings"),
+      templateExport("src/singles/Navigation/index.ts", "Navigation"),
+      templateExport("src/singles/Homepage/index.ts", "Homepage"),
+    ]);
   return {
     collections: toMinimalEntities([Posts, Categories, Tags], e =>
       resolveCollectionTableName(e.slug, e.dbName)
