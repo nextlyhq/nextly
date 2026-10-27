@@ -74,6 +74,18 @@ function isEnabled(level: DbLogLevel): boolean {
   return req >= current;
 }
 
+/**
+ * `logger`, handed every event made safe first: an auth failure's message can
+ * name the address that was signing in, or quote the credential it refused.
+ * Applied to every auth logger, the default or an app's own, and to a
+ * database logger an app installs, so no caller can reach one without it.
+ */
+function redacting<Level, Event>(logger: {
+  log(level: Level, event: Event): void;
+}): { log(level: Level, event: Event): void } {
+  return { log: (level, event) => logger.log(level, safeToLog(event)) };
+}
+
 class DefaultDbLogger implements DbLogger {
   log(level: DbLogLevel, event: DbLogEventBase): void {
     if (!isEnabled(level)) return;
@@ -88,10 +100,13 @@ class DefaultDbLogger implements DbLogger {
   }
 }
 
+// The default redacts inside itself, after its enabled check, so a query
+// logged while database logging is off costs no walk; a logger an app
+// installs is handed every event made safe first (`redacting`).
 let activeLogger: DbLogger = new DefaultDbLogger();
 
 export function setDbLogger(logger: DbLogger): void {
-  activeLogger = logger;
+  activeLogger = redacting(logger);
 }
 
 export function getDbLogger(): DbLogger {
@@ -194,16 +209,6 @@ class DefaultAuthLogger implements AuthLogger {
     else if (level === "warn") console.warn("[auth]", JSON.stringify(payload));
     else console.log("[auth]", JSON.stringify(payload));
   }
-}
-
-/**
- * `logger`, handed every event made safe first: an auth failure's message can
- * name the address that was signing in, or quote the credential it refused.
- * Applied to whichever logger is installed, the default or an app's own, so
- * no caller of `getAuthLogger()` can reach one without it.
- */
-function redacting(logger: AuthLogger): AuthLogger {
-  return { log: (level, event) => logger.log(level, safeToLog(event)) };
 }
 
 let activeAuthLogger: AuthLogger = redacting(new DefaultAuthLogger());

@@ -8,7 +8,15 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type AuthLogEvent, getAuthLogger, setAuthLogger } from "../logger";
+import {
+  type AuthLogEvent,
+  type DbLogEventBase,
+  getAuthLogger,
+  getDbLogger,
+  logDbConn,
+  setAuthLogger,
+  setDbLogger,
+} from "../logger";
 
 const ADDRESS = "john@example.com";
 
@@ -85,5 +93,30 @@ describe("an auth logger an app installs", () => {
     expect(output).toContain("Could not read: Bearer");
     expect(output).not.toContain("nx_live_aW5zdGFsbGVkTG9nZ2Vy");
     expect(output).not.toContain("session-aW5zdGFsbGVk");
+  });
+});
+
+describe("a database logger an app installs", () => {
+  it("receives events with the credentials taken out", () => {
+    const installed = getDbLogger();
+    const received: DbLogEventBase[] = [];
+    setDbLogger({ log: (_, event) => received.push(event) });
+    try {
+      logDbConn("error", {
+        dialect: "postgresql",
+        op: "health-fail",
+        errorMessage:
+          "connect failed for postgres://app:db-password-1@db.example.test/app",
+        token: "db-token-2",
+      });
+    } finally {
+      setDbLogger(installed);
+    }
+
+    const output = JSON.stringify(received);
+    // The control: the event arrived, with its words.
+    expect(output).toContain("connect failed for");
+    expect(output).not.toContain("db-password-1");
+    expect(output).not.toContain("db-token-2");
   });
 });

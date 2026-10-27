@@ -384,6 +384,33 @@ describe("credentials anywhere in a log value", () => {
     expect(note).not.toContain("chain-secret");
   });
 
+  it.each([
+    ['retrying with token="unterminated-secret-1', "unterminated-secret-1"],
+    ["retrying with password='unterminated-secret-2", "unterminated-secret-2"],
+    [
+      'upstream said {\\"apiKey\\":\\"unterminated-secret-3',
+      "unterminated-secret-3",
+    ],
+  ])(
+    "takes the rest of the line after an unclosed quote: %s",
+    (text, secret) => {
+      const out = receivedBy({ note: text });
+      // The control: the words before it remain.
+      expect(out).toContain(text.split(" ")[0]);
+      expect(out).not.toContain(secret);
+    }
+  );
+
+  it("takes them out of a request's path", () => {
+    const out = receivedBy({
+      request: new Request("https://example.test/reset/token=path-secret-1"),
+    });
+    // The control: the method and the rest of the path remain.
+    expect(out).toContain("GET");
+    expect(out).toContain("/reset/");
+    expect(out).not.toContain("path-secret-1");
+  });
+
   it("keeps a map's entries apart when their keys redact alike", () => {
     const received: unknown[] = [];
     maskingServiceLogger({

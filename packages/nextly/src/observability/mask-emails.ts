@@ -90,7 +90,10 @@ function walk(
   if (value instanceof URLSearchParams || value instanceof URL) {
     return rules.text(value.toString());
   }
-  return rules.other?.(value) ?? value;
+  // A summary is walked like any value, so the text it keeps (a request's
+  // path) is rewritten too.
+  const summary = rules.other?.(value);
+  return summary === undefined ? value : walk(summary, rules, seen, true);
 }
 
 /**
@@ -444,11 +447,13 @@ const TEXT_PARAMETER = /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)/g;
 
 /**
  * A credential's value, read where its name ends: quoted, and then taken
- * whole so a quote is never read as an empty value with the secret after it,
- * or bare, with any `Bearer` or `Basic` scheme as the second group.
+ * whole so a quote is never read as an empty value with the secret after it;
+ * an opening quote never closed (a message cut short), and then the rest of
+ * the line, failing closed; or bare, with any `Bearer` or `Basic` scheme as
+ * the second group.
  */
 const TEXT_PARAMETER_VALUE =
-  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
+  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
 
 /** A value's quotes, kept around its redaction so JSON still reads as JSON. */
 const VALUE_QUOTES = /^(\\?["']?)[\s\S]*?(\1)$/;
@@ -473,7 +478,7 @@ const CREDENTIAL_PARAMETER_ONLY_NAMES: ReadonlySet<string> = new Set([
  * whose value runs on into the address, and a token in that address's query
  * must still be found.
  */
-export function redactCredentialParameters(text: string): string {
+function redactCredentialParameters(text: string): string {
   // One pass over the text, never recursing: a value after any other name is
   // searched as the text it is part of, so a chain like `a:a:a:…` costs one
   // step per name rather than one stack frame.
@@ -516,7 +521,7 @@ const COOKIE_HEADER_IN_TEXT = /\b((?:set-)?cookie):[^\r\n]*/gi;
  * credential, the user and password before a host, a quoted cookie header,
  * and the value of a parameter named like a credential or a session.
  */
-function redactCredentialsInText(text: string): string {
+export function redactCredentialsInText(text: string): string {
   return redactCredentialParameters(
     text
       .replace(

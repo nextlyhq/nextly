@@ -1,6 +1,6 @@
 import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
-import { redactCredentialParameters } from "../../observability/mask-emails";
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
@@ -43,7 +43,10 @@ export function storedPathForLog(pathOrUrl: string): string {
 export function errorForLog(error: unknown): string {
   if (!(error instanceof Error))
     return "a value that is not an error was thrown";
-  return (
+  // The whole message is judged as every log line is, so a credential's name
+  // stays joined to its value (`X-Api-Key: …`, `"token":"…"`) and a `Bearer`
+  // credential is found too.
+  return redactCredentialsInText(
     error.message
       // Every URL, with a scheme or without one (`//host/...`).
       .replace(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s"'<>]+/gi, url =>
@@ -51,11 +54,8 @@ export function errorForLog(error: unknown): string {
           ? storedPathForLog(`https:${url}`).slice(6)
           : storedPathForLog(url)
       )
-      // A query outside a URL: every parameter after a `?` or `&`, and a
-      // credential's own name anywhere (`X-Amz-Credential=...`, `token=...`).
+      // A query outside a URL: every parameter after a `?` or `&`.
       .replace(/[?&][^\s=&?#]+=[^\s&#]*/g, "")
-      // A credential's own name anywhere, judged as every log line judges it.
-      .replace(/[^\s"'<>]+/g, word => redactCredentialParameters(word))
   );
 }
 
