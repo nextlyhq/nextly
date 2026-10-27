@@ -1147,6 +1147,35 @@ describe("switching language after a change to access", () => {
   });
 });
 
+describe("a placeholder past its end", () => {
+  it("keeps no answer the end of a role has left behind, before it is asked again", async () => {
+    // The English answer is in the cache, not yet invalidated, from before the
+    // role assignment it was read under ended. German is opened and its own
+    // answer is held back: the English one is no placeholder for it.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const ended = Date.now() - 60_000;
+    client.setQueryData(
+      currentUserCapabilitiesKey("en"),
+      answering({ read: true, update: true }, ended),
+      { updatedAt: ended - 60_000 }
+    );
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "de";
+
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+
+    // The first render, before anything is asked again.
+    expect(result.current.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+    });
+  });
+});
+
 describe("a change to access during a language switch", () => {
   it("stops keeping the language moved from once a change invalidates it", async () => {
     onScreen.locale = "en";
