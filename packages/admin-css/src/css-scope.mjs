@@ -357,13 +357,14 @@ export function prefixKeyframes(css, prefix) {
 }
 
 /**
- * Collect style-rule selectors that escaped `.nextly-admin`.
+ * Every style-rule selector part in a stylesheet, one entry per comma part.
  *
- * Walks brace depth so nested at-rules (@layer/@media/@supports) are checked,
- * while at-rules whose bodies are not selectors are skipped.
+ * Walks brace depth so nested at-rules (@layer/@media/@supports) are visited,
+ * while at-rules whose bodies are not selectors are skipped. Shared by the
+ * leak checks, which answer different questions about the same rules.
  */
-export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
-  const offenders = [];
+function collectStyleRuleSelectors(css) {
+  const selectors = [];
   const skipAtRule = /^@(keyframes|font-face|property|counter-style|page)/i;
   // Comments would otherwise be swallowed into the following rule's prelude
   // (e.g. the `/*! tailwindcss ... */` banner before `@layer`).
@@ -393,15 +394,9 @@ export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
       if (prelude.startsWith("@")) {
         if (!skipAtRule.test(prelude)) walk(block.slice(open + 1, j));
       } else if (prelude) {
-        // A comma-separated selector list is scoped only if EVERY part is
-        // scoped. Check each part independently — a whole-prelude substring
-        // test would accept `.nextly-admin .a, .leak` because the first part
-        // scopes it, letting `.leak` restyle the host page.
         for (const part of splitTopLevel(prelude)) {
           const trimmed = part.trim();
-          if (trimmed && !isScoped(trimmed, scope)) {
-            offenders.push(trimmed.slice(0, 100));
-          }
+          if (trimmed) selectors.push(trimmed);
         }
       }
       i = j + 1;
@@ -409,5 +404,208 @@ export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
   }
 
   walk(css);
+  return selectors;
+}
+
+/**
+ * Collect style-rule selectors that escaped `.nextly-admin`.
+ *
+ * A comma-separated selector list is scoped only if EVERY part is scoped, so
+ * each part is checked independently — a whole-prelude substring test would
+ * accept `.nextly-admin .a, .leak` because the first part scopes it, letting
+ * `.leak` restyle the host page.
+ */
+export function findUnscopedRules(css, scope = DEFAULT_SCOPE) {
+  const offenders = collectStyleRuleSelectors(css)
+    .filter(part => !isScoped(part, scope))
+    .map(part => part.slice(0, 100));
+  return [...new Set(offenders)];
+}
+
+/**
+ * The state classes Tailwind's variants reach for through an ancestor:
+ * `dark:` matches `.dark` on any ancestor, and `group-*:`/`peer-*:` match a
+ * `.group`/`.peer` marker, optionally named (`group\/item`).
+ *
+ * A compound references the marker when it carries the class anywhere in it
+ * — `html.dark` and a chained `.a.dark` both require an element with the
+ * class, wherever in the compound it sits — at an identifier boundary, and
+ * not behind an escape (`.foo\.dark` and the utility class `.dark\:x` are
+ * different classes, not references). The wrapper carrying the class
+ * (`.nextly-admin.dark`, the scoped dark token block) is caught by the
+ * scope-first ordering in the caller, not by this pattern.
+ */
+const VARIANT_MARKER_RE =
+  /(?<!\\)\.(dark|group|peer)((?:\\\/[\w-]+)?)(?![\w\\-])/;
+
+/** Whether a compound carries the scope class (`.nextly-admin.dark` does). */
+function hasScopeClass(compound, scope) {
+  // Escape sequences collapse to an inert identifier character first, so
+  // `.nextly-ui\~x` — a different class that shares the scope's text — is not
+  // read as the wrapper.
+  const literal = compound.replace(/\\./g, "_");
+  const className = scope.replace(/^\./, "");
+  return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`).test(literal);
+}
+
+/**
+ * Split an item into compounds at top-level whitespace and combinators.
+ *
+ * Combinators matter because the release gate reads the minified sheet,
+ * where `a > b` is written `a>b` and a whitespace-only split would leave
+ * `.dark>.nextly-admin` as one compound — one the scope check would accept
+ * while the `.dark` marker in front of it goes unseen.
+ */
+function splitCompounds(item) {
+  const compounds = [];
+  let current = "";
+  let depth = 0;
+  for (const ch of item) {
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    // `[class~="x"]` keeps its `~`: it sits inside the brackets' depth.
+    if (depth === 0 && (/\s/.test(ch) || ch === ">" || ch === "+" || ch === "~")) {
+      if (current.trim()) compounds.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) compounds.push(current.trim());
+  return compounds;
+}
+
+/**
+ * Whether an item names a variant marker that no preceding compound has
+ * brought under `scope`.
+ *
+ * The confined forms carry the scope in front — `:where(.nextly-admin .group)`
+ * and `:where(.nextly-admin.dark, .nextly-admin.dark *)` — so a marker that
+ * appears before any scope compound, or with none at all, names an element
+ * outside the wrapper: the host's `<html class="dark">`, a host `.group`.
+ * A marker AFTER the scope (`.nextly-admin .group:hover .x`) is a marker the
+ * admin's own DOM carries, which is the in-admin styling confinement keeps.
+ */
+function markerOutsideScope(item, scope) {
+  let scoped = false;
+  for (const compound of splitCompounds(item)) {
+    if (hasScopeClass(compound, scope)) scoped = true;
+    if (!scoped && VARIANT_MARKER_RE.test(compound)) return true;
+  }
+  return false;
+}
+
+/**
+ * The contents of each `:where(...)` in a selector, however deeply the selector
+ * nests them (`:is(:where(.group):hover *)` carries `.group`).
+ */
+function* whereContents(selector) {
+  let from = 0;
+  for (;;) {
+    const at = selector.indexOf(":where(", from);
+    if (at === -1) return;
+    // `open` sits on the `(` of ":where(" itself, so the balanced scan covers
+    // the whole group; an unbalanced one yields nothing rather than a slice
+    // to the end of the selector.
+    const open = at + ":where(".length - 1;
+    const close = skipBalanced(selector, open);
+    if (close === -1) return;
+    yield selector.slice(open + 1, close);
+    from = close + 1;
+  }
+}
+
+/**
+ * The index of the `)` closing the balanced paren group that opens at `open`,
+ * or -1 when the group never closes.
+ */
+function skipBalanced(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * A selector with its functional pseudo-classes (`:where(...)`, `:is(...)`)
+ * removed, leaving the compounds that name real elements.
+ *
+ * Escaped characters pass through untouched: `.dark\:border` is one class
+ * name, not a `dark:` variant. Plain pseudos (`:hover`, `::before`) stay —
+ * they qualify a compound, they do not relocate it.
+ */
+function stripFunctionalPseudos(selector) {
+  let out = "";
+  let i = 0;
+  while (i < selector.length) {
+    if (selector[i] === "\\") {
+      out += selector.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    const end = functionalPseudoEnd(selector, i);
+    if (end !== undefined) {
+      i = end; // drop the whole `:name(...)` group
+      continue;
+    }
+    out += selector[i];
+    i++;
+  }
+  return out;
+}
+
+/**
+ * One past a functional pseudo-class starting at `i`, or undefined when `i`
+ * does not start one. `:hover` and `::before` have no `(...)` body, so they
+ * are not functional and return undefined here. A group that never closes
+ * swallows the rest of the selector, as an unclosed functional pseudo would.
+ */
+function functionalPseudoEnd(selector, i) {
+  if (selector[i] !== ":" || !/[a-zA-Z-]/.test(selector[i + 1] ?? "")) return;
+  let name = i + 1;
+  while (name < selector.length && /[\w-]/.test(selector[name])) name++;
+  if (selector[name] !== "(") return;
+  const close = skipBalanced(selector, name);
+  return close === -1 ? selector.length : close + 1;
+}
+
+/**
+ * Whether a selector part leaves a dark/group/peer reference where an element
+ * outside `scope` can satisfy it.
+ *
+ * Two shapes reach for an ancestor the rule does not own:
+ *
+ *   - the variant references Tailwind compiles `dark:`/`group-*:`/`peer-*:`
+ *     into — `:where(.dark, .dark *)`, `:is(:where(.group):hover *)` — where
+ *     the marker class inside the `:where` is the ancestor;
+ *   - a bare ancestor compound (`.dark .nextly-admin .x`), which passes the
+ *     unscoped-rule check (the rule's own subject IS inside the wrapper) while
+ *     still requiring a `.dark` ancestor the admin does not carry.
+ */
+function hasUnconfinedVariant(selector, scope) {
+  for (const content of whereContents(selector)) {
+    for (const item of splitTopLevel(content)) {
+      if (markerOutsideScope(item, scope)) return true;
+    }
+  }
+  return markerOutsideScope(stripFunctionalPseudos(selector), scope);
+}
+
+/**
+ * Collect style-rule selectors whose dark/group/peer variant references an
+ * element outside `.nextly-admin` can satisfy.
+ *
+ * This is the gate on {@link confineVariantClasses}: scoping a rule's own
+ * selector leaves the variant's ancestor reference — the existing leak guard
+ * checks the subject, not the ancestors it requires, so an unconfined variant
+ * passes it. The release build refuses to ship these; the dev build reports
+ * them.
+ */
+export function findUnconfinedVariants(css, scope = DEFAULT_SCOPE) {
+  const offenders = collectStyleRuleSelectors(css)
+    .filter(part => hasUnconfinedVariant(part, scope))
+    .map(part => part.slice(0, 100));
   return [...new Set(offenders)];
 }

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   confineVariantClasses,
+  findUnconfinedVariants,
   findUnscopedRules,
   isScoped,
   prefixKeyframes,
@@ -164,6 +165,131 @@ describe("findUnscopedRules", () => {
         "/*! tailwindcss v4 */\n@layer base{.nextly-admin a{color:red}}"
       )
     ).toEqual([]);
+  });
+});
+
+describe("findUnconfinedVariants", () => {
+  it("reports an unconfined dark variant reference by name", () => {
+    // The rule's own subject is scoped, so only the ancestor reference inside
+    // the :where reaches outside the wrapper — the shape the unscoped-rules
+    // check passes and this gate exists to catch.
+    const sel = ".nextly-admin .dark\\:border-border:where(.dark, .dark *)";
+    expect(findUnconfinedVariants(`${sel}{border-color:red}`)).toEqual([sel]);
+  });
+
+  it("passes the confined form confineVariantClasses emits", () => {
+    const css =
+      ".nextly-admin .dark\\:border-border:where(.nextly-admin.dark,.nextly-admin.dark *){border-color:red}";
+    expect(findUnconfinedVariants(css)).toEqual([]);
+  });
+
+  it("reports group- and peer-shaped references by name", () => {
+    const group =
+      ".nextly-admin .group-hover\\:x:is(:where(.group):hover *){color:blue}";
+    const peer =
+      ".nextly-admin .peer-checked\\:x:is(:where(.peer):checked ~ *){color:blue}";
+    expect(findUnconfinedVariants(group + peer)).toEqual([
+      ".nextly-admin .group-hover\\:x:is(:where(.group):hover *)",
+      ".nextly-admin .peer-checked\\:x:is(:where(.peer):checked ~ *)",
+    ]);
+  });
+
+  it("reports named group and peer markers, and passes them confined", () => {
+    const unconfined =
+      ".nextly-admin .group-hover\\/item\\:x:is(:where(.group\\/item):hover *){color:red}";
+    expect(findUnconfinedVariants(unconfined)).toEqual([
+      ".nextly-admin .group-hover\\/item\\:x:is(:where(.group\\/item):hover *)",
+    ]);
+    const confined = confineVariantClasses(unconfined);
+    expect(confined).toContain(":where(.nextly-admin .group\\/item)");
+    expect(findUnconfinedVariants(confined)).toEqual([]);
+  });
+
+  it("passes a marker compound the admin's own DOM carries", () => {
+    // R-4's promise: a marker inside the wrapper is the in-admin styling
+    // confinement keeps, not a leak.
+    expect(
+      findUnconfinedVariants(".nextly-admin .group:hover .a{color:red}")
+    ).toEqual([]);
+  });
+
+  it("reports a bare dark ancestor compound before the scope", () => {
+    // `.dark` at the top level of the selector: the subject is scoped, so the
+    // unscoped-rules check passes it, but a host <html class="dark"> satisfies
+    // the ancestor.
+    expect(findUnconfinedVariants(".dark .nextly-admin .a{color:red}")).toEqual(
+      [".dark .nextly-admin .a"]
+    );
+  });
+
+  it("sees the marker wherever it sits in the compound", () => {
+    // The class can follow a type selector (`html.dark`) or chain onto
+    // another class (`.a.dark`): both name an element carrying `.dark`, and
+    // a compound-initial-only check would let both through the gate.
+    expect(findUnconfinedVariants("html.dark .nextly-admin .a{color:red}"))
+      .toEqual(["html.dark .nextly-admin .a"]);
+    expect(findUnconfinedVariants(".a.dark .nextly-admin .x{color:red}")).toEqual(
+      [".a.dark .nextly-admin .x"]
+    );
+    expect(
+      findUnconfinedVariants(
+        ".nextly-admin .a:where(html.dark, html.dark *){color:red}"
+      )
+    ).toHaveLength(1);
+  });
+
+  it("splits combinators written without spaces, as the minifier writes them", () => {
+    // The release gate reads the minified sheet, where `a > b` is `a>b`; a
+    // whitespace-only split leaves `.dark>.nextly-admin` as one compound the
+    // scope check accepts while the marker in front of it goes unseen.
+    expect(findUnconfinedVariants(".dark>.nextly-admin .a{color:red}")).toEqual(
+      [".dark>.nextly-admin .a"]
+    );
+    // A marker AFTER the scope, child step, is still an in-admin marker.
+    expect(
+      findUnconfinedVariants(".nextly-admin>.group:hover .a{color:red}")
+    ).toEqual([]);
+  });
+
+  it("passes the scope's own dark token block", () => {
+    // `.dark` ON the wrapper is the admin's dark theme, not an ancestor
+    // reference.
+    expect(findUnconfinedVariants(".nextly-admin.dark{--a:1}")).toEqual([]);
+  });
+
+  it("is not fooled by class names that merely start with a marker", () => {
+    expect(findUnconfinedVariants(".nextly-admin .group-card .a{color:red}"))
+      .toEqual([]);
+    // The utility class `.dark\:x` is one class name whose text contains
+    // "dark", not a dark: variant — the variant is the :where, tested above.
+    expect(findUnconfinedVariants(".nextly-admin .dark\\:x{color:red}")).toEqual(
+      []
+    );
+  });
+
+  it("checks inside conditional at-rules", () => {
+    expect(
+      findUnconfinedVariants(
+        "@media (min-width:40rem){.nextly-admin .a:where(.dark,.dark *){color:red}}"
+      )
+    ).toHaveLength(1);
+  });
+
+  it("finds nothing left after confineVariantClasses rewrote the sheet", () => {
+    const css =
+      ".nextly-admin .dark\\:x:where(.dark, .dark *){color:red}" +
+      ".nextly-admin .group-hover\\:x:is(:where(.group):hover *){color:blue}" +
+      ".nextly-admin .peer-disabled\\:x:is(:where(.peer):disabled *){color:green}";
+    expect(findUnconfinedVariants(confineVariantClasses(css))).toEqual([]);
+  });
+
+  it("honours a custom scope", () => {
+    const sel = ".nextly-ui .dark\\:x:where(.dark, .dark *)";
+    expect(findUnconfinedVariants(`${sel}{color:red}`, ".nextly-ui")).toEqual([
+      sel,
+    ]);
+    const confined = confineVariantClasses(`${sel}{color:red}`, ".nextly-ui");
+    expect(findUnconfinedVariants(confined, ".nextly-ui")).toEqual([]);
   });
 });
 
