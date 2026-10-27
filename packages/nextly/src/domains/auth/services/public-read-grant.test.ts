@@ -225,7 +225,11 @@ describe("seedPublicReadGrants asking rules", () => {
     // Timeouts only: the in-memory `nextly_meta` turns with `setImmediate`.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const never = () => new Promise<boolean>(() => {});
+      let started = 0;
+      const never = () => {
+        started++;
+        return new Promise<boolean>(() => {});
+      };
       const { seeding } = site();
       const seeded = seedPublicReadGrants({
         ...seeding,
@@ -238,7 +242,9 @@ describe("seedPublicReadGrants asking rules", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
 
-      // Six rules waiting, and one timer for all of them.
+      // All six rules asked at once, before any time passes, and one timer
+      // for all of them.
+      expect(started).toBe(6);
       expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(2000);

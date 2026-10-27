@@ -272,6 +272,15 @@ describe("seedPermissionsAndRolePresets", () => {
     }
   });
 
+  it("grants the Public role nothing until every permission is seeded", async () => {
+    seedSystemPermissions.mockRejectedValue(new Error("connection reset"));
+
+    await seedPermissionsAndRolePresets();
+
+    expect(seedPublicRole).toHaveBeenCalled();
+    expect(seedPublicReadGrants).not.toHaveBeenCalled();
+  });
+
   it("writes nothing during a production build", async () => {
     // What `next build` sets while it prerenders, which is when a build boots
     // Nextly: the first runtime boot seeds before it serves.

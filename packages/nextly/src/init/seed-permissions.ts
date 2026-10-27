@@ -13,6 +13,7 @@
  * @module init/seed-permissions
  */
 
+import type { AccessTarget } from "../auth/access/decide";
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/service-access";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -261,7 +262,9 @@ async function seedEverything(): Promise<void> {
   });
   // Public's read where code lets anyone read, granted once per entity so an
   // owner's change to it stands, and the startup listing of what it lacks.
-  if (publicRoleSeeded) {
+  // Only after every permission seeded: a read whose permission is missing
+  // could be neither granted nor listed, so a later boot does it whole.
+  if (publicRoleSeeded && permissionsSeeded) {
     await seedingStep("public role's reads", seedPublicRoleReads);
   }
   // A plugin role is created once and never revisited: a later boot skips a
@@ -302,7 +305,11 @@ function seedPublicRoleReads(): Promise<void> {
         getService("collectionRegistryService").getAllLabels(),
         getService("singleRegistryService").getAllLabels(),
       ]);
-      return [
+      // Each slug once, as a request finds it: the target the rules are
+      // registered under, kind and rules together. Boot keeps one slug to
+      // one kind, so this is the entity itself.
+      const bySlug = new Map<string, AccessTarget>();
+      for (const target of [
         ...collections
           .filter(
             ({ slug }) =>
@@ -310,10 +317,14 @@ function seedPublicRoleReads(): Promise<void> {
           )
           .map(({ slug }) => ({ kind: "collection" as const, slug })),
         ...singles.map(({ slug }) => ({ kind: "single" as const, slug })),
-      ].map(target => ({
-        ...target,
-        access: rbac.getRegisteredTarget(target.slug)?.access,
-      }));
+      ]) {
+        if (bySlug.has(target.slug)) continue;
+        bySlug.set(
+          target.slug,
+          rbac.getRegisteredTarget(target.slug) ?? target
+        );
+      }
+      return [...bySlug.values()];
     },
     permissionIds: () =>
       permissionIdsBySlug(new PermissionService(adapter, logger)),
