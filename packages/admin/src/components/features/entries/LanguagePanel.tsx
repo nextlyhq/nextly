@@ -713,7 +713,8 @@ function PublishAllConfirm({
   held: boolean;
   onOpenChange: (open: boolean) => void;
   languageCount: number;
-  pendingCount: number;
+  // Null where the languages' states were not read, so no count is known.
+  pendingCount: number | null;
   publish: ReturnType<typeof usePublishAllLanguages>;
 }) {
   const offered = !held && publish.available;
