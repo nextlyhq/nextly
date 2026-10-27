@@ -80,17 +80,42 @@ function signalTree(pid, signal, { platform, kill, run }) {
     : signalGroup(pid, signal, kill);
 }
 
-/** Whether `exited` settles within `ms`, without a timer left to hold the process open. */
-async function exitsWithin(exited, ms) {
+/**
+ * Whether process group `pid` still has a live process. A group that exists
+ * but is not this user's to signal is alive all the same.
+ */
+function liveGroup(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+/**
+ * Whether the server has exited within `ms`: `exited` settled and no process
+ * of its group is left. `exited` alone is the shell's exit, and a wrapper such
+ * as pnpm can leave while the server under it is still writing; waiting for
+ * the whole group is what keeps anything it writes from landing after the run
+ * returns. No timer is left to hold the process open.
+ */
+async function exitsWithin(exited, ms, groupAlive) {
+  const deadline = Date.now() + ms;
   let timer;
   const late = new Promise(resolve => {
     timer = setTimeout(() => resolve(false), ms);
   });
   try {
-    return await Promise.race([exited.then(() => true), late]);
+    if (!(await Promise.race([exited.then(() => true), late]))) return false;
   } finally {
     clearTimeout(timer);
   }
+  while (groupAlive()) {
+    if (Date.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return true;
 }
 
 /**
@@ -101,8 +126,9 @@ async function exitsWithin(exited, ms) {
  * Asked to end, then forced after `graceMs`; each wait is bounded, and a
  * server still there after both is reported with its pid rather than waited
  * on for good. A kill that fails is reported, not swallowed. The platform and
- * the functions that kill are passed in so each platform's path can be tested
- * on any machine.
+ * the functions that kill and look for the group are passed in so each
+ * platform's path can be tested on any machine. Windows has no process group
+ * to look for: `taskkill /T` has ended the tree when it returns.
  */
 export function stopperFor({
   pid,
@@ -112,12 +138,13 @@ export function stopperFor({
   kill = process.kill,
   run = spawnSync,
   graceMs = STOP_GRACE_MS,
+  groupAlive = platform === "win32" ? () => false : () => liveGroup(pid),
 }) {
   let stopping;
   const attempt = async signal => {
     const failed = signalTree(pid, signal, { platform, kill, run });
     if (failed) log(failed);
-    return exitsWithin(exited, graceMs);
+    return exitsWithin(exited, graceMs, groupAlive);
   };
   const stop = async () => {
     // taskkill already forces, so there is no harder second attempt on Windows.
@@ -155,17 +182,30 @@ function interruptedStatus(signal) {
  */
 export function startDetached({ command, cwd, env, keep, log }) {
   const [shell, ...args] = shellArgs(command);
+  // A server this run stops has its errors forwarded until the stop begins,
+  // and none after: its wrapper reports the intended SIGTERM as a failure.
+  // One left running with `keep` writes to this terminal directly, since a
+  // pipe from it would break when this process exits.
   const child = spawn(shell, args, {
     cwd,
     env,
-    stdio: ["ignore", "ignore", "inherit"],
+    stdio: ["ignore", "ignore", keep ? "inherit" : "pipe"],
     // Its own process group, which the group kill stops whole; on Windows a
     // detached child would get a console window of its own instead.
     detached: process.platform !== "win32",
     windowsHide: true,
   });
-  const exited = new Promise(resolve => child.once("exit", () => resolve()));
-  const stopTree = stopperFor({ pid: child.pid, exited, log });
+  let stopping = false;
+  child.stderr?.on("data", chunk => {
+    if (!stopping) process.stderr.write(chunk);
+  });
+  // `close`, not `exit`: it waits for every process holding the pipe too.
+  const exited = new Promise(resolve => child.once("close", () => resolve()));
+  const stopper = stopperFor({ pid: child.pid, exited, log });
+  const stopTree = () => {
+    stopping = true;
+    return stopper();
+  };
 
   const onSignal = signal => {
     unhook();

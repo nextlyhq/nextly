@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -30,6 +32,9 @@ function recorder({ killThrows, taskkillStatus = 0 } = {}) {
       };
     },
     log: line => calls.log.push(line),
+    // The pid here is made up, so its group is said to be gone rather than
+    // looked up on this machine, where some real group could hold that id.
+    groupAlive: () => false,
   };
 }
 
@@ -187,6 +192,102 @@ describe.runIf(process.platform !== "win32")(
       } finally {
         if (groupAlive(server.pid)) process.kill(-server.pid, "SIGKILL");
       }
+    });
+  }
+);
+
+/*
+ * A server that, like the playground's, sits under a wrapper: `pnpm exec`
+ * leaves at once on SIGTERM and reports the stop as a failure, while the
+ * server under it takes a moment to exit. The stand-in server says it started
+ * (a line a real start failure would print too), and on SIGTERM waits, writes
+ * an error line and a marker file, and exits.
+ */
+function standInServer(dir, { serverStdio = "inherit" } = {}) {
+  const server = path.join(dir, "server.cjs");
+  const wrapper = path.join(dir, "wrapper.cjs");
+  const marker = path.join(dir, "exited");
+  writeFileSync(
+    server,
+    `process.stderr.write("stand-in: started\\n");
+process.on("SIGTERM", () => setTimeout(() => {
+  process.stderr.write("stand-in: ERR failed on SIGTERM\\n");
+  require("fs").writeFileSync(${JSON.stringify(marker)}, "exited");
+  process.exit(1);
+}, 300));
+setInterval(() => {}, 1000);
+`
+  );
+  writeFileSync(
+    wrapper,
+    `require("child_process").spawn(process.execPath, [${JSON.stringify(server)}], { stdio: ${JSON.stringify(serverStdio)} });
+process.on("SIGTERM", () => process.exit(1));
+setInterval(() => {}, 1000);
+`
+  );
+  return {
+    command: `${JSON.stringify(process.execPath)} ${JSON.stringify(wrapper)}`,
+    marker,
+  };
+}
+
+/**
+ * Starts the stand-in the way the run starts the playground, in a process of
+ * its own as the command runs, so what reaches its stderr, and when, is what
+ * an author's terminal or log file would get. Waits for it to start, stops
+ * it, and answers that stderr and what was true when `stop()` resolved.
+ */
+function stopStandIn(options) {
+  const dir = mkdtempSync(path.join(tmpdir(), "visual-check-stop-"));
+  try {
+    const { command, marker } = standInServer(dir, options);
+    const server = pathToFileURL(path.join(HERE, "server.mjs")).href;
+    const script = `
+      import { existsSync } from "node:fs";
+      import { startDetached } from ${JSON.stringify(server)};
+      const handle = startDetached({ command: ${JSON.stringify(command)}, cwd: process.cwd(), env: process.env, keep: false, log: line => console.log(line) });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const gone = await handle.stop();
+      let alive = true;
+      try { process.kill(-handle.pid, 0); } catch { alive = false; }
+      console.log(JSON.stringify({ gone, alive, exited: existsSync(${JSON.stringify(marker)}) }));
+      process.stderr.write("tool: done\\n");
+      // Ended late, not at once, so a stop that returned early lets the
+      // server's own late write land, as it would after the command returns.
+      if (alive) setTimeout(() => { try { process.kill(-handle.pid, "SIGKILL"); } catch {} }, 2000);
+    `;
+    const run = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      { encoding: "utf8", timeout: 60_000 }
+    );
+    return {
+      stderr: run.stderr,
+      result: JSON.parse(run.stdout.trim().split("\n").pop()),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe.runIf(process.platform !== "win32")(
+  "stopping a server the run started",
+  () => {
+    it("forwards its start, silences its stop, and returns only once it has exited", () => {
+      const { stderr, result } = stopStandIn();
+      expect(stderr).toContain("stand-in: started");
+      expect(stderr).not.toContain("stand-in: ERR");
+      expect(stderr.trimEnd().endsWith("tool: done")).toBe(true);
+      expect(result).toEqual({ gone: true, alive: false, exited: true });
+    });
+
+    /*
+     * A server that holds none of the run's output closes no pipe the run
+     * waits on, so only its process group says when it has gone.
+     */
+    it("returns only once a server holding none of its output has exited too", () => {
+      const { result } = stopStandIn({ serverStdio: "ignore" });
+      expect(result).toEqual({ gone: true, alive: false, exited: true });
     });
   }
 );
