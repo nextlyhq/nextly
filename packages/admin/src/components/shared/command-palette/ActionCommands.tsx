@@ -1,6 +1,7 @@
 "use client";
 
 import { CommandGroup, CommandItem, CommandShortcut } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   FileText,
@@ -106,7 +107,7 @@ export interface ActionCommandsProps {
  *
  * @param onSelect - Callback to handle command selection
  */
-export function ActionCommands({ onSelect }: ActionCommandsProps) {
+export function ActionCommands({ onSelect }: ActionCommandsProps): JSX.Element {
   return (
     <CommandGroup heading="Actions">
       {actionCommands.map(command => {

@@ -1,4 +1,5 @@
 import { Checkbox } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   isEveryPermissionLocked,
@@ -32,7 +33,7 @@ export function PermissionMatrixRow({
   onToggleAll,
   isAllSelected,
   isPartiallySelected,
-}: PermissionMatrixRowProps) {
+}: PermissionMatrixRowProps): JSX.Element {
   const allLocked = isEveryPermissionLocked(
     permissionIdsForContentType(contentType),
     lockedIds

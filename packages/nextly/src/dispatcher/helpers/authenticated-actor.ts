@@ -19,7 +19,7 @@ export function readAuthenticatedActor(): RequestActor | undefined {
  *
  * An API key's scope is the one the route handler pinned for the dispatch,
  * whole: the same object every other gate sees, carrying the key's own grants,
- * roles and the rows a rule's `resource:action` spelling is derived from, so a
+ * roles and the rows a rule's permission list is built from, so a
  * service check (e.g. the publish/unpublish transition gate) judges the key on
  * those rather than the owner's RBAC.
  *

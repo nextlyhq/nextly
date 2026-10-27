@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan D4)
  */
 import { applyCarriedOptions } from "./field-transformers";
-import { type UiSchemaFieldType } from "./ui-schema-mode";
+import type { UiSchemaFieldType } from "./ui-schema-mode";
 
 /** Validation shape carried by builder fields (superset of FieldDefinition's). */
 export interface BuilderFieldValidationInput {

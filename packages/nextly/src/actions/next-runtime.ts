@@ -15,6 +15,15 @@
  * an upstream header could never reach its assertion — it was skipped rather
  * than deleted, precisely so that absence stayed on the record.
  *
+ * WHY `createRequire`. A static `import "next/navigation"` breaks Node's strict
+ * ESM resolver when this package is loaded as an external
+ * (`serverExternalPackages`), since Next 16 lists no `./navigation` export.
+ * The `.js`-suffixed specifier fixes Node but makes Turbopack descend into
+ * Next internals that are not on disk, and `await import()` only moves the
+ * ESM failure to call time. Node's CommonJS resolver finds
+ * `node_modules/next/navigation.js` directly, and bundlers treat the call as
+ * opaque.
+ *
  * Putting the lazy require behind a module of our own means callers import a
  * specifier tests CAN substitute, while Next is still only touched when one of
  * these functions is called. The resolution is memoised here rather than at the
@@ -40,13 +49,76 @@ export function getHeaders(): HeadersFn {
   return cachedHeaders;
 }
 
-/** Next's `unstable_rethrow`, which lets framework control-flow errors pass through untouched. */
+/**
+ * Next's `unstable_rethrow`, which lets framework control-flow errors pass
+ * through untouched. The one implementation both the route-handler and the
+ * Server Action wrappers use.
+ */
 export function getUnstableRethrow(): UnstableRethrow {
   if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  const require = createRequire(import.meta.url);
-  const mod = require("next/navigation") as {
-    unstable_rethrow: UnstableRethrow;
-  };
-  cachedUnstableRethrow = mod.unstable_rethrow;
+  cachedUnstableRethrow = unstableRethrowFrom(() =>
+    createRequire(import.meta.url)("next/navigation")
+  );
   return cachedUnstableRethrow;
+}
+
+/**
+ * Next's own `unstable_rethrow` when `load` yields it, else the same check
+ * made from the errors' digests.
+ *
+ * The `createRequire` call is opaque to file tracing, so a host that bundles
+ * each function from a trace (Vercel) can ship a bundle in which
+ * `next/navigation` loads but a module it requires is missing. This runs only
+ * after a handler has caught an error, so a failing lookup here used to turn
+ * that error into a crash of its own, and the caller never got the answer the
+ * error carried.
+ */
+function unstableRethrowFrom(load: () => unknown): UnstableRethrow {
+  try {
+    const mod = load() as { unstable_rethrow?: unknown } | null;
+    if (typeof mod?.unstable_rethrow === "function") {
+      return mod.unstable_rethrow as UnstableRethrow;
+    }
+  } catch {
+    // Fall through to the digest check below.
+  }
+  return rethrowNextControlFlow;
+}
+
+/**
+ * The digests Next gives the errors `unstable_rethrow` passes through: a
+ * redirect, a not-found or other HTTP fallback, a bail-out to client
+ * rendering, dynamic server usage, a hanging promise and an interrupted
+ * prerender (next 16.4, `client/components/unstable-rethrow.js`).
+ */
+const CONTROL_FLOW_DIGESTS = new Set([
+  "BAILOUT_TO_CLIENT_SIDE_RENDERING",
+  "DYNAMIC_SERVER_USAGE",
+  "HANGING_PROMISE_REJECTION",
+  "NEXT_PRERENDER_INTERRUPTED",
+]);
+const CONTROL_FLOW_DIGEST_PREFIXES = [
+  "NEXT_REDIRECT;",
+  "NEXT_HTTP_ERROR_FALLBACK;",
+];
+
+/**
+ * Re-throw a Next control-flow error, or one carried as another error's
+ * cause, as `unstable_rethrow` does; return for anything else.
+ */
+function rethrowNextControlFlow(error: unknown): void {
+  const digest =
+    typeof error === "object" && error !== null && "digest" in error
+      ? error.digest
+      : undefined;
+  if (
+    typeof digest === "string" &&
+    (CONTROL_FLOW_DIGESTS.has(digest) ||
+      CONTROL_FLOW_DIGEST_PREFIXES.some(prefix => digest.startsWith(prefix)))
+  ) {
+    throw error;
+  }
+  if (error instanceof Error && "cause" in error) {
+    rethrowNextControlFlow(error.cause);
+  }
 }

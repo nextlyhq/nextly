@@ -16,6 +16,7 @@
  */
 
 import { Button, Card } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   X,
@@ -228,7 +229,7 @@ export function UploadPreview({
   onEdit,
   disabled = false,
   className,
-}: UploadPreviewProps) {
+}: UploadPreviewProps): JSX.Element {
   const isImage = file.mimeType?.startsWith("image/");
   const isSvg = file.mimeType === "image/svg+xml";
   // SVGs scale natively — Nextly's media pipeline sometimes leaves

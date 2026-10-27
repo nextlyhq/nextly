@@ -44,7 +44,7 @@ function asSentence(message: string): string {
 }
 
 /** The largest request body commerce reads: far more than a cart line needs. */
-export const MAX_REQUEST_BYTES = 16 * 1024;
+export const MAX_REQUEST_BYTES: number = 16 * 1024;
 
 /**
  * A request's JSON body, read in chunks and refused at the first chunk past

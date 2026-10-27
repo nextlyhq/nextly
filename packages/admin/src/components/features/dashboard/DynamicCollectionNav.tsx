@@ -82,7 +82,7 @@ type SidebarSection =
 export function DynamicCollectionNav({
   isActive,
   search = "",
-}: DynamicCollectionNavProps) {
+}: DynamicCollectionNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();

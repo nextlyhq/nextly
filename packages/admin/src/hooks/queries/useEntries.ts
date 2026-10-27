@@ -27,10 +27,16 @@ import {
   useQuery,
   keepPreviousData,
   type UseQueryOptions,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import type { ListResponse } from "@admin/lib/api/response-types";
-import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
+import {
+  entryApi,
+  entryKeys,
+  type FindParams,
+  type CountResult,
+} from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
 /**
@@ -163,7 +169,7 @@ export function useEntries<T = Entry>({
   params,
   enabled = true,
   queryOptions,
-}: UseEntriesOptions<T>) {
+}: UseEntriesOptions<T>): UseQueryResult<ListResponse<T>, Error> {
   return useQuery<ListResponse<T>, Error>({
     queryKey: entryKeys.list(collectionSlug, params),
     queryFn: async () => {
@@ -211,7 +217,7 @@ export function useEntryCount(
   collectionSlug: string,
   where?: Record<string, unknown>,
   enabled = true
-) {
+): UseQueryResult<CountResult, Error> {
   return useQuery({
     queryKey: entryKeys.count(collectionSlug, where),
     queryFn: () => entryApi.count(collectionSlug, { where }),

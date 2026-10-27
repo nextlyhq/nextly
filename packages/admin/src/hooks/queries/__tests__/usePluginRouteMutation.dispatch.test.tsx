@@ -30,7 +30,7 @@ vi.mock("../../../../../nextly/src/auth/middleware", () => ({
 vi.mock("../../../../../nextly/src/domains/audit/audit-log-writer", () => ({
   buildAuditLogWriter: () => ({ write: vi.fn() }),
 }));
-vi.mock("../../../../../nextly/src/di/register", () => ({
+vi.mock("../../../../../nextly/src/di/service-access", () => ({
   getService: () => ({}),
 }));
 // Refuses to load where `window` exists, as server code must in a browser.

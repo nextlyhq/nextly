@@ -32,11 +32,15 @@ import {
   useMemo,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
+import { askableWith } from "../widget-as-asked";
 
 import {
   dependentsOf,
@@ -47,6 +51,11 @@ import {
   startingValue,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
+import {
+  drawnSetting,
+  overlongMessage,
+  overlongSetting,
+} from "./setting-length";
 
 export interface WidgetSettingsSheetProps {
   open: boolean;
@@ -54,6 +63,12 @@ export interface WidgetSettingsSheetProps {
   /** The card being configured, for the heading a reader reads. */
   title: string;
   settings: AnyWidgetSetting[];
+  /**
+   * The widget whose card this configures: its Collection setting offers only the collections
+   * that card can be asked of (`askableWith`), as the add panel does. Absent, it offers every
+   * collection the server sent.
+   */
+  widget?: DashboardWidget;
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
   /**
@@ -399,10 +414,12 @@ function SheetFields({
   settings,
   sources,
   saving,
+  widget,
 }: {
   settings: readonly AnyWidgetSetting[];
   sources: WidgetSources;
   saving: boolean;
+  widget: DashboardWidget | undefined;
 }) {
   // Frozen while Done saves: the save carries the values Done was pressed on, so a field changed
   // after it would be dropped without a word when the sheet closes, and one changed before a
@@ -419,11 +436,26 @@ function SheetFields({
             key={setting.name}
             setting={setting}
             sources={sources ?? []}
+            {...(widget === undefined || setting.type !== "collection"
+              ? {}
+              : {
+                  offers: (collection: string) =>
+                    askableWith(
+                      widget,
+                      { [setting.name]: collection },
+                      sources ?? undefined
+                    ),
+                })}
           />
         ) : (
           // No cast: `WidgetSetting` is assignable to `FieldConfig`,
-          // and `settings.compat.test-d.ts` is what keeps that true.
-          <FieldRenderer key={setting.name} field={setting} mode="edit" />
+          // and `settings.compat.test-d.ts` is what keeps that true. A
+          // textarea's bound is judged on Done (`drawnSetting`).
+          <FieldRenderer
+            key={setting.name}
+            field={drawnSetting(setting)}
+            mode="edit"
+          />
         )
       )}
     </fieldset>
@@ -468,7 +500,9 @@ function SheetActions({
   );
 }
 
-export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
+export function WidgetSettingsSheet(
+  props: WidgetSettingsSheetProps
+): JSX.Element {
   const { open, title, settings, config, blocked, renderPreview } = props;
   // The collections and fields this reader may be offered, decided on the
   // server; absent until the session-gated half of the payload arrives.
@@ -512,7 +546,19 @@ export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.
               onSubmit={event => {
-                void form.handleSubmit(submit)(event);
+                void form.handleSubmit(values => {
+                  // A note over its bound is refused here, by the counter the
+                  // layout write uses, rather than by the server after Done.
+                  const overlong = overlongSetting(settings, values);
+                  if (overlong) {
+                    form.setError(overlong.name, {
+                      type: "maxLength",
+                      message: overlongMessage(overlong.maxLength),
+                    });
+                    return;
+                  }
+                  submit(values);
+                })(event);
               }}
               className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
             >
@@ -521,6 +567,7 @@ export function WidgetSettingsSheet(props: WidgetSettingsSheetProps) {
                 settings={settings}
                 sources={sources}
                 saving={saving}
+                widget={props.widget}
               />
               <SheetActions
                 saving={saving}

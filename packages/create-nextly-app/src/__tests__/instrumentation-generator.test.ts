@@ -10,9 +10,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { spawnSync } from "node:child_process";
+
 import fs from "fs-extra";
-import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { compile } from "../../../../scripts/tsc-cli.mjs";
 
 import { generateInstrumentation } from "../generators/instrumentation";
 import { nextConfigFiles, patchNextConfig } from "../generators/next-config";
@@ -27,7 +30,6 @@ const blankHook = path.resolve(
 /** A Next.js release that runs the hook without opting in. */
 const NEXT = "16.0.0";
 
-/** Syntax errors in a TypeScript module, as the compiler reports them. */
 /**
  * The type errors a hook body has, checked as a program rather than only
  * transpiled, so an `await` outside an async function, a name never declared
@@ -35,6 +37,9 @@ const NEXT = "16.0.0";
  * declared by the shape the body uses them in: this package does not depend
  * on nextly, and the real API is compiled against the same body by the
  * scaffold jobs, which build the blank template whose hook shares it.
+ *
+ * Checked by the compiler's command line, which answers the same on every
+ * TypeScript version, with the options in a config written beside the files.
  */
 async function typeErrors(source: string): Promise<string[]> {
   const root = await mkdtemp(path.join(tmpdir(), "hook-types-"));
@@ -51,22 +56,25 @@ async function typeErrors(source: string): Promise<string[]> {
       declarations,
       [
         'declare module "nextly/runtime" { export function registerNextCacheRevalidator(): void; }',
-        'declare module "nextly" { export function createRegister(config: unknown): () => Promise<void>; }',
+        'declare module "nextly" { export function createRegister(config: unknown, host?: { cacheComponents?: string | boolean }): () => Promise<void>; }',
         "declare const process: { env: Record<string, string | undefined> };",
       ].join("\n")
     );
-    const program = ts.createProgram([hook, declarations], {
-      strict: true,
-      noEmit: true,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      types: [],
-      skipLibCheck: true,
-    });
-    return ts
-      .getPreEmitDiagnostics(program)
-      .map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+    await writeFile(
+      path.join(root, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "es2022",
+          module: "esnext",
+          moduleResolution: "bundler",
+          types: [],
+          skipLibCheck: true,
+        },
+        files: [hook, declarations],
+      })
+    );
+    return compile(["-p", "tsconfig.json"], root).map(d => d.message);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -83,6 +91,25 @@ afterEach(async () => {
  * An app directory with Next.js installed at this version, as its own
  * node_modules reports it, or none installed when null.
  */
+/**
+ * Why a module would not parse as JavaScript, as Node itself reports it
+ * (`node --check` on an ES module copy), or nothing when it parses. TypeScript
+ * syntax in a hook offered under a JavaScript extension fails here.
+ */
+async function javaScriptSyntaxErrors(source: string): Promise<string[]> {
+  const root = await mkdtemp(path.join(tmpdir(), "hook-js-"));
+  try {
+    const file = path.join(root, "instrumentation.mjs");
+    await writeFile(file, source);
+    const result = spawnSync(process.execPath, ["--check", file], {
+      encoding: "utf8",
+    });
+    return result.status === 0 ? [] : [result.stderr];
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 async function app(nextVersion: string | null = NEXT): Promise<string> {
   project = await mkdtemp(path.join(tmpdir(), "nextly-hook-"));
   if (nextVersion) {
@@ -147,7 +174,11 @@ describe("generateInstrumentation", () => {
       expect(result.skipped).toHaveLength(1);
       expect(result.skipped[0].path).toBe(`src/${name}`);
       expect(result.skipped[0].toAdd).toContain(
-        "await createRegister(config)();"
+        "await createRegister(config, {"
+      );
+      // The setting Next.js inlines here, which Nextly cannot read for itself.
+      expect(result.skipped[0].toAdd).toContain(
+        "cacheComponents: process.env.__NEXT_CACHE_COMPONENTS"
       );
       expect(result.skipped[0].toAdd).toContain(
         'await import("../nextly.config")'
@@ -216,12 +247,7 @@ describe("generateInstrumentation", () => {
 
     expect(offered.path).toBe("src/instrumentation.page.jsx");
     // Parsed as the file it would be saved as: TypeScript syntax fails here.
-    const { diagnostics = [] } = ts.transpileModule(offered.toAdd ?? "", {
-      reportDiagnostics: true,
-      fileName: "instrumentation.page.js",
-      compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
-    });
-    expect(diagnostics.map(d => d.messageText)).toEqual([]);
+    expect(await javaScriptSyntaxErrors(offered.toAdd ?? "")).toEqual([]);
     expect(offered.toAdd).toContain("export async function register()");
   });
 
@@ -387,15 +413,9 @@ describe("generateInstrumentation", () => {
       "src/instrumentation.<one of your pageExtensions>"
     );
     // The extension may be a JavaScript one, so the content must parse as JS.
-    const { diagnostics = [] } = ts.transpileModule(
-      result.skipped[0].toAdd ?? "",
-      {
-        reportDiagnostics: true,
-        fileName: "instrumentation.page.js",
-        compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
-      }
+    expect(await javaScriptSyntaxErrors(result.skipped[0].toAdd ?? "")).toEqual(
+      []
     );
-    expect(diagnostics.map(d => d.messageText)).toEqual([]);
   });
 
   it.each([

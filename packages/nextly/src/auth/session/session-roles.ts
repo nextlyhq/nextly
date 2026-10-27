@@ -3,8 +3,8 @@
  * carry them.
  *
  * An access token is a copy of the roles taken when it was signed: the
- * stateless session readers (`getSession`, `hasRole`, `requireRole`) answer
- * from its claims until it expires. A role that lapses while a token is still
+ * stateless session readers (`getSession`, `requireAuth`) answer from its
+ * claims until it expires. A role that lapses while a token is still
  * alive would keep answering from it for the rest of its life, so a token
  * ends no later than the soonest expiry among the roles it carries, and the
  * client refreshes into claims that no longer hold the role. The signer

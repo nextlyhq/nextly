@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+import type { Expression, Node, Program } from "oxc-parser";
 import {
   afterAll,
   afterEach,
@@ -44,71 +45,70 @@ function enginesOf(name: string): string {
  * call that lost one of its arguments.
  */
 
-function parseSource(file: string, text: string): ts.SourceFile {
-  return ts.createSourceFile(
-    file,
-    text,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
+/** One parsed file: its program, and the text its nodes' offsets point into. */
+interface Parsed {
+  readonly text: string;
+  readonly program: Program;
+}
+
+function parseFile(file: string, text: string): Parsed {
+  return { text, program: parseSource(text, file).program };
+}
+
+/** The source text of one node, as it is written. */
+function textOf(source: Parsed, node: Node): string {
+  return source.text.slice(node.start, node.end);
 }
 
 /** Every node in a file, depth first. */
-function allNodes(root: ts.Node): ts.Node[] {
-  const nodes: ts.Node[] = [];
-  const visit = (node: ts.Node): void => {
+function allNodes(root: Node): Node[] {
+  const nodes: Node[] = [];
+  walk(root, node => {
     nodes.push(node);
-    ts.forEachChild(node, visit);
-  };
-  visit(root);
+  });
   return nodes;
 }
 
 /** The names a file imports from one module. */
-function namedImportsFrom(source: ts.SourceFile, from: string): string[] {
-  return source.statements.flatMap(statement => {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== from
-    ) {
-      return [];
-    }
-    const bindings = statement.importClause?.namedBindings;
-    return bindings && ts.isNamedImports(bindings)
-      ? bindings.elements.map(element => element.name.text)
-      : [];
-  });
+function namedImportsFrom(source: Parsed, from: string): string[] {
+  return source.program.body.flatMap(statement =>
+    statement.type === "ImportDeclaration" && statement.source.value === from
+      ? statement.specifiers.flatMap(specifier =>
+          specifier.type === "ImportSpecifier" ? [specifier.local.name] : []
+        )
+      : []
+  );
 }
 
-/** The element tree a JSX expression renders, as `Outer(Inner(Leaf))`. */
-function jsxShape(node: ts.Node): string {
-  if (ts.isParenthesizedExpression(node)) return jsxShape(node.expression);
-  if (ts.isJsxSelfClosingElement(node)) return node.tagName.getText();
-  if (ts.isJsxElement(node)) {
-    const children = node.children
-      .filter(
-        child => ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child)
-      )
-      .map(jsxShape);
-    return `${node.openingElement.tagName.getText()}(${children.join(",")})`;
+/**
+ * The element tree a JSX expression renders, as `Outer(Inner(Leaf))`: a
+ * self-closing element is its name alone, an element with a body is its name
+ * and the elements inside it.
+ */
+function jsxShape(source: Parsed, node: Node): string {
+  if (node.type === "ParenthesizedExpression") {
+    return jsxShape(source, node.expression);
   }
-  return "";
+  if (node.type !== "JSXElement") return "";
+  const name = textOf(source, node.openingElement.name);
+  if (node.openingElement.selfClosing) return name;
+  const children = node.children
+    .filter(child => child.type === "JSXElement")
+    .map(child => jsxShape(source, child));
+  return `${name}(${children.join(",")})`;
 }
 
 /** What a file's default-exported function returns. */
-function defaultExportReturns(source: ts.SourceFile): ts.Expression[] {
-  const exported = source.statements.find(
-    (statement): statement is ts.FunctionDeclaration =>
-      ts.isFunctionDeclaration(statement) &&
-      (statement.modifiers ?? []).some(
-        modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword
-      )
+function defaultExportReturns(source: Parsed): Expression[] {
+  const [fn] = source.program.body.flatMap(statement =>
+    statement.type === "ExportDefaultDeclaration" &&
+    statement.declaration.type === "FunctionDeclaration"
+      ? [statement.declaration]
+      : []
   );
-  return (exported?.body?.statements ?? []).flatMap(statement =>
-    ts.isReturnStatement(statement) && statement.expression
-      ? [statement.expression]
+  return (fn?.body?.body ?? []).flatMap(statement =>
+    statement.type === "ReturnStatement" && statement.argument
+      ? [statement.argument]
       : []
   );
 }
@@ -116,32 +116,40 @@ function defaultExportReturns(source: ts.SourceFile): ts.Expression[] {
 /**
  * Each call to `<anything>.<method>(...)` in a file, as the properties of its
  * one object argument: `{ collection: '"examples"', data: "{ ... }" }`. A call
- * whose argument is not a single object literal is returned as `null`.
+ * whose argument is not a single object literal is returned as `null`. Only
+ * `key: value` properties are listed; a shorthand, a method or a spread names
+ * no value to compare.
  */
 function objectCallsTo(
-  source: ts.SourceFile,
+  source: Parsed,
   method: string
 ): Array<Record<string, string> | null> {
-  return allNodes(source)
-    .filter(
-      (node): node is ts.CallExpression =>
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === method
-    )
-    .map(call => {
-      const [only, ...rest] = call.arguments;
-      if (!only || rest.length > 0 || !ts.isObjectLiteralExpression(only)) {
-        return null;
-      }
-      return Object.fromEntries(
+  return allNodes(source.program).flatMap(node => {
+    if (
+      node.type !== "CallExpression" ||
+      node.callee.type !== "MemberExpression" ||
+      node.callee.computed ||
+      node.callee.property.type !== "Identifier" ||
+      node.callee.property.name !== method
+    ) {
+      return [];
+    }
+    const [only, ...rest] = node.arguments;
+    if (!only || rest.length > 0 || only.type !== "ObjectExpression") {
+      return [null];
+    }
+    return [
+      Object.fromEntries(
         only.properties.flatMap(property =>
-          ts.isPropertyAssignment(property)
-            ? [[property.name.getText(), property.initializer.getText()]]
+          property.type === "Property" &&
+          !property.shorthand &&
+          !property.method
+            ? [[textOf(source, property.key), textOf(source, property.value)]]
             : []
         )
-      );
-    });
+      ),
+    ];
+  });
 }
 
 // Repo-root templates/ (this test exercises the real, bundled plugin template).
@@ -452,12 +460,12 @@ describe("a plugin scaffold runs as created", () => {
   // RootLayout renders /admin as a 500 ("No QueryClient set").
   it("mounts the admin inside the providers its hooks need", async () => {
     const file = "dev/src/app/admin/[[...params]]/page.tsx";
-    const page = parseSource(file, await read(file));
+    const page = parseFile(file, await read(file));
 
     // What the page renders, and that each name is the admin's own export.
-    expect(defaultExportReturns(page).map(jsxShape)).toEqual([
-      "ErrorBoundary(QueryProvider(RootLayout))",
-    ]);
+    expect(
+      defaultExportReturns(page).map(returned => jsxShape(page, returned))
+    ).toEqual(["ErrorBoundary(QueryProvider(RootLayout))"]);
     expect(namedImportsFrom(page, "@nextlyhq/admin")).toEqual(
       expect.arrayContaining(["ErrorBoundary", "QueryProvider", "RootLayout"])
     );
@@ -467,7 +475,7 @@ describe("a plugin scaffold runs as created", () => {
   // the positional form fails before the first assertion runs.
   it("generates a test written against the current Direct API", async () => {
     const file = "src/plugin.test.ts";
-    const suite = parseSource(file, await read(file));
+    const suite = parseFile(file, await read(file));
 
     // One argument object per call, carrying what each call needs.
     const creates = objectCallsTo(suite, "create");

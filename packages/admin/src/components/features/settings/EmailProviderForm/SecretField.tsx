@@ -1,6 +1,7 @@
 "use client";
 
 import { Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useRef, useState } from "react";
 import type { Control, FieldPath } from "react-hook-form";
 
@@ -68,7 +69,7 @@ export function SecretField({
    * error rather than an instruction to the server.
    */
   clearable?: boolean;
-}) {
+}): JSX.Element {
   const [visible, setVisible] = useState(false);
   // Set by the first keystroke and never cleared while the form is open. After
   // it, the value in this field is the user's own — whatever it looks like —

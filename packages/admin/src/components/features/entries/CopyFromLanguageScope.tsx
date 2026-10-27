@@ -22,7 +22,7 @@
  * @module components/features/entries/CopyFromLanguageScope
  */
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode, type JSX } from "react";
 
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import {
@@ -45,7 +45,11 @@ export function useCopyFromLanguageScope(): CopyFromLanguage | undefined {
   return useContext(CopyFromLanguageContext);
 }
 
-export function CopyFromLanguageScope({ children }: { children: ReactNode }) {
+export function CopyFromLanguageScope({
+  children,
+}: {
+  children: ReactNode;
+}): JSX.Element {
   const copy = useCopyFromLanguage();
   return (
     <CopyFromLanguageContext.Provider value={copy}>

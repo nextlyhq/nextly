@@ -170,6 +170,14 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockRelationshipService = createMockRelationshipService();
     const mockHookRegistry = createMockHookRegistry();
     const mockRbac = createMockRbacAccessControlService();
+    // The batch writes here are made with no user, as an anonymous caller
+    // makes them, and an anonymous write needs a rule that allows it. The
+    // mechanics under test start past that gate.
+    mockRbac.getRegisteredAccess.mockReturnValue({
+      create: true,
+      update: true,
+      delete: true,
+    });
     mockComponentDataService = createMockComponentDataService();
 
     service = new CollectionEntryService(

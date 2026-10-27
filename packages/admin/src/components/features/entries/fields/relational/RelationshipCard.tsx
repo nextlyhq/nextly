@@ -9,6 +9,7 @@
  */
 
 import { Badge, Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { X, Pencil } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -118,7 +119,7 @@ export function RelationshipCard({
   onEdit,
   collectionSlug,
   className,
-}: RelationshipCardProps) {
+}: RelationshipCardProps): JSX.Element {
   const label = getItemLabel(item);
   const collection = collectionSlug || item.relationTo;
 

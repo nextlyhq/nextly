@@ -2,9 +2,16 @@
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
 import type {
   TabsListProps as TabsListBaseProps,
   TabsListRef,
@@ -93,7 +100,7 @@ import type {
  * @see https://www.radix-ui.com/primitives/docs/components/tabs
  * @public
  */
-const Tabs = Root;
+const Tabs: typeof Root = Root;
 
 /**
  * The list's own appearance, as variants rather than as classes each caller
@@ -123,7 +130,12 @@ const TABS_LIST_VARIANTS = {
   ghost: "h-8 bg-transparent",
 } as const;
 
-const tabsListVariants = cva(
+/** The arms `tabsListVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const TABS_LIST_VARIANT_MAP: { variant: typeof TABS_LIST_VARIANTS } = {
+  variant: TABS_LIST_VARIANTS,
+};
+
+const tabsListVariants: VariantsFn<typeof TABS_LIST_VARIANT_MAP> = cva(
   // Square corners: underline tabs, so the list never draws a rounded surface.
   // `gap-1` and `p-0` are invariant across the variants, so they belong here —
   // repeating them in each arm gives any future adjustment two sites to change
@@ -143,10 +155,37 @@ const tabsListVariants = cva(
   // fixed bottom rail draws a horizontal line beneath a vertical list.
   "inline-flex items-center justify-center gap-1 rounded-none border-b border-border p-0 text-muted-foreground data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:border-r",
   {
-    variants: { variant: TABS_LIST_VARIANTS },
+    variants: TABS_LIST_VARIANT_MAP,
     defaultVariants: { variant: "default" },
   }
 );
+
+/** What `TabsList` is declared to take. `TabsListProps`, below, is read back from the component. */
+type TabsListOwnProps = TabsListBaseProps &
+  VariantProps<typeof tabsListVariants> & {
+    /**
+     * Let a strip too wide for its container scroll sideways.
+     *
+     * The scroll container is a WRAPPER, never the list, and that is why this
+     * prop exists rather than callers reaching for `overflow-x-auto`
+     * themselves. Two things go wrong when the list is the scroller, and the
+     * second is why the obvious remedy is also wrong:
+     *
+     *  - Per the CSS overflow rules, `visible` computes to `auto` when the
+     *    other axis is neither `visible` nor `clip`, so `overflow-x` alone
+     *    always makes the element a VERTICAL scroll container too.
+     *  - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this
+     *    list's rail rather than below it. That pull-up puts content past the
+     *    content-box edge, which the new scroll container reports as vertical
+     *    overflow — so `overflow-y-hidden` would clip the 2px the underline is
+     *    made of, silencing a scrollbar by deleting the indicator.
+     *
+     * With the wrapper scrolling instead, the list keeps its rail and
+     * `w-max min-w-full` makes that rail span the full scroll width rather
+     * than stopping where the triggers do.
+     */
+    scrollable?: boolean;
+  };
 
 /**
  * TabsList - Container for tab triggers
@@ -158,62 +197,40 @@ const tabsListVariants = cva(
  * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
  * @public
  */
-const TabsList = forwardRef<
-  TabsListRef,
-  TabsListBaseProps &
-    VariantProps<typeof tabsListVariants> & {
-      /**
-       * Let a strip too wide for its container scroll sideways.
-       *
-       * The scroll container is a WRAPPER, never the list, and that is why this
-       * prop exists rather than callers reaching for `overflow-x-auto`
-       * themselves. Two things go wrong when the list is the scroller, and the
-       * second is why the obvious remedy is also wrong:
-       *
-       *  - Per the CSS overflow rules, `visible` computes to `auto` when the
-       *    other axis is neither `visible` nor `clip`, so `overflow-x` alone
-       *    always makes the element a VERTICAL scroll container too.
-       *  - `TabsTrigger` carries `-mb-0.5` so its 2px underline lands ON this
-       *    list's rail rather than below it. That pull-up puts content past the
-       *    content-box edge, which the new scroll container reports as vertical
-       *    overflow — so `overflow-y-hidden` would clip the 2px the underline is
-       *    made of, silencing a scrollbar by deleting the indicator.
-       *
-       * With the wrapper scrolling instead, the list keeps its rail and
-       * `w-max min-w-full` makes that rail span the full scroll width rather
-       * than stopping where the triggers do.
-       */
-      scrollable?: boolean;
-    }
->(({ className, variant, scrollable = false, ...props }, ref) => {
-  const list = (
-    <List
-      ref={ref}
-      data-slot="tabs-list"
-      className={cn(
-        tabsListVariants({ variant }),
-        scrollable && "w-max min-w-full",
-        className
-      )}
-      {...props}
-    />
-  );
+const TabsList: ForwardRefExoticComponent<
+  PropsWithoutRef<TabsListOwnProps> & RefAttributes<TabsListRef>
+> = forwardRef<TabsListRef, TabsListOwnProps>(
+  ({ className, variant, scrollable = false, ...props }, ref) => {
+    const list = (
+      <List
+        ref={ref}
+        data-slot="tabs-list"
+        className={cn(
+          tabsListVariants({ variant }),
+          scrollable && "w-max min-w-full",
+          className
+        )}
+        {...props}
+      />
+    );
 
-  if (!scrollable) return list;
+    if (!scrollable) return list;
 
-  return (
-    <div data-slot="tabs-list-scroller" className="w-full overflow-x-auto">
-      {list}
-    </div>
-  );
-});
+    return (
+      <div data-slot="tabs-list-scroller" className="w-full overflow-x-auto">
+        {list}
+      </div>
+    );
+  }
+);
 TabsList.displayName = List.displayName;
 
 /**
  * The trigger's own appearance. `size` carries the type scale only: everything
  * that draws the tab -- the square corners, the 2px underline, the active and
  * hover colours, the focus ring -- is in the base and is not a caller's to
- * choose, which is the property `tabs-contract.test.ts` watches for.
+ * choose, which is the property the `tab-indicator` lint rule
+ * (`lint/tab-indicator`) holds every call site to.
  *
  * Arms declared separately for the same reason as the list's.
  */
@@ -222,7 +239,12 @@ const TABS_TRIGGER_SIZES = {
   sm: "text-xs",
 } as const;
 
-const tabsTriggerVariants = cva(
+/** The arms `tabsTriggerVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const TABS_TRIGGER_VARIANT_MAP: { size: typeof TABS_TRIGGER_SIZES } = {
+  size: TABS_TRIGGER_SIZES,
+};
+
+const tabsTriggerVariants: VariantsFn<typeof TABS_TRIGGER_VARIANT_MAP> = cva(
   // Square corners: the active state is a 2px border on the trailing edge that
   // has to run the full length of the trigger and stay flush with its ends.
   //
@@ -240,10 +262,14 @@ const tabsTriggerVariants = cva(
   // on one axis and the line it sits on the other.
   "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
   {
-    variants: { size: TABS_TRIGGER_SIZES },
+    variants: TABS_TRIGGER_VARIANT_MAP,
     defaultVariants: { size: "default" },
   }
 );
+
+/** What `TabsTrigger` is declared to take. `TabsTriggerProps`, below, is read back from the component. */
+type TabsTriggerOwnProps = TabsTriggerBaseProps &
+  VariantProps<typeof tabsTriggerVariants>;
 
 /**
  * TabsTrigger - Clickable tab button
@@ -264,17 +290,18 @@ const tabsTriggerVariants = cva(
  * - Data attributes: [data-state="active|inactive"], [data-disabled]
  * @public
  */
-const TabsTrigger = forwardRef<
-  TabsTriggerRef,
-  TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
->(({ className, size, ...props }, ref) => (
-  <Trigger
-    ref={ref}
-    data-slot="tabs-trigger"
-    className={cn(tabsTriggerVariants({ size }), className)}
-    {...props}
-  />
-));
+const TabsTrigger: ForwardRefExoticComponent<
+  PropsWithoutRef<TabsTriggerOwnProps> & RefAttributes<TabsTriggerRef>
+> = forwardRef<TabsTriggerRef, TabsTriggerOwnProps>(
+  ({ className, size, ...props }, ref) => (
+    <Trigger
+      ref={ref}
+      data-slot="tabs-trigger"
+      className={cn(tabsTriggerVariants({ size }), className)}
+      {...props}
+    />
+  )
+);
 TabsTrigger.displayName = Trigger.displayName;
 
 /**
@@ -290,7 +317,9 @@ TabsTrigger.displayName = Trigger.displayName;
  * - Only active content is visible, inactive content is hidden
  * @public
  */
-const TabsContent = forwardRef<TabsContentRef, TabsContentProps>(
+const TabsContent: ForwardRefExoticComponent<
+  PropsWithoutRef<TabsContentProps> & RefAttributes<TabsContentRef>
+> = forwardRef<TabsContentRef, TabsContentProps>(
   ({ className, ...props }, ref) => (
     <Content
       ref={ref}

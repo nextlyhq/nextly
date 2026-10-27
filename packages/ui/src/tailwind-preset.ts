@@ -50,8 +50,127 @@ const tintScale = (base: string): Record<number, string> => ({
   950: `color-mix(in srgb, var(${base}), black 85%)`,
 });
 
+/** The shape of {@link uiPreset}: the tokens it maps, each to its CSS custom property. */
+type UiPreset = {
+  theme: {
+    extend: {
+      colors: {
+        overlay: string;
+        "overlay-soft": string;
+        "overlay-strong": string;
+        border: {
+          DEFAULT: string;
+          subtle: string;
+          strong: string;
+        };
+        input: string;
+        "control-border": string;
+        ring: string;
+        background: string;
+        foreground: string;
+        primary: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        secondary: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        destructive: {
+          DEFAULT: string;
+          solid: string;
+          foreground: string;
+        };
+        success: {
+          DEFAULT: string;
+          solid: string;
+          foreground: string;
+        };
+        warning: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        muted: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        accent: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        highlight: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        code: {
+          bg: string;
+          fg: string;
+          comment: string;
+          keyword: string;
+          string: string;
+          number: string;
+          function: string;
+          operator: string;
+          punctuation: string;
+          variable: string;
+          tag: string;
+          deleted: string;
+          inserted: string;
+        };
+        sidebar: {
+          DEFAULT: string;
+          background: string;
+          foreground: string;
+          primary: string;
+          "primary-foreground": string;
+          accent: string;
+          "accent-background": string;
+          "accent-foreground": string;
+          border: string;
+          ring: string;
+        };
+        popover: {
+          DEFAULT: string;
+          foreground: string;
+        };
+        card: {
+          DEFAULT: string;
+          foreground: string;
+        };
+      };
+      borderRadius: {
+        lg: string;
+        md: string;
+        sm: string;
+      };
+      keyframes: {
+        "accordion-down": {
+          from: {
+            height: string;
+          };
+          to: {
+            height: string;
+          };
+        };
+        "accordion-up": {
+          from: {
+            height: string;
+          };
+          to: {
+            height: string;
+          };
+        };
+      };
+      animation: {
+        "accordion-down": string;
+        "accordion-up": string;
+      };
+    };
+  };
+};
+
 /** @experimental */
-const uiPreset = {
+const uiPreset: UiPreset = {
   theme: {
     extend: {
       colors: {

@@ -29,6 +29,7 @@ import {
   type LexicalCommand,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { Video } from "@admin/components/icons";
 
@@ -64,7 +65,7 @@ export interface RichTextVideoPluginProps {
 
 export function RichTextVideoPlugin({
   disabled = false,
-}: RichTextVideoPluginProps) {
+}: RichTextVideoPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [url, setUrl] = useState("");
   const [caption, setCaption] = useState("");

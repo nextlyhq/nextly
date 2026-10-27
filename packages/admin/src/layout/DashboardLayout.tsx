@@ -49,7 +49,9 @@ interface DashboardLayoutProps {
  * that ask for chrome to be hidden are rendered as `children` and React state
  * has to be lifted past both to be read by the one and written by the other.
  */
-export function DashboardLayout({ children }: DashboardLayoutProps) {
+export function DashboardLayout({
+  children,
+}: DashboardLayoutProps): React.JSX.Element {
   return (
     <ChromeSuppressionProvider>
       <SidePanelReservationProvider>

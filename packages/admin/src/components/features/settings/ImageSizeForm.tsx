@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
@@ -40,7 +41,25 @@ import { SettingsSection } from "./SettingsSection";
 const FIT_VALUES = ["inside", "cover", "contain", "fill"] as const;
 const FORMAT_VALUES = ["auto", "webp", "jpeg", "png", "avif"] as const;
 
-const imageSizeSchema = z
+const imageSizeSchema: z.ZodObject<{
+  name: z.ZodString;
+  width: z.ZodNullable<z.ZodNumber>;
+  height: z.ZodNullable<z.ZodNumber>;
+  fit: z.ZodEnum<{
+    fill: "fill";
+    cover: "cover";
+    inside: "inside";
+    contain: "contain";
+  }>;
+  format: z.ZodEnum<{
+    auto: "auto";
+    jpeg: "jpeg";
+    webp: "webp";
+    png: "png";
+    avif: "avif";
+  }>;
+  quality: z.ZodNumber;
+}> = z
   .object({
     name: z
       .string()
@@ -124,7 +143,7 @@ export function ImageSizeForm({
   imageSize,
   isPending,
   onSubmit,
-}: ImageSizeFormProps) {
+}: ImageSizeFormProps): JSX.Element {
   const isEdit = mode === "edit";
 
   const form = useForm<ImageSizeFormValues>({

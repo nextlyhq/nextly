@@ -132,8 +132,12 @@ export default defineConfig([
     clean: true,
     sourcemap: false,
     target: "es2022",
-    // Declarations without a type check: `check-types` is the type check.
-    dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+    // oxc writes the declarations from the source's own annotations, one file
+    // at a time. Named, because the plugin otherwise picks `tsc` (or `tsgo` under
+    // TypeScript 7) when `isolatedDeclarations` is off in tsconfig.json, and it
+    // is off here: admin's `paths` reach nextly's source, which the flag would
+    // hold to it too. An export oxc cannot type fails this build.
+    dts: { generator: "oxc", sourcemap: false },
     tsconfig: "tsconfig.json",
     define: {
       __NEXTLY_ADMIN_VERSION__: JSON.stringify(ADMIN_VERSION),
@@ -158,9 +162,17 @@ export default defineConfig([
       // The declarations name the packages their types come from rather than
       // inlining them, bundled into the JavaScript or not. `@admin/*` is this
       // package's own source under a path alias, so it is resolved and bundled.
+      //
+      // Rolldown asks this again with each RESOLVED id, a file path. A Windows
+      // path starts with a drive letter, which the package-name test accepts,
+      // and a source file marked external binds the declarations to the
+      // JavaScript module, where no type is exported. `path.win32` treats both
+      // `D:\…` and `/…` as absolute, so a path is never a package on any OS.
       dts: {
         neverBundle: id =>
-          /^(@[\w-][\w.-]*\/)?[\w-]/.test(id) && !id.startsWith("@admin/"),
+          !path.win32.isAbsolute(id) &&
+          /^(@[\w-][\w.-]*\/)?[\w-]/.test(id) &&
+          !id.startsWith("@admin/"),
       },
     },
     treeshake: {
@@ -357,7 +369,8 @@ export default defineConfig([
     sourcemap: false,
     target: "es2020",
     clean: false,
-    dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+    // oxc, for the reason given on the browser bundle above.
+    dts: { generator: "oxc", sourcemap: false },
     tsconfig: "tsconfig.json",
     deps: { neverBundle: id => matches(id, EXTERNAL_DEPS) },
     // Keep the file names the exports map already publishes.

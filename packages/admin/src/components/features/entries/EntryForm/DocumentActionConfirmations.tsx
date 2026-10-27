@@ -11,6 +11,8 @@
  *
  * @module components/features/entries/EntryForm/DocumentActionConfirmations
  */
+import type { JSX } from "react";
+
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { DocumentActionBindings } from "./useDocumentActionBindings";
@@ -28,7 +30,7 @@ export function DocumentActionConfirmations({
   confirmations,
   entry,
   isSubmitting = false,
-}: DocumentActionConfirmationsProps) {
+}: DocumentActionConfirmationsProps): JSX.Element {
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title

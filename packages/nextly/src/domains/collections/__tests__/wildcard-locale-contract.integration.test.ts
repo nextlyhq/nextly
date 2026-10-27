@@ -14,6 +14,10 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -148,6 +152,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // A code rule only narrows the permission, so the editor holds update and
+  // publish on the guarded collection; its `unpublish` rule still refuses.
+  await userWhoMay(current, EDITOR.id, "update", [SLUG]);
+  await grantTo(current, EDITOR.id, "publish", [SLUG]);
   return current;
 }
 
@@ -236,7 +244,9 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(refused.success).toBe(false);
-      expect(refused.statusCode).toBe(403);
+      // The editor holds update but not read, so the refusal is answered as
+      // the entry being missing rather than as a 403.
+      expect(refused.statusCode).toBe(404);
       // The German translation is still live: the refusal rolled the sweep back
       // rather than denying after the fact.
       const after = await companionStatuses(t, `dc_${SLUG}_locales`);

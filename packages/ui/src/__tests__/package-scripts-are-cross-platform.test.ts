@@ -19,7 +19,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
+import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = join(
@@ -131,6 +136,47 @@ const GENERATOR = join(
   "template.ts"
 );
 
+/** Every node the parser spells `Property`: in an object literal, a pattern or an assignment target. */
+type AnyProperty = Extract<Node, { type: "Property" }>;
+
+/** A property's key as the name it spells, or undefined for a computed one. */
+function keyName(property: AnyProperty): string | undefined {
+  if (property.computed) return undefined;
+  if (property.key.type === "Identifier") return property.key.name;
+  return literalText(property.key) ?? undefined;
+}
+
+/**
+ * The commands of one `scripts: { … }` object in the generator, or null when
+ * the node is not one.
+ *
+ * Only literal commands can be judged. A computed one is reported rather than
+ * skipped, so a script assembled at runtime cannot pass by being unreadable.
+ */
+function scriptsBlockOf(
+  node: Node,
+  text: string
+): Record<string, string> | null {
+  if (
+    node.type !== "Property" ||
+    keyName(node) !== "scripts" ||
+    node.value.type !== "ObjectExpression"
+  ) {
+    return null;
+  }
+  const block: Record<string, string> = {};
+  for (const property of node.value.properties) {
+    if (property.type !== "Property" || property.shorthand || property.method)
+      continue;
+    const key = keyName(property);
+    if (key === undefined) continue;
+    block[key] =
+      literalText(property.value) ??
+      `<non-literal: ${text.slice(property.value.start, property.value.end)}>`;
+  }
+  return block;
+}
+
 /**
  * Every command a scaffolded project's `package.json` will contain.
  *
@@ -147,43 +193,12 @@ function generatedScriptCommands(): {
   path: string;
   scripts: Record<string, string>;
 }[] {
-  const source = ts.createSourceFile(
-    GENERATOR,
-    readFileSync(GENERATOR, "utf8"),
-    ts.ScriptTarget.Latest,
-    true
-  );
-
+  const text = readFileSync(GENERATOR, "utf8");
   const blocks: Record<string, string>[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isPropertyAssignment(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "scripts" &&
-      ts.isObjectLiteralExpression(node.initializer)
-    ) {
-      const block: Record<string, string> = {};
-      for (const property of node.initializer.properties) {
-        if (!ts.isPropertyAssignment(property)) continue;
-        const key = ts.isIdentifier(property.name)
-          ? property.name.text
-          : ts.isStringLiteral(property.name)
-            ? property.name.text
-            : undefined;
-        // Only literal commands can be judged. A computed one is reported rather than skipped, so
-        // a script assembled at runtime cannot pass by being unreadable.
-        if (key === undefined) continue;
-        block[key] = ts.isStringLiteral(property.initializer)
-          ? property.initializer.text
-          : ts.isNoSubstitutionTemplateLiteral(property.initializer)
-            ? property.initializer.text
-            : `<non-literal: ${property.initializer.getText(source)}>`;
-      }
-      blocks.push(block);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+  walk(parseSource(text, GENERATOR).program, node => {
+    const block = scriptsBlockOf(node, text);
+    if (block) blocks.push(block);
+  });
 
   return blocks.map((scripts, index) => ({
     path: `create-nextly-app scripts block #${index + 1}`,

@@ -14,7 +14,11 @@
  * @module hooks/queries/usePublishAllSingleLocales
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import { singleApi } from "@admin/services/singleApi";
@@ -30,7 +34,15 @@ export interface UsePublishAllSingleLocalesOptions {
 export function usePublishAllSingleLocales({
   slug,
   silent = false,
-}: UsePublishAllSingleLocalesOptions) {
+}: UsePublishAllSingleLocalesOptions): UseMutationResult<
+  {
+    id: string;
+    status?: string;
+  },
+  Error,
+  void,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation({

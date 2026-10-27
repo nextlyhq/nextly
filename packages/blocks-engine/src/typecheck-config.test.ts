@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+
+import { listedFiles, showConfig } from "../../../scripts/tsc-cli.mjs";
 
 /**
  * The two halves of type-checking this package, held where deleting one is
@@ -29,12 +30,13 @@ import { describe, expect, it } from "vitest";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_DIR = join(HERE, "..");
 
-/** Parse a tsconfig, which is JSONC — comments and all. */
+/**
+ * A tsconfig as the compiler resolves it (`tsc --showConfig`): what a reader of
+ * the file would conclude, answered by the compiler that reads it, with an
+ * `extends` followed. A config tsc cannot read throws.
+ */
 function readConfig(name: string): Record<string, unknown> {
-  const path = join(PACKAGE_DIR, name);
-  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
-  expect(parsed.error, `${name} must be parseable`).toBeUndefined();
-  return parsed.config as Record<string, unknown>;
+  return showConfig(join(PACKAGE_DIR, name));
 }
 
 function compilerOptions(name: string): Record<string, unknown> {
@@ -105,8 +107,10 @@ describe("both configs actually run", () => {
     // green that covers no test file at all. That exact false pass has already
     // cost this repo a defect, which is why the script is asserted rather than
     // assumed.
+    // The compiler runs through `scripts/tsc.mjs`, which sizes its checkers
+    // to the machine and passes every other argument to `tsc`.
     const script = packageJson().scripts["check-types"];
-    expect(script).toContain("tsc --noEmit");
+    expect(script).toContain("scripts/tsc.mjs --noEmit");
     expect(script).toContain("-p tsconfig.tests.json");
   });
 });
@@ -130,9 +134,8 @@ const PROGRAM_TIMEOUT_MS = 60_000;
 /**
  * The node type files a config's program actually loads.
  *
- * Built through the compiler rather than by spawning `tsc --listFiles`, which
- * answers the same question a second or two slower and puts a subprocess in a
- * unit suite. The two were checked against each other and agree.
+ * Asked of the compiler's command line (`tsc --listFilesOnly`), which answers
+ * the same on every TypeScript version, where its JavaScript API does not.
  *
  * The directory separators in the pattern are load-bearing. pnpm encodes peer
  * dependencies into its directory names, so `vitest@4.1.10_@types+node@20.19.17`
@@ -141,20 +144,14 @@ const PROGRAM_TIMEOUT_MS = 60_000;
  */
 function nodeTypeFilesIn(configName: string): string[] {
   const configPath = join(PACKAGE_DIR, configName);
-  const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
-  // An unreadable config resolves to an empty program, and an empty program
-  // loads no node types — so without this the guard passes by failing to ask.
-  expect(error, `${configName} could not be read`).toBeUndefined();
-  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, PACKAGE_DIR);
+  // An unreadable config throws rather than answering with an empty program,
+  // and a config that matched no file loads no node types either — so without
+  // this the guard would pass by failing to ask.
   expect(
-    parsed.fileNames.length,
+    readConfig(configName).files,
     `${configName} matched no files`
-  ).toBeGreaterThan(0);
-  const program = ts.createProgram(parsed.fileNames, parsed.options);
-  return program
-    .getSourceFiles()
-    .map(file => file.fileName)
-    .filter(name => name.includes("/@types/node/"));
+  ).not.toHaveLength(0);
+  return listedFiles(configPath).filter(name => name.includes("/@types/node/"));
 }
 
 describe("what the shipping program actually loads", () => {

@@ -76,7 +76,9 @@ import { cn } from "../lib/utils";
  * @see {@link https://adrianroselli.com/2020/11/more-accessible-skeletons.html More Accessible Skeletons}
  * @experimental
  */
-const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
+const Skeleton: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<SkeletonProps> & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<HTMLDivElement, SkeletonProps>(
   ({ className, ...props }, ref) => {
     return (
       <div

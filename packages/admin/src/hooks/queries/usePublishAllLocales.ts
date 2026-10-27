@@ -8,7 +8,11 @@
  * @module hooks/queries/usePublishAllLocales
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
@@ -22,7 +26,15 @@ export interface UsePublishAllLocalesOptions {
 export function usePublishAllLocales({
   collectionSlug,
   silent = false,
-}: UsePublishAllLocalesOptions) {
+}: UsePublishAllLocalesOptions): UseMutationResult<
+  {
+    id: string;
+    status?: string;
+  },
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation({

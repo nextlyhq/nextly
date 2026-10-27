@@ -504,32 +504,21 @@ describe("focus", () => {
 });
 
 describe("the cards' own content while customising", () => {
-  // How each kind dims: a framed card keeps its title and border, so the dim
-  // reaches its body and footer through the card's slots; an unframed
-  // section has no frame, so all of it dims.
-  for (const [kind, title, link, dims] of [
-    [
-      "a framed card",
-      "Posts",
-      "View posts",
-      "[&_[data-slot=card-content]]:opacity-60",
-    ],
-    ["an unframed section", "Home page", "Open the home page", "opacity-60"],
+  // Every card is framed: it keeps its title and border, and dims its body
+  // and footer, which are out of reach.
+  for (const [kind, title, link] of [
+    ["a framed card", "Posts", "View posts"],
   ] as const) {
     it(`puts ${kind}'s own links and controls out of reach, and dims them`, async () => {
       renderDashboard();
       await beginEditing();
 
       const content = screen.getByRole("link", { name: link, hidden: true });
-      const fence = content.closest("[inert]");
-      expect(fence).not.toBeNull();
-      expect(fence).toHaveClass(dims);
-      // And what the framed dim reaches for is there to reach.
-      if (kind === "a framed card") {
-        expect(
-          fence?.querySelector("[data-slot=card-content]")
-        ).toContainElement(content);
-      }
+      expect(content.closest("[inert]")).not.toBeNull();
+      // The card's own body dims, once: the fence adds no dim of its own.
+      const body = content.closest("[data-slot=card-content]");
+      expect(body).toHaveClass("opacity-55");
+      expect(body?.closest(".opacity-60")).toBeNull();
       // The edit controls are NOT fenced: they are what customising is for.
       expect(
         screen

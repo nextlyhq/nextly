@@ -8,6 +8,7 @@
  * @module components/features/versions/diff/diff-primitives
  */
 
+import type { Provider, JSX } from "react";
 import { createContext, useContext } from "react";
 
 import { Badge } from "@admin/components/ui";
@@ -44,7 +45,11 @@ const STATUS_BADGE: Record<
   unsupported: { variant: "outline", label: "Not comparable" },
 };
 
-export function StatusBadge({ status }: { status: ComparableStatus }) {
+export function StatusBadge({
+  status,
+}: {
+  status: ComparableStatus;
+}): JSX.Element {
   const badge = STATUS_BADGE[status];
   return <Badge variant={badge.variant}>{badge.label}</Badge>;
 }
@@ -56,7 +61,8 @@ export function StatusBadge({ status }: { status: ComparableStatus }) {
 const DrawnContainersContext = createContext(0);
 
 /** Declares the containers drawn around the field rows below it. */
-export const DrawnContainersProvider = DrawnContainersContext.Provider;
+export const DrawnContainersProvider: Provider<number> =
+  DrawnContainersContext.Provider;
 
 /** The containers drawn around the field rows here. */
 export function useDrawnContainers(): number {
@@ -80,7 +86,7 @@ export function FieldRow({
   node?: NamedNode;
   status: ComparableStatus;
   children: React.ReactNode;
-}) {
+}): JSX.Element {
   const drawn = useDrawnContainers();
   const place = node ? placeOf(node.path, drawn) : [];
   const name = node ? fieldNameOf(node) : (label ?? "Field");
@@ -104,7 +110,11 @@ export function FieldRow({
   );
 }
 
-export function TextSegmentSpan({ segment }: { segment: TextSegment }) {
+export function TextSegmentSpan({
+  segment,
+}: {
+  segment: TextSegment;
+}): JSX.Element {
   if (segment.op === 0) return <span>{segment.text}</span>;
   if (segment.op === 1) {
     return (
@@ -123,7 +133,11 @@ export function TextSegmentSpan({ segment }: { segment: TextSegment }) {
 }
 
 /** One sequence of text-diff runs as a paragraph of marked spans. */
-export function TextRuns({ segments }: { segments: readonly TextSegment[] }) {
+export function TextRuns({
+  segments,
+}: {
+  segments: readonly TextSegment[];
+}): JSX.Element {
   return (
     <p className="whitespace-pre-wrap break-words leading-relaxed">
       {segments.map((segment, index) => (
@@ -140,7 +154,7 @@ export function TextRuns({ segments }: { segments: readonly TextSegment[] }) {
  * alternative — silence — is indistinguishable from "nothing changed", which is
  * the conclusion this whole state exists to prevent.
  */
-export function NotComparable({ what }: { what: string }) {
+export function NotComparable({ what }: { what: string }): JSX.Element {
   return (
     <p className="text-xs italic text-muted-foreground">
       This {what} uses a format the comparison does not understand. Open the

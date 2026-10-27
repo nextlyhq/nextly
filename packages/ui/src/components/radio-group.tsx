@@ -1,8 +1,18 @@
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import type { ElementRef, ComponentPropsWithoutRef } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ElementRef,
+  type ComponentPropsWithoutRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+
+type RadioGroupProps = ComponentPropsWithoutRef<
+  typeof RadioGroupPrimitive.Root
+>;
 
 /**
  * RadioGroup Component - Design System Specification
@@ -33,26 +43,35 @@ import { cn } from "../lib/utils";
  * - Hover state changes  border border-border color for better interactivity
  * @public
  */
-const RadioGroup = forwardRef<
-  ElementRef<typeof RadioGroupPrimitive.Root>,
-  ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root>
->(({ className, ...props }, ref) => {
-  return (
-    <RadioGroupPrimitive.Root
-      className={cn("grid gap-2", className)}
-      {...props}
-      ref={ref}
-      data-slot="radio-group"
-    />
-  );
-});
+const RadioGroup: ForwardRefExoticComponent<
+  PropsWithoutRef<RadioGroupProps> &
+    RefAttributes<ElementRef<typeof RadioGroupPrimitive.Root>>
+> = forwardRef<ElementRef<typeof RadioGroupPrimitive.Root>, RadioGroupProps>(
+  ({ className, ...props }, ref) => {
+    return (
+      <RadioGroupPrimitive.Root
+        className={cn("grid gap-2", className)}
+        {...props}
+        ref={ref}
+        data-slot="radio-group"
+      />
+    );
+  }
+);
 
 RadioGroup.displayName = "RadioGroup";
 
+type RadioGroupItemProps = ComponentPropsWithoutRef<
+  typeof RadioGroupPrimitive.Item
+>;
+
 /** @public */
-const RadioGroupItem = forwardRef<
+const RadioGroupItem: ForwardRefExoticComponent<
+  PropsWithoutRef<RadioGroupItemProps> &
+    RefAttributes<ElementRef<typeof RadioGroupPrimitive.Item>>
+> = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Item>,
-  ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
+  RadioGroupItemProps
 >(({ className, ...props }, ref) => {
   return (
     <RadioGroupPrimitive.Item

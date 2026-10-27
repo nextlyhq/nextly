@@ -1,8 +1,7 @@
 /**
  * RBAC tables — SQLite.
  *
- * Tables: roles, permissions, rolePermissions, userRoles, roleInherits,
- * userPermissionCache.
+ * Tables: roles, permissions, rolePermissions, userRoles, roleInherits.
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -171,42 +170,5 @@ export const roleInherits = sqliteTable(
     ),
     index("role_inherits_child_idx").on(t.childRoleId),
     index("role_inherits_parent_idx").on(t.parentRoleId), // For bidirectional hierarchy queries
-  ]
-);
-
-/**
- * Permission cache table for denormalized permission storage (SQLite).
- *
- * See postgres.ts for detailed documentation.
- * Main differences:
- * - Uses TEXT instead of JSONB for roleIds field (stored as JSON string)
- * - Uses INTEGER for timestamps (Unix timestamp mode)
- * - Uses INTEGER for boolean hasPermission field (1 = true, 0 = false)
- */
-export const userPermissionCache = sqliteTable(
-  "user_permission_cache",
-  {
-    // Composite key: userId|action|resource
-    id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    action: text("action").notNull(),
-    resource: text("resource").notNull(),
-    hasPermission: integer("has_permission", { mode: "boolean" }).notNull(),
-    // Store role IDs for invalidation (JSON array stored as text)
-    roleIds: text("role_ids").notNull(), // JSON array of strings
-    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [
-    // Primary invalidation path: by user
-    index("upc_user_id_idx").on(t.userId),
-    // Cleanup expired entries efficiently
-    index("upc_expires_at_idx").on(t.expiresAt),
-    // Composite index for fast cache lookups
-    index("upc_user_action_resource_idx").on(t.userId, t.action, t.resource),
   ]
 );

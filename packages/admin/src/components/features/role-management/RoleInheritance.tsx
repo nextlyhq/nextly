@@ -5,6 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useRef } from "react";
 import { useWatch, type UseFormReturn } from "react-hook-form";
 
@@ -58,7 +59,7 @@ export function RoleInheritance({
   setRolePermissionsMap,
   lockedPermissionIds,
   setLockedPermissionIds,
-}: RoleInheritanceProps) {
+}: RoleInheritanceProps): JSX.Element | null {
   // Subscribed, not sampled. `getValues` reads once per render and nothing
   // above this component renders on a permission change — the permission
   // matrix is its own controller, and the only form state anyone here

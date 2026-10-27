@@ -78,7 +78,15 @@ export async function runDrain(): Promise<RunDrainResult> {
   return result.item;
 }
 
-export const deliveryApi = {
+/** The type of {@link deliveryApi}. */
+type DeliveryApiType = {
+  readonly listDeliveries: typeof listDeliveries;
+  readonly getDelivery: typeof getDelivery;
+  readonly redeliver: typeof redeliver;
+  readonly runDrain: typeof runDrain;
+};
+
+export const deliveryApi: DeliveryApiType = {
   listDeliveries,
   getDelivery,
   redeliver,
