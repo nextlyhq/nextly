@@ -21,7 +21,8 @@ const card = (
 ): WidgetPlacement => ({
   id: "c",
   widgetId,
-  width: "quarter",
+  w: 3,
+  h: 2,
   removed: false,
   ...(config === undefined ? {} : { config }),
 });

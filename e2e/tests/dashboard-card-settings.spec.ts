@@ -18,6 +18,7 @@ import {
 
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
+import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -32,7 +33,8 @@ interface Layout {
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
   }>;
@@ -44,14 +46,19 @@ async function readLayout(page: Page): Promise<Layout> {
   return (await read.json()) as Layout;
 }
 
-/** Put the settings card on the reader's dashboard, full width, at its defaults. */
+/** Put the settings card on the reader's dashboard, as wide as it may be, at its defaults. */
 async function placeCard(page: Page): Promise<void> {
   const layout = await readLayout(page);
   const others = layout.placements.filter(p => p.widgetId !== CARD);
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: {
       placements: [
-        { id: "e2e-settings", widgetId: CARD, width: "full", removed: false },
+        {
+          id: "e2e-settings",
+          widgetId: CARD,
+          ...(await widestSizeOf(page, CARD)),
+          removed: false,
+        },
         ...others,
       ],
       version: layout.version,

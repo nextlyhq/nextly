@@ -6,17 +6,13 @@
 import { describe, expect, it } from "vitest";
 
 import { addPanelFacts } from "../add-panel";
-import {
-  type CanonicalWidget,
-  placedByDefault,
-  widthFacts,
-} from "../canonical";
+import { type CanonicalWidget, placedByDefault, sizeFacts } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 
 const widget = (patch: Partial<CanonicalWidget>): CanonicalWidget => ({
   id: "core/note",
   archetype: "custom",
-  defaultSize: "md",
+  size: { default: { w: 4, h: 3 } },
   ...patch,
 });
 
@@ -29,14 +25,14 @@ describe("a widget offered on request", () => {
   });
 
   it("allows several cards unless it says otherwise", () => {
-    expect(widthFacts(widget({ offered: "on-request" })).allowsSeveral).toBe(
+    expect(sizeFacts(widget({ offered: "on-request" })).allowsSeveral).toBe(
       true
     );
     expect(
-      widthFacts(widget({ offered: "on-request", allowsSeveral: false }))
+      sizeFacts(widget({ offered: "on-request", allowsSeveral: false }))
         .allowsSeveral
     ).toBe(false);
-    expect(widthFacts(widget({})).allowsSeveral).toBe(false);
+    expect(sizeFacts(widget({})).allowsSeveral).toBe(false);
   });
 
   it("is one row of the add panel's Overview, not a row per collection", () => {

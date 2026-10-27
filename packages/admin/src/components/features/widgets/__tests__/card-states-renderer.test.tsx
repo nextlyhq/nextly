@@ -14,12 +14,13 @@ import type {
 import { UNAVAILABLE_TITLE } from "../frame/states";
 import { resolveWidgetOutcome } from "../outcome";
 import { WidgetRenderer } from "../WidgetRenderer";
+import { gridBounds } from "./grid-bounds";
 
 const list: DashboardWidget = {
   id: "core/recent-posts",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", select: ["title"] },
 };
 

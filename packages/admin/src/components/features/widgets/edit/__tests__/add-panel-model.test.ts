@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import type {
   DashboardWidget,
+  WidgetLayoutFacts,
   WidgetPlacement,
-  WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
+
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 import {
   addPanelCount,
@@ -18,34 +20,36 @@ import {
   searchAddPanel,
 } from "../add-panel-model";
 
-const ALL = ["quarter", "third", "half", "twoThirds", "full"] as const;
-
-function facts(over: Partial<WidgetWidthFacts>): WidgetWidthFacts {
+function facts(over: Partial<WidgetLayoutFacts>): WidgetLayoutFacts {
   return {
-    allowedWidths: [...ALL],
-    defaultWidth: "full",
     allowsSeveral: false,
     group: "overview",
     sketch: "metric",
     rank: 0,
     ...over,
-  } as WidgetWidthFacts;
+  } as WidgetLayoutFacts;
 }
 
-const declared = (id: string, title: string): DashboardWidget =>
-  ({ id, title, archetype: "metric" }) as unknown as DashboardWidget;
+/** A declared widget; its widths run from `w` to the full twelve columns unless it is twelve. */
+const declared = (id: string, title: string, w = 12): DashboardWidget =>
+  ({
+    id,
+    title,
+    archetype: "metric",
+    size: gridBounds(w),
+  }) as unknown as DashboardWidget;
 
 const placement = (
   id: string,
   widgetId: string,
   removed = false
-): WidgetPlacement => ({ id, widgetId, width: "full", removed });
+): WidgetPlacement => ({ id, widgetId, w: 12, h: 3, removed });
 
 const byId = new Map(
   [
     declared("core/collections", "Collections"),
     declared("core/team", "Team"),
-    declared("site/notes", "Notes"),
+    declared("site/notes", "Notes", 6),
     declared("forms/latest", "Latest submissions"),
   ].map(widget => [widget.id, widget])
 );
@@ -59,7 +63,6 @@ const WIDGETS = {
     rank: 1,
     allowsSeveral: true,
     sketch: "text",
-    allowedWidths: ["half", "full"],
   }),
   "core/team": facts({ rank: 2, group: "team" }),
   "forms/latest": facts({
@@ -130,8 +133,21 @@ describe("the add panel's rows", () => {
     expect(rows.find(row => row.key === "site/notes")).toMatchObject({
       placed: 2,
       action: { kind: "add-another", widgetId: "site/notes" },
-      widths: "½ to Full wide",
+      // From its declaration's bounds: six columns at the least, twelve at the most.
+      widths: "6 to 12 columns wide",
     });
+  });
+
+  it("says one width once, for a widget whose bounds allow only one", () => {
+    const rows = addPanelRows({
+      placements: [],
+      offered: ["core/collections"],
+      widgets: WIDGETS,
+      byId,
+    });
+    expect(rows.find(row => row.key === "core/collections")?.widths).toBe(
+      "12 columns wide"
+    );
   });
 
   it("lists a widget the server does not offer and the reader never placed nowhere", () => {
@@ -287,6 +303,7 @@ describe("a widget offered per collection", () => {
     id: "core/count",
     title: "Count",
     archetype: "metric",
+    size: gridBounds(3, 2),
     settings: [{ name: "collection", type: "collection" }],
   } as unknown as DashboardWidget;
   const rowsFor = (placements: WidgetPlacement[]) =>
@@ -382,6 +399,7 @@ describe("a widget offered only where its card can be asked", () => {
     id: "core/breakdown",
     title: "Breakdown",
     archetype: "bars",
+    size: gridBounds(4, 3),
     settings: [
       { name: "collection", type: "collection" },
       {

@@ -37,9 +37,11 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  carryStoredPasswords,
   type FieldGroupReach,
   hashPasswordFieldValues,
   NO_FIELD_GROUPS,
+  reachesPasswordField,
   storedPasswordValues,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
@@ -1187,7 +1189,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1324,7 +1328,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -1975,6 +1981,21 @@ export class FieldGroupMutationService extends BaseService {
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }
+    // After validation, which judges what the writer sent: each password an
+    // update left out of a container keeps its stored hash, whoever writes.
+    const keep = new Set(restoredHashes);
+    if (mode === "update" && slug !== undefined && storedId !== undefined) {
+      const reach = reachOf(nested);
+      if (reachesPasswordField(componentFields, reach)) {
+        const carried = carryStoredPasswords(
+          instance,
+          await this.storedContainerValues(slug, storedId, componentFields),
+          componentFields,
+          reach
+        );
+        for (const hash of carried) keep.add(hash);
+      }
+    }
     // Through the field groups held inline in this one's containers too: their
     // passwords are stored in those containers, which no save of their own
     // reaches.
@@ -1982,7 +2003,7 @@ export class FieldGroupMutationService extends BaseService {
       instance,
       componentFields,
       reachOf(nested),
-      restoredHashes
+      keep
     );
   }
 
@@ -2153,6 +2174,20 @@ export class FieldGroupMutationService extends BaseService {
       status: false,
     });
     if (!schema) return undefined;
+    // Before its migration the companion is not there, and a translated
+    // container is still on the instance's own row. Off a transaction the
+    // verdict is resolved here, so a cold cache cannot skip the read; inside
+    // one only the cached verdict is read, which the write resolved before
+    // opening it.
+    const readiness =
+      scope.executor === undefined
+        ? await resolveCompanionReadiness(this.adapter, {
+            companionTableName: schema.companionTableName,
+            mainTableName: meta.tableName,
+            localizedColumns: schema.localizedFields.map(f => f.column),
+          })
+        : cachedCompanionReadiness(this.adapter, schema.companionTableName);
+    if (readiness !== "ready") return undefined;
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
@@ -2318,7 +2353,9 @@ export class FieldGroupMutationService extends BaseService {
       componentFields,
       existingEntry ? "update" : "create",
       args.req,
-      meta.slug
+      meta.slug,
+      // The stored row an existing block is, for its stored passwords.
+      existingEntry ? instanceId : undefined
     );
     return { meta, componentFields, instanceId, existingEntry };
   }

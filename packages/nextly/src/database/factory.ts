@@ -33,6 +33,8 @@ import type { BaseAdapterConfig } from "@nextlyhq/adapter-drizzle/types";
 import { assertSupportedPostgresSchema } from "../domains/schema/services/postgres-schema";
 import { env } from "../lib/env";
 
+import { loadDialectTables } from "./dialect-tables";
+
 /**
  * Supported database adapter types
  *
@@ -231,7 +233,13 @@ export async function createAdapter(
   if (type === "postgresql" && config?.schema) {
     assertSupportedPostgresSchema(config.schema);
   }
-  const adapter = await loadAdapter(type, adapterConfig, url);
+  // The dialect's own tables load beside its adapter, so every adapter this
+  // returns can have its tables read synchronously, and no other dialect's
+  // tables are imported at all.
+  const [adapter] = await Promise.all([
+    loadAdapter(type, adapterConfig, url),
+    loadDialectTables(type),
+  ]);
   await adapter.connect();
   return adapter;
 }

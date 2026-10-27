@@ -127,8 +127,12 @@ on a component's own fields, which are judged on each instance the version holds
 depth. An API key is judged on its own grants, not its owner's.
 
 - A version read lists what it held back in `withheld`, by field name, or by a dotted
-  path below the top level (`banner.secret`).
-- A comparison shows a held-back field as `hidden` in its place, with neither value.
+  path below the top level (`banner.secret`). A field in a row of a list (a repeater or a
+  repeatable component) is named by that row's index in the version (`items.1.secret`),
+  so a rule that reads its row can hide a field in one row and show it in the next. The
+  shape of `withheld` is experimental.
+- A comparison shows a held-back field as `hidden` in its place, with neither value, and
+  only in the row that held it back: the other rows' changes to that field still show.
 - A restore never writes back a field the restorer may not read; it is reported in
   `droppedFields`.
 
@@ -250,12 +254,45 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 - `registerVersionPinHolder` refuses a name another feature registered. Registering the
   same name and label again, as a module reloaded in development does, returns the same
   handle.
-- `versionPins.list(db, ref)` reads every slot on a document, of every feature.
+- `legal.list(db, ref)` reads the slots this feature holds on a document, taking a
+  transaction or the adapter. The read names the holder, so another feature's slots never
+  leave the database. `versionPins.list(db, ref)` reads every slot on a document, of every
+  feature.
 - Deleting a document, a collection or a Single removes its pins, and a pin waiting on one
   being deleted is refused.
 
-A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
-`TransactionContext` above, so a plugin cannot pin through it.
+### From a plugin
+
+A plugin pins through `ctx.services.versions.pins`, on its own transaction: the handle
+`ctx.db.transaction` passes its callback, or the transaction
+`ctx.services.collections.withTransaction` hands its work. The pin commits or rolls back
+with the plugin's own writes.
+
+```ts
+import type { PluginContext, VersionRef } from "@nextlyhq/plugin-sdk";
+
+// Record the approval in the plugin's own table, and pin the version it names,
+// in one transaction.
+export async function approve(
+  ctx: PluginContext,
+  ref: VersionRef,
+  versionNo: number
+) {
+  const approvals = ctx.services.versions.pins.registerHolder({
+    name: "approvals",
+    label: "Approvals",
+  });
+  await ctx.db.transaction(async tx => {
+    await approvals.pin(ref, { slot: "approved", versionNo }, { tx });
+  });
+}
+```
+
+- A plugin's holder is named in its own namespace, so two plugins can each register
+  `approvals` and hold apart, and no plugin can register or reach a holder of core's.
+- `pin`, `release`, `releaseAll` and `list` all take `{ tx }`, and refuse anything but an
+  open transaction of the plugin's. `list` returns the holder's own slots.
+- A plugin's pins take the same document lock and refusals as the ones above.
 
 ## Renaming a collection or Single
 
