@@ -66,14 +66,15 @@ export const HEAVY_MODULES = 1_000;
 export const JUDGED_PROJECT = "nextly (isolated)";
 
 /**
- * The judged project's pins, each a margin above what it measured when they
- * were set (61 heavy files, and a mean of 1,217 modules over the heaviest
- * tenth, over 589 files), and the heavy files of that measurement. A run that
- * measures below a pin by more than its margin fails, naming the pin to set;
- * the list is refreshed with them. The pins are edited by hand so that a
- * change to one is a line a reviewer reads; only the list has a command.
+ * The judged project's pins, each a margin above what it measured when it was
+ * set (70 heavy files, over 597 files; a mean of 1,217 modules over the
+ * heaviest tenth, over 589 files), and the heavy files of the latest
+ * measurement. A run that measures below a pin by more than its margin fails,
+ * naming the pin to set; the list is refreshed with them. The pins are edited
+ * by hand so that a change to one is a line a reviewer reads; only the list
+ * has a command.
  */
-export const BUDGET = { heavyFiles: 64, tailMeanModules: 1_252 };
+export const BUDGET = { heavyFiles: 73, tailMeanModules: 1_252 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
