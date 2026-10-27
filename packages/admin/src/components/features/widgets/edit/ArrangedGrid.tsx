@@ -217,21 +217,22 @@ function cellSettingsWrite(
 }
 
 /**
- * Whether a card is off the dashboard because its widget hides when empty and its answer is, by
- * the outcome the renderer draws from (`resolveWidgetOutcome`), so the two cannot disagree.
+ * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
+ * hides when empty and its answer is. Read from the outcome the renderer draws from
+ * (`resolveWidgetOutcome`), so the two cannot disagree.
  */
 function hiddenWhileEmpty(
   row: ArrangedWidget,
   slots: Record<string, WidgetSlot>,
   cellSlots: CellSlots
 ): boolean {
-  if (row.widget.hidesWhenEmpty !== true) return false;
   const outcome = resolveWidgetOutcome(
     row.widget,
     slots[row.placementId],
     key => cellSlots[row.placementId]?.[key]
   );
-  return outcome.state === "empty";
+  if (outcome.state === "not-shown") return true;
+  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
 }
 
 /**
