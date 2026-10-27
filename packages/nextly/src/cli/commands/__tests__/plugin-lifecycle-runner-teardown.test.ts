@@ -43,6 +43,19 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
+// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async <T>(
+    _adapter: unknown,
+    _dialect: unknown,
+    fn: () => Promise<T>
+  ) => ({ ran: true as const, value: await fn() }),
+}));
+
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
     config: state.loadedConfig,

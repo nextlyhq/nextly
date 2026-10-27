@@ -11,14 +11,16 @@
 export {
   defineWidget,
   type AnyWidget,
-  type ContentQuery,
+  type WidgetAccess,
   type WidgetComponentMap,
   type WidgetData,
   type WidgetDataInput,
   type WidgetEmpty,
+  type WidgetPreviewCase,
   type WidgetProps,
   type WidgetReadServices,
   type WidgetRenderSize,
+  type WidgetSummary,
 } from "./define-widget";
 export type {
   AdminDashboardConfig,
@@ -28,7 +30,13 @@ export type {
   WidgetOverride,
   WidgetRef,
 } from "./dashboard";
-export type { ComponentDisplay, CoreDisplay, WidgetDisplay } from "./displays";
+export type {
+  ComponentDisplay,
+  CoreDisplay,
+  CoreView,
+  WidgetDisplay,
+  WidgetView,
+} from "./displays";
 export {
   settings,
   type ChartStyle,

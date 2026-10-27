@@ -9,17 +9,20 @@
  * the Markdown and the page, and links held to `http`, `https` and `mailto`
  * (`safeHref`), so what a reader writes cannot run.
  *
+ * Core/note is a declared widget: its `load` answers the text, the frame draws
+ * every state but ready (an unwritten note is empty by its declaration's
+ * `isEmpty`, with its declared message), and this component draws only the
+ * text it is handed.
+ *
  * Loaded lazily, as the `text` archetype loads it, so a dashboard with no note
  * pays nothing for the renderer.
  *
  * @module components/features/dashboard/NoteCard
  */
 
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 import { lazy, Suspense } from "react";
-
-import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 
 const TextMarkdown = lazy(() =>
   import("@admin/components/features/widgets/archetypes/TextMarkdown").then(
@@ -28,31 +31,20 @@ const TextMarkdown = lazy(() =>
 );
 
 /**
- * The note's text as written, or `""` for a note not written yet or a value
- * that is not text. Not trimmed: leading spaces are Markdown (four of them
- * make a code block), so only the empty test below reads past them.
+ * The note's text as its `load` answered it, or `""` for an answer that holds
+ * none. Not trimmed: leading spaces are Markdown (four of them make a code
+ * block).
  */
-function noteText(settings: WidgetComponentProps["settings"]): string {
-  const text = settings?.text;
+function noteText(data: unknown): string {
+  const text =
+    typeof data === "object" && data !== null
+      ? (data as { text?: unknown }).text
+      : undefined;
   return typeof text === "string" ? text : "";
 }
 
-export const NoteCard: React.FC<WidgetComponentProps> = ({ settings }) => {
-  const text = noteText(settings);
-  // Blank as well as absent is an empty note: whitespace alone draws nothing.
-  if (text.trim() === "") {
-    return (
-      <FrameState
-        state={{
-          kind: "empty",
-          empty: {
-            title: "An empty note",
-            detail: "Write it in the card's settings.",
-          },
-        }}
-      />
-    );
-  }
+export const NoteCard: React.FC<DeclaredComponentProps> = ({ data }) => {
+  const text = noteText(data);
   return (
     <Suspense
       fallback={

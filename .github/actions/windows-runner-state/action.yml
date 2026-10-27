@@ -1,0 +1,47 @@
+name: Windows runner state
+description: >-
+  Prints a Windows runner's disks, memory, heaviest processes, recent
+  application errors and any turbo crash report, for a job that has failed.
+
+# A Windows gate job sometimes ends with exit code 1 and nothing else: no task
+# error, no turbo summary, no crash code, a few seconds into a step. What the
+# job's own output cannot say is what the machine looked like at that moment,
+# so this prints it, after the failure, for the next one to be read against.
+#
+# It reads the machine, never the job: no environment variable, no command
+# line and no file's contents are printed, so nothing a step was handed (a
+# token, a signing key) can reach the log. Every command tolerates its own
+# failure, and callers run this with `continue-on-error: true`.
+
+runs:
+  using: composite
+  steps:
+    - name: Print the runner's state
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Continue'
+        '== Disks'
+        Get-PSDrive -PSProvider FileSystem |
+          Format-Table Name, @{ n = 'UsedGB'; e = { [math]::Round($_.Used / 1GB, 1) } }, @{ n = 'FreeGB'; e = { [math]::Round($_.Free / 1GB, 1) } } -AutoSize |
+          Out-String -Width 200
+        '== Memory and commit charge'
+        $os = Get-CimInstance Win32_OperatingSystem
+        'Physical: {0:N1} GB free of {1:N1} GB' -f ($os.FreePhysicalMemory / 1MB), ($os.TotalVisibleMemorySize / 1MB)
+        'Commit: {0:N1} GB free of {1:N1} GB' -f ($os.FreeVirtualMemory / 1MB), ($os.TotalVirtualMemorySize / 1MB)
+        '== The ten processes holding the most memory (names only)'
+        Get-Process |
+          Sort-Object WorkingSet64 -Descending |
+          Select-Object -First 10 Name, Id, @{ n = 'WorkingSetMB'; e = { [math]::Round($_.WorkingSet64 / 1MB) } } |
+          Format-Table -AutoSize | Out-String -Width 200
+        '== Application errors in the last hour'
+        Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 1, 2; StartTime = (Get-Date).AddHours(-1) } -MaxEvents 20 -ErrorAction SilentlyContinue |
+          Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 200
+        '== Crash reports from the last two hours (names only)'
+        # turbo's panic handler writes `report-<uuid>.toml` to the temporary
+        # directory, with nothing naming turbo in it.
+        $since = (Get-Date).AddHours(-2)
+        Get-ChildItem -Path $env:TEMP -Recurse -File -Include 'report-*.toml', '*turbo*' -ErrorAction SilentlyContinue |
+          Where-Object { $_.LastWriteTime -ge $since } |
+          Select-Object -First 10 FullName, Length, LastWriteTime |
+          Format-Table -AutoSize | Out-String -Width 200
+        exit 0

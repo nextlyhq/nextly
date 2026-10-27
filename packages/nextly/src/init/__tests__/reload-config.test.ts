@@ -1832,7 +1832,7 @@ describe("reloadNextlyConfig", () => {
             widgets: [
               {
                 id: "acme/new",
-                display: { component: "@acme/widgets/admin#New" },
+                view: { component: "@acme/widgets/admin#New" },
               },
             ],
           },

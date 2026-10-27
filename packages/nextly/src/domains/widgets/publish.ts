@@ -118,13 +118,17 @@ function publishedSourceOf(
     label: source.label,
     lifecycle: source.lifecycleStatus === true,
     ...(titleField === undefined ? {} : { titleField }),
-    fields: offered.map(({ name, label, type, choices, groupable }) => ({
-      name,
-      type,
-      ...(label === undefined ? {} : { label }),
-      ...(choices === undefined ? {} : { choices }),
-      // Carried so a Group by setting offers only keys the read accepts.
-      ...(groupable === undefined ? {} : { groupable }),
-    })),
+    fields: offered.map(
+      ({ name, label, type, choices, groupable, presentable }) => ({
+        name,
+        type,
+        ...(label === undefined ? {} : { label }),
+        ...(choices === undefined ? {} : { choices }),
+        // Carried so a Group by setting offers only keys the read accepts.
+        ...(groupable === undefined ? {} : { groupable }),
+        // Carried so a Fields setting offers only fields a row can print.
+        ...(presentable === undefined ? {} : { presentable }),
+      })
+    ),
   };
 }

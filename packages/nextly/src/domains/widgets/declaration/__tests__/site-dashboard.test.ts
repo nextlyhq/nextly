@@ -174,7 +174,7 @@ describe("a site config with faults", () => {
         hide: ["core/teem"],
         overrides: {
           "acme/orders-by-state": {
-            description: "x".repeat(81),
+            description: "Orders by state\nand by region",
             size: { min: { w: 3, h: 3 } },
             settings: { top: "many", colour: "red" },
           },
@@ -186,7 +186,7 @@ describe("a site config with faults", () => {
     for (const expected of [
       'the site config, widget "site/revenue": title must be a non-empty string',
       'the site config, widget "core/teem": hide names "core/teem", which no widget declares; did you mean "core/team"?',
-      'the site config, widget "acme/orders-by-state": overrides.description must be at most 80 characters, has 81',
+      'the site config, widget "acme/orders-by-state": overrides.description must be one line',
       'the site config, widget "acme/orders-by-state": overrides.size.min { w: 3, h: 3 } widens the smallest size; the widget allows from { w: 4, h: 3 } to { w: 8, h: 6 }, and an override may only narrow that',
       'the site config, widget "acme/orders-by-state": overrides.settings sets "colour", which the widget does not declare',
       'the site config, widget "acme/orders-by-state": overrides.settings: setting "top"',

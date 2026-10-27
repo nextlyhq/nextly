@@ -149,6 +149,11 @@ export interface WidgetCardProps {
    */
   hidesWhenEmpty?: boolean;
   /**
+   * The widget's own `shows` said no for this person: the card is taken off the dashboard as one
+   * hidden while empty is, and customise mode shows it marked, so it can be removed.
+   */
+  notShown?: boolean;
+  /**
    * At most ONE. A footer is not a row of buttons. Shown beside a drawn body and under an empty
    * one, where "View all" still leads somewhere; never while the card is loading, failed or not
    * available, where its destination is the thing that did not answer.
@@ -210,7 +215,7 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
  */
 function frameFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "link">,
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown" | "link">,
   state: CardState,
   modes: {
     customizing: boolean;
@@ -220,10 +225,15 @@ function frameFlags(
 ) {
   const { customizing } = modes;
   const refreshing = modes.refreshing || state.kind === "refreshing";
-  const hidden = props.hidesWhenEmpty === true && state.kind === "empty";
+  const notShown = props.notShown === true;
+  const hidden =
+    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
   return {
     hiddenEmpty: hidden && !customizing,
     markedHidden: hidden && customizing,
+    hiddenBecause: notShown
+      ? "Not shown for you right now"
+      : "Hidden while empty",
     // A quick control changes the question; before the first answer there is no question on
     // show to change, and in customise mode the card's menu stands there.
     quickInert: state.kind === "loading" || customizing,
@@ -307,7 +317,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                     className="mb-2 text-xs font-medium text-muted-foreground"
                     data-testid="hidden-while-empty"
                   >
-                    Hidden while empty
+                    {flags.hiddenBecause}
                   </p>
                 ) : null}
                 <StateBody state={state} title={title} props={props} />
@@ -357,19 +367,46 @@ function StateBody({
       return <LoadingBody hint={state.skeleton} props={props} />;
     case "error":
       return (
-        <CardError
-          message={state.message}
-          title={title}
-          onRetry={state.retry}
-        />
+        <CentredState>
+          <CardError
+            message={state.message}
+            title={title}
+            onRetry={state.retry}
+          />
+        </CentredState>
       );
     case "no-access":
-      return <CardUnavailable />;
+      return (
+        <CentredState>
+          <CardUnavailable />
+        </CentredState>
+      );
     case "empty":
-      return <CardEmpty {...state.empty} />;
+      return (
+        <CentredState>
+          <CardEmpty {...state.empty} />
+        </CentredState>
+      );
     default:
       return null;
   }
+}
+
+/**
+ * A state that says something instead of showing data (empty, error, no access), centred in the
+ * body both ways. A card keeps its rows whatever it shows, so a short message at the top-left of
+ * a tall card left the rest of it blank and looking unfinished. The loading skeleton is not
+ * centred: it holds the place of the content it stands in for, which starts at the top.
+ */
+function CentredState({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-testid="card-state-centred"
+      className="flex flex-1 flex-col items-center justify-center text-center"
+    >
+      {children}
+    </div>
+  );
 }
 
 /**

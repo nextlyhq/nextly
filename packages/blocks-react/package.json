@@ -31,6 +31,11 @@
       "types": "./dist/blocks/index.d.ts",
       "import": "./dist/blocks/index.mjs",
       "default": "./dist/blocks/index.mjs"
+    },
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.mjs",
+      "default": "./dist/environment.mjs"
     }
   },
   "files": [

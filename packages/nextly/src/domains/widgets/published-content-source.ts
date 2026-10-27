@@ -33,6 +33,6 @@ export interface PublishedContentSource {
   titleField?: string;
   fields: Pick<
     WidgetSourceField,
-    "name" | "label" | "type" | "choices" | "groupable"
+    "name" | "label" | "type" | "choices" | "groupable" | "presentable"
   >[];
 }

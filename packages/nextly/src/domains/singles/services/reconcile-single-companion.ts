@@ -23,7 +23,7 @@ import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
 import { appLocalization } from "../../i18n/configured-locales";
-import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
   type FieldRename,
@@ -62,6 +62,12 @@ export interface ReconcileSingleCompanionArgs {
   joinedBefore?: readonly string[];
   /** A translated field this change renames, by field name; its companion column is renamed. */
   renamed?: FieldRename;
+  /**
+   * Applies the Required and Unique settings of fields leaving translation, once their values are
+   * copied onto main and before their companion columns are dropped (`settleThenDropLeavingFields`),
+   * throwing when they are refused. Left out, each column is dropped right after its copy.
+   */
+  settleLeaving?: () => Promise<void>;
 }
 
 export async function reconcileSingleCompanion(
@@ -123,6 +129,7 @@ export async function reconcileSingleCompanion(
     wasStatus,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
+    holdLeavingDrops: args.settleLeaving !== undefined,
     // What this database holds now, so a re-save after a part-applied one finishes it.
     ...(await liveCompanionShape(adapter, {
       tableName,
@@ -133,48 +140,14 @@ export async function reconcileSingleCompanion(
     })),
   });
 
-  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
-  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
-  if (plan.needsArchive) {
-    await ensureI18nArchive(adapter, dialect);
-  }
-  // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
-  //
-  // Tolerating it would make a half-finished localization ENABLE look like success. Interrupted
-  // after the companion is created but before the seed and the main-column drops, the retry is
-  // indistinguishable from an orphan repair — the planner cannot tell them apart, because the
-  // signal that separates them (`existingMainColumns`) is consumed only on the disable path — so
-  // the duplicate columns would be swallowed and the entity recorded as localized while its
-  // default-locale content is still stranded on the main table.
-  //
-  // A loud failure is the worse experience and the safer outcome. It costs the repair of a
-  // localized entity whose create half-failed; it prevents silently reporting a migration that did
-  // not happen.
-  for (const stmt of plan.statements) {
-    await adapter.executeQuery(stmt);
-  }
-
-  // The transition record describes a companion that no longer exists, so it stops being true the
-  // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
-  // — the check that protects a live transition would block a legitimate one instead.
-  if (plan.companionDropped) {
-    // The other half of "this companion is gone": readiness remembers only that one exists.
-    const { forgetCompanionReadiness } = await import(
-      "../../i18n/runtime/companion-readiness"
-    );
-    forgetCompanionReadiness(adapter, `${tableName}_locales`);
-    const { resolveTransitionStore } = await import(
-      "../../i18n/migration/transition-recorder"
-    );
-    const { forgetI18nTransition } = await import(
-      "../../i18n/migration/transition-state"
-    );
-    await forgetI18nTransition(
-      await resolveTransitionStore(adapter),
-      "single",
-      slug
-    );
-  }
+  await applyCompanionTransition({
+    adapter,
+    plan,
+    settleLeaving: args.settleLeaving,
+    kind: "single",
+    slug,
+    tableName,
+  });
 
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
   // the plan dropped the companion (disable) or the single is no longer localized.

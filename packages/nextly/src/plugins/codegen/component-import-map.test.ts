@@ -366,6 +366,72 @@ describe("block editor components", () => {
   });
 });
 
+describe("block editor entries", () => {
+  /** A plugin declaring blocks and naming the module that exports them. */
+  function declaringEntry(
+    editorEntry: unknown,
+    enabled?: boolean
+  ): PluginDefinition {
+    return {
+      name: "@acme/blocks",
+      version: "1.0.0",
+      nextly: "*",
+      enabled,
+      contributes: {
+        declarations: {
+          "@nextlyhq/plugin-page-builder": {
+            blocks: [{ name: "acme/hero", version: 1 }],
+            editorEntry,
+          },
+        },
+      },
+    } as unknown as PluginDefinition;
+  }
+
+  const ENTRY = "@acme/blocks/editor#editorBlocks";
+
+  it("lists the entry while the page builder is active, and hands it to the page builder", () => {
+    const plugins = [pageBuilder(), declaringEntry(ENTRY)];
+
+    expect(componentImportMapPaths(plugins)).toContain(ENTRY);
+    const code = buildComponentImportMap(plugins);
+    expect(code).toContain(
+      'import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";'
+    );
+    expect(code).toContain(`"${ENTRY}": _p0.editorBlocks`);
+    // Definitions are not a component: the component registry never sees it.
+    expect(code).not.toContain("registerComponents(");
+  });
+
+  it("lists no entry while the page builder is absent or disabled", () => {
+    for (const plugins of [
+      [declaringEntry(ENTRY)],
+      [pageBuilder(false), declaringEntry(ENTRY)],
+    ]) {
+      expect(componentImportMapPaths(plugins)).not.toContain(ENTRY);
+      expect(buildComponentImportMap(plugins)).not.toContain(
+        "registerBlockEditorModules"
+      );
+    }
+  });
+
+  it("skips a malformed entry rather than failing generation", () => {
+    // The page builder refuses it at boot, naming the plugin.
+    for (const malformed of [42, "", "   "]) {
+      expect(
+        componentImportMapPaths([pageBuilder(), declaringEntry(malformed)])
+      ).toEqual([]);
+    }
+  });
+
+  it("leaves a map with no block modules exactly as before", () => {
+    // Every committed map of a site with no contributed blocks is unchanged.
+    expect(buildComponentImportMap([pageBuilder()])).not.toContain(
+      "blockEditorEntries"
+    );
+  });
+});
+
 describe("field-type and slot components", () => {
   it("collects a field type's editor component from a plugin with no admin contributions", () => {
     // The page builder is exactly this shape: one field type and no pages,
@@ -738,10 +804,10 @@ describe("widgets declared under contributes.dashboard", () => {
     const shop = declaring([
       {
         id: "acme/revenue",
-        display: { component: "@acme/shop/admin#Revenue" },
+        view: { component: "@acme/shop/admin#Revenue" },
       },
-      // A core display ships no component, so it contributes no path.
-      { id: "acme/orders", display: "list" },
+      // A core view ships no component, so it contributes no path.
+      { id: "acme/orders", view: "list" },
     ]);
     expect(collectAdminComponentPaths(shop)).toEqual([
       "@acme/shop/admin#Revenue",
@@ -755,7 +821,7 @@ describe("widgets declared under contributes.dashboard", () => {
     expect(
       collectAdminComponentPaths(
         declaring(
-          [{ id: "a/b", display: { component: "@acme/shop/admin#Revenue" } }],
+          [{ id: "a/b", view: { component: "@acme/shop/admin#Revenue" } }],
           false
         )
       )
@@ -765,9 +831,12 @@ describe("widgets declared under contributes.dashboard", () => {
       collectAdminComponentPaths(
         declaring([
           null,
-          { display: { component: "" } },
-          { display: { component: 3 } },
-          { display: null },
+          { view: { component: "" } },
+          { view: { component: 3 } },
+          { view: null },
+          // The field a declaration named its component under before `view`:
+          // startup refuses it by name, and the map does not read it.
+          { id: "a/old", display: { component: "@acme/shop/admin#Old" } },
         ])
       )
     ).toEqual([]);
@@ -822,7 +891,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/revenue",
-              display: { component: "@acme/shop/admin#Revenue" },
+              view: { component: "@acme/shop/admin#Revenue" },
             },
           ],
         },
@@ -894,7 +963,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/shared",
-              display: { component: "@acme/shop/admin#Shared" },
+              view: { component: "@acme/shop/admin#Shared" },
             },
           ],
         },

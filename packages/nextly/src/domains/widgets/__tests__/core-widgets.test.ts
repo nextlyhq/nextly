@@ -3,7 +3,7 @@
  * them.
  *
  * Deliberately NOT a restatement of the list. Asserting that a card carries the
- * literal written three lines away in `core-widgets.ts` is a test that can only
+ * literal written three lines away in `core-widgets/` is a test that can only
  * ever agree with itself, and it would go on agreeing while the thing the
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
@@ -137,11 +137,11 @@ describe("core widget definitions", () => {
     expect(card?.lifecycle ?? "always").toBe("always");
     expect(card).not.toHaveProperty("visibleWhen");
     expect(card?.dismissible).toBe(true);
-    // Full width only, and never shorter than its steps: a card does not scroll, so a reader
-    // may make it taller for the Singles they open, never short enough to cut a step off.
+    // Full width only, and compact: its steps fold to the rows it has, so it may be as short
+    // as three rows without a step cut off.
     expect(card && sizeBounds(card.size)).toEqual({
-      default: { w: 12, h: 8 },
-      min: { w: 12, h: 8 },
+      default: { w: 12, h: 4 },
+      min: { w: 12, h: 3 },
       max: { w: 12, h: 12 },
     });
     const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
