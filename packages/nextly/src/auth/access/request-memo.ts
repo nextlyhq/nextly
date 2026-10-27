@@ -19,8 +19,14 @@
  * script, looks every answer up as it always has.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 
 import type { RuleFilter } from "./rule-answer";
+import {
+  languagesIn,
+  ruleLanguageKeyOf,
+  type RuleLanguageOf,
+} from "./rule-language-key";
 
 /**
  * What a request has looked up about one user, the revision of the role and
@@ -51,16 +57,22 @@ export type RouteVerdict =
   | { readonly all: true }
   | { readonly filter: RuleFilter };
 
+/** A route's verdict, and the languages its rules were told. */
+interface KeptVerdict {
+  readonly languages: ReadonlySet<string>;
+  readonly verdict: RouteVerdict;
+}
+
 /**
  * The verdicts the routes of this request gave, for the reads they authorized
  * to apply: by caller, target and action, and within those by the language
- * the route's rules were told. Kept apart from the lookups and rule outcomes
- * above, which a write in the request clears: the route's verdict is what
- * lets the read run, so it stands for the whole request, as the route's allow
- * does.
+ * the route's rules were told, as `ruleLanguageKeyOf` names it. Kept apart
+ * from the lookups and rule outcomes above, which a write in the request
+ * clears: the route's verdict is what lets the read run, so it stands for the
+ * whole request, as the route's allow does.
  */
 const routeVerdicts = new AsyncLocalStorage<
-  Map<string, Map<string, RouteVerdict>>
+  Map<string, Map<string, KeptVerdict>>
 >();
 
 /** Which caller a route judged, on which target and action, in which language. */
@@ -68,8 +80,8 @@ export interface RouteVerdictQuestion {
   readonly userId: string;
   readonly slug: string;
   readonly action: string;
-  /** The rule language, as `ruleLanguageKey` names it. */
-  readonly language: string;
+  /** The languages the rule is told. */
+  readonly language: RuleLanguageOf;
 }
 
 const routeVerdictKey = (q: RouteVerdictQuestion): string =>
@@ -98,24 +110,42 @@ export function rememberRouteVerdict(
   const kept = routeVerdicts.getStore();
   if (!kept) return false;
   const key = routeVerdictKey(question);
-  const byLanguage = kept.get(key) ?? new Map<string, RouteVerdict>();
-  byLanguage.set(question.language, verdict);
+  const byLanguage = kept.get(key) ?? new Map<string, KeptVerdict>();
+  byLanguage.set(ruleLanguageKeyOf(question.language), {
+    languages: languagesIn(question.language),
+    verdict,
+  });
   kept.set(key, byLanguage);
   return true;
 }
 
 /**
- * The verdict a route in this request gave on `question`: the verdict kept in
- * its language; `"other-language"` where the route judged this caller,
- * target and action only in other languages, whose verdicts say nothing of
- * this one; `undefined` where no route in the request judged them.
+ * The verdict a route in this request gave on `question`, where the
+ * languages the route's rules were told include every language of
+ * `question`: the route that judged a history in every language at once
+ * judged it in each of them. `"other-language"` where the route judged this
+ * caller, target and action, but in no set of languages that includes these,
+ * or in several that disagree, so its verdicts say nothing of this read.
+ * `undefined` where no route in the request judged them.
  */
 export function routeVerdictFor(
   question: RouteVerdictQuestion
 ): RouteVerdict | "other-language" | undefined {
   const byLanguage = routeVerdicts.getStore()?.get(routeVerdictKey(question));
   if (!byLanguage) return undefined;
-  return byLanguage.get(question.language) ?? "other-language";
+  const exact = byLanguage.get(ruleLanguageKeyOf(question.language));
+  if (exact) return exact.verdict;
+  const asked = languagesIn(question.language);
+  // A read told no language is answered only by a route told none.
+  if (asked.size === 0) return "other-language";
+  const covering = [...byLanguage.values()].filter(kept =>
+    [...asked].every(language => kept.languages.has(language))
+  );
+  if (covering.length === 0) return "other-language";
+  const [first, ...rest] = covering.map(kept => kept.verdict);
+  return rest.every(verdict => isDeepStrictEqual(verdict, first))
+    ? first
+    : "other-language";
 }
 
 /**
