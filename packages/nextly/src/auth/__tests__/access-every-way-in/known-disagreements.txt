@@ -685,6 +685,7 @@ service key-role-based-super-admin publish single-pub async-throws at widget  # 
 service key-partial publish single-pub async-throws at widget  # holds-permission-key-skips-rules
 service key-full-access unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
 service key-role-based unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based-super-admin unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub role-name at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin publish single-pub role-name at widget  # holds-permission-key-skips-rules
 service key-partial publish single-pub role-name at widget  # holds-permission-key-skips-rules

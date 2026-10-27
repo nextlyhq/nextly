@@ -786,6 +786,19 @@ async function handleFor(
 }
 
 /**
+ * The handle one cell asks with. A key that sends its headers is
+ * authenticated again for each cell, as each request it sends is: the
+ * super-admin authority authentication gives a key's scope lapses soon after,
+ * and the table runs far longer than that. A handed-over scope is kept as
+ * it is, since nothing re-authenticates it.
+ */
+export async function handleForCell(who: CallerHandle): Promise<CallerHandle> {
+  if (!who.actor || !who.headers.authorization) return who;
+  const auth = await authenticated(who.headers);
+  return { ...who, actor: apiKeyScopeFrom(auth) };
+}
+
+/**
  * The callers only a call hands over, made from the callers they stand for.
  * They send no headers, since no request presents them.
  */
