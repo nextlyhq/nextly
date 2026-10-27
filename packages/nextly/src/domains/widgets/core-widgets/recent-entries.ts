@@ -7,10 +7,11 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY, RECENT_ENTRIES_ITEMS } from "./shared";
 
 export const recentEntriesWidget = {
-  id: "core/recent-entries",
+  id: CORE_WIDGET_ID.recentEntries,
   title: "Recent entries",
   description:
     "A collection's entries changed most recently, each linking to its entry.",
