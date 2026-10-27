@@ -17,9 +17,9 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetQuerySpec } from "../query";
-import type { WidgetScope } from "../resolved-sources";
 import type { DeclaredComponentProps } from "../result";
 import type { WidgetOp } from "../sources";
+import type { WidgetScope } from "../widget-scope";
 
 import type {
   CoreDisplay,
