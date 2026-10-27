@@ -250,6 +250,57 @@ service custom-role list collection throws at service  403 FORBIDDEN thrown  | Y
 service custom-role list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service custom-role list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service custom-role list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service custom-role new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service custom-role new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service custom-role new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service custom-role new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service custom-role new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service custom-role new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service custom-role new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service custom-role new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service custom-role new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service custom-role new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service custom-role new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service custom-role new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service custom-role new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service custom-role new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service custom-role new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service custom-role new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service custom-role new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service custom-role new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service custom-role new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service custom-role new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service custom-role new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service custom-role new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service custom-role new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish c publish falses.
+service custom-role new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service custom-role new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service custom-role new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service custom-role new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service custom-role new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service custom-role new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service custom-role new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service custom-role new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service custom-role new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service custom-role new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service custom-role new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service custom-role new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service custom-role new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service custom-role new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service custom-role new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service custom-role new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service custom-role new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service custom-role new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service custom-role new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service custom-role new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service custom-role new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service custom-role new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service custom-role new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service custom-role new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service custom-role new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service custom-role new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service custom-role new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service custom-role new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service custom-role publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -969,6 +1020,51 @@ service key-full-access list collection returns-undefined at service  403 FORBID
 service key-full-access list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service key-full-access list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service key-full-access list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service key-full-access new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-full-access new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service key-full-access new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-full-access new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-full-access new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service key-full-access new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-full-access new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-full-access new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service key-full-access new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-full-access new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service key-full-access new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service key-full-access new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service key-full-access new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-full-access new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service key-full-access new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-full-access new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-full-access new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-full-access new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-full-access new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-full-access new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service key-full-access new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-full-access new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-full-access new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish c publish falses.
+service key-full-access new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-full-access new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-full-access new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service key-full-access new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-full-access new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-full-access new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service key-full-access new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-full-access new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-full-access new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service key-full-access new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-full-access new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-full-access new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service key-full-access new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-full-access new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-full-access new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service key-full-access new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-full-access new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-full-access new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service key-full-access new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-full-access new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service key-full-access new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service key-full-access new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service key-full-access publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -1714,6 +1810,75 @@ service key-partial list collection role-name at service  403 FORBIDDEN thrown  
 service key-partial list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service key-partial list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service key-partial list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service key-partial new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-partial new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service key-partial new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-partial new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-partial new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service key-partial new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-partial new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-partial new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service key-partial new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-partial new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service key-partial new-pub collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service key-partial new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service key-partial new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service key-partial new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service key-partial new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service key-partial new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-partial new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service key-partial new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-partial new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service key-partial new-pub collection none at rest  403 FORBIDDEN error  | You can't create c nones.
+service key-partial new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service key-partial new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service key-partial new-pub collection other-operation at rest  403 FORBIDDEN error  | You can't create c other operations.
+service key-partial new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service key-partial new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-partial new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-partial new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-partial new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-partial new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service key-partial new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-partial new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service key-partial new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't create c publish falses.
+service key-partial new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service key-partial new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-partial new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service key-partial new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-partial new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-partial new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service key-partial new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-partial new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-partial new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service key-partial new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-partial new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-partial new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service key-partial new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-partial new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-partial new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service key-partial new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-partial new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service key-partial new-pub collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service key-partial new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service key-partial new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-partial new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service key-partial new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-partial new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service key-partial new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service key-partial new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service key-partial new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service key-partial new-pub collection role-screen-spelling at rest  403 FORBIDDEN error  | You can't create c role screen spellings.
+service key-partial new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service key-partial new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service key-partial new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service key-partial new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service key-partial new-pub collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service key-partial new-pub collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service key-partial new-pub collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service key-partial new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service key-partial new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service key-partial new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service key-partial publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -2527,6 +2692,75 @@ service key-read-only list collection returns-undefined at service  403 FORBIDDE
 service key-read-only list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service key-read-only list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service key-read-only list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service key-read-only new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-read-only new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service key-read-only new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-read-only new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-read-only new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service key-read-only new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-read-only new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-read-only new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service key-read-only new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-read-only new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service key-read-only new-pub collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service key-read-only new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service key-read-only new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service key-read-only new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service key-read-only new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service key-read-only new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-read-only new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service key-read-only new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-read-only new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service key-read-only new-pub collection none at rest  403 FORBIDDEN error  | You can't create c nones.
+service key-read-only new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service key-read-only new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service key-read-only new-pub collection other-operation at rest  403 FORBIDDEN error  | You can't create c other operations.
+service key-read-only new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service key-read-only new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-read-only new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-read-only new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-read-only new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-read-only new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service key-read-only new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-read-only new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service key-read-only new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't create c publish falses.
+service key-read-only new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service key-read-only new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-read-only new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service key-read-only new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-read-only new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-read-only new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service key-read-only new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-read-only new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-read-only new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service key-read-only new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-read-only new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-read-only new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service key-read-only new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-read-only new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-read-only new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service key-read-only new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-read-only new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service key-read-only new-pub collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service key-read-only new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service key-read-only new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-read-only new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service key-read-only new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-read-only new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service key-read-only new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service key-read-only new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service key-read-only new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service key-read-only new-pub collection role-screen-spelling at rest  403 FORBIDDEN error  | You can't create c role screen spellings.
+service key-read-only new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service key-read-only new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service key-read-only new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service key-read-only new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service key-read-only new-pub collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service key-read-only new-pub collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service key-read-only new-pub collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service key-read-only new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service key-read-only new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service key-read-only new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service key-read-only publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -3376,6 +3610,54 @@ service key-role-based list collection role-name at service  403 FORBIDDEN throw
 service key-role-based list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service key-role-based list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service key-role-based list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service key-role-based new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-role-based new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service key-role-based new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-role-based new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-role-based new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service key-role-based new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-role-based new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-role-based new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service key-role-based new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-role-based new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service key-role-based new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service key-role-based new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service key-role-based new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-role-based new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service key-role-based new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-role-based new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-role-based new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-role-based new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-role-based new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-role-based new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service key-role-based new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-role-based new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-role-based new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish c publish falses.
+service key-role-based new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-role-based new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-role-based new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service key-role-based new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-role-based new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-role-based new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service key-role-based new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-role-based new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-role-based new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service key-role-based new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-role-based new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-role-based new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service key-role-based new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-role-based new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-role-based new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service key-role-based new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-role-based new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-role-based new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service key-role-based new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-role-based new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service key-role-based new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service key-role-based new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service key-role-based new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service key-role-based new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service key-role-based new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service key-role-based publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -4089,6 +4371,57 @@ service key-super-admin list collection throws at service  403 FORBIDDEN thrown 
 service key-super-admin list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service key-super-admin list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service key-super-admin list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service key-super-admin new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-super-admin new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service key-super-admin new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service key-super-admin new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-super-admin new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service key-super-admin new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service key-super-admin new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-super-admin new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service key-super-admin new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service key-super-admin new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service key-super-admin new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service key-super-admin new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service key-super-admin new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-super-admin new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service key-super-admin new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service key-super-admin new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-super-admin new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service key-super-admin new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service key-super-admin new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-super-admin new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service key-super-admin new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service key-super-admin new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-super-admin new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish c publish falses.
+service key-super-admin new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service key-super-admin new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-super-admin new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service key-super-admin new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service key-super-admin new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-super-admin new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service key-super-admin new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service key-super-admin new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-super-admin new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service key-super-admin new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service key-super-admin new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-super-admin new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service key-super-admin new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service key-super-admin new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-super-admin new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service key-super-admin new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service key-super-admin new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-super-admin new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service key-super-admin new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service key-super-admin new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service key-super-admin new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service key-super-admin new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service key-super-admin new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service key-super-admin new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service key-super-admin new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service key-super-admin new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service key-super-admin new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service key-super-admin new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service key-super-admin publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -4755,6 +5088,52 @@ service principal list collection throws at direct  403 FORBIDDEN thrown  | You 
 service principal list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
 service principal list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service principal list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service principal new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service principal new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service principal new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service principal new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service principal new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service principal new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service principal new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't publish c async trues.
+service principal new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't publish c async trues.
+service principal new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service principal new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service principal new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service principal new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service principal new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service principal new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service principal new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service principal new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service principal new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service principal new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service principal new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't publish c principal kinds.
+service principal new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't publish c principal kinds.
+service principal new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service principal new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service principal new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service principal new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service principal new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service principal new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service principal new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service principal new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service principal new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service principal new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service principal new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service principal new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service principal new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service principal new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service principal new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service principal new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service principal new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service principal new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service principal new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service principal new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service principal new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service principal new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service principal new-pub collection true at direct  403 FORBIDDEN thrown  | You can't publish c trues.
+service principal new-pub collection true at service  403 FORBIDDEN thrown  | You can't publish c trues.
+service principal new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service principal new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service principal publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal publish collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5167,6 +5546,52 @@ service principal-other list collection throws at direct  403 FORBIDDEN thrown  
 service principal-other list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
 service principal-other list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service principal-other list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service principal-other new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service principal-other new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service principal-other new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service principal-other new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service principal-other new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service principal-other new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service principal-other new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't publish c async trues.
+service principal-other new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't publish c async trues.
+service principal-other new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service principal-other new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service principal-other new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service principal-other new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service principal-other new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service principal-other new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service principal-other new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service principal-other new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service principal-other new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service principal-other new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service principal-other new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service principal-other new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service principal-other new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service principal-other new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service principal-other new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service principal-other new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service principal-other new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service principal-other new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service principal-other new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service principal-other new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service principal-other new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service principal-other new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service principal-other new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service principal-other new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service principal-other new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service principal-other new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service principal-other new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service principal-other new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service principal-other new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service principal-other new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service principal-other new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service principal-other new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service principal-other new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service principal-other new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service principal-other new-pub collection true at direct  403 FORBIDDEN thrown  | You can't publish c trues.
+service principal-other new-pub collection true at service  403 FORBIDDEN thrown  | You can't publish c trues.
+service principal-other new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service principal-other new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service principal-other publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other publish collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5717,6 +6142,75 @@ service user-partial list collection throws at service  403 FORBIDDEN thrown  | 
 service user-partial list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service user-partial list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service user-partial list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service user-partial new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-partial new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service user-partial new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-partial new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-partial new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service user-partial new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-partial new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-partial new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service user-partial new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-partial new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-partial new-pub collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service user-partial new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-partial new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service user-partial new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service user-partial new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service user-partial new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-partial new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service user-partial new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-partial new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service user-partial new-pub collection none at rest  403 FORBIDDEN error  | You can't create c nones.
+service user-partial new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service user-partial new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service user-partial new-pub collection other-operation at rest  403 FORBIDDEN error  | You can't create c other operations.
+service user-partial new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service user-partial new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-partial new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service user-partial new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-partial new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-partial new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service user-partial new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-partial new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service user-partial new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't create c publish falses.
+service user-partial new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service user-partial new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-partial new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service user-partial new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-partial new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-partial new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service user-partial new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-partial new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-partial new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service user-partial new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-partial new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-partial new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service user-partial new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-partial new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-partial new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service user-partial new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-partial new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-partial new-pub collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service user-partial new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-partial new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-partial new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service user-partial new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-partial new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service user-partial new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service user-partial new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service user-partial new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service user-partial new-pub collection role-screen-spelling at rest  403 FORBIDDEN error  | You can't create c role screen spellings.
+service user-partial new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service user-partial new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service user-partial new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service user-partial new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service user-partial new-pub collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service user-partial new-pub collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service user-partial new-pub collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service user-partial new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service user-partial new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service user-partial new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service user-partial publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -6473,6 +6967,51 @@ service user-with list collection returns-undefined at service  403 FORBIDDEN th
 service user-with list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service user-with list collection throws at rest  403 FORBIDDEN error  | You can't see c throws.
 service user-with list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
+service user-with new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-with new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service user-with new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-with new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-with new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service user-with new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-with new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-with new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service user-with new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-with new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service user-with new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service user-with new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service user-with new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-with new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service user-with new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-with new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-with new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service user-with new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-with new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-with new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service user-with new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-with new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service user-with new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish c publish falses.
+service user-with new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish c publish falses.
+service user-with new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-with new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service user-with new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-with new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-with new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service user-with new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-with new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-with new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service user-with new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-with new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-with new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service user-with new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-with new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-with new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service user-with new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-with new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-with new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service user-with new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-with new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service user-with new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service user-with new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
 service user-with publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -7266,6 +7805,75 @@ service user-without list collection true at service  403 FORBIDDEN thrown  | Yo
 service user-without list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service user-without list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see c user is key makers.
 service user-without list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service user-without new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-without new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create c async falses.
+service user-without new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service user-without new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-without new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create c async filters.
+service user-without new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service user-without new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-without new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create c async throws.
+service user-without new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service user-without new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-without new-pub collection async-true at rest  403 FORBIDDEN error  | You can't create c async trues.
+service user-without new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't create c async trues.
+service user-without new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service user-without new-pub collection false at rest  403 FORBIDDEN error  | You can't create c falses.
+service user-without new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service user-without new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-without new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create c malformed filters.
+service user-without new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service user-without new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service user-without new-pub collection none at rest  403 FORBIDDEN error  | You can't create c nones.
+service user-without new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service user-without new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service user-without new-pub collection other-operation at rest  403 FORBIDDEN error  | You can't create c other operations.
+service user-without new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service user-without new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-without new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create c permission spellings.
+service user-without new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service user-without new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-without new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create c principal kinds.
+service user-without new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service user-without new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service user-without new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't create c publish falses.
+service user-without new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service user-without new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-without new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create c returns empty ins.
+service user-without new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service user-without new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-without new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create c returns falses.
+service user-without new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service user-without new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-without new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create c returns filters.
+service user-without new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service user-without new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-without new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create c returns nulls.
+service user-without new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service user-without new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-without new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create c returns strings.
+service user-without new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service user-without new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-without new-pub collection returns-true at rest  403 FORBIDDEN error  | You can't create c returns trues.
+service user-without new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't create c returns trues.
+service user-without new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-without new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create c returns undefineds.
+service user-without new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service user-without new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service user-without new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create c role names.
+service user-without new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service user-without new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service user-without new-pub collection role-screen-spelling at rest  403 FORBIDDEN error  | You can't create c role screen spellings.
+service user-without new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service user-without new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service user-without new-pub collection throws at rest  403 FORBIDDEN error  | You can't create c throws.
+service user-without new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service user-without new-pub collection true at direct  403 FORBIDDEN thrown  | You can't create c trues.
+service user-without new-pub collection true at rest  403 FORBIDDEN error  | You can't create c trues.
+service user-without new-pub collection true at service  403 FORBIDDEN thrown  | You can't create c trues.
+service user-without new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service user-without new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create c user is key makers.
+service user-without new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service user-without publish collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-without publish collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-without publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
@@ -8269,6 +8877,75 @@ service visitor list collection true at rest  401 AUTH_REQUIRED error  | Authent
 service visitor list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service visitor list collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
+service visitor new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create c async falses.
+service visitor new-pub collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create c async falses.
+service visitor new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create c async filters.
+service visitor new-pub collection async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create c async filters.
+service visitor new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create c async throws.
+service visitor new-pub collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create c async throws.
+service visitor new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't publish c async trues.
+service visitor new-pub collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't publish c async trues.
+service visitor new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create c falses.
+service visitor new-pub collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection false at service  403 FORBIDDEN thrown  | You can't create c falses.
+service visitor new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service visitor new-pub collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create c malformed filters.
+service visitor new-pub collection none at direct  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor new-pub collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection none at service  403 FORBIDDEN thrown  | You can't create c nones.
+service visitor new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor new-pub collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't create c other operations.
+service visitor new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service visitor new-pub collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create c permission spellings.
+service visitor new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service visitor new-pub collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create c principal kinds.
+service visitor new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor new-pub collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't create c publish falses.
+service visitor new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service visitor new-pub collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create c returns empty ins.
+service visitor new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create c returns falses.
+service visitor new-pub collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create c returns falses.
+service visitor new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create c returns filters.
+service visitor new-pub collection returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create c returns filters.
+service visitor new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service visitor new-pub collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create c returns nulls.
+service visitor new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create c returns strings.
+service visitor new-pub collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create c returns strings.
+service visitor new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service visitor new-pub collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't publish c returns trues.
+service visitor new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service visitor new-pub collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create c returns undefineds.
+service visitor new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create c role names.
+service visitor new-pub collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create c role names.
+service visitor new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service visitor new-pub collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't create c role screen spellings.
+service visitor new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create c throws.
+service visitor new-pub collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create c throws.
+service visitor new-pub collection true at direct  403 FORBIDDEN thrown  | You can't publish c trues.
+service visitor new-pub collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection true at service  403 FORBIDDEN thrown  | You can't publish c trues.
+service visitor new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create c user is key makers.
+service visitor new-pub collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+service visitor new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create c user is key makers.
 service visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this c async false.
 service visitor publish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor publish collection async-false at route  401 AUTH_REQUIRED error  | Authentication required.

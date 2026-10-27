@@ -15,8 +15,6 @@
 
 import type { JSX, ReactNode } from "react";
 
-import { cn } from "@admin/lib/utils";
-
 /**
  * Sets `inert` on the element it is attached to.
  *
@@ -31,29 +29,18 @@ export function fenceOff(element: HTMLElement | null): void {
 }
 
 export function CustomizingFence({
-  framed,
   children,
 }: {
-  /**
-   * Whether the widget is drawn in the card frame. A framed card keeps its
-   * title and border at full strength and dims its body and footer, through
-   * the slots the card primitives name; an unframed section has no frame to
-   * keep, so all of it dims.
-   */
-  framed: boolean;
   children: ReactNode;
 }): JSX.Element {
   return (
     <div
       ref={fenceOff}
       data-testid="card-content-fence"
-      className={cn(
-        // The fence stands in the cell where the card used to, so a framed
-        // card still fills the row's height.
-        framed
-          ? "h-full [&_[data-slot=card-content]]:opacity-60 [&_[data-slot=card-footer]]:opacity-60"
-          : "opacity-60"
-      )}
+      // The fence stands in the cell where the card used to, so the card still fills the row's
+      // height. The card dims its own body and footer in customise mode (`WidgetCard`), so the
+      // fence only puts its content out of reach.
+      className="h-full"
     >
       {children}
     </div>

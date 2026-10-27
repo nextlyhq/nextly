@@ -270,47 +270,9 @@ service visitor read related publish-false at population  # visitor-public-defau
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
-service user-naming-super-admin read related async-false at population  # claimed-super-admin
-service user-naming-super-admin read related async-throws at population  # claimed-super-admin
-service user-naming-super-admin read related async-true at population  # claimed-super-admin
-service user-naming-super-admin read related false at population  # claimed-super-admin
-service user-naming-super-admin read related none at population  # claimed-super-admin
-service user-naming-super-admin read related other-operation at population  # claimed-super-admin
-service user-naming-super-admin read related permission-spelling at population  # claimed-super-admin
-service user-naming-super-admin read related principal-kind at population  # claimed-super-admin
-service user-naming-super-admin read related publish-false at population  # claimed-super-admin
-service user-naming-super-admin read related returns-false at population  # claimed-super-admin
-service user-naming-super-admin read related returns-null at population  # claimed-super-admin
-service user-naming-super-admin read related returns-string at population  # claimed-super-admin
-service user-naming-super-admin read related returns-true at population  # claimed-super-admin
-service user-naming-super-admin read related returns-undefined at population  # claimed-super-admin
-service user-naming-super-admin read related role-name at population  # claimed-super-admin
-service user-naming-super-admin read related role-screen-spelling at population  # claimed-super-admin
-service user-naming-super-admin read related throws at population  # claimed-super-admin
-service user-naming-super-admin read related true at population  # claimed-super-admin
-service user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
 no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
 no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
-bound user-naming-super-admin read related async-false at population  # claimed-super-admin
-bound user-naming-super-admin read related async-throws at population  # claimed-super-admin
-bound user-naming-super-admin read related async-true at population  # claimed-super-admin
-bound user-naming-super-admin read related false at population  # claimed-super-admin
-bound user-naming-super-admin read related none at population  # claimed-super-admin
-bound user-naming-super-admin read related other-operation at population  # claimed-super-admin
-bound user-naming-super-admin read related permission-spelling at population  # claimed-super-admin
-bound user-naming-super-admin read related principal-kind at population  # claimed-super-admin
-bound user-naming-super-admin read related publish-false at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-false at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-null at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-string at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-true at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-undefined at population  # claimed-super-admin
-bound user-naming-super-admin read related role-name at population  # claimed-super-admin
-bound user-naming-super-admin read related role-screen-spelling at population  # claimed-super-admin
-bound user-naming-super-admin read related throws at population  # claimed-super-admin
-bound user-naming-super-admin read related true at population  # claimed-super-admin
-bound user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
 bound visitor read related async-true at population  # visitor-public-default
 bound visitor read related none at population  # visitor-public-default
 bound visitor read related other-operation at population  # visitor-public-default
@@ -831,8 +793,6 @@ service key-role-based read collection returns-filter at schema  # schema-list-i
 service key-super-admin read collection returns-filter at schema  # schema-list-ignores-rules
 service user-partial read collection returns-filter at schema  # schema-list-ignores-rules
 service key-partial read collection returns-filter at schema  # schema-list-ignores-rules
-service user-naming-super-admin read related returns-filter at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-filter at population  # claimed-super-admin
 service key-read-only read collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-full-access read collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based read collection returns-filter at widget  # holds-permission-key-skips-rules
@@ -879,8 +839,6 @@ service key-role-based read collection async-filter at schema  # schema-list-ign
 service key-super-admin read collection async-filter at schema  # schema-list-ignores-rules
 service user-partial read collection async-filter at schema  # schema-list-ignores-rules
 service key-partial read collection async-filter at schema  # schema-list-ignores-rules
-service user-naming-super-admin read related async-filter at population  # claimed-super-admin
-bound user-naming-super-admin read related async-filter at population  # claimed-super-admin
 service key-read-only read collection async-filter at widget  # holds-permission-key-skips-rules
 service key-full-access read collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based read collection async-filter at widget  # holds-permission-key-skips-rules
@@ -927,8 +885,6 @@ service key-role-based read collection returns-empty-in at schema  # schema-list
 service key-super-admin read collection returns-empty-in at schema  # schema-list-ignores-rules
 service user-partial read collection returns-empty-in at schema  # schema-list-ignores-rules
 service key-partial read collection returns-empty-in at schema  # schema-list-ignores-rules
-service user-naming-super-admin read related returns-empty-in at population  # claimed-super-admin
-bound user-naming-super-admin read related returns-empty-in at population  # claimed-super-admin
 service key-read-only read collection returns-empty-in at widget  # holds-permission-key-skips-rules
 service key-full-access read collection returns-empty-in at widget  # holds-permission-key-skips-rules
 service key-role-based read collection returns-empty-in at widget  # holds-permission-key-skips-rules
@@ -975,8 +931,6 @@ service key-role-based read collection malformed-filter at schema  # schema-list
 service key-super-admin read collection malformed-filter at schema  # schema-list-ignores-rules
 service user-partial read collection malformed-filter at schema  # schema-list-ignores-rules
 service key-partial read collection malformed-filter at schema  # schema-list-ignores-rules
-service user-naming-super-admin read related malformed-filter at population  # claimed-super-admin
-bound user-naming-super-admin read related malformed-filter at population  # claimed-super-admin
 service key-read-only read collection malformed-filter at widget  # holds-permission-key-skips-rules
 service key-full-access read collection malformed-filter at widget  # holds-permission-key-skips-rules
 service key-role-based read collection malformed-filter at widget  # holds-permission-key-skips-rules
@@ -1106,3 +1060,18 @@ no-service key-role-based read collection malformed-filter at widget  # holds-pe
 no-service key-role-based read collection malformed-filter at capabilities  # no-service
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
+service user-with new-pub collection other-operation at rest
+service user-with new-pub collection other-operation at direct  # lifecycle-judged-alone
+service user-with new-pub collection other-operation at service  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at rest
+service custom-role new-pub collection other-operation at direct  # lifecycle-judged-alone
+service custom-role new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at rest
+service key-full-access new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-full-access new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at rest
+service key-role-based new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-role-based new-pub collection other-operation at service  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at rest
+service key-super-admin new-pub collection other-operation at direct  # lifecycle-judged-alone
+service key-super-admin new-pub collection other-operation at service  # lifecycle-judged-alone

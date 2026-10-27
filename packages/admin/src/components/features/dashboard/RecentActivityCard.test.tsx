@@ -8,6 +8,7 @@ import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
 import { RecentActivityCard } from "./RecentActivity";
@@ -46,7 +47,7 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   };
   return render(
     <CardTierContext.Provider value={tier}>
-      <RecentActivityCard {...full} />
+      {inFrame(<RecentActivityCard {...full} />, "Recent activity")}
     </CardTierContext.Provider>
   );
 }
@@ -54,7 +55,7 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
 const titles = () => screen.queryAllByText(/^Doc \d+$/).map(n => n.textContent);
 
 describe("the Recent activity card", () => {
-  it("holds its rows' place while its first answer is on the way, and draws nothing for no request", () => {
+  it("holds its rows' place while its first answer is on the way, and is not available with no request", () => {
     const { unmount } = draw({
       isFetching: true,
       query: { ...LIST_QUERY, limit: 4 },
@@ -62,8 +63,10 @@ describe("the Recent activity card", () => {
     expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
     unmount();
 
-    const { container } = draw({ isFetching: false });
-    expect(container).toBeEmptyDOMElement();
+    // A card never asked has nothing to show: the frame's one "not available"
+    // state, never a blank card.
+    draw({ isFetching: false });
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
   });
 
   it("says it is not available, or that it failed, in the frame's own words", () => {
@@ -156,5 +159,32 @@ describe("the Recent activity card", () => {
     expect(titles()).toEqual(["Doc 1"]);
     // The count's own words: a bare /12/ also matches a relative time such as "12h ago".
     expect(screen.getByText(/12 times/)).toBeInTheDocument();
+  });
+
+  it("heads a Single's row by its label, with no collection beside it", () => {
+    // A collection's entry draws its collection as a chip after the title; a
+    // Single's row has no collection, and drawing its slug there would name one
+    // that does not exist. The collection row is the control.
+    draw({
+      slot: {
+        ok: true,
+        result: {
+          op: "list",
+          items: [
+            row(1, {
+              subjectKind: "single",
+              collection: "site-settings",
+              entryTitle: "Site Settings",
+            }),
+            row(2, { entryTitle: "Hello" }),
+          ],
+        },
+      },
+      query: LIST_QUERY,
+    });
+    const single = screen.getByText("Site Settings").closest("p");
+    expect(single?.textContent).not.toContain("site-settings");
+    const collection = screen.getByText("Hello").closest("p");
+    expect(collection?.textContent).toContain("posts");
   });
 });

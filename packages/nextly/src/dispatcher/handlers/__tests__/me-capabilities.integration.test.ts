@@ -48,6 +48,20 @@ const REFUSED = "secrets";
  * and so named, in every language.
  */
 const GERMAN = "german";
+/**
+ * Its read rule refuses German, and refuses one language read together with
+ * others' translation states, while every language at once, unfiltered, may
+ * be read. Readable in every language, so it is named, and each read the
+ * admin sends answers by the languages that read is in.
+ */
+const OVERVIEW_REFUSED = "overview-refused";
+/** Its publish rule refuses German; nothing else about it is refused. */
+const NOT_IN_GERMAN = "not-in-german";
+/**
+ * Has a Draft/Published lifecycle, and the reader may read and create in it
+ * but not publish: a copy of a published entry is created published.
+ */
+const PUBLISHED_COPY = "published-copy";
 
 interface Capabilities {
   isSuperAdmin: boolean;
@@ -68,6 +82,8 @@ describe.each(getConfiguredTestDialects())(
     /** Reads Posts and Notes: the control for `postsReader`. */
     let bothReader: { id: string; roleId: string };
     let visitingId: string;
+    /** One entry in each collection whose requests the agreement test sends. */
+    let entryIn: Record<string, string>;
     /** The visiting reader's read-only and role-based keys, and when each ends. */
     let visitingKeys: { readOnly: string; roleBased: string; keyEnds: number };
     /** When the visiting reader's one role assignment ends. */
@@ -144,7 +160,32 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: GERMAN,
             localized: true,
-            access: { update: ({ locale }) => locale === "de" },
+            access: {
+              update: ({ locale }) => locale === "de",
+              create: ({ locale }) => locale === "de",
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: OVERVIEW_REFUSED,
+            localized: true,
+            access: {
+              read: ({ locale, locales }) =>
+                locale !== "de" &&
+                (locale === undefined || locales.length === 1),
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: NOT_IN_GERMAN,
+            localized: true,
+            status: true,
+            access: { publish: ({ locale }) => locale !== "de" },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: PUBLISHED_COPY,
+            status: true,
             fields: [text({ name: "title" })],
           }),
         ],
@@ -201,10 +242,40 @@ describe.each(getConfiguredTestDialects())(
               idOf(`read-${REFUSED}`),
               idOf(`read-${GERMAN}`),
               idOf(`update-${GERMAN}`),
+              idOf(`create-${GERMAN}`),
+              idOf(`read-${OVERVIEW_REFUSED}`),
+              idOf(`read-${NOT_IN_GERMAN}`),
+              idOf(`update-${NOT_IN_GERMAN}`),
+              idOf(`publish-${NOT_IN_GERMAN}`),
+              idOf(`read-${PUBLISHED_COPY}`),
+              idOf(`create-${PUBLISHED_COPY}`),
             ],
           },
         })
       ).item.id;
+      // Written with no access check, so each request below meets only its
+      // own gate.
+      entryIn = {};
+      for (const slug of [OVERVIEW_REFUSED, GERMAN, NOT_IN_GERMAN]) {
+        const created = await t.nextly.create({
+          collection: slug,
+          data: { title: `one ${slug}` },
+        });
+        entryIn[slug] = (created.item as { id: string }).id;
+      }
+      const published = await t.nextly.create({
+        collection: PUBLISHED_COPY,
+        data: { title: "live", status: "published" },
+      });
+      entryIn[PUBLISHED_COPY] = (published.item as { id: string }).id;
+      // A German translation, so publishing every language puts German live
+      // and the publish rule is asked about it.
+      await t.nextly.update({
+        collection: NOT_IN_GERMAN,
+        id: entryIn[NOT_IN_GERMAN]!,
+        data: { title: "eins" },
+        locale: "de",
+      });
       readerId = (
         await direct.users.create({
           email: "reader@example.com",
@@ -278,25 +349,43 @@ describe.each(getConfiguredTestDialects())(
       const { entities } = await ask(await session(superAdminId, []));
 
       expect(Object.keys(entities).sort()).toEqual(
-        [...PLAIN, REFUSED, GERMAN, "home"].sort()
+        [
+          ...PLAIN,
+          REFUSED,
+          GERMAN,
+          OVERVIEW_REFUSED,
+          NOT_IN_GERMAN,
+          PUBLISHED_COPY,
+          "home",
+        ].sort()
       );
       expect(Object.keys(entities.posts!).sort()).toEqual([
         "create",
+        "createInDefaultLanguage",
         "delete",
+        "duplicate",
         "kind",
         "publish",
+        "publishEveryLanguage",
         "read",
+        "readHistory",
+        "readTranslations",
         "unpublish",
         "update",
+        "updateInDefaultLanguage",
       ]);
       // A Single is one document: it is never created and never deleted, so
       // it carries neither answer rather than carrying `false`.
       expect(Object.keys(entities.home!).sort()).toEqual([
         "kind",
         "publish",
+        "publishEveryLanguage",
         "read",
+        "readHistory",
+        "readTranslations",
         "unpublish",
         "update",
+        "updateInDefaultLanguage",
       ]);
       expect(entities.posts!.kind).toBe("collection");
       expect(entities.home!.kind).toBe("single");
@@ -381,6 +470,210 @@ describe.each(getConfiguredTestDialects())(
       expect(english.entities.posts!.read).toBe(true);
     });
 
+    it("judges a read of every language's states, and the unfiltered history, in the languages those requests read", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      const english = (await ask(headers, "?locale=en")).entities[
+        OVERVIEW_REFUSED
+      ];
+      const german = (await ask(headers, "?locale=de")).entities[
+        OVERVIEW_REFUSED
+      ];
+      // English alone may be read, but not English with every language's
+      // translation state, which is what the localized list and the editor's
+      // overview ask for.
+      expect(english).toMatchObject({ read: true, readTranslations: false });
+      // The unfiltered history reads every language at once, with none read
+      // alone: the rule allows that, in whichever language the answer was
+      // asked, though German alone is refused.
+      expect(german).toMatchObject({ read: false, readHistory: true });
+      expect(english!.readHistory).toBe(true);
+      // POPULATION CONTROL: a collection whose read rule reads no language
+      // allows all three, so the refusals above are the rule reading the
+      // languages each request is in.
+      expect((await ask(headers, "?locale=en")).entities.posts).toMatchObject({
+        read: true,
+        readTranslations: true,
+        readHistory: true,
+      });
+    });
+
+    it("judges a create and an update sent with no language in the default language", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      // Asked in German, the rule admits the create and the update. The
+      // quick-create and quick-edit modals send no language, so the server
+      // writes English, which the rule refuses.
+      const { entities } = await ask(headers, "?locale=de");
+      expect(entities[GERMAN]).toMatchObject({
+        create: true,
+        update: true,
+        createInDefaultLanguage: false,
+        updateInDefaultLanguage: false,
+      });
+      // POPULATION CONTROL: a super-admin passes the rule, so the default
+      // language cells can say yes and the refusals are the rule's.
+      expect(
+        (await ask(await session(superAdminId, []), "?locale=de")).entities[
+          GERMAN
+        ]
+      ).toMatchObject({
+        createInDefaultLanguage: true,
+        updateInDefaultLanguage: true,
+      });
+    });
+
+    it("agrees with the request behind each cell, for a refusal and an allow", async () => {
+      const handlers = createDynamicHandlers();
+      const send = (
+        headers: Record<string, string>,
+        method: "GET" | "POST" | "PATCH",
+        path: string,
+        body?: unknown
+      ) => {
+        const [route, search = ""] = path.split("?");
+        const segments = route!.split("/");
+        return handlers[method](
+          new Request(`${ORIGIN}/api/${route}${search ? `?${search}` : ""}`, {
+            method,
+            headers: {
+              origin: ORIGIN,
+              ...headers,
+              ...(body ? { "content-type": "application/json" } : {}),
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          }),
+          { params: Promise.resolve({ params: segments }) }
+        );
+      };
+      /** Whether the request got through its gate. */
+      const allowed = async (res: Response | Promise<Response>) =>
+        (await res).status < 300;
+      const reader = await session(readerId, [readerRoleId]);
+      const admin = await session(superAdminId, []);
+      const english = (await ask(reader, "?locale=en")).entities;
+      const german = (await ask(reader, "?locale=de")).entities;
+      const adminCells = (await ask(admin, "?locale=de")).entities;
+      const at = (slug: string) =>
+        `collections/${slug}/entries/${entryIn[slug]}`;
+
+      const compared: [string, boolean, boolean][] = [
+        [
+          "a list with translation states",
+          await allowed(
+            send(
+              reader,
+              "GET",
+              `collections/${OVERVIEW_REFUSED}/entries?locale=en&translation-status=1`
+            )
+          ),
+          english[OVERVIEW_REFUSED]!.readTranslations as boolean,
+        ],
+        [
+          "the same list where the rule reads no language",
+          await allowed(
+            send(
+              reader,
+              "GET",
+              "collections/posts/entries?locale=en&translation-status=1"
+            )
+          ),
+          english.posts!.readTranslations as boolean,
+        ],
+        [
+          "the unfiltered history",
+          await allowed(
+            send(reader, "GET", `${at(OVERVIEW_REFUSED)}/versions`)
+          ),
+          german[OVERVIEW_REFUSED]!.readHistory as boolean,
+        ],
+        [
+          "a create sent with no language",
+          await allowed(
+            send(reader, "POST", `collections/${GERMAN}/entries`, {
+              title: "sent with no language",
+            })
+          ),
+          german[GERMAN]!.createInDefaultLanguage as boolean,
+        ],
+        [
+          "an update sent with no language",
+          await allowed(
+            send(reader, "PATCH", at(GERMAN), { title: "changed" })
+          ),
+          german[GERMAN]!.updateInDefaultLanguage as boolean,
+        ],
+        [
+          "a duplicate",
+          await allowed(send(reader, "POST", `${at(GERMAN)}/duplicate`)),
+          german[GERMAN]!.duplicate as boolean,
+        ],
+        [
+          "a duplicate of a published entry, without publish",
+          await allowed(
+            send(reader, "POST", `${at(PUBLISHED_COPY)}/duplicate`)
+          ),
+          english[PUBLISHED_COPY]!.duplicate as boolean,
+        ],
+        [
+          "publishing every language",
+          await allowed(
+            send(reader, "POST", `${at(NOT_IN_GERMAN)}/publish-all`)
+          ),
+          english[NOT_IN_GERMAN]!.publishEveryLanguage as boolean,
+        ],
+        // The allow side, from a caller no rule refuses.
+        [
+          "an update sent with no language, by a super-admin",
+          await allowed(send(admin, "PATCH", at(GERMAN), { title: "changed" })),
+          adminCells[GERMAN]!.updateInDefaultLanguage as boolean,
+        ],
+        [
+          "a duplicate, by a super-admin",
+          await allowed(send(admin, "POST", `${at(GERMAN)}/duplicate`)),
+          adminCells[GERMAN]!.duplicate as boolean,
+        ],
+        [
+          "a duplicate of a published entry, by a super-admin",
+          await allowed(send(admin, "POST", `${at(PUBLISHED_COPY)}/duplicate`)),
+          adminCells[PUBLISHED_COPY]!.duplicate as boolean,
+        ],
+        [
+          "publishing every language, by a super-admin",
+          await allowed(
+            send(admin, "POST", `${at(NOT_IN_GERMAN)}/publish-all`)
+          ),
+          adminCells[NOT_IN_GERMAN]!.publishEveryLanguage as boolean,
+        ],
+      ];
+      for (const [request, route, cell] of compared) {
+        expect(cell, request).toBe(route);
+      }
+      // POPULATION CONTROL: the comparison saw both verdicts.
+      const verdicts = new Set(compared.map(([, route]) => route));
+      expect([...verdicts].sort()).toEqual([false, true]);
+    });
+
+    it("refuses publishing every language where the publish rule refuses one of them", async () => {
+      const headers = await session(readerId, [readerRoleId]);
+
+      // Publishing English is allowed; publishing every language asks the
+      // rule about German too, which it refuses.
+      const { entities } = await ask(headers, "?locale=en");
+      expect(entities[NOT_IN_GERMAN]).toMatchObject({
+        update: true,
+        publish: true,
+        publishEveryLanguage: false,
+      });
+      // POPULATION CONTROL: the same answer for a super-admin, whom no rule
+      // refuses, allows it, so the cell can say yes.
+      expect(
+        (await ask(await session(superAdminId, []), "?locale=en")).entities[
+          NOT_IN_GERMAN
+        ]!.publishEveryLanguage
+      ).toBe(true);
+    });
+
     it("passes a super-admin through every entity rule", async () => {
       const { isSuperAdmin, entities } = await ask(
         await session(superAdminId, [])
@@ -427,6 +720,39 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("says the permission list ends when the role assignment it was read under ends", async () => {
+      const permissionsOf = async (headers: Record<string, string>) => {
+        const segments = ["me", "permissions"];
+        const res = await createDynamicHandlers().GET(
+          new Request(`${ORIGIN}/api/${segments.join("/")}`, {
+            headers: { origin: ORIGIN, ...headers },
+          }),
+          { params: Promise.resolve({ params: segments }) }
+        );
+        expect(res.status).toBe(200);
+        return (await res.json()) as {
+          permissions: string[];
+          validUntil: number | null;
+        };
+      };
+
+      const visiting = await permissionsOf(
+        await session(visitingId, [readerRoleId])
+      );
+      // POPULATION CONTROL: the assignment is live, so its permissions are
+      // listed.
+      expect(visiting.permissions).toContain("read-posts");
+      expect(visiting.validUntil).toEqual(expect.any(Number));
+      expect(
+        Math.abs((visiting.validUntil ?? 0) - visitEnds.getTime())
+      ).toBeLessThan(1000);
+      // A role held with no end leaves the list unbounded.
+      expect(
+        (await permissionsOf(await session(readerId, [readerRoleId])))
+          .validUntil
+      ).toBeNull();
+    });
+
     it("ends a key's answer with the key, and with its owner's role only where the key follows it", async () => {
       // A read-only key follows its owner's roles, so it ends when the
       // visitor's role does, an hour from now, before the key's seven days.
@@ -468,6 +794,154 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a caller it did not authenticate", async () => {
       expect((await askRaw({})).status).toBe(401);
+    });
+  }
+);
+
+/**
+ * A duplicate is written in the default language from what a read of the
+ * source shows there, its fallbacks included, so it is judged in those
+ * languages: here English, which falls back to German. A create sent with no
+ * language is judged in English alone. A rule refusing any write that
+ * involves German tells the two apart, which the site above, with no
+ * fallback, cannot.
+ */
+describe.each(getConfiguredTestDialects())(
+  "what the server says a caller may duplicate (%s)",
+  (dialect: TestDialect) => {
+    const COPIED = "copied";
+    let t: TestNextly;
+    let headers: Record<string, string>;
+    let entryId: string;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: {
+          locales: [{ code: "en", fallbackLocale: "de" }, "de"],
+          defaultLocale: "en",
+        },
+        collections: [
+          defineCollection({
+            slug: COPIED,
+            localized: true,
+            access: { create: ({ locales }) => !locales.includes("de") },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const seeder = t.getService("permissionSeedService") as unknown as {
+        seedSystemPermissions: () => Promise<unknown>;
+        seedAllCollectionPermissions: () => Promise<unknown>;
+      };
+      await seeder.seedSystemPermissions();
+      await seeder.seedAllCollectionPermissions();
+      const direct = t.nextly as unknown as {
+        users: {
+          create(a: {
+            email: string;
+            password: string;
+            data: Record<string, unknown>;
+          }): Promise<{ item: { id: string } }>;
+        };
+        permissions: {
+          find(a: { limit: number }): Promise<{
+            items: { id: string; slug: string }[];
+          }>;
+        };
+        roles: {
+          create(a: { data: Record<string, unknown> }): Promise<{
+            item: { id: string };
+          }>;
+        };
+      };
+      // The first user is the super-admin; the copier comes after.
+      await direct.users.create({
+        email: "owner@example.com",
+        password: "Password123!",
+        data: { name: "Owner", isActive: true },
+      });
+      const seeded = await direct.permissions.find({ limit: 1000 });
+      const idOf = (slug: string) =>
+        seeded.items.find(p => p.slug === slug)!.id;
+      const roleId = (
+        await direct.roles.create({
+          data: {
+            name: "copiers",
+            slug: "copiers",
+            permissionIds: [idOf(`read-${COPIED}`), idOf(`create-${COPIED}`)],
+          },
+        })
+      ).item.id;
+      const userId = (
+        await direct.users.create({
+          email: "copier@example.com",
+          password: "Password123!",
+          data: { name: "Copier", isActive: true, roles: [roleId] },
+        })
+      ).item.id;
+      const created = await t.nextly.create({
+        collection: COPIED,
+        data: { title: "the source" },
+      });
+      entryId = (created.item as { id: string }).id;
+      const token = await signAccessToken(
+        buildClaims({
+          userId,
+          email: "copier@example.com",
+          name: "Copier",
+          image: null,
+          roleIds: [roleId],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET!
+      );
+      headers = { cookie: `nextly_session=${token}` };
+    }, 120_000);
+
+    afterAll(async () => {
+      resetSessionStandingForTests();
+      await t?.destroy();
+    });
+
+    function send(method: "GET" | "POST", path: string, body?: unknown) {
+      const [route, search = ""] = path.split("?");
+      const segments = route!.split("/");
+      return createDynamicHandlers()[method](
+        new Request(`${ORIGIN}/api/${route}${search ? `?${search}` : ""}`, {
+          method,
+          headers: {
+            origin: ORIGIN,
+            ...headers,
+            ...(body ? { "content-type": "application/json" } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        }),
+        { params: Promise.resolve({ params: segments }) }
+      );
+    }
+
+    it("judges a duplicate in the default language and its fallbacks, as the duplicate route does", async () => {
+      const res = await send("GET", "me/capabilities");
+      expect(res.status).toBe(200);
+      const { entities } = (await res.json()) as {
+        entities: Record<string, Record<string, unknown>>;
+      };
+      // A plain create writes English alone, which the rule allows; a copy
+      // reads English and its German fallback, which it refuses.
+      expect(entities[COPIED]).toMatchObject({
+        createInDefaultLanguage: true,
+        duplicate: false,
+      });
+      const duplicated = await send(
+        "POST",
+        `collections/${COPIED}/entries/${entryId}/duplicate`
+      );
+      expect(duplicated.status < 300).toBe(false);
+      const created = await send("POST", `collections/${COPIED}/entries`, {
+        title: "written in English",
+      });
+      expect(created.status < 300).toBe(true);
     });
   }
 );
