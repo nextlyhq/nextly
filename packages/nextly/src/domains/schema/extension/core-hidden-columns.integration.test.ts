@@ -25,7 +25,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import {
-  getTableColumns,
+  getColumns,
   getTableName,
   isTable,
   type Table,
@@ -945,7 +945,7 @@ describe.each(getConfiguredTestDialects())(
         ).write({ kind: "password-changed" });
 
         const columnNames = (table: unknown): string[] =>
-          Object.values(getTableColumns(table as Table)).map(
+          Object.values(getColumns(table as Table)).map(
             column => column.name
           );
         const bundle = Object.values(getDialectTables(dialect));
