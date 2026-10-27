@@ -116,7 +116,11 @@ describe("once the registry is known", () => {
     const { rerender } = renderHook(
       ({ plugins }: { plugins: PluginMetadata[] | undefined }) =>
         usePluginPageRegistration(plugins),
-      { initialProps: { plugins: undefined } }
+      {
+        initialProps: {
+          plugins: undefined as PluginMetadata[] | undefined,
+        },
+      }
     );
     expect(arePluginPagesKnown()).toBe(false);
 
