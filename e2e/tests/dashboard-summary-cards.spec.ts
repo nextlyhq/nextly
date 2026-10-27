@@ -6,7 +6,7 @@
  * - Team draws the number of people and links to Users.
  * - Content draws a tile per collection, each linking to its list.
  * - Create draws its shortcuts.
- * - Upcoming releases links to Releases.
+ * - Upcoming releases, with nothing scheduled, offers Releases as its one way on.
  *
  * The cards are placed through the layout write first, so the test does not
  * depend on which conditional cards this run's other specs left offered; the
@@ -107,9 +107,11 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
 
     await expect(cell(page, "core/quick-create")).toBeVisible();
 
+    // The release made above is a draft holding nothing, so nothing is scheduled: the card says
+    // so, and offers Releases as its one way on.
     const releases = cell(page, "core/upcoming-releases");
     await expect(
-      releases.getByRole("link", { name: "All releases" })
+      releases.getByRole("link", { name: "Open Releases" })
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
     // A card refreshing its data dims its body and marks it aria-busy until the

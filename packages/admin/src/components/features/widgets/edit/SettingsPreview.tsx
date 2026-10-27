@@ -43,9 +43,9 @@ export function SettingsPreview(props: {
             : { slotFor: preview.slotFor })}
           subtitle={preview.subtitle}
           isFetching={preview.isFetching}
-          {...(preview.answerTier === undefined
+          {...(preview.answerSize === undefined
             ? {}
-            : { answerTier: preview.answerTier })}
+            : { answerSize: preview.answerSize })}
         />
       </div>
     </section>

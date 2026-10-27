@@ -1,9 +1,9 @@
 /**
  * What must hold before a translated field becomes unique within each language.
  *
- * - **The server can key the index.** It keys on `NULLIF(value, '')`, an expression, which
- *   PostgreSQL and SQLite always can and MySQL can from 8.0.13. On a server that cannot, the rule
- *   is refused rather than left unenforced.
+ * - **The server can key the index.** PostgreSQL keys `NULLIF(value, '')`, an expression, and so
+ *   does MySQL from 8.0.13; SQLite keys the value itself in a partial index. On a server that
+ *   cannot, the rule is refused rather than left unenforced.
  * - **No language already holds a value twice.** Adding the rule over duplicates would fail
  *   part-way; it stops first instead, and names the documents in each language that share a value.
  *   It never names the value: the person adding the rule may not be allowed to read every document.

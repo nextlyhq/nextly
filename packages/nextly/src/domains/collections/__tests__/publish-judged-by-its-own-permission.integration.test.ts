@@ -50,6 +50,10 @@ const FILTERED = "filtered";
 const PUBLISHER = "publisher-1";
 /** May read and update posts and notes, and not publish. */
 const EDITOR = "editor-1";
+/** May read, and not update, publish or unpublish. */
+const READER = "reader-1";
+/** May not even read posts. */
+const STRANGER = "stranger-1";
 
 /** A system column's value no hook should be handed from a status-only body. */
 const SENT_SYSTEM_VALUE = "1999-01-01T00:00:00.000Z";
@@ -273,14 +277,14 @@ async function stored(
   };
 }
 
-/** A REST write as `userId`, answered with its status. */
-async function rest(
+/** A REST write as `userId`, answered with its response. */
+async function restResponse(
   userId: string,
   method: "PATCH" | "POST",
   path: string[],
   body: unknown,
   query = ""
-): Promise<number> {
+): Promise<Response> {
   const token = await signAccessToken(
     buildClaims({
       userId,
@@ -307,7 +311,29 @@ async function rest(
     }),
     { params: Promise.resolve({ params: path }) }
   );
-  return res.status;
+  return res;
+}
+
+/** A REST write as `userId`, answered with its status. */
+async function rest(
+  userId: string,
+  method: "PATCH" | "POST",
+  path: string[],
+  body: unknown,
+  query = ""
+): Promise<number> {
+  return (await restResponse(userId, method, path, body, query)).status;
+}
+
+/** A REST write as `userId`, answered with its status and error message. */
+async function restRefusal(
+  userId: string,
+  path: string[],
+  body: unknown
+): Promise<{ status: number; message: unknown }> {
+  const res = await restResponse(userId, "PATCH", path, body);
+  const json = (await res.json()) as { error?: { message?: unknown } };
+  return { status: res.status, message: json.error?.message };
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -499,6 +525,92 @@ describe.each(getConfiguredTestDialects())(
           title: "edited",
         })
       ).toBe(200);
+    });
+
+    it("refuses a status-only write over REST in the words of the action it asks", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, READER, "read", [POSTS, NOTES, HOME]);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      // Every gate refuses this caller, so each write is refused; the
+      // refusal names the action the body asks, not update.
+      expect
+        .soft(await restRefusal(READER, entry, { status: "published" }))
+        .toEqual({ status: 403, message: "You can't publish this posts." });
+      expect
+        .soft(
+          await restRefusal(READER, ["singles", HOME], { status: "published" })
+        )
+        .toEqual({ status: 403, message: "You can't publish Home." });
+      expect
+        .soft(
+          await restRefusal(READER, ["collections", POSTS, "entries"], {
+            where: { id: { equals: id } },
+            data: { status: "published" },
+          })
+        )
+        .toEqual({ status: 403, message: "You can't publish posts." });
+      expect((await stored(POSTS, id)).status).toBe("draft");
+
+      await trusted().update({
+        collection: POSTS,
+        id,
+        data: { status: "published" },
+      } as never);
+      expect
+        .soft(await restRefusal(READER, entry, { status: "draft" }))
+        .toEqual({
+          status: 403,
+          message: "You can't unpublish this posts.",
+        });
+      expect((await stored(POSTS, id)).status).toBe("published");
+
+      // A write naming a field is an edit, refused as one.
+      expect
+        .soft(
+          await restRefusal(READER, entry, { status: "draft", title: "edited" })
+        )
+        .toEqual({ status: 403, message: "You can't edit this posts." });
+      // Where a collection has no lifecycle its status is a field, so a write
+      // naming only it is an edit too.
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      expect
+        .soft(
+          await restRefusal(
+            READER,
+            [
+              "collections",
+              NOTES,
+              "entries",
+              String((item as { id: unknown }).id),
+            ],
+            { status: "published" }
+          )
+        )
+        .toEqual({ status: 403, message: "You can't edit this notes." });
+    });
+
+    it("answers a status-only write by a caller who may not read the entry as a missing entry", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, STRANGER, "read", [NOTES]);
+      const id = await draft(POSTS, "t");
+      const entry = ["collections", POSTS, "entries", id];
+
+      // A caller who may not read the entry is told it is missing, whatever
+      // the write asks: naming the action would confirm the entry exists.
+      const missing = { status: 404, message: "Not found." };
+      expect(
+        await restRefusal(STRANGER, entry, { status: "published" })
+      ).toEqual(missing);
+      // The control: an ordinary update by the same caller is answered alike.
+      expect(await restRefusal(STRANGER, entry, { title: "edited" })).toEqual(
+        missing
+      );
+      expect((await stored(POSTS, id)).status).toBe("draft");
     });
 
     it("asks publish of a status-only row in a batch, for a caller who may update", async () => {

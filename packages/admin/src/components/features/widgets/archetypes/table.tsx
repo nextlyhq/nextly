@@ -22,7 +22,7 @@ import {
   rowsOrInstead,
   selectsNothing,
 } from "./cell-text";
-import { TieredRows } from "./tiered-rows";
+import { answerTotal, TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** A table is drawn from selected fields, exactly as a list is. */
@@ -69,8 +69,8 @@ export const tableBody: ArchetypeBody = (answer, definition) => {
         items={result.items}
         columns={columns}
         labelField={columns[0].name}
-        detailField={columns[1]?.name}
         query={definition.query}
+        total={answerTotal(result)}
       />
     ),
   };
