@@ -107,6 +107,12 @@ export interface UseUpdateEntryOptions<
    */
   draft?: boolean;
   /**
+   * Whether the editor's read asks every language's translation state, as
+   * the editor decides it (`useAsksTranslationStatus`). Part of the cache
+   * identity for the same reason `draft` is. Defaults to false.
+   */
+  translationStatus?: boolean;
+  /**
    * The entry's fields, for the labels a refusal over out-of-date shared
    * fields names them by; their names are used without them.
    */
@@ -243,6 +249,7 @@ export function useUpdateEntry<
   locale,
   fallbackLocale,
   draft,
+  translationStatus = false,
   fields,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
@@ -271,12 +278,13 @@ export function useUpdateEntry<
   // with, built through the shared `detailScoped` helper so the two can never
   // drift (React Query hashes the object; any mismatch silently no-ops the
   // optimistic write, rollback, and cancellation). A localized editor reads with
-  // `translationStatus` on and `fallbackLocale: "none"`, and draft mode follows
-  // the collection's working-draft split.
+  // `fallbackLocale: "none"` and, where the user may read every language's
+  // state, `translationStatus` on; draft mode follows the collection's
+  // working-draft split.
   const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
     locale,
     fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
-    translationStatus: localizationEnabled,
+    translationStatus,
     draft,
   });
 
