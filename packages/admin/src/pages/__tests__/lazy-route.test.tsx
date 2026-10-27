@@ -37,15 +37,28 @@ describe("lazyRoute", () => {
   });
 
   it("renders the page once the chunk arrives", async () => {
-    const Route = lazyRoute(() =>
-      Promise.resolve({ default: Page })
-    );
+    const Route = lazyRoute(() => Promise.resolve({ default: Page }));
     renderInShell(<Route />);
 
-    await waitFor(() =>
-      expect(screen.getByTestId("page")).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByTestId("page")).toBeTruthy());
     expect(screen.queryByTestId("route-loading")).toBeNull();
+  });
+
+  it("a route whose chunk already arrived starts at the page on its next mount", async () => {
+    // Returning to a visited route re-mounts the same wrapper; the closure
+    // still holds the resolved page, so no loading pass runs and the loader
+    // is not asked again.
+    const loader = vi.fn(() => Promise.resolve({ default: Page }));
+    const Route = lazyRoute(loader);
+
+    const first = renderInShell(<Route />);
+    await waitFor(() => expect(screen.getByTestId("page")).toBeTruthy());
+    first.unmount();
+
+    renderInShell(<Route />);
+    expect(screen.getByTestId("page")).toBeTruthy();
+    expect(screen.queryByTestId("route-loading")).toBeNull();
+    expect(loader).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the shell and shows a recoverable error when the fetch fails", async () => {
@@ -70,9 +83,7 @@ describe("lazyRoute", () => {
       expect(screen.getByTestId("route-load-error")).toBeTruthy()
     );
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /try again/i })
-    );
+    await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     await waitFor(() => expect(screen.getByTestId("page")).toBeTruthy());
     expect(loader).toHaveBeenCalledTimes(2);
@@ -98,9 +109,7 @@ describe("lazyRoute", () => {
       await waitFor(() =>
         expect(screen.getByTestId("route-load-error")).toBeTruthy()
       );
-      await userEvent.click(
-        screen.getByRole("button", { name: /try again/i })
-      );
+      await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
       // The second failure is past the fetch-blip stage: the recovery becomes
       // a reload, which refetches from scratch.
@@ -126,9 +135,7 @@ describe("lazyRoute", () => {
     const PageWithProps = (props: { params?: { slug?: string } }) => (
       <div data-testid="page">{props.params?.slug}</div>
     );
-    const Route = lazyRoute(() =>
-      Promise.resolve({ default: PageWithProps })
-    );
+    const Route = lazyRoute(() => Promise.resolve({ default: PageWithProps }));
     render(<Route params={{ slug: "news" }} />);
 
     await waitFor(() =>
