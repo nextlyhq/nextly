@@ -59,6 +59,34 @@ describe("a translated field's uniqueness within each language", () => {
     );
   });
 
+  // SQLite keys the column itself and leaves blanks and NULLs out by a WHERE, since the tool the
+  // schema pipeline reads SQLite with refuses a unique index over several columns with an
+  // expression among them.
+  it("keys SQLite's text index on the value and the language, leaving blanks out by its WHERE", () => {
+    const [create] = companionUniqueIndexStatements({
+      dialect: "sqlite",
+      companionTable: "dc_posts_locales",
+      wanted: [{ field: "slug", column: "slug", text: true }],
+      translatedColumns: ["slug"],
+      liveIndexNames: new Set(),
+    });
+    expect(create).toMatch(
+      /^CREATE UNIQUE INDEX IF NOT EXISTS "[^"]+" ON "dc_posts_locales" \("slug", "_locale"\) WHERE "slug" IS NOT NULL AND "slug" <> ''$/
+    );
+    expect(create).not.toMatch(/NULLIF/);
+  });
+
+  it("keys SQLite's index on a column that is not text over every row, with no WHERE", () => {
+    const [create] = companionUniqueIndexStatements({
+      dialect: "sqlite",
+      companionTable: "dc_posts_locales",
+      wanted: [{ field: "rank", column: "rank", text: false }],
+      translatedColumns: ["rank"],
+      liveIndexNames: new Set(),
+    });
+    expect(create).toMatch(/ON "dc_posts_locales" \("rank", "_locale"\)$/);
+  });
+
   it("keys a column that is not text as it is, on every dialect, since only text has a blank", () => {
     const columns = uniqueTranslatedColumns({
       fields: [{ name: "rank", type: "number", unique: true, localized: true }],

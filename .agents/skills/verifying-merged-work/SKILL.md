@@ -58,8 +58,9 @@ simply the newest run: that one may itself be skipped, queued or cancelled. It
 is a pass only at `success`. Until a later run reaches a verdict, nothing has
 tested the commit, and a covering run cancelled after this one skipped leaves
 it untested until a later run tests it. `.github/workflows/main-catch-up.yml` makes sure one does:
-every two hours it starts CI and Integration on `main`'s newest commit when no
-run has tested it. Nothing is cancelled by skipping: on
+every two hours and on each push to `main` it starts CI and Integration on
+`main`'s newest commit when no run has tested it, or when `main`'s last
+verdict is over three hours old even though a run is still queued. Nothing is cancelled by skipping: on
 `main` each commit has a concurrency group of its own, so a `cancelled` job
 still means what it says and still blocks.
 
