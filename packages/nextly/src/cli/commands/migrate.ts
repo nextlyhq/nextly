@@ -77,6 +77,10 @@ import {
   type PluginMigrationSet,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
+import {
+  findRegistryDisagreements,
+  registryDisagreementLines,
+} from "../../domains/schema/migrate/registry-consistency";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -497,6 +501,28 @@ export async function runMigrate(
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);
+    }
+
+    // Read-only, once the run has done its own work: name every registry row
+    // whose table or recorded field's column does not exist, and every
+    // declared entity with no row. A production start compares none of this,
+    // so this is where a deploy hears of it. A comparison that cannot run
+    // never fails a migrate that succeeded.
+    try {
+      for (const line of registryDisagreementLines(
+        await findRegistryDisagreements({
+          adapter: adapter as unknown as DrizzleAdapter,
+          dialect,
+          declared: resolvedSchema.entities,
+          logger,
+        })
+      )) {
+        logger.warn(line);
+      }
+    } catch (err) {
+      logger.warn(
+        `Could not compare the registry with the tables: ${describeError(err)}`
+      );
     }
 
     // Read-only: accounts an earlier release left holding a password as given
