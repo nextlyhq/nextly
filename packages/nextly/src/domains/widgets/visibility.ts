@@ -25,7 +25,6 @@ import {
 
 import { allWidgets, type CanonicalWidget } from "./canonical";
 import { collectionSettingsToken } from "./collection-cards";
-import { registeredCollectionSlugs } from "./collection-sources";
 import {
   generatedWidgets,
   refreshCollectionWidgets,
@@ -101,7 +100,6 @@ async function decide(caller: ReadAccessCaller): Promise<{
   visible: CanonicalWidget[];
   verdicts: Map<string, boolean>;
   generated: WidgetDefinition[];
-  registeredCollections: ReadonlySet<string> | undefined;
   readableCollections: ReadonlySet<string>;
 }> {
   // The same freshness on every surface that asks. A set derived on some
@@ -116,9 +114,6 @@ async function decide(caller: ReadAccessCaller): Promise<{
   // re-read that may hold a different definition under the same id.
   const generated = generatedWidgets();
   const all = allWidgets();
-  // The registry record the same refresh wrote, taken in the same span for
-  // the same reason: a later read could hold another request's refresh.
-  const registeredCollections = registeredCollectionSlugs();
   // The collections a card may be set to: each one with a content source,
   // which a collection kept off the dashboard never has. Taken in the same
   // span, from the same refresh.
@@ -169,7 +164,6 @@ async function decide(caller: ReadAccessCaller): Promise<{
     visible,
     verdicts,
     generated,
-    registeredCollections,
     readableCollections: new Set(
       offeredCollections.filter(slug => readable.has(slug))
     ),
@@ -233,21 +227,15 @@ export interface WidgetAudience {
    */
   token: string;
   /**
-   * Every collection the install held at this answer's refresh, or `undefined`
-   * when the registry has never been read (`registeredCollectionSlugs`). From
-   * the same refresh as `visible`, so the two describe one snapshot.
-   */
-  registeredCollections: ReadonlySet<string> | undefined;
-  /**
    * The collections this reader may read that a card may be set to: each
    * collection with a content source the entity read gate admits them to.
    * From the same refresh as `visible`.
    *
    * 🔴 The ONE readable verdict the dashboard asks: which cards set to a
-   * collection are withheld, what a saved generated card converts to, which
-   * collections a card's content settings may name, and which Collection
-   * defaults the workspace payload ships. Asked of the collections themselves,
-   * not read off the generated cards, which a slug collision drops.
+   * collection are withheld, which collections a card's content settings may
+   * name, and which Collection defaults the workspace payload ships. Asked of
+   * the collections themselves, not read off the generated cards, which a slug
+   * collision drops.
    */
   readableCollections: ReadonlySet<string>;
 }
@@ -255,13 +243,8 @@ export interface WidgetAudience {
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const {
-    visible,
-    verdicts,
-    generated,
-    registeredCollections,
-    readableCollections,
-  } = await decide(caller);
+  const { visible, verdicts, generated, readableCollections } =
+    await decide(caller);
   const declared = new Set<string>();
   const generatedIds = new Set<string>();
   for (const widget of visible) {
@@ -287,7 +270,6 @@ export async function widgetAudience(
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
     heldActionGates,
-    registeredCollections,
     readableCollections,
     // Over what the workspace payload is built from beyond the ids and gates:
     // the readable collections, which decide the Collection defaults it ships,

@@ -129,7 +129,12 @@ describe("startup with plugins that declare widgets", () => {
         plugin("@acme/shop", {
           dashboard: untyped([
             { ...revenue, title: "" },
-            { ...revenue, id: "acme/other", width: "quarter" },
+            {
+              ...revenue,
+              id: "acme/other",
+              // Narrower than the size it starts at.
+              size: { ...revenue.size, max: { w: 7, h: 4 } },
+            },
           ]),
         }),
         plugin("@other/stats", {
@@ -142,7 +147,7 @@ describe("startup with plugins that declare widgets", () => {
       'plugin "@acme/shop", widget "acme/revenue": title must be a non-empty string'
     );
     expect(message).toContain(
-      'plugin "@acme/shop", widget "acme/other": width "quarter" is not one of the widths it allows'
+      'plugin "@acme/shop", widget "acme/other": size.default must not be larger than size.max'
     );
     expect(message).toContain(
       'plugin "@other/stats", widget "other/x": category must be a non-empty string'

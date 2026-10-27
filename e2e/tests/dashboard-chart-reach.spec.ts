@@ -19,6 +19,7 @@ import {
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
 import { fileAccount, test } from "./support/test";
+import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -43,7 +44,8 @@ interface Layout {
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
   }>;
@@ -106,15 +108,15 @@ async function placeCharts(page: Page): Promise<void> {
     {
       id: "e2e-breakdown",
       widgetId: BREAKDOWN,
-      // The widest a Breakdown allows; the layout write refuses a new card wider than that.
-      width: "half",
+      // The widest each allows; the layout write holds a card to its widget's bounds.
+      ...(await widestSizeOf(page, BREAKDOWN)),
       removed: false,
       config: POSTS,
     },
     {
       id: "e2e-timeline",
       widgetId: TIMELINE,
-      width: "full",
+      ...(await widestSizeOf(page, TIMELINE)),
       removed: false,
       config: POSTS,
     },

@@ -69,8 +69,7 @@ export interface PluginPageMeta {
  * while this kept it required, so a plugin adopting the server's shape reached
  * `PluginSlot` with `path === undefined` and rendered an empty grid cell
  * silently. Then the declarative half -- `title`, `description`, `icon`,
- * `category`, `archetype`, `defaultSize`, `minSize`, `maxSize`, `query` and
- * `link` -- which the server serializes on every contributed widget and this
+ * `category`, `archetype`, `size`, `query` and `link` -- which the server serializes on every contributed widget and this
  * copy never gained, so admin code reading a property that was PRESENT on the
  * wire got a type error for it.
  *
@@ -91,7 +90,7 @@ export type PluginWidgetMeta = PluginAdminWidget;
  * A different channel from `PluginWidgetMeta` above, not a variant of it. That
  * one is DECLARED in a plugin's `contributes.admin.widgets` and is almost
  * entirely optional; this one went through `registerWidget`, whose validator
- * requires `title`, `archetype` and `defaultSize`, requires a `query` for every
+ * requires `title`, `archetype` and `size`, requires a `query` for every
  * data archetype and a `component` for `custom`, and forbids each where it does
  * not belong. So a registered widget arrives already complete, and the resolver
  * has nothing to default for it.

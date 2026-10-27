@@ -9,7 +9,7 @@
  * must reach the row, so the virtual field's absence is the rule rather than
  * an empty payload.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 
@@ -26,6 +26,13 @@ import {
   createMockSchema,
   silentLogger,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 vi.mock("../../../di/container", () => ({
   container: {
