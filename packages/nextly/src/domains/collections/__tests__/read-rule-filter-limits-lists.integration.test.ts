@@ -17,7 +17,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
-import { defineCollection, json, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  json,
+  text,
+} from "../../../config";
 import {
   registerBeforeOperationHook,
   unregisterBeforeOperationHook,
@@ -41,6 +47,9 @@ const PLACES = "rulefilter_places";
 const SHIFTING = "rulefilter_shifting";
 // A read rule whose filter names a field the collection does not have.
 const VANISHED = "rulefilter_vanished";
+// A component, and a read rule whose filter names a field inside it.
+const META = "rulefilter_meta";
+const COMPONENTED = "rulefilter_componented";
 let shiftingCalls = 0;
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
@@ -58,7 +67,18 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    fieldGroups: [
+      defineFieldGroup({ slug: META, fields: [text({ name: "heading" })] }),
+    ],
     collections: [
+      defineCollection({
+        slug: COMPONENTED,
+        access: { read: answering({ "meta.heading": { equals: "x" } }) },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "meta", component: META }),
+        ],
+      }),
       defineCollection({
         slug: NOTES,
         access: { read: answering({ team: { equals: "public" } }) },
@@ -253,6 +273,19 @@ describe("a read rule that answers a filter", () => {
     expect(
       (await t.nextly.count({ collection: VANISHED, ...asVisitor })).total
     ).toBe(0);
+  });
+
+  it("fails the read, rather than listing nothing, where reading what the rule's filter needs fails", async () => {
+    const t = await boot();
+    // The component table lookup the rule's filter needs, failing as a lost
+    // database connection does: not a filter that cannot be built.
+    vi.spyOn(
+      t.getService("fieldGroupDataService"),
+      "getComponentTableName"
+    ).mockRejectedValue(new Error("connection lost"));
+    await expect(
+      t.nextly.find({ collection: COMPONENTED, ...asVisitor })
+    ).rejects.toThrow();
   });
 
   it("refuses a filter using near, and reports it once, rather than reading every entry", async () => {
