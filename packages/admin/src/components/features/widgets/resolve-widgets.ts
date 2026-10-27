@@ -20,7 +20,6 @@ import type {
   WidgetQueryCell,
   WidgetSize,
   WidgetStatCell,
-  WidgetChrome,
   AnyWidgetSetting,
 } from "nextly/config";
 import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
@@ -117,7 +116,7 @@ export interface ReadableWidgetDeclaration {
   cells?: WidgetStatCell[] | WidgetQueryCell[];
   link?: { label: string; href: string };
   defaultOrder?: number;
-  chrome?: WidgetChrome;
+  hidesWhenEmpty?: boolean;
   /** Whether the reader may send this card away; see `DashboardWidget`. */
   dismissible?: boolean;
   /** Whether the host sizes this custom widget's list query; see `DashboardWidget`. */
@@ -251,7 +250,7 @@ function resolveOne(
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
-    chrome: meta.chrome,
+    hidesWhenEmpty: meta.hidesWhenEmpty,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
     // Only a registration carries it (`mergeCollision`), so a contributed card
@@ -307,7 +306,7 @@ function resolveRegistered(
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
-    chrome: meta.chrome,
+    hidesWhenEmpty: meta.hidesWhenEmpty,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
     ...(meta.sourceFilters === undefined
@@ -373,7 +372,7 @@ function mergeCollision(
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
     // The registry wins where it states one, exactly as `defaultOrder` and
-    // `chrome` do below. Named in this list rather than left out because the
+    // `hidesWhenEmpty` do below. Named in this list rather than left out because the
     // list IS the contract: a field missing from it is dropped silently, and a
     // merged widget would lose the height its contribution declared.
     defaultHeight: preferRegistered(
@@ -417,13 +416,15 @@ function mergeCollision(
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
-    // silently: the merged widget loses its declared position, and an unframed
-    // custom widget is wrapped in the card it asked not to have.
+    // silently: the merged widget loses its declared position.
     defaultOrder: preferRegistered(
       registration.defaultOrder,
       contribution.defaultOrder
     ),
-    chrome: preferRegistered(registration.chrome, contribution.chrome),
+    hidesWhenEmpty: preferRegistered(
+      registration.hidesWhenEmpty,
+      contribution.hidesWhenEmpty
+    ),
     // Named here like every other field, because this list IS the contract: a
     // field the merge does not name is dropped, and a merged card would lose
     // the dismiss control its contribution declared.

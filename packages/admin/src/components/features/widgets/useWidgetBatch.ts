@@ -26,6 +26,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { DREW_NOTHING } from "./draw-failures";
 import { drawsFrom } from "./frame/tier";
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { queryForTier } from "./tier-query";
@@ -320,7 +321,18 @@ function byCard(
   return [...cards.values()];
 }
 
-export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
+/** No card's component has failed to draw. */
+const NO_DRAW_FAILURES: ReadonlySet<string> = new Set();
+
+/**
+ * `drawFailed` is the placements whose own component threw drawing a fine
+ * answer (`draw-failures`): the answer cannot say so, so they are counted as
+ * failed from here.
+ */
+export function useWidgetBatch(
+  cards: BatchCard[],
+  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES
+): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
   // visual arrangement CHANGES every time a card moves — and every drag or
@@ -411,21 +423,25 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
             card.widget.serverData === true ||
             (card.widget.query ?? card.widget.cells?.length)
         )
-        .map(card =>
-          widgetOutcome(
+        .map(card => {
+          const outcome = widgetOutcome(
             card.widget,
             slots[card.placementId],
             cellSlots[card.placementId],
             card.tier
-          )
-        )
+          );
+          return outcome.state === "answered" &&
+            drawFailed.has(card.placementId)
+            ? ({ state: "failed", message: DREW_NOTHING } as const)
+            : outcome;
+        })
         // An unavailable card is neither updated nor failed, so it is left out of the
         // announcement rather than counted as "updated" beside a card that says otherwise.
         .filter(
           outcome =>
             outcome.state !== "self-drawn" && outcome.state !== "unavailable"
         ),
-    [cards, slots, cellSlots]
+    [cards, slots, cellSlots, drawFailed]
   );
 
   return {
