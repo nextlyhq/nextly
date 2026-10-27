@@ -296,15 +296,11 @@ export function MediaLibrary({
   }, []);
 
   // Handlers: Upload
-  const handleUploadComplete = React.useCallback(
-    (_media: Media[]) => {
-      // Refetch to show new uploads
-      void refetch();
-      // Clear selection
-      setSelectedIds(new Set());
-    },
-    [refetch]
-  );
+  const handleUploadComplete = React.useCallback((_media: Media[]) => {
+    // The dropzone has already invalidated the media lists, which refetches
+    // the one on screen; asking again here would fetch it twice.
+    setSelectedIds(new Set());
+  }, []);
 
   // Collapse the drop target as soon as files start uploading; the dropzone's
   // queue keeps rendering while collapsed, so progress stays visible.
