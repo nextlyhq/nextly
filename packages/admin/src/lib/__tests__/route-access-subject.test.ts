@@ -14,28 +14,30 @@ import { resolveRoute } from "@admin/lib/routing";
 
 describe("the subject a guarded route names", () => {
   it.each([
-    ["/admin/collections/posts", "read-posts"],
-    ["/admin/collections/posts/create", "create-posts"],
-    ["/admin/collections/posts/api", "read-posts"],
-    ["/admin/collections/posts/entry-1", "update-posts"],
-    ["/admin/collections/posts/entry-1/versions", "read-posts"],
-  ])("names a collection for %s", (path, permission) => {
+    ["/admin/collections/posts", "read"],
+    ["/admin/collections/posts/create", "create"],
+    ["/admin/collections/posts/api", "read"],
+    ["/admin/collections/posts/entry-1", "read"],
+    ["/admin/collections/posts/entry-1/versions", "read"],
+  ])("names a collection for %s", (path, action) => {
     const resolved = resolveRoute(path, "");
     expect(resolved.accessSubject).toBe("collection");
-    // The permission is asserted beside the subject because both come from
-    // one table: a subject attached to the wrong row would still read
-    // "collection" here while gating on another action.
-    expect(resolved.requiredPermission).toBe(permission);
+    // The permission and the entity access are asserted beside the subject
+    // because all three come from one table: a subject attached to the wrong
+    // row would still read "collection" here while gating on another action.
+    expect(resolved.requiredPermission).toBe(`${action}-posts`);
+    expect(resolved.entityAccess).toEqual({ slug: "posts", action });
   });
 
   it.each([
-    ["/admin/singles/site-settings", "update-site-settings"],
-    ["/admin/singles/site-settings/api", "read-site-settings"],
-    ["/admin/singles/site-settings/versions", "read-site-settings"],
-  ])("names a Single for %s", (path, permission) => {
+    ["/admin/singles/site-settings", "read"],
+    ["/admin/singles/site-settings/api", "read"],
+    ["/admin/singles/site-settings/versions", "read"],
+  ])("names a Single for %s", (path, action) => {
     const resolved = resolveRoute(path, "");
     expect(resolved.accessSubject).toBe("single");
-    expect(resolved.requiredPermission).toBe(permission);
+    expect(resolved.requiredPermission).toBe(`${action}-site-settings`);
+    expect(resolved.entityAccess).toEqual({ slug: "site-settings", action });
   });
 
   it("names nothing for a route that is neither", () => {
@@ -44,5 +46,6 @@ describe("the subject a guarded route names", () => {
     const resolved = resolveRoute(ROUTES.USERS, "");
     expect(resolved.requiredPermission).toBeDefined();
     expect(resolved.accessSubject).toBeUndefined();
+    expect(resolved.entityAccess).toBeUndefined();
   });
 });

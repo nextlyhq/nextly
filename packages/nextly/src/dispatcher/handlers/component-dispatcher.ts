@@ -31,6 +31,7 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
@@ -64,11 +65,11 @@ import {
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
   getMigrationJournalFromDI,
@@ -347,11 +348,7 @@ export const COMPONENTS_METHODS: Record<
       const slug = requireParam(p, "slug", "Component slug");
       const component = await svc.registry.getComponent(slug);
       if (!component) throw new Error("Component not found");
-      if (component.locked) {
-        throw new Error(
-          "This component is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(component, "component", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -473,11 +470,7 @@ export const COMPONENTS_METHODS: Record<
         async () => {
           const component = await svc.registry.getComponent(slug);
           if (!component) throw new Error("Component not found");
-          if (component.locked) {
-            throw new Error(
-              "This component is managed via code and cannot be modified in the UI"
-            );
-          }
+          refuseChangeDefinedInCode(component, "component", slug);
 
           // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
           // This route moves storage exactly as `updateFieldGroup` does and reaches the registry by a
@@ -541,8 +534,7 @@ export const COMPONENTS_METHODS: Record<
             // what it must.
             renamed: companionRename,
             tableName: tableName,
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
             adapter,
             entity: slug,
             kind: "fieldGroup",
@@ -616,8 +608,7 @@ export const COMPONENTS_METHODS: Record<
             uiTargetKind: "component" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
 
           if (!result.success) {
@@ -905,8 +896,10 @@ export const COMPONENTS_METHODS: Record<
 
       const isLocked = await svc.registry.isLocked(slug);
       if (isLocked) {
-        // Same NextlyError pattern as updateComponent's locked branch.
-        throw NextlyError.forbidden({
+        // Defined in code, as updateComponent's locked branch answers.
+        throw NextlyError.definedInCode({
+          thing: "component",
+          change: "delete",
           logContext: {
             reason: "component-locked",
             slug,

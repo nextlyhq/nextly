@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
 function getFirstName(name: string | undefined | null): string {
@@ -32,7 +34,7 @@ export const DASHBOARD_HEADING_ID = "dashboard-heading";
  * returners, since the dashboard surfaces content + schemas + team
  * regardless of when you came back.
  */
-export function WelcomeHeader() {
+export function WelcomeHeader(): JSX.Element {
   const { user, isLoading: userLoading } = useDashboardUser();
 
   return (

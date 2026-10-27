@@ -20,6 +20,14 @@ import { parseApiError } from "@admin/lib/api/parseApiError";
 import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import type { WidgetQueryBatchResponse } from "@admin/types/dashboard/widgets";
 
+/**
+ * A card asked for rather than a query: by its id, or with settings of the reader's choosing
+ * (one not yet saved, or a settings preview). The server answers either from the declaration.
+ */
+export type CardAsk =
+  | { widget: string; card: string }
+  | { widget: string; settings: Record<string, unknown> };
+
 /** The media type the endpoint streams settled slots in. */
 const NDJSON = "application/x-ndjson";
 
@@ -75,7 +83,7 @@ export function readResults(body: unknown): unknown[] {
  * stream cut off partway, so the caller's retry and failure states see it.
  */
 export async function fetchWidgetBatch(
-  queries: readonly WidgetQuery[],
+  queries: readonly (WidgetQuery | CardAsk | undefined)[],
   options: {
     signal?: AbortSignal;
     onSlots: (slots: readonly StreamedSlot[]) => void;

@@ -8,6 +8,7 @@
  */
 
 import { Button, Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -37,7 +38,7 @@ export function ToolbarButton({
   shortcut,
   children,
   className,
-}: ToolbarButtonProps) {
+}: ToolbarButtonProps): JSX.Element {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

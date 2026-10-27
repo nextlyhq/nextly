@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 /**
  * Whether the editor is holding work the document does not have yet.
  *
@@ -51,7 +53,9 @@ export interface UnsavedChangesPillProps {
  * @param props - whether the document holds unsaved work
  * @returns a live region, carrying the reading only while work is outstanding
  */
-export function UnsavedChangesPill({ isDirty }: UnsavedChangesPillProps) {
+export function UnsavedChangesPill({
+  isDirty,
+}: UnsavedChangesPillProps): JSX.Element {
   return (
     // `polite` rather than `assertive`: the state changes on almost every edit,
     // and a reading that interrupts on each one is one an author learns to

@@ -53,7 +53,7 @@ export function FieldTypePicker<T extends string>({
   disabled,
   columns = 2,
   ariaLabel = "Field type",
-}: FieldTypePickerProps<T>) {
+}: FieldTypePickerProps<T>): React.JSX.Element {
   const entries: readonly FieldTypeCatalogEntry<T>[] = useMemo(
     () => entriesProp ?? narrowFieldTypeCatalog(types ?? []),
     [entriesProp, types]

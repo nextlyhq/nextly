@@ -26,7 +26,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-import { expect, type Page } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import type { Requester } from "./releases-api";
 
 /** The suite's own database, never the one `pnpm dev:app` uses. */
 const E2E_DB = path.resolve(
@@ -44,11 +46,16 @@ export type RunnerOutcome = "overdue" | "stopped";
  * the server reads it that way.
  */
 export async function leaveReleasesAsTheRunnerWould(
-  page: Page,
+  page: Requester,
   releases: ReadonlyArray<{ id: string; outcome: RunnerOutcome }>
 ): Promise<void> {
   const dueAt = Math.floor((Date.now() - OVERDUE_BY_MS) / 1000);
+  // The dev server holds the same file, and it, or a spec on another worker,
+  // may be writing when this opens: wait for its lock, as the server's own adapter
+  // does, rather than fail at once on `database is locked`. Set by pragma, not
+  // the constructor's `timeout`, which Node 22 accepts only from 22.16.
   const db = new DatabaseSync(E2E_DB);
+  db.exec("PRAGMA busy_timeout = 5000");
   try {
     const update = db.prepare(
       "UPDATE nextly_releases SET state = ?, scheduled_at = ? WHERE id = ?"

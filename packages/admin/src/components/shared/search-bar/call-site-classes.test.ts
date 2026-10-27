@@ -32,7 +32,16 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import {
+  parseSource,
+  walk as walkAst,
+} from "@nextlyhq/module-specifiers/parse-source";
+import type {
+  ImportDeclaration,
+  JSXOpeningElement,
+  Node,
+  Program,
+} from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 import { inertClassesFor } from "./inert-classes";
@@ -63,14 +72,24 @@ function walk(dir: string, found: string[] = []): string[] {
   return found;
 }
 
-function parse(path: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
-    path,
-    source,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    ts.ScriptKind.TSX
-  );
+/** One parsed file: its name, its program, and the text its nodes' offsets point into. */
+interface ParsedFile {
+  readonly fileName: string;
+  readonly text: string;
+  readonly program: Program;
+}
+
+function parse(path: string, source: string): ParsedFile {
+  return {
+    fileName: path,
+    text: source,
+    program: parseSource(source, path).program,
+  };
+}
+
+/** The source text of one node, as it is written. */
+function textOf(file: ParsedFile, node: Node): string {
+  return file.text.slice(node.start, node.end);
 }
 
 /**
@@ -115,12 +134,10 @@ function resolveSpecifier(specifier: string, fromFile: string): string | null {
 }
 
 function fromExportingModule(
-  statement: ts.ImportDeclaration,
+  statement: ImportDeclaration,
   fromFile: string
 ): boolean {
-  const specifier = statement.moduleSpecifier;
-  if (!ts.isStringLiteral(specifier)) return false;
-  const resolved = resolveSpecifier(specifier.text, fromFile);
+  const resolved = resolveSpecifier(statement.source.value, fromFile);
   return resolved !== null && EXPORTING_MODULES.has(resolved);
 }
 
@@ -136,36 +153,37 @@ function fromExportingModule(
  * The binding must also come FROM this component's module. Otherwise a file
  * importing an unrelated `SearchBar` has these rules applied to it.
  */
-function localTagNames(file: ts.SourceFile, fromFile: string): Set<string> {
+function localTagNames(file: ParsedFile, fromFile: string): Set<string> {
   const names = new Set<string>();
   let importsTheName = false;
-  for (const statement of file.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    const clause = statement.importClause;
-    if (!clause) continue;
+  for (const statement of file.program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
     const isOurs = fromExportingModule(statement, fromFile);
-    // A DEFAULT import has no named bindings, so a loop that reads only those
-    // skips it entirely -- and the bare-name fallback below then claims
-    // `import SearchBar from "@vendor/search-kit"` as ours. This module has no
-    // default export, so such a binding is never ours; it only has to suppress
-    // the fallback.
-    if (clause.name?.text === COMPONENT) importsTheName = true;
-    const bindings = clause.namedBindings;
-    if (!bindings) continue;
-    if (ts.isNamespaceImport(bindings)) {
-      if (isOurs) names.add(`${bindings.name.text}.${COMPONENT}`);
-      continue;
-    }
-    for (const element of bindings.elements) {
-      // `propertyName` is set only when the import is aliased, and then holds
-      // the EXPORTED name while `name` holds the local one.
-      if ((element.propertyName ?? element.name).text === COMPONENT && isOurs) {
-        names.add(element.name.text);
+    for (const specifier of statement.specifiers) {
+      // A DEFAULT import has no named bindings, so a loop that reads only those
+      // skips it entirely -- and the bare-name fallback below then claims
+      // `import SearchBar from "@vendor/search-kit"` as ours. This module has no
+      // default export, so such a binding is never ours; it only has to suppress
+      // the fallback.
+      if (specifier.type === "ImportDefaultSpecifier") {
+        if (specifier.local.name === COMPONENT) importsTheName = true;
+        continue;
       }
+      if (specifier.type === "ImportNamespaceSpecifier") {
+        if (isOurs) names.add(`${specifier.local.name}.${COMPONENT}`);
+        continue;
+      }
+      // `imported` is the EXPORTED name and `local` the name it is bound to
+      // here; they differ only when the import is aliased.
+      const imported =
+        specifier.imported.type === "Identifier"
+          ? specifier.imported.name
+          : specifier.imported.value;
+      if (imported === COMPONENT && isOurs) names.add(specifier.local.name);
       // Tracked whatever the module, so an unrelated import of the same name
       // suppresses the bare-name fallback below instead of being re-admitted
       // by it.
-      if (element.name.text === COMPONENT) importsTheName = true;
+      if (specifier.local.name === COMPONENT) importsTheName = true;
     }
   }
   // The component's own module declares rather than imports it, and a control
@@ -183,21 +201,19 @@ function localTagNames(file: ts.SourceFile, fromFile: string): Set<string> {
 
 /** Every `<SearchBar ...>` element in a file, found by binding rather than text. */
 function searchBarTags(
-  file: ts.SourceFile,
+  file: ParsedFile,
   fromFile = file.fileName
-): (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] {
+): JSXOpeningElement[] {
   const names = localTagNames(file, fromFile);
-  const found: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
-  const visit = (node: ts.Node): void => {
+  const found: JSXOpeningElement[] = [];
+  walkAst(file.program, node => {
     if (
-      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-      names.has(node.tagName.getText(file))
+      node.type === "JSXOpeningElement" &&
+      names.has(textOf(file, node.name))
     ) {
       found.push(node);
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
+  });
   return found;
 }
 
@@ -209,29 +225,30 @@ function searchBarTags(
  * anything, so it is not attempted here.
  */
 function literalClassName(
-  tag: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
-  file: ts.SourceFile
+  tag: JSXOpeningElement,
+  file: ParsedFile
 ): string | null {
-  for (const property of tag.attributes.properties) {
-    if (!ts.isJsxAttribute(property)) continue;
-    if (property.name.getText(file) !== "className") continue;
-    const initializer = property.initializer;
-    if (!initializer) return null;
-    if (ts.isStringLiteral(initializer)) return initializer.text;
+  for (const attribute of tag.attributes) {
+    if (attribute.type !== "JSXAttribute") continue;
+    if (textOf(file, attribute.name) !== "className") continue;
+    const value = attribute.value;
+    if (value?.type === "Literal" && typeof value.value === "string") {
+      return value.value;
+    }
     if (
-      ts.isJsxExpression(initializer) &&
-      initializer.expression &&
-      ts.isStringLiteral(initializer.expression)
+      value?.type === "JSXExpressionContainer" &&
+      value.expression.type === "Literal" &&
+      typeof value.expression.value === "string"
     ) {
-      return initializer.expression.text;
+      return value.expression.value;
     }
     return null;
   }
   return null;
 }
 
-function lineOf(node: ts.Node, file: ts.SourceFile): number {
-  return file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+function lineOf(node: Node, file: ParsedFile): number {
+  return file.text.slice(0, node.start).split("\n").length;
 }
 
 const sources = walk(adminSrc).filter(

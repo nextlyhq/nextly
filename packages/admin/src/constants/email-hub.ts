@@ -36,8 +36,10 @@ export const EMAIL_TEMPLATE_UPDATE_PERMISSIONS = [
  * Previewing an email with sample data. The preview route is a POST, which
  * the server reads as a create, so seeing the list alone does not reach it.
  */
-export const EMAIL_TEMPLATE_PREVIEW_PERMISSIONS =
-  EMAIL_TEMPLATE_CREATE_PERMISSIONS;
+export const EMAIL_TEMPLATE_PREVIEW_PERMISSIONS: readonly [
+  "create-email-templates",
+  "manage-email-templates",
+] = EMAIL_TEMPLATE_CREATE_PERMISSIONS;
 
 /** Deleting an email. */
 export const EMAIL_TEMPLATE_DELETE_PERMISSIONS = [
@@ -68,8 +70,10 @@ export const EMAIL_PROVIDER_UPDATE_PERMISSIONS = [
 ] as const;
 
 /** Sending a test from a provider: a POST, which the server reads as a create. */
-export const EMAIL_PROVIDER_TEST_PERMISSIONS =
-  EMAIL_PROVIDER_CREATE_PERMISSIONS;
+export const EMAIL_PROVIDER_TEST_PERMISSIONS: readonly [
+  "create-email-providers",
+  "manage-email-providers",
+] = EMAIL_PROVIDER_CREATE_PERMISSIONS;
 
 /** Deleting a provider. */
 export const EMAIL_PROVIDER_DELETE_PERMISSIONS = [

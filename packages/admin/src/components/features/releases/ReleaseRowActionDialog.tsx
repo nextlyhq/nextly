@@ -19,6 +19,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
+import type { JSX } from "react";
 import { useState } from "react";
 
 import {
@@ -116,7 +117,7 @@ export function ReleaseRowActionDialog({
   action,
   open,
   onOpenChange,
-}: ReleaseRowActionDialogProps) {
+}: ReleaseRowActionDialogProps): JSX.Element {
   // All three hooks, every render: which one runs is chosen by `action`, and a
   // hook called conditionally would change the order React reads them in.
   const publish = usePublishReleaseNow(release.id);

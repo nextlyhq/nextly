@@ -39,6 +39,7 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useEffect, useMemo } from "react";
+import type { JSX } from "react";
 
 import {
   positionInList,
@@ -60,7 +61,7 @@ export function HooksEditor({
   fieldNames,
   isExpanded = false,
   onExpandedChange,
-}: HooksEditorProps) {
+}: HooksEditorProps): JSX.Element {
   const [localExpanded, setLocalExpanded] = useState(isExpanded);
   const [expandedHookIds, setExpandedHookIds] = useState<Set<string>>(
     new Set()

@@ -18,15 +18,19 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { test } from "./support/test";
-import { STORAGE_STATE } from "../global-setup";
+import { fileAccount, test } from "./support/test";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { createEntry, expectOk } from "./support/runtime-collection";
+import { LOCK } from "./support/locks";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({
+  mode: "serial",
+  lock: [LOCK.usersRoles, LOCK.relatedLinks],
+});
 
 const SINGLE = "related-links";
 const LABEL = "Restricted or missing item";
@@ -50,7 +54,7 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
   admin = await playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 
   const run = Date.now().toString(36);

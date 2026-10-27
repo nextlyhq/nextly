@@ -105,19 +105,14 @@ async function userReads(
     );
   }
   if (declaresRule(target, "read")) {
-    // A declared read rule decides alone for anyone but a super-admin,
-    // whatever their grants, and its answer is handed back as the rule gave
-    // it: today's answer is the access-control service's, which admits a
-    // super-admin and otherwise asks the rule once, with no need of the
-    // user's grants.
-    const today = await rbac.checkAccess({
+    // The access-control service's answer: it admits a super-admin, and
+    // otherwise needs the read permission first and then a rule that answers
+    // `true`, as the decision does.
+    return rbac.checkAccess({
       userId: caller.userId,
       operation: "read",
       resource: slug,
     });
-    return deviate("rule-alone-for-people", today, async () =>
-      decided(await actor(), target)
-    );
   }
   return decided(await actor(), target);
 }

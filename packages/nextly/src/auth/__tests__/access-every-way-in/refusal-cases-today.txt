@@ -1,0 +1,11 @@
+unknown key  401 AUTH_REQUIRED error  | Authentication required.
+revoked key  401 AUTH_REQUIRED error  | Authentication required.
+deactivated creator's key  401 AUTH_REQUIRED error  | Authentication required.
+malformed session  401 AUTH_REQUIRED error  | Authentication required.
+expired session  401 TOKEN_EXPIRED error  | Authentication required.
+visitor  401 AUTH_REQUIRED error  | Authentication required.
+address limit  429 RATE_LIMITED error  | Too many requests. Please try again later.
+unresolved-address limit  429 RATE_LIMITED error  | Too many requests. Please try again later.
+key budget  429 RATE_LIMITED error  | Rate limit exceeded for this API key
+auth route limit  429 RATE_LIMITED error  | Too many auth requests from this IP. Please try again later.
+plugin route limit  429 RATE_LIMITED error  | Too many requests. Please try again later.

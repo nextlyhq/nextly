@@ -53,6 +53,24 @@ export const DASHBOARD_LAYOUT_KEY = ["dashboard", "layout"] as const;
 const LAYOUT_PATH = "/dashboard/layout";
 
 /** What a save sends. Both guards, always — neither is optional server-side. */
+/**
+ * The layout read: one fetch for every query under {@link DASHBOARD_LAYOUT_KEY}, so a card
+ * reading the same answer as the grid shares the grid's request and cache entry.
+ */
+export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
+  return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+}
+
+/**
+ * The layout read with the Get started steps answered even for a removed card, which the card
+ * needs once it is restored in customise mode and drawn before the save that restores it.
+ */
+export function fetchGetStartedOnRestore(): Promise<DashboardLayoutResponse> {
+  return protectedApi.get<DashboardLayoutResponse>(
+    `${LAYOUT_PATH}?getStarted=1`
+  );
+}
+
 export interface SaveLayoutInput {
   /** The WHOLE ordered list, removed cards included: the order is the array's. */
   placements: WidgetPlacement[];
@@ -257,7 +275,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
 
   const query = useQuery({
     queryKey: DASHBOARD_LAYOUT_KEY,
-    queryFn: () => protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH),
+    queryFn: fetchDashboardLayout,
     // Matching `useDashboardStats` and `useWidgetQueries`: fresh on mount and
     // on focus, and NO polling. An arrangement that rearranges itself while
     // somebody is reading it is worse than a stale one.

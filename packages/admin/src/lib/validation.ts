@@ -67,7 +67,7 @@ export function validateUUID(id: string | null | undefined): string | null {
  * Creates a slug validation schema
  * @returns A Zod schema for slug validation
  */
-export const createSlugSchema = () => {
+export const createSlugSchema = (): z.ZodString => {
   return z
     .string()
     .regex(
@@ -111,38 +111,40 @@ function countCodePoints(value: string): number {
  * 4. Within the default digester's 72-byte reach (UTF-8)
  * No character class is required — a class-less passphrase passes.
  */
-export const passwordSchema = z.string().superRefine((value, ctx) => {
-  const addIssue = (message: string) =>
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+export const passwordSchema: z.ZodString = z
+  .string()
+  .superRefine((value, ctx) => {
+    const addIssue = (message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
 
-  if (value.length === 0) {
-    addIssue("Password is required");
-    return;
-  }
+    if (value.length === 0) {
+      addIssue("Password is required");
+      return;
+    }
 
-  const normalized = value.normalize("NFC");
-  const charCount = countCodePoints(normalized);
+    const normalized = value.normalize("NFC");
+    const charCount = countCodePoints(normalized);
 
-  if (charCount < MIN_LENGTH) {
-    addIssue(`Password must be at least ${MIN_LENGTH} characters`);
-  }
+    if (charCount < MIN_LENGTH) {
+      addIssue(`Password must be at least ${MIN_LENGTH} characters`);
+    }
 
-  if (charCount > MAX_LENGTH) {
-    addIssue(`Password must be at most ${MAX_LENGTH} characters`);
-  }
+    if (charCount > MAX_LENGTH) {
+      addIssue(`Password must be at most ${MAX_LENGTH} characters`);
+    }
 
-  if (commonPasswords.has(normalized.toLowerCase())) {
-    addIssue("This password is too common.");
-  }
+    if (commonPasswords.has(normalized.toLowerCase())) {
+      addIssue("This password is too common.");
+    }
 
-  // UTF-8 byte length, browser-safe: the server reads the password raw, so
-  // the mirror measures it raw too, not the NFC-normalized form.
-  if (new TextEncoder().encode(value).length > DIGESTER_REACH_BYTES) {
-    addIssue(
-      `Password exceeds the ${DIGESTER_REACH_BYTES}-byte limit of the password digester.`
-    );
-  }
-});
+    // UTF-8 byte length, browser-safe: the server reads the password raw, so
+    // the mirror measures it raw too, not the NFC-normalized form.
+    if (new TextEncoder().encode(value).length > DIGESTER_REACH_BYTES) {
+      addIssue(
+        `Password exceeds the ${DIGESTER_REACH_BYTES}-byte limit of the password digester.`
+      );
+    }
+  });
 
 export type PasswordStrength = {
   score: number;

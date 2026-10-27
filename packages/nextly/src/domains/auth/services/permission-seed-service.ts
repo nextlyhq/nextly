@@ -23,6 +23,7 @@ import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
+import { entityPermissionSpelling } from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
 import { RolePermissionService } from "./role-permission-service";
 
@@ -680,14 +681,15 @@ export class PermissionSeedService extends BaseService {
     collectionSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const label = this.slugToLabel(collectionSlug);
     const actions = COLLECTION_SEEDED_ACTIONS;
 
     for (const action of actions) {
-      const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-      const name = `${actionLabel} ${label}`;
-      const slug = permissionSlug(action, collectionSlug);
-      const description = `Permission to ${action} ${label.toLowerCase()}`;
+      // Spelled by the one function a rename also spells them with, so a
+      // renamed entity's permissions read as if it had been created so.
+      const { name, slug, description } = entityPermissionSpelling(
+        action,
+        collectionSlug
+      );
 
       result.total++;
       try {
@@ -731,14 +733,15 @@ export class PermissionSeedService extends BaseService {
     singleSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const label = this.slugToLabel(singleSlug);
     const actions = SINGLE_SEEDED_ACTIONS;
 
     for (const action of actions) {
-      const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-      const name = `${actionLabel} ${label}`;
-      const slug = permissionSlug(action, singleSlug);
-      const description = `Permission to ${action} ${label.toLowerCase()}`;
+      // Spelled by the one function a rename also spells them with, so a
+      // renamed entity's permissions read as if it had been created so.
+      const { name, slug, description } = entityPermissionSpelling(
+        action,
+        singleSlug
+      );
 
       result.total++;
       try {
@@ -1463,13 +1466,6 @@ export class PermissionSeedService extends BaseService {
     );
 
     return rows.map(row => String(row.slug));
-  }
-
-  private slugToLabel(slug: string): string {
-    return slug
-      .split("-")
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ");
   }
 
   private emptySeedResult(): SeedResult {

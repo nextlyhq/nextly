@@ -10,6 +10,8 @@
  * each field. That split is stated here and nowhere else; the pages used to
  * write it a second time to decide which flag to raise.
  */
+import type { JSX } from "react";
+
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -54,7 +56,7 @@ export function BuilderSchemaChangeDialogs({
   confirmation,
   entityName,
   onConfirm,
-}: Props) {
+}: Props): JSX.Element | null {
   const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
   if (!preview) return null;

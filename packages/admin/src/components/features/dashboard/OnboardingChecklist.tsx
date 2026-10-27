@@ -122,6 +122,11 @@ function StepRow({ step }: { step: OnboardingStepState }) {
   );
 }
 
+/**
+ * @deprecated The dashboard draws the Get started card (`core/get-started`) in its place, and
+ * no longer registers this. Kept for one release for a page that renders it directly; it still
+ * reads the deprecated onboarding endpoint.
+ */
 export const OnboardingChecklist: React.FC = () => {
   const { steps, completedCount, totalCount, isPending, isUnavailable } =
     useOnboardingSteps();

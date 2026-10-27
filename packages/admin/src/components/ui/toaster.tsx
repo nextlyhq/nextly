@@ -1,9 +1,10 @@
 import { Toaster as UIToaster } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { ToasterProps } from "sonner";
 
 import { useTheme } from "@admin/context/providers/ThemeProvider";
 
-export function Toaster(props: Omit<ToasterProps, "theme">) {
+export function Toaster(props: Omit<ToasterProps, "theme">): JSX.Element {
   const { theme } = useTheme();
   return <UIToaster theme={theme as "light" | "dark" | "system"} {...props} />;
 }

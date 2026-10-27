@@ -1,4 +1,5 @@
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { actionsForContentTypes } from "@admin/constants/permissions";
 import type { ContentTypePermissions } from "@admin/types/ui/form";
@@ -81,7 +82,7 @@ export function PermissionMatrixTable({
   isPartiallySelected,
   isAllSelectedForAction,
   isPartiallySelectedForAction,
-}: PermissionMatrixTableProps) {
+}: PermissionMatrixTableProps): JSX.Element {
   // Resolved once here so the header and every row agree on the columns.
   const actions = actionsForContentTypes(contentTypes);
 

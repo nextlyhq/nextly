@@ -33,6 +33,9 @@ import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 import { readStoredMediaBytes } from "../storage/read-stored-media";
 import { getMediaStorage } from "../storage/storage";
 
+import { buildErrorResponse } from "./error-response";
+import { generateRequestId, readOrGenerateRequestId } from "./request-id";
+
 /**
  * The only types this route hands to an unauthenticated caller.
  *
@@ -65,9 +68,16 @@ const IMMUTABLE_FOR_A_YEAR = "public, max-age=31536000, immutable";
  */
 const MEDIA_COLLECTION = "media";
 
-/** The response for a record this route will not talk about. */
-function notFound(): Response {
-  return new Response(null, { status: 404 });
+/**
+ * The response for a record this route will not talk about: the one error
+ * body every refusal is answered with, saying no more than "not found".
+ */
+function notFound(request: Request | undefined): Response {
+  return buildErrorResponse(NextlyError.notFound(), {
+    // The request's own id, so one request is followed through the proxy,
+    // the answer and the log alike.
+    requestId: request ? readOrGenerateRequestId(request) : generateRequestId(),
+  });
 }
 
 /**
@@ -77,7 +87,8 @@ function notFound(): Response {
  * @returns The bytes with their content type, or 404
  */
 export async function handleServeMediaBytes(
-  mediaId: string
+  mediaId: string,
+  request?: Request
 ): Promise<Response> {
   const mediaService = getService("mediaService");
   const context: RequestContext = {};
@@ -102,7 +113,7 @@ export async function handleServeMediaBytes(
      * thing this route promises not to do.
      */
     if (NextlyError.isNotFound(error)) {
-      return notFound();
+      return notFound(request);
     }
     throw error;
   }
@@ -117,7 +128,7 @@ export async function handleServeMediaBytes(
    */
   const servedType = canonicalMimeType(media.mimeType);
   if (!PUBLIC_SERVE_MIME_TYPES.has(servedType)) {
-    return notFound();
+    return notFound(request);
   }
 
   /*
@@ -156,7 +167,7 @@ export async function handleServeMediaBytes(
   );
   // The row outlived its object. Same answer as a row that never existed,
   // because from outside they are the same thing: there is no font here.
-  if (bytes === null) return notFound();
+  if (bytes === null) return notFound(request);
 
   /*
    * THE BYTES DECIDE, at serve time, not only at upload time.
@@ -175,7 +186,7 @@ export async function handleServeMediaBytes(
    * gate above is: the route says nothing about objects it will not serve.
    */
   if (!matchesWebFontSignature(bytes, servedType)) {
-    return notFound();
+    return notFound(request);
   }
 
   return new Response(new Uint8Array(bytes), {

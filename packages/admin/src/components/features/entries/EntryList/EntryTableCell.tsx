@@ -10,6 +10,7 @@
 
 import { Avatar, AvatarFallback, AvatarImage, Badge } from "@nextlyhq/ui";
 import type { FieldConfig } from "nextly/config";
+import type { ReactNode } from "react";
 
 import { Check, File, Image, X } from "@admin/components/icons";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -422,7 +423,7 @@ export function EntryTableCell({
   isTitle,
   entry,
   onEdit,
-}: EntryTableCellProps) {
+}: EntryTableCellProps): ReactNode {
   // Wrap content if it's a title
   const renderContent = (content: React.ReactNode) => {
     if (isTitle && onEdit) {

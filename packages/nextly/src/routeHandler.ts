@@ -27,6 +27,7 @@ import {
   isErrorResponse,
   type AuthContext,
   type ErrorResponse,
+  type RefusalTarget,
 } from "@nextly/auth/middleware";
 import { actorFromAuthContext } from "@nextly/auth/request-actor";
 import type { DispatchRequest } from "@nextly/services/dispatcher";
@@ -53,6 +54,7 @@ import {
   releaseLock,
   renewLock,
 } from "./api/document-lock";
+import { buildErrorResponse } from "./api/error-response";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -66,6 +68,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import {
   listPreviewLinks,
@@ -84,6 +87,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
+import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -120,13 +124,19 @@ import {
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
+import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
-} from "./domains/auth/services/super-admin-grant";
+} from "./domains/auth/services/role-change-caller";
+import {
+  appLocalization,
+  withCurrentLanguages,
+} from "./domains/i18n/configured-locales";
+import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -137,6 +147,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
 import {
@@ -364,6 +375,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "notices",
   "jobs",
   "generalSettings",
+  "languages",
   "previewLinks",
   "previewUrl",
   "imageSizes",
@@ -372,6 +384,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "contentEvents",
+  "rolesScreen",
 ]);
 
 /**
@@ -419,6 +432,41 @@ async function handleWebhookRequest(
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
+}
+
+/** Delegate a languages request to its handler, which manages its own auth and body. */
+async function handleLanguagesRequest(
+  req: Request,
+  httpMethod: string
+): Promise<Response> {
+  switch (httpMethod) {
+    case "GET":
+      return getLanguages(req);
+    case "POST":
+      return changeLanguages(req);
+    default:
+      return methodNotAllowed(req, ["GET", "POST"]);
+  }
+}
+
+/**
+ * The canonical refusal for a verb a route does not serve, with the `Allow` header HTTP requires.
+ *
+ * Built and RETURNED rather than thrown, for the reason the builder gate is: this runs outside
+ * the dispatcher's NextlyError-to-response mapping, so a throw would surface as a 500. Serialized
+ * by the same `buildErrorResponse` every error boundary uses, so the body carries the code, the
+ * sentence and the request id Nextly's own error parser reads.
+ */
+function methodNotAllowed(req: Request, allowed: readonly string[]): Response {
+  const response = buildErrorResponse(
+    new NextlyError({
+      code: "METHOD_NOT_ALLOWED",
+      publicMessage: genericPublicMessage("METHOD_NOT_ALLOWED"),
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+  response.headers.set("allow", allowed.join(", "));
+  return response;
 }
 
 /**
@@ -728,13 +776,11 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * Every method here runs the caller through `checkCollectionAccess`, which
- * reads roles twice over: the super-admin bypass is keyed on the role set
- * (`isSuperAdminContext`), and the RBAC gate matches the caller's permissions
- * against the roles forwarded in the request context. A caller arriving
- * without roles is therefore treated as a non-super-admin holding no roles, so
- * a role-based rule denies a legitimately permitted reader and a super-admin
- * loses the bypass and gets owner-filtered instead.
+ * Every method here runs the caller through `checkCollectionAccess`, whose
+ * RBAC gate matches the caller's permissions against the roles forwarded in
+ * the request context. A caller arriving without roles is therefore treated
+ * as holding no roles, so a role-based rule denies a legitimately permitted
+ * reader. Super-admin authority is not among them: the gate looks it up.
  *
  * The version methods surface that denial as a 404, since their gate does not
  * disclose existence, and the two version `get*` methods additionally return a
@@ -749,8 +795,7 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
 const ROLE_AWARE_READ_METHODS = new Set([
   // The autosave reads run through the same gate the version reads use, so
   // they need resolved roles for the same reason: without them a caller arrives
-  // as a non-super-admin holding no roles, and the gate answers not-found for
-  // the author whose own
+  // holding no roles, and the gate answers not-found for the author whose own
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
@@ -805,6 +850,12 @@ export const _needsResolvedRolesForTest = needsResolvedRoles;
 export const _applyGlobalDateFormattingForTest = applyGlobalDateFormatting;
 
 /**
+ * What a refused read of permissions names, whichever of the grants it
+ * accepts the caller lacked.
+ */
+const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.names;
+
+/**
  * Centralized permission resolver for all API service endpoints.
  *
  * Determines the correct permission check for each service/method combination
@@ -818,7 +869,9 @@ async function resolveAuthorization(
   method: string,
   operation: string,
   routeParams: Record<string, string> | undefined,
-  httpMethod: string
+  httpMethod: string,
+  // Whether the request's path names one entry; see the caller.
+  entryInPath = false
 ): Promise<AuthContext | ErrorResponse> {
   // --- Collection endpoints ---
   if (service === "collections") {
@@ -829,6 +882,7 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        namesOne: entryInPath,
       });
     }
     if (method === "getCollection") {
@@ -869,6 +923,8 @@ async function resolveAuthorization(
       return requireCollectionAccess(req, action, slug, {
         method,
         params: routeParams ?? {},
+        // A Single is its one document, named by its slug.
+        namesOne: true,
       });
     }
     if (method === "getSingleSchema") {
@@ -1016,15 +1072,23 @@ async function resolveAuthorization(
     // listRolePermissions: allow read-roles or read-permissions
     // (role edit form needs this to populate the PermissionMatrix)
     if (method === "listRolePermissions") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
-    // listPermissions: allow users with read-roles (for role form's permission matrix)
+    // The permissions and roles lists: the gates the dashboard's counts of
+    // them read too.
     if (method === "listPermissions") {
-      return requireAnyPermission(req, [{ action: "read", resource: "roles" }]);
+      return requireListRead(req, LIST_READ_GATES.permissions);
+    }
+    if (method === "listRoles") {
+      return requireListRead(req, LIST_READ_GATES.roles);
     }
 
     // addPermissionToRole, removePermissionFromRole → update-roles
@@ -1051,10 +1115,14 @@ async function resolveAuthorization(
     // getPermissionById: allow read-roles or read-permissions
     // (reading a single permission is needed for display and role editing)
     if (method === "getPermissionById") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "roles" },
-        { action: "read", resource: "permissions" },
-      ]);
+      return requireAnyPermission(
+        req,
+        [
+          { action: "read", resource: "roles" },
+          { action: "read", resource: "permissions" },
+        ],
+        READING_PERMISSIONS
+      );
     }
 
     // ensurePermission, updatePermission, deletePermissionById → manage-permissions (or CRUD)
@@ -1075,6 +1143,11 @@ async function resolveAuthorization(
     // (listRoles, getRoleById, createRole, updateRole, deleteRole, etc.)
     const action = getActionFromMethod(httpMethod);
     return requirePermission(req, action, "roles");
+  }
+
+  // The users list: the gate the dashboard's user count reads too.
+  if (service === "users" && method === "listUsers") {
+    return requireListRead(req, LIST_READ_GATES.users);
   }
 
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
@@ -1223,7 +1296,18 @@ async function withinBuiltInLimit(
   return refused ?? serve();
 }
 
-async function handleServiceRequest(
+/** Serves one REST request with one language list from start to end (`withCurrentLanguages`). */
+function handleServiceRequest(
+  req: Request,
+  params: string[],
+  httpMethod: string
+): Promise<Response> {
+  return withCurrentLanguages(() =>
+    serveServiceRequest(req, params, httpMethod)
+  );
+}
+
+async function serveServiceRequest(
   req: Request,
   params: string[],
   httpMethod: string
@@ -1250,6 +1334,11 @@ async function handleServiceRequest(
     httpMethod,
     searchParams
   );
+  // Whether the PATH names one entry. The parsed parameters also carry the
+  // query, so a list request with `?entryId=` would otherwise read as naming
+  // one; parsed without its query, only a route that names one has an id.
+  const entryInPath =
+    parseRestRoute(params, httpMethod).routeParams?.entryId !== undefined;
 
   if (!service || !operation || !method) {
     // Only now. A plugin may claim a top-level path, and this is the point at
@@ -1418,6 +1507,11 @@ async function handleServiceRequest(
     return resolveEntryPreviewUrl(req);
   }
 
+  // ==================== LANGUAGES DIRECT DISPATCH ====================
+  if (service === "languages") {
+    return handleLanguagesRequest(req, httpMethod);
+  }
+
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
   if (service === "generalSettings") {
     return handleGeneralSettingsRequest(req, httpMethod);
@@ -1484,6 +1578,13 @@ async function handleServiceRequest(
     return handleSchemaRequest(req, method);
   }
 
+  // ==================== ROLES SCREEN DIRECT DISPATCH ====================
+  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
+  // GET, so there is no body to consume.
+  if (service === "rolesScreen") {
+    return getRolesScreen(req);
+  }
+
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
   // Check if endpoint is public
   const isPublic = isPublicEndpoint(service, method);
@@ -1495,7 +1596,7 @@ async function handleServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1507,7 +1608,7 @@ async function handleServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1519,10 +1620,11 @@ async function handleServiceRequest(
         method,
         operation,
         routeParams,
-        httpMethod
+        httpMethod,
+        entryInPath
       );
       if (isErrorResponse(authResult)) {
-        return refuseRequest(method, authResult);
+        return refuseRequest(req, method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1729,6 +1831,9 @@ const NO_WIDGETS: WidgetAudience = {
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
+  // No reader and no cards, so no collection a card could name.
+  registeredCollections: undefined,
+  readableCollections: new Set(),
 };
 
 /**
@@ -1737,19 +1842,45 @@ const NO_WIDGETS: WidgetAudience = {
  * An `actions` widget's shortcuts each carry a gate of their own, and a
  * shortcut is a label and an href: shipped whole and hidden by the browser
  * afterwards, the protected ones are readable from the payload regardless.
- * Filtered on the same reading the card's own gate gets. A declaration
- * without actions passes through untouched.
+ * A declared widget's empty-state action is the same kind of thing, and is
+ * withheld the same way. Filtered on the same reading the card's own gate
+ * gets. A declaration with neither passes through untouched.
  */
 function actionsForAudience<
-  W extends { id: string; actions?: readonly WidgetAction[] },
+  W extends {
+    id: string;
+    actions?: readonly WidgetAction[];
+    empty?: { message?: string; action?: { requiredPermission?: string } };
+  },
 >(widget: W, audience: WidgetAudience): W {
-  if (widget.actions === undefined) return widget;
+  const withheldEmpty = emptyForAudience(widget.empty, audience);
+  if (widget.actions === undefined && withheldEmpty === widget.empty) {
+    return widget;
+  }
   return {
     ...widget,
-    actions: widget.actions.filter(action =>
-      audience.holds(action.requiredPermission)
-    ),
+    ...(widget.actions === undefined
+      ? {}
+      : {
+          actions: widget.actions.filter(action =>
+            audience.holds(action.requiredPermission)
+          ),
+        }),
+    ...(withheldEmpty === undefined ? {} : { empty: withheldEmpty }),
   };
+}
+
+/**
+ * A declared widget's empty state with its action withheld from a reader who
+ * may not take it; the same object when there is nothing to withhold.
+ */
+function emptyForAudience<
+  E extends { message?: string; action?: { requiredPermission?: string } },
+>(empty: E | undefined, audience: WidgetAudience): E | undefined {
+  if (empty?.action === undefined) return empty;
+  if (audience.holds(empty.action.requiredPermission)) return empty;
+  const { action: _withheld, ...rest } = empty;
+  return rest as E;
 }
 
 /**
@@ -1773,6 +1904,7 @@ function actionsForAudience<
 function widgetsForAudience(
   plugin: PluginAdminMeta,
   audience: WidgetAudience,
+  readable: ReadonlySet<string>,
   shipped: Set<string>
 ): PluginAdminMeta {
   if (plugin.widgets === undefined) return plugin;
@@ -1781,7 +1913,9 @@ function widgetsForAudience(
   for (const widget of widgets) {
     if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
     shipped.add(widget.id);
-    visible.push(actionsForAudience(widget, audience));
+    visible.push(
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   }
   return visible.length > 0 ? { ...rest, widgets: visible } : rest;
 }
@@ -1881,8 +2015,9 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Content-localization config for the admin (present only when i18n is enabled).
-  const localization = config?.localization;
+  // The site's languages for the admin (present only when i18n is enabled): the language list as
+  // it is now, so a language added in Settings shows without a restart.
+  const localization = appLocalization() ?? config?.localization;
   if (localization) {
     workspace.locales = {
       defaultLocale: localization.defaultLocale,
@@ -1895,10 +2030,14 @@ async function buildAdminMeta(
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
   const shipped = new Set<string>();
+  // The collections this reader may read, as the layout judges them: a widget
+  // declaration below ships its Collection setting's default only when it
+  // names one of them (`collectionDefaultForReader`).
+  const readable = audience.readableCollections;
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience, shipped));
+  ).map(plugin => widgetsForAudience(plugin, audience, readable, shipped));
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -1951,7 +2090,12 @@ async function buildAdminMeta(
   const widgets = [
     ...publishableWidgets()
       .filter(widget => audience.declared.has(widget.id))
-      .map(widget => actionsForAudience(widget, audience)),
+      .map(widget =>
+        collectionDefaultForReader(
+          actionsForAudience(widget, audience),
+          readable
+        )
+      ),
     ...audience.generated,
   ];
   if (widgets.length > 0) {
@@ -1959,7 +2103,7 @@ async function buildAdminMeta(
   }
   // What a card's content settings may offer this reader, derived from the
   // cards above: a collection is offered exactly when its own card is.
-  const widgetSources = publishableContentSources(audience.visible);
+  const widgetSources = publishableContentSources(audience.readableCollections);
   if (widgetSources.length > 0) {
     workspace.widgetSources = widgetSources;
   }
@@ -2021,11 +2165,16 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * person's 401 or 403 to another hides from them what they may read.
  */
 function refuseRequest(
+  req: Request,
   method: string,
   refusal: Parameters<typeof createJsonErrorResponse>[0]
 ): Response {
-  const response = createJsonErrorResponse(refusal);
-  return SESSION_PRIVATE_METHODS.has(method)
+  // Answered with the request's own id, as every other error is.
+  const response = createJsonErrorResponse(refusal, req);
+  // A named entry answered as missing depends on who asked, unlike a missing
+  // entry's 404, and a 404 is cacheable by default: kept private, so a shared
+  // cache never replays one caller's answer to another who may read it.
+  return SESSION_PRIVATE_METHODS.has(method) || refusal.statusCode === 404
     ? withSessionCacheHeaders(response)
     : response;
 }
@@ -2109,7 +2258,7 @@ async function handleAdminMetaWorkspaceRequest(
 ): Promise<Response> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) {
-    return withSessionCacheHeaders(createJsonErrorResponse(auth));
+    return withSessionCacheHeaders(createJsonErrorResponse(auth, req));
   }
 
   // After the authentication precondition, never before it. Service
@@ -2138,7 +2287,12 @@ async function handleAdminMetaWorkspaceRequest(
   const caller = readAccessCaller(await readCaller(auth));
   const audience = await widgetAudience(caller);
 
-  const { workspace } = await buildAdminMeta(audience);
+  // Dispatched outside the content requests that bring the language list up to date, so it does
+  // so itself: a language added on another server reaches the admin within the registry's
+  // interval rather than whenever unrelated content traffic next arrives here.
+  const { workspace } = await withCurrentLanguages(() =>
+    buildAdminMeta(audience)
+  );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 
@@ -2153,7 +2307,9 @@ async function handleAdminMetaWorkspaceRequest(
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
     const authResult = await requirePermission(req, "manage", "settings");
-    if (isErrorResponse(authResult)) return createJsonErrorResponse(authResult);
+    if (isErrorResponse(authResult)) {
+      return createJsonErrorResponse(authResult, req);
+    }
 
     const text = await req.text();
     const body = text ? JSON.parse(text) : {};

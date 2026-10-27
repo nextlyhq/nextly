@@ -314,7 +314,7 @@ describe("formatPluginMigrationsIndex", () => {
     expect(aPos).toBeGreaterThan(-1);
     expect(bPos).toBeGreaterThan(-1);
     expect(aPos).toBeLessThan(bPos);
-    expect(index).toContain("export const migrations = [");
+    expect(index).toContain("export const migrations: PluginMigration[] = [");
   });
 
   it("imports modules whose names fold alike under bindings of their own", () => {
@@ -341,7 +341,7 @@ describe("formatPluginMigrationsIndex", () => {
     }
     // And the exported list is those bindings, in import order.
     expect(index).toContain(
-      `export const migrations = [\n  ${bindings.join(",\n  ")},\n];`
+      `export const migrations: PluginMigration[] = [\n  ${bindings.join(",\n  ")},\n];`
     );
   });
 });
@@ -361,7 +361,11 @@ describe("generatePluginMigration (file writes)", () => {
     expect(files).toContain("index.ts");
 
     const moduleContent = await readFile(first!.modulePath, "utf-8");
-    expect(moduleContent).toContain("satisfies PluginMigration");
+    // Checked against the type and declared as it, so the module's declaration
+    // is written from the annotation rather than inferred from the literal.
+    expect(moduleContent.trimEnd()).toMatch(
+      /\n\} satisfies PluginMigration as PluginMigration;$/
+    );
     expect(moduleContent).toContain('"schemaVersion": 1');
 
     const firstModule = buildPluginMigration(FIRST)!.module;
@@ -847,6 +851,9 @@ describe("formatHandSealedPluginMigrationModule", () => {
       'import {\n  migrationChecksum,\n  type PluginMigration,\n} from "@nextlyhq/plugin-sdk/schema";'
     );
     expect(text).toContain("checksum: migrationChecksum(content),");
+    expect(text.trimEnd()).toMatch(
+      /\n\} satisfies PluginMigration as PluginMigration;$/
+    );
     // No literal checksum to go stale when the SQL is edited.
     expect(text).not.toContain(blank.checksum);
     expect(text).toContain('"transaction": false');

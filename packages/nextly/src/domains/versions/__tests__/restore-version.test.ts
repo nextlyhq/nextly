@@ -25,13 +25,21 @@ const {
 
 // Field-level write rules are evaluated by the update path too; stubbed here so
 // these tests exercise restore's own decisions rather than access configuration.
-vi.mock("../../../shared/lib/field-level-registry", () => ({
+vi.mock("../../../shared/lib/field-level-registry", async importOriginal => ({
   applyFieldWriteAccess: vi.fn(),
   applyFieldReadAccess: vi.fn(),
   callerAccessGrants: vi.fn(
     () => () => Promise.resolve({ permissions: [], roles: [] })
   ),
   getFieldFunctions: vi.fn(),
+  // A pure parse of a container's value, which the field-group walk shares
+  // with the entity's own pass: the real one, so the walk reaches what it
+  // would in a live read.
+  openNestedContainer: (
+    await importOriginal<
+      typeof import("../../../shared/lib/field-level-registry")
+    >()
+  ).openNestedContainer,
 }));
 
 vi.mock("../../../di", () => ({
@@ -331,8 +339,9 @@ describe("restoreVersion", () => {
 
     // Both layers were walked: the password only becomes visible through the
     // second one.
-    expect(componentSpy).toHaveBeenCalledWith("wrapper");
-    expect(componentSpy).toHaveBeenCalledWith("leaf");
+    // No transaction here, so no executor: the lookups run on the pool.
+    expect(componentSpy).toHaveBeenCalledWith("wrapper", undefined);
+    expect(componentSpy).toHaveBeenCalledWith("leaf", undefined);
   });
 
   it("does not pass a stale locale to an entity that is no longer localized", async () => {

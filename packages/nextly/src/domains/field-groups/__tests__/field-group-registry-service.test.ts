@@ -467,13 +467,30 @@ describe("FieldGroupRegistryService", () => {
     });
   });
 
+  describe("a component defined in code", () => {
+    it("is refused a change from anywhere but its code, and told why", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
+
+      await expect(
+        ctx.service.updateComponent("seo", { label: "X" }, { source: "ui" })
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage:
+          "This component is defined in code, so it can't be changed here.",
+      });
+    });
+  });
+
   describe("deleteComponent", () => {
     it("throws FORBIDDEN when component is locked", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 
-      await expect(ctx.service.deleteComponent("seo")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Why, in words: the component is defined in code.
+        publicMessage:
+          "This component is defined in code, so it can't be deleted here.",
+      });
     });
 
     it("deletes unlocked component and drops its data table", async () => {

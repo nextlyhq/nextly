@@ -46,7 +46,11 @@
  * @see lib/errors/error-mapping.ts - Server error mapping utilities
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
@@ -250,7 +254,12 @@ export function useUpdateEntry<
   draft,
   fields,
   refusedForm,
-}: UseUpdateEntryOptions<T, TFieldValues>) {
+}: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
+  MutationResult<T>,
+  Error,
+  UpdateEntryPayload,
+  UpdateContext<T>
+> {
   const queryClient = useQueryClient();
   // A publish refused over shared values someone else published since offers
   // to take them; the reload that follows shows the change brought up to date.

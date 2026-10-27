@@ -565,5 +565,137 @@ describe.each(getConfiguredTestDialects())(
       expect(ok.status).toBe(200);
       expect((await read(editor)).source).toBe("default");
     });
+
+    describe("the Get started card", () => {
+      const STARTED = "core/get-started";
+
+      interface StartedRead extends LayoutRead {
+        defaultPlacements: Placement[];
+        getStarted: {
+          drawn: boolean;
+          answer: {
+            unknown: boolean;
+            steps: Array<{ key: string; status: string }>;
+          } | null;
+        };
+      }
+
+      /** A read, held to its one rule: the card is handed exactly when it is said to be drawn. */
+      async function readStarted(
+        userId: string,
+        query?: Record<string, string>
+      ): Promise<StartedRead> {
+        const res = await call(userId, "GET", query ? { query } : {});
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as StartedRead;
+        const handed = body.placements.some(
+          p => p.widgetId === STARTED && !p.removed
+        );
+        expect(handed).toBe(body.getStarted.drawn);
+        return body;
+      }
+
+      it("is drawn first, at full width, while a step waits, with its steps from the same read", async () => {
+        const seen = await readStarted(admin);
+        expect(seen.placements[0]).toMatchObject({
+          widgetId: STARTED,
+          width: "full",
+          removed: false,
+        });
+        expect(seen.defaultPlacements[0]?.widgetId).toBe(STARTED);
+        expect(
+          seen.getStarted.answer?.steps.some(s => s.status === "open")
+        ).toBe(true);
+        expect(seen.available).not.toContain(STARTED);
+      });
+
+      it("keeps a dismissal and its skips on the server, answers its steps only when asked, and comes back with them", async () => {
+        const seen = await readStarted(admin);
+        const card = seen.placements.find(p => p.widgetId === STARTED)!;
+        const settings = { acted: true, skipped: ["invite"] };
+        const dismissed = seen.placements.map(p =>
+          p.id === card.id ? { ...p, removed: true, config: settings } : p
+        );
+        expect(
+          (await save(admin, seen, dismissed, { arranged: false })).status
+        ).toBe(200);
+
+        const after = await readStarted(admin);
+        expect(after.placements.find(p => p.id === card.id)).toMatchObject({
+          removed: true,
+          config: settings,
+        });
+        expect(after.getStarted).toEqual({ drawn: false, answer: null });
+        const asked = await readStarted(admin, { getStarted: "1" });
+        expect(asked.getStarted.answer).not.toBeNull();
+
+        const restored = after.placements.map(p =>
+          p.id === card.id ? { ...p, removed: false } : p
+        );
+        expect(
+          (await save(admin, after, restored, { arranged: false })).status
+        ).toBe(200);
+        const back = await readStarted(admin);
+        expect(back.getStarted.drawn).toBe(true);
+        expect(back.placements.find(p => p.id === card.id)?.config).toEqual(
+          settings
+        );
+      });
+
+      it("converts a stored row holding the checklist and the sample-content card into one card, removed when either was", async () => {
+        const seen = await read(admin);
+        expect((await save(admin, seen, seen.placements)).status).toBe(200);
+        const { overwrite } = await rawRow(admin);
+        await overwrite(
+          JSON.stringify({
+            schemaVersion: 1,
+            placements: [
+              {
+                id: "seed",
+                widgetId: "core/seed-demo-content",
+                order: 0,
+                hidden: false,
+              },
+              {
+                id: "checklist",
+                widgetId: "core/onboarding-checklist",
+                order: 1,
+                hidden: true,
+              },
+              { id: "first", widgetId: "test/first", order: 2, hidden: false },
+            ],
+          })
+        );
+        const converted = await readStarted(admin);
+        const cards = converted.placements.filter(p => p.widgetId === STARTED);
+        expect(cards).toEqual([
+          expect.objectContaining({ id: "seed", width: "full", removed: true }),
+        ]);
+      });
+
+      it("says setup could not be checked, and stays drawn, when the registry cannot be listed", async () => {
+        const registry = handle.getService(
+          "collectionRegistryService"
+        ) as unknown as { getAllSlugs: () => Promise<string[]> };
+        const failing = vi
+          .spyOn(registry, "getAllSlugs")
+          .mockRejectedValue(new Error("registry down"));
+        try {
+          const seen = await readStarted(admin);
+          expect(seen.getStarted.drawn).toBe(true);
+          expect(seen.getStarted.answer?.unknown).toBe(true);
+          // Never shown as waiting on the strength of a registry that did not answer.
+          expect(
+            seen.getStarted.answer?.steps.some(
+              s =>
+                (s.key === "collection" || s.key === "entry") &&
+                s.status === "open"
+            )
+          ).toBe(false);
+        } finally {
+          failing.mockRestore();
+        }
+      });
+    });
   }
 );

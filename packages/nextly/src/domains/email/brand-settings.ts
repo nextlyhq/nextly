@@ -351,7 +351,7 @@ function linksMarkup(settings: BrandSettings, stack: string): string {
         `<a href="${escapeHtml(link.url)}" style="color: ${escapeHtml(settings.accentColor)}; text-decoration: underline;">${escapeHtml(link.label)}</a>`
     )
     .join(" &middot; ");
-  return `<p class="email-muted" style="margin: 8px 0 0; font-size: 12px; line-height: 18px; color: #71717a; font-family: ${stack};">${links}</p>`;
+  return `<p class="email-muted" style="margin: 8px 0 0; font-size: 12px; line-height: 18px; color: #52525b; font-family: ${stack};">${links}</p>`;
 }
 
 // ============================================================

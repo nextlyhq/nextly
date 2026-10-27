@@ -8,7 +8,7 @@
  *
  * @module blocks/button
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -175,7 +175,7 @@ export const BUTTON_BASE_STYLES = {
   },
 } as const;
 
-export const button = defineBlock<ButtonProps, PageContext>({
+export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
   name: "core/button",
   version: 1,
   description:

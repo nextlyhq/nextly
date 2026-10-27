@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
@@ -30,7 +31,7 @@ export function DefaultValueField({
 }: {
   form: UseFormReturn<UserFieldFormValues>;
   disabled?: boolean;
-}) {
+}): JSX.Element {
   const fieldType = form.watch("type");
   const options = form.watch("options");
 

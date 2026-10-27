@@ -14,6 +14,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import { assertEntryPreviewable } from "../preview-access";
@@ -37,6 +41,10 @@ async function seed(): Promise<string> {
       }),
     ],
   });
+  // A rule only narrows a permission, so `u1` holds read and update on the
+  // collection, and its own update rule is what refuses the edit.
+  await userWhoMay(current, DENIED.id, "read", ["pages"]);
+  await grantTo(current, DENIED.id, "update", ["pages"]);
   const created = await current.nextly.create({
     collection: "pages",
     data: { slug: "a", title: "A" },

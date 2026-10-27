@@ -22,10 +22,24 @@ export class Secret<T = string> {
   toString(): string {
     return REDACTED;
   }
-  [Symbol.for("nodejs.util.inspect.custom")](): string {
-    return REDACTED;
-  }
 }
+
+// `util.inspect` and `console.log` read a custom rendering from Node's own
+// registered symbol, which `Symbol.for` returns without importing `node:util`.
+// Defined on the prototype as a class method would be (not enumerable), rather
+// than in the class: a member under a computed key cannot be declared from the
+// source alone, and the published declaration never named it.
+Object.defineProperty(
+  Secret.prototype,
+  Symbol.for("nodejs.util.inspect.custom"),
+  {
+    value(): string {
+      return REDACTED;
+    },
+    writable: true,
+    configurable: true,
+  }
+);
 
 /** @experimental Wrap a value so it redacts unless explicitly `.reveal()`ed (D37). */
 export function secret<T>(value: T): Secret<T> {

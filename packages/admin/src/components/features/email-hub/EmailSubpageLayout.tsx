@@ -30,7 +30,7 @@ export function EmailSubpageLayout({
   parentCrumb,
   actions,
   children,
-}: EmailSubpageLayoutProps) {
+}: EmailSubpageLayoutProps): React.JSX.Element {
   return (
     <div>
       <PageHeader

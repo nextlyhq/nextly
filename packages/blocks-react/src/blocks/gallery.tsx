@@ -55,7 +55,7 @@
  *
  * @module blocks/library/gallery
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -95,49 +95,50 @@ export const GALLERY_BASE_STYLES = {
   },
 } as const;
 
-export const gallery = defineBlock<ContainerProps, PageContext>({
-  name: GALLERY_BLOCK,
-  version: 1,
-  description:
-    "A reflowing grid of pictures. Restricts its slot to core/image so every item carries alt text and an intrinsic size, and a stray block cannot be laid out as though it were a photograph.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Gallery",
-    icon: "gallery",
-    category: MEDIA,
-    keywords: ["images", "photos", "grid", "carousel"],
-  },
-  props: {
-    as: { type: "select", options: ["div", "section", "article"] },
-    contained: { type: "checkbox" },
-  },
-  defaultProps: { as: "div", contained: false },
-  example: { props: { as: "div" } },
-  // The parent half of the nesting rule, and the ONLY half this pair has.
-  // `block.ts` is explicit that a slot naming a type does not confine that type
-  // to it — which is exactly right here: `core/image` is a general-purpose
-  // block that belongs anywhere, so it must NOT declare `parent: [gallery]`.
-  // That asymmetry is the difference between this and the columns pair, where
-  // a column has no meaning outside its row.
-  slots: {
-    children: {
-      allow: [GALLERY_ITEM_BLOCK],
-      // No `defaultBlock`, and the asymmetry noted above is why. A row and an
-      // accordion declare one because their allowed child names them back as
-      // its only parent, so the container is unusable until it holds one. A
-      // gallery's child is `core/image`, which deliberately declares no parent
-      // and is placeable anywhere — so nothing about a gallery makes an image
-      // hard to reach.
-      //
-      // A default would also have to guess a count that nothing here knows: a
-      // gallery holds as many images as the author has. And an image with no
-      // source is a placeholder awaiting an upload, so seeding two would put
-      // two things on the page that must be replaced rather than filled.
+export const gallery: BlockDefinition<ContainerProps, PageContext> =
+  defineBlock({
+    name: GALLERY_BLOCK,
+    version: 1,
+    description:
+      "A reflowing grid of pictures. Restricts its slot to core/image so every item carries alt text and an intrinsic size, and a stray block cannot be laid out as though it were a photograph.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Gallery",
+      icon: "gallery",
+      category: MEDIA,
+      keywords: ["images", "photos", "grid", "carousel"],
     },
-  },
-  baseStyles: GALLERY_BASE_STYLES,
-  supports: CONTAINER_SUPPORTS,
-  render: renderContainer,
-});
+    props: {
+      as: { type: "select", options: ["div", "section", "article"] },
+      contained: { type: "checkbox" },
+    },
+    defaultProps: { as: "div", contained: false },
+    example: { props: { as: "div" } },
+    // The parent half of the nesting rule, and the ONLY half this pair has.
+    // `block.ts` is explicit that a slot naming a type does not confine that type
+    // to it — which is exactly right here: `core/image` is a general-purpose
+    // block that belongs anywhere, so it must NOT declare `parent: [gallery]`.
+    // That asymmetry is the difference between this and the columns pair, where
+    // a column has no meaning outside its row.
+    slots: {
+      children: {
+        allow: [GALLERY_ITEM_BLOCK],
+        // No `defaultBlock`, and the asymmetry noted above is why. A row and an
+        // accordion declare one because their allowed child names them back as
+        // its only parent, so the container is unusable until it holds one. A
+        // gallery's child is `core/image`, which deliberately declares no parent
+        // and is placeable anywhere — so nothing about a gallery makes an image
+        // hard to reach.
+        //
+        // A default would also have to guess a count that nothing here knows: a
+        // gallery holds as many images as the author has. And an image with no
+        // source is a placeholder awaiting an upload, so seeding two would put
+        // two things on the page that must be replaced rather than filled.
+      },
+    },
+    baseStyles: GALLERY_BASE_STYLES,
+    supports: CONTAINER_SUPPORTS,
+    render: renderContainer,
+  });

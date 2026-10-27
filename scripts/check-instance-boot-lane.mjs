@@ -51,7 +51,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import {
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -123,12 +126,10 @@ export const SCAN_ROOTS = ["packages"];
  * compiler marks that on both the clause and the individual specifier.
  */
 export function importsBootHelper(source, fileName = "test.ts") {
-  const parsed = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ false,
-    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const { program } = parseSource(source, fileName);
+  const valueImports = program.body.filter(
+    statement =>
+      statement.type === "ImportDeclaration" && statement.importKind !== "type"
   );
 
   /*
@@ -140,56 +141,62 @@ export function importsBootHelper(source, fileName = "test.ts") {
    * `<anything>.createTestNextly` would report a suite whose own fixture or mock
    * happens to expose that name - `fixture.createTestNextly()` boots nothing -
    * and a check that demands an integration rename for a correct file is one
-   * that gets turned off. Only identifiers a `NamespaceImport` actually
+   * that gets turned off. Only identifiers a namespace import actually
    * introduced count, so the receiver has to be a module this file imported.
    */
-  const namespaces = new Set();
-  for (const statement of parsed.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    const clause = statement.importClause;
-    if (!clause || clause.isTypeOnly) continue;
-    const bindings = clause.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) {
-      namespaces.add(bindings.name.text);
-    }
+  const namespaces = new Set(
+    valueImports.flatMap(statement =>
+      statement.specifiers
+        .filter(specifier => specifier.type === "ImportNamespaceSpecifier")
+        .map(specifier => specifier.local.name)
+    )
+  );
+
+  if (namespaces.size > 0 && readsThroughNamespace(program, namespaces)) {
+    return true;
   }
+  return valueImports.some(statement =>
+    statement.specifiers.some(importsTheHelper)
+  );
+}
 
-  if (namespaces.size > 0) {
-    let reachedThroughNamespace = false;
-    const findPropertyAccess = node => {
-      if (reachedThroughNamespace) return;
-      if (
-        ts.isPropertyAccessExpression(node) &&
-        node.name.text === BOOT_BINDING &&
-        ts.isIdentifier(node.expression) &&
-        namespaces.has(node.expression.text)
-      ) {
-        reachedThroughNamespace = true;
-        return;
-      }
-      ts.forEachChild(node, findPropertyAccess);
-    };
-    ts.forEachChild(parsed, findPropertyAccess);
-    if (reachedThroughNamespace) return true;
-  }
+/** Whether the file reads `<namespace>.createTestNextly` off one of `namespaces`. */
+function readsThroughNamespace(program, namespaces) {
+  let reached = false;
+  walk(program, node => {
+    if (reached) return false;
+    reached = readsHelperOff(node, namespaces);
+  });
+  return reached;
+}
 
-  for (const statement of parsed.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    const clause = statement.importClause;
-    if (!clause || clause.isTypeOnly) continue;
-    const bindings = clause.namedBindings;
-    if (!bindings || !ts.isNamedImports(bindings)) continue;
+/** An identifier's name, or undefined for any other node. */
+const identifierName = node =>
+  node.type === "Identifier" ? node.name : undefined;
 
-    for (const element of bindings.elements) {
-      if (element.isTypeOnly) continue;
-      // `import { createTestNextly as boot }` still boots an instance, so the
-      // name that matters is the one on the module's side of the rename.
-      const imported = element.propertyName ?? element.name;
-      if (imported.text === BOOT_BINDING) return true;
-    }
-  }
+/** `<namespace>.createTestNextly`, with the receiver one of `namespaces`. */
+function readsHelperOff(node, namespaces) {
+  if (node.type !== "MemberExpression" || node.computed) return false;
+  return (
+    identifierName(node.property) === BOOT_BINDING &&
+    namespaces.has(identifierName(node.object))
+  );
+}
 
-  return false;
+/**
+ * Whether one import specifier brings in the helper as a value.
+ *
+ * `import { createTestNextly as boot }` still boots an instance, so the name
+ * that matters is the one on the module's side of the rename.
+ */
+function importsTheHelper(specifier) {
+  if (specifier.type !== "ImportSpecifier" || specifier.importKind === "type")
+    return false;
+  const imported =
+    specifier.imported.type === "Identifier"
+      ? specifier.imported.name
+      : specifier.imported.value;
+  return imported === BOOT_BINDING;
 }
 
 /** The package directory a file belongs to, as `packages/<name>`. */

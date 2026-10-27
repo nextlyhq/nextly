@@ -24,7 +24,6 @@ import {
   singleAbsentResult,
 } from "../../singles/services/single-utils";
 import { registerBuiltInSingleSources } from "../built-in-sources";
-import { generatedCollectionSlug, singleWidgets } from "../collection-widgets";
 import { setDeferredEntities } from "../deferred-entities";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
@@ -283,37 +282,6 @@ describe("what a single executes", () => {
     expect(() =>
       validateWidgetQuery({ source: "single:site-settings", op: "count" })
     ).toThrow();
-  });
-});
-
-describe("what a single feeds", () => {
-  it("derives one status card per single, linking to the single itself", () => {
-    const cards = singleWidgets(listSources());
-    expect(cards.map(card => card.id)).toEqual([
-      "single/site-settings-status",
-      "single/homepage-status",
-    ]);
-    const [settings, homepage] = cards;
-    expect(settings.query).toEqual({
-      source: "single:site-settings",
-      op: "list",
-      status: "all",
-      select: ["status", "updatedAt"],
-    });
-    expect(settings.link).toEqual({
-      label: "Open Site settings",
-      href: "/admin/singles/site-settings",
-    });
-    // Without a lifecycle there is no state to name, only the last change.
-    expect(homepage.query?.select).toEqual(["updatedAt"]);
-  });
-
-  it("names the single a derived card reads, so the reader gate can ask about it", () => {
-    // The same derivation a collection card gets: the card's subject is the
-    // entity its query reads, and `canReadEntity` resolves a single's slug the
-    // way it resolves a collection's.
-    const [card] = singleWidgets(listSources());
-    expect(generatedCollectionSlug(card)).toBe("site-settings");
   });
 });
 

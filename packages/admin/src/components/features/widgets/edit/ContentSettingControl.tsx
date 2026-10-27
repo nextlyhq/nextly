@@ -17,6 +17,7 @@ import type {
   PublishedContentSource,
   SelectFieldConfig,
 } from "nextly/config";
+import type { JSX } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useController, useWatch } from "react-hook-form";
 
@@ -34,6 +35,12 @@ import { fieldFits, sameSettingValue } from "./content-settings";
 export interface ContentSettingControlProps {
   setting: ContentSetting;
   sources: readonly PublishedContentSource[];
+  /**
+   * Whether the card can be asked of a collection, for a Collection setting:
+   * a collection it could not be asked of is not offered. Absent, every
+   * collection the server sent is.
+   */
+  offers?: (collection: string) => boolean;
 }
 
 type Field = PublishedContentSource["fields"][number];
@@ -66,7 +73,8 @@ function selectOf(
 export function ContentSettingControl({
   setting,
   sources,
-}: ContentSettingControlProps) {
+  offers,
+}: ContentSettingControlProps): JSX.Element {
   // The collection a dependent setting works over, as the form holds it now,
   // so its choices follow a change made in the same sheet.
   const collection = useWatch({
@@ -78,7 +86,15 @@ export function ContentSettingControl({
   if (setting.type === "collection") {
     return (
       <FieldRenderer
-        field={selectOf(setting, collectionOptions(setting, sources))}
+        field={selectOf(
+          setting,
+          collectionOptions(
+            setting,
+            offers === undefined
+              ? sources
+              : sources.filter(source => offers(source.collection))
+          )
+        )}
         mode="edit"
       />
     );

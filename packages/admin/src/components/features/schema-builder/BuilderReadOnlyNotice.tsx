@@ -2,6 +2,8 @@
 // code-first (locked). The builder itself already renders every control
 // disabled; this notice makes the read-only intent explicit and points to
 // the source file so devs know where to make changes.
+import type { JSX } from "react";
+
 import { Lock } from "@admin/components/icons";
 
 import type { BuilderConfig } from "./builder-config";
@@ -18,7 +20,10 @@ type Props = {
   configPath?: string | null;
 };
 
-export function BuilderReadOnlyNotice({ kind, configPath }: Props) {
+export function BuilderReadOnlyNotice({
+  kind,
+  configPath,
+}: Props): JSX.Element {
   const label = KIND_LABEL[kind];
 
   return (

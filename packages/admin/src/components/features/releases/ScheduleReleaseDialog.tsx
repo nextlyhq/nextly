@@ -15,6 +15,7 @@
  * @module components/features/releases/ScheduleReleaseDialog
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import {
@@ -116,7 +117,7 @@ export function ScheduleReleaseDialog({
   release,
   open,
   onOpenChange,
-}: ScheduleReleaseDialogProps) {
+}: ScheduleReleaseDialogProps): JSX.Element {
   const [wall, setWall] = useState("");
   const [zone, setZone] = useState(() => release.timezone ?? readerZone());
   const schedule = useScheduleRelease(release.id);

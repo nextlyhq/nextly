@@ -77,7 +77,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 async function draftInScheduledRelease(t: TestNextly): Promise<void> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
-    { collectionName: SLUG },
+    { collectionName: SLUG, overrideAccess: true },
     { title: "pending", status: "draft", occurredAt: OCCURRED }
   );
   const id = (created.data as { id?: string } | undefined)?.id;

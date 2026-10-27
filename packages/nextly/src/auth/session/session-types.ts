@@ -8,15 +8,6 @@ export interface SessionUser {
   [key: string]: unknown;
 }
 
-export interface AuthContext {
-  userId: string;
-  userName: string;
-  userEmail: string;
-  permissions: Map<string, boolean>;
-  roles: string[];
-  authMethod: "session" | "api-key";
-}
-
 export interface RefreshTokenRecord {
   id: string;
   userId: string;

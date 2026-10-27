@@ -67,7 +67,7 @@ export function CreateFolderDialog({
   onOpenChange,
   parentId,
   onSuccess,
-}: CreateFolderDialogProps) {
+}: CreateFolderDialogProps): React.JSX.Element {
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   // Parent selection is derived so the picker reflects the `parentId` prop on
