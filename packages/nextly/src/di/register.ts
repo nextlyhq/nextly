@@ -130,7 +130,6 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
-import { checkDeclaredWidgetReferences } from "../domains/widgets/declaration/references";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import {
@@ -1077,22 +1076,12 @@ async function registerServicesOnce(
       judgeWorkflows(transformedConfig, changedComponents),
   });
 
-  const { databaseNotSetUp } = await syncCodeFirstEntities(
+  await syncCodeFirstEntities(
     adapter,
     resolvedLogger,
     transformedConfig,
     workflows
   );
-
-  // Declared widgets' starting queries, against the content just synced: the
-  // first point in boot where the collections, Singles and their fields exist.
-  // Refused only over what the deployed code defines; a query over the
-  // database's own content is warned about, and its card errors when it runs.
-  await checkDeclaredWidgetReferences({
-    collections: collectSlugs(transformedConfig.collections),
-    singles: collectSlugs(transformedConfig.singles),
-    databaseNotSetUp,
-  });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,

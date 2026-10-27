@@ -17,7 +17,7 @@ import { expectTypeOf } from "vitest";
 import type { WidgetSizeDeclaration } from "../../grid-size";
 import type { WidgetRenderSize, WidgetResultField } from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
-import type { CoreView, QueryAnswer } from "../displays";
+import type { CoreView } from "../displays";
 import {
   defineWidget,
   type WidgetAccess,
@@ -97,29 +97,6 @@ expectTypeOf<WidgetSettingValues<typeof everySetting>>().toEqualTypeOf<{
   readonly tone: "calm" | "loud";
 }>();
 
-// 🔴 In a query core runs: the builder reads the same settings, typed.
-defineWidget({
-  id: "test/query-reads-settings",
-  title: "Query",
-  description: "A query written from its settings",
-  category: "Test",
-  size: { default: { w: 12, h: 4 } },
-  settings: {
-    collection: settings.collection(),
-    items: settings.items(),
-    range: settings.dateRange(),
-  },
-  load: {
-    query: ({ settings }) => {
-      expectTypeOf(settings.collection).toEqualTypeOf<string>();
-      expectTypeOf(settings.items).toEqualTypeOf<number>();
-      expectTypeOf(settings.range).toEqualTypeOf<DateRange>();
-      return { collection: settings.collection, op: "count" };
-    },
-  },
-  view: "figure",
-});
-
 // 🔴 In a component, through `import type` of the declaration: its settings
 // and its data, both props typed by the same widget. The component file (`plugin/admin.ts`) compiles against these
 // types; asserting them here pins what it was handed.
@@ -180,17 +157,16 @@ expectTypeOf<
   >
 >();
 
-// Who may be offered it: a permission today, and the two forms typed for the
-// release that judges them (startup refuses them until then).
+// Who may be offered it: a permission, the collections it reads, or a
+// function of the person, each judged per card before its data function runs.
 expectTypeOf<(typeof ordersByState)["access"]>().toEqualTypeOf<
   WidgetAccess | undefined
 >();
 
-// A component over a query core runs is handed that query's answer, the wire
-// shape for its op.
-expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
-  QueryAnswer<"count">
->();
+// A component is handed exactly what its widget's data function answers.
+expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<{
+  total: number;
+}>();
 
 // A widget drawn by a core view has that view's data, whatever its own
 // function's literal answer was.

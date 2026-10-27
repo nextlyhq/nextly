@@ -26,8 +26,8 @@ describe("the widget declaration, from the package root", () => {
     for (const internal of [
       "registerDashboardWidgets",
       "CORE_OWNER",
-      "buildCardQuery",
       "resolveCardSettings",
+      "unsetSetting",
       "assertWidgetDeclarations",
     ]) {
       expect(internal in root, internal).toBe(false);

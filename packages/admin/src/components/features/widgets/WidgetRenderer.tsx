@@ -88,6 +88,9 @@ function skeletonFor(archetype: string): SkeletonShape {
   }
 }
 
+/** What a card its widget does not show for this person says, where customise mode shows it. */
+const NOT_SHOWN = "Not shown for you right now";
+
 /** Every outcome the frame draws itself, which is all but a plugin's own component. */
 type FramedOutcome = Exclude<
   WidgetOutcome,
@@ -111,8 +114,16 @@ function answeredState(isFetching: boolean): CardState {
 function cardForOutcome(
   outcome: FramedOutcome,
   live: { isFetching: boolean; onRetry?: (() => void) | undefined }
-): { state: CardState; body: ReactNode } {
+): { state: CardState; body: ReactNode; notShown?: true } {
   switch (outcome.state) {
+    case "not-shown":
+      // Drawn as an empty card the frame takes off the dashboard, as it takes a card hidden
+      // while empty, and marks in customise mode instead.
+      return {
+        state: { kind: "empty", empty: { title: NOT_SHOWN } },
+        body: null,
+        notShown: true,
+      };
     case "loading":
       // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
       return { state: { kind: "loading" }, body: null };
@@ -449,7 +460,11 @@ export function WidgetRenderer({
 
   const drawn = cardForOutcome(outcome, { isFetching, onRetry });
   return (
-    <WidgetCard {...shared} state={drawn.state}>
+    <WidgetCard
+      {...shared}
+      state={drawn.state}
+      {...(drawn.notShown ? { notShown: true } : {})}
+    >
       {drawn.body}
     </WidgetCard>
   );

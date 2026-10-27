@@ -5,9 +5,11 @@
  * component throws while it draws shows its own error with Retry, and only
  * that card.
  *
- * A card whose widget hides when its data is empty leaves the dashboard at
- * rest and comes back, marked, in customise mode. Every card, plugin or core,
- * wears the same header.
+ * A card whose data function throws on the server shows its own error, and the
+ * cards answered beside it draw. A card whose widget hides when its data is
+ * empty, or whose `shows` leaves it out, leaves the dashboard at rest and comes
+ * back, marked, in customise mode. Every card, plugin or core, wears the same
+ * header.
  *
  * All are the playground's widget-kit fixture, placed by the test through the
  * layout, since a declared widget is never on the default dashboard.
@@ -28,7 +30,9 @@ const API = "/admin/api";
 const KIT = "widget-kit-fixture/kit";
 const THROWS = "widget-kit-fixture/throws";
 const HIDES = "widget-kit-fixture/hides-when-empty";
-const FIXTURES = [KIT, THROWS, HIDES];
+const LOAD_THROWS = "widget-kit-fixture/load-throws";
+const NOT_SHOWN = "widget-kit-fixture/not-shown";
+const FIXTURES = [KIT, THROWS, HIDES, LOAD_THROWS, NOT_SHOWN];
 
 interface Layout {
   version: number;
@@ -64,6 +68,18 @@ async function placeFixtures(page: Page): Promise<void> {
             ...(await defaultSizeOf(page, HIDES)),
             removed: false,
           },
+          {
+            id: "e2e-load-throws",
+            widgetId: LOAD_THROWS,
+            ...(await defaultSizeOf(page, LOAD_THROWS)),
+            removed: false,
+          },
+          {
+            id: "e2e-not-shown",
+            widgetId: NOT_SHOWN,
+            ...(await defaultSizeOf(page, NOT_SHOWN)),
+            removed: false,
+          },
           ...others,
         ],
         version: layout.version,
@@ -91,6 +107,52 @@ test("a card that throws while it draws shows its own error, and only that card"
   ).toHaveCount(0);
   // The card beside it draws as if nothing happened.
   await expect(page.getByTestId("kit-card")).toBeVisible();
+});
+
+test("a card whose data function throws on the server shows its own error, and the cards beside it draw", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  const failing = page.getByTestId(`widget-cell-${LOAD_THROWS}`);
+  await expect(failing.getByTestId("widget-card-error")).toBeVisible();
+  await expect(
+    failing.getByRole("button", { name: "Retry Test fixture: failing data" })
+  ).toBeVisible();
+  // What the plugin's error said stays in the server's log.
+  await expect(page.getByText("customer 42")).toHaveCount(0);
+  // Answered in the same batch, the cards beside it draw.
+  await expect(page.getByTestId("kit-card")).toBeVisible();
+  await expect(
+    page.getByTestId(`widget-cell-${HIDES}`).locator('[role="region"]')
+  ).toHaveAttribute("data-hidden-empty", "");
+});
+
+test("a card its widget does not show is off the dashboard, and shown marked while customising", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  await expect(page.getByTestId("kit-card")).toBeVisible();
+  const notShown = page.getByTestId(`widget-cell-${NOT_SHOWN}`);
+  await expect(notShown.locator('[role="region"]')).toHaveAttribute(
+    "data-hidden-empty",
+    ""
+  );
+  await expect(notShown).toBeHidden();
+
+  // Entered as the hidden-while-empty case enters it, so the two differ only in their card.
+  const begin = page.getByTestId("dashboard-edit-begin");
+  await begin.focus();
+  await page.keyboard.press("Enter");
+  await expect(notShown).toBeVisible();
+  await expect(notShown.getByTestId("hidden-while-empty")).toHaveText(
+    "Not shown for you right now"
+  );
 });
 
 for (const theme of ["light", "dark"] as Theme[]) {
