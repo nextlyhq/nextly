@@ -172,6 +172,16 @@ describe("what it answers with", () => {
     const [item] = (result as { items: Record<string, unknown>[] }).items;
     expect(Object.keys(item)).toEqual(["title"]);
   });
+
+  it("answers a release's id when the query selects it, so its row can open it", async () => {
+    const result = await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ["id", "title"] },
+      caller
+    );
+
+    const [item] = (result as { items: Record<string, unknown>[] }).items;
+    expect(item).toEqual({ id: "r1", title: "Spring launch" });
+  });
 });
 
 describe("the attention rows, asked for by selecting `reason`", () => {

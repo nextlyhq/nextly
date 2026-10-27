@@ -1,9 +1,9 @@
 /**
  * The Public role: the role every visitor is judged by.
  *
- * Boot seeding creates it once, as a built-in role holding nothing. It is the
- * one built-in role whose permissions an owner may set; everything else about
- * it is locked. It is never deleted or renamed, never given to a person or an
+ * Boot seeding creates it once, as a built-in role holding only the reads
+ * code opens to anyone (none here) and `read-media`. It is the one built-in
+ * role whose permissions an owner may set; everything else about it is locked. It is never deleted or renamed, never given to a person or an
  * API key, and never joined to another role's inheritance in either direction,
  * since a visitor holds exactly what Public holds and nothing it could reach
  * through another role.
@@ -150,7 +150,7 @@ async function asBeforePublic(nextly: TestNextly, roleId?: string) {
 }
 
 describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
-  it("is created by boot seeding as a built-in role holding nothing", async () => {
+  it("is created by boot seeding as a built-in role holding only read-media", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();
 
@@ -159,11 +159,39 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
       id,
       isSystem: true,
     });
-    expect(await permissionsOf(nextly, id)).toEqual([]);
+    const held = await services(nextly).rolePermissions.listRolePermissions(id);
+    expect(held.map(p => `${p.action}-${p.resource}`)).toEqual(["read-media"]);
 
     // Seeding again leaves the one role as it was.
     await seedPermissionsAndRolePresets();
     expect(await publicRoleId(nextly)).toBe(id);
+  });
+
+  it("is marked as a role nobody can be given, where roles are listed and read", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const roles = services(nextly).roles;
+
+    const { data } = await roles.listRoles({ limit: 100 });
+    const listed = new Map(data.map(role => [role.id, role.assignable]));
+    expect(listed.get(id)).toBe(false);
+    // The positive control: every other role can be given.
+    expect([...listed.entries()].filter(([other]) => other !== id)).not.toEqual(
+      []
+    );
+    expect(
+      [...listed.entries()].every(([other, can]) => other === id || can)
+    ).toBe(true);
+    expect((await roles.getRoleById(id)).assignable).toBe(false);
+
+    // And through the Direct API, which maps roles for its own callers.
+    const found = await nextly.nextly.roles.find({ limit: 100 });
+    expect(found.items.find(role => role.id === id)?.assignable).toBe(false);
+    expect(found.items.some(role => role.id !== id && role.assignable)).toBe(
+      true
+    );
+    expect((await nextly.nextly.roles.findByID({ id })).assignable).toBe(false);
   });
 
   it("can't be deleted or renamed", async () => {
@@ -380,7 +408,8 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect(await permissionsOf(nextly, own.id)).toEqual([readMedia]);
     const created = await publicRoleId(nextly);
     expect(created).not.toBe(own.id);
-    expect(await permissionsOf(nextly, created)).toEqual([]);
+    // A new role, so boot seeding grants it `read-media` afresh.
+    expect(await permissionsOf(nextly, created)).toEqual([readMedia]);
   });
 
   it("takes a name of its own where a role of the site's is called Public", async () => {

@@ -20,7 +20,7 @@ describe("a deviation", () => {
 
   it("is recorded only where it changed the answer", async () => {
     const { result, deviations } = await recordingDeviations(async () => {
-      await deviate("lifecycle-judged-alone", true, () => false);
+      await deviate("single-route-authorized-visitor", true, () => false);
       await deviate("no-service", true, () => true);
       await deviate("visitor-public-default", false, async () => true);
       return "done";
@@ -28,7 +28,7 @@ describe("a deviation", () => {
     expect(result).toBe("done");
     expect(deviations).toEqual([
       "visitor-public-default",
-      "lifecycle-judged-alone",
+      "single-route-authorized-visitor",
     ]);
   });
 

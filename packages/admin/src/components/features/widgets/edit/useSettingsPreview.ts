@@ -31,6 +31,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import type { AnswerSize } from "../frame/tier";
 import { queryForTier } from "../tier-query";
 import { UNSOURCED_SLOT } from "../useWidgetBatch";
 import {
@@ -57,8 +58,8 @@ export interface ShownAnswer {
   slotFor?: CellSlotLookup;
   updatedAt: Date | null;
   isFetching: boolean;
-  /** The tier that answer was fetched at, for a sized card. */
-  answerTier?: SizeTier;
+  /** The size that answer was fetched at, for a sized card. */
+  answerSize?: AnswerSize;
 }
 
 export interface SettingsPreview {
@@ -72,8 +73,8 @@ export interface SettingsPreview {
   slotFor?: CellSlotLookup;
   /** The preview is waiting for an answer to the question its values ask. */
   isFetching: boolean;
-  /** The tier the answer drawn was fetched at, so a list knows whether more exist. */
-  answerTier?: SizeTier;
+  /** The size the answer drawn was fetched at, so a list knows whether more exist. */
+  answerSize?: AnswerSize;
 }
 
 /**
@@ -189,10 +190,10 @@ export function useSettingsPreview(args: {
     slot: ready ? asked.slots[previewId] : undefined,
     ...(slotFor === undefined ? {} : { slotFor }),
     isFetching: !ready || asked.fetchingPlacementIds.has(previewId),
-    // Only an answer asked sized has a tier: a custom card's and a server card's were not.
+    // Only an answer asked sized has a size: a custom card's and a server card's were not.
     ...(definition.archetype === "custom" || widget.serverData === true
       ? {}
-      : { answerTier: PREVIEW_TIER }),
+      : { answerSize: { tier: PREVIEW_TIER } }),
   };
 }
 
@@ -228,6 +229,6 @@ function shownPreview(
     slot: shown.slot,
     ...(shown.slotFor === undefined ? {} : { slotFor: shown.slotFor }),
     isFetching: shown.isFetching,
-    ...(shown.answerTier === undefined ? {} : { answerTier: shown.answerTier }),
+    ...(shown.answerSize === undefined ? {} : { answerSize: shown.answerSize }),
   };
 }
