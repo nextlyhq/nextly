@@ -89,7 +89,14 @@ export function lazyRoute(
     );
 
     useEffect(() => {
-      if (loaded) return;
+      if (loaded) {
+        // The previous mount's import resolved while this one was rendering:
+        // its promise set `loaded` in the gap between this mount's first
+        // render and this effect, so there is no fetch to start — adopt the
+        // page it delivered.
+        setState({ status: "ok", Page: loaded });
+        return;
+      }
       let live = true;
       setState({ status: "loading" });
       load()
