@@ -84,6 +84,7 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
   routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -1326,10 +1327,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1454,10 +1457,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.
