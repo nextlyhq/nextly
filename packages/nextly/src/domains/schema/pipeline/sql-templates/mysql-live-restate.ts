@@ -123,7 +123,9 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  * than run a statement cut short, the variable then holds a sentence saying so, which PREPARE
  * rejects.
  */
-function renameKeepingChecks(op: RenameColumnOp): string[] {
+function renameKeepingChecks(
+  op: Pick<RenameColumnOp, "tableName" | "fromColumn" | "toColumn">
+): string[] {
   const from = literal(q(op.fromColumn));
   const checksOnColumn =
     "FROM information_schema.CHECK_CONSTRAINTS cc JOIN information_schema.TABLE_CONSTRAINTS tc " +
@@ -186,13 +188,10 @@ function plainEquivalentOf(run: readonly string[]): string | undefined {
   const rename = RENAME_RUN.exec(first);
   if (rename !== null) {
     const [, tableName, fromColumn, toColumn] = rename;
-    const op: RenameColumnOp = {
-      type: "rename_column",
-      tableName,
-      fromColumn,
-      toColumn,
-    };
-    return sameRun(run, renameKeepingChecks(op))
+    return sameRun(
+      run,
+      renameKeepingChecks({ tableName, fromColumn, toColumn })
+    )
       ? `ALTER TABLE ${q(tableName)} RENAME COLUMN ${q(fromColumn)} TO ${q(toColumn)}`
       : undefined;
   }

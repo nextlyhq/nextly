@@ -16,6 +16,8 @@ const rename = mysqlLiveStatements({
   tableName: "dc_posts",
   fromColumn: "heading",
   toColumn: "title2",
+  fromType: "text",
+  toType: "text",
 })!;
 const required = mysqlLiveStatements({
   type: "change_column_nullable",
