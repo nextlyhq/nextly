@@ -277,12 +277,7 @@ async function visitorVerdict(
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
   let visitor: VisitorActor;
   try {
-    // Without the service, on the gate's own database where it has one, as
-    // a signed-in user's permission is read there.
-    visitor =
-      !q.rules && q.visitorWithoutService
-        ? await q.visitorWithoutService()
-        : await actorForVisitor({ executor: q.executor });
+    visitor = await visitorOf(q);
   } catch (error) {
     // The Public role's grants could not be read: refused, never guessed.
     return { allowed: false, refusal: "failed", error };
@@ -305,6 +300,17 @@ async function visitorVerdict(
     return INSUFFICIENT;
   }
   return visitorPassVerdict(visitor, q, target, outcome);
+}
+
+/**
+ * The visitor a gate judges. Without the service, as the gate's own database
+ * holds it where it has one, as a signed-in user's permission is read there;
+ * otherwise on the pool, or the caller's transaction.
+ */
+function visitorOf(q: GateQuestion): Promise<VisitorActor> {
+  return !q.rules && q.visitorWithoutService
+    ? q.visitorWithoutService()
+    : actorForVisitor({ executor: q.executor });
 }
 
 /**
