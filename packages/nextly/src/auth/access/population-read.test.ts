@@ -196,4 +196,45 @@ describe("a plugin's signed-in person", () => {
     ).resolves.toEqual({ allowed: false });
     expect(checkAccessApplyingFilter).not.toHaveBeenCalled();
   });
+
+  it("is judged as the person even where the user the read names is called super-admin", async () => {
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: true });
+
+    await expect(
+      relatedRowReads(
+        "posts",
+        {
+          user: { id: "u1", roles: ["super-admin"] },
+          principal: makePrincipal("members:member", "m1", {}),
+        },
+        service({ read: false })
+      )
+    ).resolves.toEqual({ allowed: false });
+  });
+});
+
+describe("a user handed in naming the super-admin role", () => {
+  const named = { id: "u1", role: "super-admin", roles: ["super-admin"] };
+
+  it("is refused where they hold neither the role nor the read", async () => {
+    failingClosedSpy.mockResolvedValue(
+      userActor({ userId: "u1", roles: ["editor"], permissions: [] })
+    );
+
+    await expect(
+      relatedRowReads("posts", { user: named, principal: null }, service())
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it("is shown the rows once they hold the role", async () => {
+    // The control: the same caller, holding super-admin by lookup, reads, so
+    // the refusal above is the lookup's answer to the name they carry.
+    failingClosedSpy.mockResolvedValue(
+      userActor({ userId: "u1", roles: ["super-admin"], permissions: [] })
+    );
+
+    await expect(
+      relatedRowReads("posts", { user: named, principal: null }, service())
+    ).resolves.toEqual({ allowed: true });
+  });
 });

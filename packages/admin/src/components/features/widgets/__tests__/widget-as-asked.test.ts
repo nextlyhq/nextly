@@ -142,14 +142,20 @@ describe("a custom card asking through cells", () => {
     });
   });
 
-  it("is titled by the collection it is set to, and as its widget when set to none", () => {
-    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toBe(
-      "Count: Posts"
-    );
-    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toBe(
-      "Count: drafts"
-    );
-    expect(titleAsAsked(count, {}, [posts])).toBe("Count");
+  it("is titled by its subject, the collection it is set to, with its widget's name beneath", () => {
+    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Count",
+    });
+    // A collection with no published label is named as stored.
+    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toEqual({
+      title: "drafts",
+      subtitle: "Count",
+    });
+  });
+
+  it("is titled as its widget, with no subtitle, when set to no collection", () => {
+    expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
   });
 });
 

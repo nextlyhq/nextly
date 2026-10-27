@@ -29,6 +29,7 @@ function state(over: Partial<DocumentActionState> = {}): DocumentActionState {
     status: "draft",
     hasWorkingDraft: false,
     readingHistory: false,
+    canEdit: true,
     canPublish: true,
     canUnpublish: true,
     canDelete: true,
@@ -386,5 +387,50 @@ describe("actions a host contributes", () => {
 
   it("changes nothing when there is nothing to contribute", () => {
     expect(withContributedActions(built, [])).toEqual(built);
+  });
+});
+
+describe("a user who may read the document but not change it", () => {
+  const ids = (over: Partial<DocumentActionState>) =>
+    documentActions(state(over)).map(action => action.id);
+
+  it("is offered nothing that changes the content, and no leading action", () => {
+    const offered = documentActions(
+      state({
+        canEdit: false,
+        status: "published",
+        hasWorkingDraft: true,
+        isDirty: true,
+      })
+    );
+    expect(offered.find(a => a.placement === "primary")).toBeUndefined();
+    for (const edit of [
+      "save",
+      "duplicate",
+      "discard-draft",
+      "discard-changes",
+    ]) {
+      expect(offered.map(a => a.id)).not.toContain(edit);
+    }
+  });
+
+  it("keeps unpublishing, deleting and reading the API, which follow their own permissions", () => {
+    expect(
+      ids({ canEdit: false, status: "published", hasWorkingDraft: true })
+    ).toEqual(["view-api", "unpublish", "delete"]);
+    // POPULATION CONTROL: the same document for a user who may change it
+    // offers each edit, so their absence above is the permission.
+    expect(
+      ids({ canEdit: true, status: "published", hasWorkingDraft: true })
+    ).toEqual(
+      expect.arrayContaining([
+        "publish",
+        "save",
+        "duplicate",
+        "discard-draft",
+        "unpublish",
+        "delete",
+      ])
+    );
   });
 });

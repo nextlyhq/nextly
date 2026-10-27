@@ -71,10 +71,7 @@ vi.mock("@admin/components/ui", async importOriginal => ({
 
 const api = vi.mocked(protectedApi);
 
-/**
- * Two cards, only the first of which its author said may be sent away. Both
- * UNFRAMED: a card drawing its own chrome still gets the control.
- */
+/** Two cards, only the first of which its author said may be sent away. */
 function branding(
   patch: Record<string, Record<string, unknown>> = {}
 ): AdminBranding {
@@ -85,7 +82,6 @@ function branding(
         title: "Set up your project",
         archetype: "custom",
         defaultSize: "full",
-        chrome: "none",
         component: "core#Whatever",
         dismissible: true,
         ...patch["core/onboarding"],
@@ -95,7 +91,6 @@ function branding(
         title: "Collections",
         archetype: "custom",
         defaultSize: "full",
-        chrome: "none",
         component: "core#Whatever",
         ...patch["core/permanent"],
       },
@@ -213,17 +208,6 @@ describe("the control a card carries itself", () => {
     expect(screen.queryByTestId("widget-dismiss")).toBeNull();
   });
 
-  it("does not leave a blank row when the widget itself draws nothing", async () => {
-    renderGrid();
-    await screen.findByTestId("widget-dismiss");
-    const cell = screen.getByTestId("widget-cell-core/onboarding");
-
-    // jsdom evaluates no CSS, so the two halves of the collapse are asserted:
-    // the body has its own slot, and the cell's rule asks that slot.
-    expect(cell.querySelector("[data-widget-body]")).not.toBeNull();
-    expect(cell).toHaveClass("has-[>[data-widget-body]:empty]:hidden");
-  });
-
   it("keeps the way back in reach of the control that removes", async () => {
     renderGrid();
     expect(await screen.findByTestId("widget-dismiss")).toHaveClass(
@@ -232,10 +216,7 @@ describe("the control a card carries itself", () => {
     );
   });
 
-  it("puts the control in the header of a card the host frames", async () => {
-    mockBranding = branding({
-      "core/onboarding": { chrome: "card", icon: "Rocket" },
-    });
+  it("puts the control in the card's header, before its title's end", async () => {
     renderGrid();
 
     const dismiss = await screen.findByTestId("widget-dismiss");

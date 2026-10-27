@@ -7,6 +7,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
@@ -46,7 +47,7 @@ function draw(props: Partial<WidgetComponentProps>, tier: SizeTier = "medium") {
   };
   return render(
     <CardTierContext.Provider value={tier}>
-      <RecentlyEdited {...full} />
+      {inFrame(<RecentlyEdited {...full} />)}
     </CardTierContext.Provider>
   );
 }

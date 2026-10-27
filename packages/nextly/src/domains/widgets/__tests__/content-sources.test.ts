@@ -52,7 +52,7 @@ afterEach(() => {
 });
 
 const offeredFor = (collection: string) =>
-  publishableContentSources([{ generated: true, collection }]);
+  publishableContentSources([collection]);
 
 describe("the content sources a card's settings may offer", () => {
   it("offers a plain field with its label, type and choices", () => {
@@ -120,15 +120,11 @@ describe("the content sources a card's settings may offer", () => {
     expect(notes).not.toHaveProperty("titleField");
   });
 
-  it("offers only collections whose own card the reader may see", () => {
-    // Derived from the visible cards: a declared card and a collection with no
-    // card here are not collections this reader was found able to read.
-    expect(
-      publishableContentSources([
-        { generated: false, collection: "posts" },
-        { generated: true, collection: "absent" },
-      ])
-    ).toEqual([]);
+  it("offers only the readable collections that have a source", () => {
+    // From the audience's readable collections: a slug with no source here is
+    // offered nothing, and only the collections passed are offered.
+    expect(publishableContentSources(["absent"])).toEqual([]);
+    expect(publishableContentSources([])).toEqual([]);
     expect(offeredFor("posts")).toHaveLength(1);
   });
 });
