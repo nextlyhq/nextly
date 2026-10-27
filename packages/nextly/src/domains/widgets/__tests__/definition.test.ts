@@ -60,7 +60,7 @@ describe("validateWidgetDefinition", () => {
     ).toThrow(/size\.default\.w must be a whole number from 1 to 12/);
     expect(() =>
       validateWidgetDefinition({ ...valid, size: { default: { w: 6, h: 0 } } })
-    ).toThrow(/size\.default\.h must be a whole number of 2 or more/);
+    ).toThrow(/size\.default\.h must be a whole number from 2 to 12/);
     expect(() =>
       validateWidgetDefinition({
         ...valid,

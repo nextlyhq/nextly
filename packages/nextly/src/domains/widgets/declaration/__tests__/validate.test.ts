@@ -100,7 +100,7 @@ describe("a widget declaration as startup receives it", () => {
       "size.default.w must be a whole number from 1 to 12, got 13",
     ]);
     expect(sized({ default: { w: 4, h: 1.5 } })).toEqual([
-      "size.default.h must be a whole number of 2 or more, got 1.5",
+      "size.default.h must be a whole number from 2 to 12, got 1.5",
     ]);
     expect(
       problemsOf(valid({ size: { default: { w: 4, h: 4 }, max: "full" } }))

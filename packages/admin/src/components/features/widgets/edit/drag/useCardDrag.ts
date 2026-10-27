@@ -177,9 +177,11 @@ function measureCards(
     const cell = cells.get(row.placementId);
     if (cell === undefined) return undefined;
     const rect = cell.getBoundingClientRect();
+    const size = drawnSize(row.size, row.widget.size);
     cards.push({
       id: row.placementId,
-      span: drawnSpan(drawnSize(row.size, row.widget.size).w, dashboardWidth),
+      span: drawnSpan(size.w, dashboardWidth),
+      rows: size.h,
       rect: {
         left: rect.left - box.left,
         top: rect.top - box.top,

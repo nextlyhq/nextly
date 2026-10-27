@@ -136,11 +136,12 @@ describe("core widget definitions", () => {
     expect(card?.lifecycle ?? "always").toBe("always");
     expect(card).not.toHaveProperty("visibleWhen");
     expect(card?.dismissible).toBe(true);
-    // Full width only, at one height, whatever a reader resizes.
+    // Full width only, and never shorter than its steps: a card does not scroll, so a reader
+    // may make it taller for the Singles they open, never short enough to cut a step off.
     expect(card && sizeBounds(card.size)).toEqual({
-      default: { w: 12, h: 3 },
-      min: { w: 12, h: 3 },
-      max: { w: 12, h: 3 },
+      default: { w: 12, h: 8 },
+      min: { w: 12, h: 8 },
+      max: { w: 12, h: 12 },
     });
     const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
     expect(card?.defaultOrder).toBe(Math.min(...orders));

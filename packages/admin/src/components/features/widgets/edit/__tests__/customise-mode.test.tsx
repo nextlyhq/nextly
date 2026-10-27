@@ -301,7 +301,9 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       });
       // By keyboard: jsdom has no geometry, so a pointer crossing into the
       // submenu reads as leaving it.
-      within(widths).getByRole("menuitemradio", { name: "6 columns" }).focus();
+      within(widths)
+        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
+        .focus();
       await user.keyboard("{Enter}");
     },
   ],

@@ -18,7 +18,7 @@
  *
  * @module tests/dashboard-grid.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page, type Route } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
@@ -240,6 +240,19 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
   throw new Error(`the dashboard did not reach ${target}px`);
 }
 
+/**
+ * The sizes a Width or Height submenu offers, read from each choice's test id (`card-width-6`)
+ * rather than its text: a width is named by its share of the row ("½") with its columns beneath,
+ * so the text is no number to read.
+ */
+async function valuesOf(choices: Locator): Promise<number[]> {
+  return choices.evaluateAll(items =>
+    items.map(item =>
+      Number((item.getAttribute("data-testid") ?? "").split("-").pop())
+    )
+  );
+}
+
 async function gridGaps(page: Page): Promise<{ across: string; down: string }> {
   return page
     .getByRole("region", { name: "Dashboard widgets" })
@@ -357,9 +370,7 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
     await widthMenu.focus();
     await page.keyboard.press("ArrowRight");
     const widths = page.getByRole("menuitemradio");
-    const offered = (await widths.allTextContents()).map(text =>
-      parseInt(text, 10)
-    );
+    const offered = await valuesOf(widths);
     expect(Math.max(...offered)).toBe(bounds.max.w);
     expect(Math.min(...offered)).toBe(bounds.min.w);
     await widths.last().focus();
@@ -378,9 +389,7 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
     await heightMenu.focus();
     await page.keyboard.press("ArrowRight");
     const heights = page.getByRole("menuitemradio");
-    const offered = (await heights.allTextContents()).map(text =>
-      parseInt(text, 10)
-    );
+    const offered = await valuesOf(heights);
     expect(Math.max(...offered)).toBe(bounds.max.h);
     await heights.last().focus();
     await page.keyboard.press("Enter");
@@ -416,3 +425,85 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
     ((area + gap) * bounds.max.w) / 12 - gap + 1
   );
 });
+
+const GET_STARTED = "core/get-started";
+
+/**
+ * The layout read passed through with the Get started card first, at its widget's default size,
+ * holding the most steps it draws before "Show N more": a collection, an entry, five of six
+ * Singles and an invite. Mocked, so the card is drawn whatever earlier specs left behind (it
+ * retires once a site's steps are done).
+ */
+async function placeFullGetStarted(page: Page): Promise<void> {
+  const size = (await sizeBoundsOf(page, GET_STARTED)).default;
+  await page.route("**/dashboard/layout", async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    // Aborted rather than thrown when the page has gone: a throw out of the handler fails a test
+    // that had passed, and its message prints the request, session cookie included.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<Record<string, unknown>>;
+      getStarted?: unknown;
+    };
+    layout.placements = [
+      { id: "e2e-get-started", widgetId: GET_STARTED, ...size, removed: false },
+      ...layout.placements.filter(p => p.widgetId !== GET_STARTED),
+    ];
+    const singles = ["a", "b", "c", "d", "e", "f"].map(slug => ({
+      key: `single:${slug}`,
+      kind: "single",
+      single: slug,
+      status: "open",
+    }));
+    const steps = [
+      { key: "collection", kind: "collection", status: "done" },
+      { key: "entry", kind: "entry", status: "open" },
+      ...singles,
+      { key: "invite", kind: "invite", status: "open" },
+    ];
+    layout.getStarted = {
+      drawn: true,
+      answer: { unknown: false, steps, done: 1, total: steps.length },
+    };
+    await route.fulfill({ response, json: body });
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`draws every step of the Get started card within its default height (${width}px)`, async ({
+    page,
+  }) => {
+    // 🔴 A card never scrolls, so a step past the card's rows is cut off: at three rows high the
+    // invite step was drawn below the card's bottom edge.
+    await page.setViewportSize({ width, height: 1100 });
+    await placeFullGetStarted(page);
+    await gotoAdmin(page, "/");
+    const cell = page.getByTestId(`widget-cell-${GET_STARTED}`);
+    await expect(cell.getByTestId("get-started-progress")).toBeVisible({
+      timeout: 60_000,
+    });
+    const body = cell.getByTestId("widget-card-body");
+    const fit = await body.evaluate(element => ({
+      scroll: element.scrollHeight,
+      client: element.clientHeight,
+    }));
+    expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
+    // The last step and the fold control both lie inside the card.
+    const card = await cell.boundingBox();
+    const last = await cell.getByRole("listitem").last().boundingBox();
+    expect(last).not.toBeNull();
+    expect((last?.y ?? 0) + (last?.height ?? 0)).toBeLessThanOrEqual(
+      (card?.y ?? 0) + (card?.height ?? 0)
+    );
+    await expect(
+      cell.getByRole("button", { name: "Show 1 more" })
+    ).toBeInViewport();
+  });
+}

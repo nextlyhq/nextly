@@ -65,7 +65,7 @@ describe("placement shape", () => {
     for (const size of [
       { w: 1, h: 2 },
       { w: 12, h: 2 },
-      { w: 7, h: 40 },
+      { w: 7, h: 12 },
     ]) {
       expect(placementProblem(placement(size))).toBeUndefined();
     }
@@ -79,6 +79,8 @@ describe("placement shape", () => {
       { w: "6", h: 3 },
       { w: 6, h: 0 },
       { w: 6, h: 2.5 },
+      // Past the twelve rows a card may span.
+      { w: 6, h: 13 },
       { w: 6, h: undefined },
       { w: undefined, h: 3 },
     ]) {
@@ -90,7 +92,7 @@ describe("placement shape", () => {
     // Whether a size lies within a widget's bounds is the live registry's
     // question, asked as a card is drawn; a stored size outside them is kept.
     expect(
-      placementProblem(placement({ widgetId: "core/narrow", w: 12, h: 30 }))
+      placementProblem(placement({ widgetId: "core/narrow", w: 12, h: 12 }))
     ).toBeUndefined();
   });
 

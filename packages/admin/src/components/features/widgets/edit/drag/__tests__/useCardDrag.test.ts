@@ -56,6 +56,7 @@ const rows = IDS.map(placementId => ({
 const cards: DrawnCard[] = IDS.map((id, index) => ({
   id,
   span: drawnSpan(12, WIDTH),
+  rows: 3,
   rect: {
     left: 0,
     top: index * HEIGHT,

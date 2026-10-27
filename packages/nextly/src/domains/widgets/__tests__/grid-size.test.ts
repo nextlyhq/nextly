@@ -9,6 +9,7 @@ import {
   clampSize,
   GRID_COLUMNS,
   isGridSize,
+  MAX_GRID_ROWS,
   narrowedSizeBounds,
   sizeBounds,
   sizeDeclarationProblems,
@@ -16,15 +17,19 @@ import {
 } from "../grid-size";
 
 describe("a grid size", () => {
-  it("is whole numbers, w from 1 to 12 and h from 2 up", () => {
+  it("is whole numbers, w from 1 to 12 and h from 2 to 12", () => {
     expect(isGridSize({ w: 1, h: 2 })).toBe(true);
     expect(isGridSize({ w: GRID_COLUMNS, h: 9 })).toBe(true);
+    expect(isGridSize({ w: 6, h: MAX_GRID_ROWS })).toBe(true);
     for (const size of [
       { w: 0, h: 2 },
       { w: 13, h: 2 },
       { w: 6, h: 0 },
       // 🔴 One row cannot hold the frame.
       { w: 6, h: 1 },
+      // 🔴 Nor past twelve, the most rows a card may span.
+      { w: 6, h: 13 },
+      { w: 6, h: 1e9 },
       { w: 6.5, h: 2 },
       { w: 6, h: 2.5 },
       { w: "6", h: 2 },
@@ -74,7 +79,14 @@ describe("a widget's size bounds", () => {
     ]);
     expect(
       sizeDeclarationProblems({ default: { w: 6, h: 3 }, max: { w: 6, h: 1 } })
-    ).toEqual(["size.max.h must be a whole number of 2 or more, got 1"]);
+    ).toEqual(["size.max.h must be a whole number from 2 to 12, got 1"]);
+    // A maximum past twelve rows is refused at startup, as one below two is.
+    expect(
+      sizeDeclarationProblems({
+        default: { w: 6, h: 3 },
+        max: { w: 6, h: 100000 },
+      })
+    ).toEqual(["size.max.h must be a whole number from 2 to 12, got 100000"]);
     // A named width is no size at all.
     expect(sizeDeclarationProblems({ default: "half" })).toEqual([
       "size.default must be { w, h }",

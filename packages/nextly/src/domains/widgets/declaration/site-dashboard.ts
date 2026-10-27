@@ -16,6 +16,7 @@ import type { WidgetDefinition } from "../definition";
 import {
   GRID_COLUMNS,
   isGridSize,
+  MAX_GRID_ROWS,
   MIN_GRID_ROWS,
   narrowedSizeBounds,
   sizeBounds,
@@ -220,24 +221,21 @@ function cardSizeProblems(
 
 /**
  * Why one stated direction of a default card is no size the grid can draw:
- * one to twelve columns, and at least the fewest rows a card may span.
+ * one to twelve columns, and from the fewest to the most rows a card may span.
  */
 function gridDirectionProblem(
   key: "w" | "h",
   value: unknown
 ): string | undefined {
   const lowest = key === "w" ? 1 : MIN_GRID_ROWS;
-  const highest = key === "w" ? GRID_COLUMNS : Number.POSITIVE_INFINITY;
+  const highest = key === "w" ? GRID_COLUMNS : MAX_GRID_ROWS;
   const drawable =
     typeof value === "number" &&
     Number.isInteger(value) &&
     value >= lowest &&
     value <= highest;
   if (drawable) return undefined;
-  const shape =
-    key === "w"
-      ? `a whole number from 1 to ${GRID_COLUMNS}`
-      : `a whole number of ${MIN_GRID_ROWS} or more`;
+  const shape = `a whole number from ${lowest} to ${highest}`;
   return `defaultLayout ${key} must be ${shape}, got ${quote(value)}`;
 }
 
@@ -359,7 +357,7 @@ function sizeOverrideProblems(size: unknown, facts: SiteWidgetFacts): string[] {
     key => size[key] !== undefined && !isGridSize(size[key])
   ).map(
     key =>
-      `overrides.size.${key} must be { w, h } with w a whole number from 1 to ${GRID_COLUMNS} and h a whole number of ${MIN_GRID_ROWS} or more, got ${quote(size[key])}`
+      `overrides.size.${key} must be { w, h } with w a whole number from 1 to ${GRID_COLUMNS} and h a whole number from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}, got ${quote(size[key])}`
   );
   const read = overrideSize(size);
   if (read === undefined || facts.size === undefined) {

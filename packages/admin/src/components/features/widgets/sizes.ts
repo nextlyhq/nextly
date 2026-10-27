@@ -31,6 +31,8 @@
 
 import {
   GRID_COLUMNS,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
   clampSize,
   isGridSize,
   type GridSize,
@@ -163,28 +165,79 @@ const COMMON_WIDTHS: readonly number[] = [3, 4, 6, 8, 12];
 
 /**
  * The widths a card may be resized to, narrowest first: each common width that lies within the
- * widget's bounds, and the bounds' own ends, so a widget whose minimum is 5 is offered 5.
+ * widget's bounds, the bounds' own ends (so a widget whose minimum is 5 is offered 5), the
+ * widget's declared default (so a card can always go back to the width its author chose), and
+ * the width it is drawn at (so one of the choices is always the checked one).
  */
-export function widthChoices(bounds: WidgetSizeBounds): number[] {
+export function widthChoices(
+  bounds: WidgetSizeBounds,
+  drawn?: number
+): number[] {
   const within = COMMON_WIDTHS.filter(
     w => w >= bounds.min.w && w <= bounds.max.w
   );
-  return [...new Set([bounds.min.w, ...within, bounds.max.w])].sort(
-    (a, b) => a - b
-  );
+  const ends = [bounds.min.w, bounds.default.w, bounds.max.w];
+  return [
+    ...new Set([...ends, ...within, ...(drawn === undefined ? [] : [drawn])]),
+  ]
+    .filter(w => w >= bounds.min.w && w <= bounds.max.w)
+    .sort((a, b) => a - b);
 }
 
-/** The heights a card may be resized to, shortest first: every one its widget's bounds allow. */
+/**
+ * The heights a card may be resized to, shortest first: every one its widget's bounds allow,
+ * within the grid's own two to twelve rows. A declaration taller than that is refused at
+ * startup; the bounds are held to it here as well, so the menu is never thousands long.
+ */
 export function heightChoices(bounds: WidgetSizeBounds): number[] {
+  const lowest = Math.max(bounds.min.h, MIN_GRID_ROWS);
+  const highest = Math.min(bounds.max.h, MAX_GRID_ROWS);
+  if (highest < lowest) return [lowest];
   return Array.from(
-    { length: bounds.max.h - bounds.min.h + 1 },
-    (_, index) => bounds.min.h + index
+    { length: highest - lowest + 1 },
+    (_, index) => lowest + index
   );
 }
 
 /** A width as the card menu says it: "6 columns". */
 export function columnsName(w: number): string {
   return w === 1 ? "1 column" : `${w} columns`;
+}
+
+/**
+ * The widths that are an exact share of the row, as the dashboard's design names them: ⅓, ½,
+ * Full. A reader thinks of a card as half the row, not as six of twelve columns, so the card
+ * menu leads with the share and gives the column count beneath it.
+ */
+const WIDTH_SHARES: ReadonlyMap<number, { glyph: string; name: string }> =
+  new Map([
+    [3, { glyph: "¼", name: "Quarter width" }],
+    [4, { glyph: "⅓", name: "Third width" }],
+    [6, { glyph: "½", name: "Half width" }],
+    [8, { glyph: "⅔", name: "Two thirds width" }],
+    [9, { glyph: "¾", name: "Three quarters width" }],
+    [12, { glyph: "Full", name: "Full width" }],
+  ]);
+
+/**
+ * A width as the card menu offers it: the share of the row where it is an exact one ("½"), with
+ * its columns as the detail beneath, or the columns alone ("5 columns"). `spoken` is the whole
+ * name a screen reader hears, "Half width, 6 columns".
+ */
+export function widthChoiceName(w: number): {
+  label: string;
+  detail?: string;
+  spoken: string;
+} {
+  const share = WIDTH_SHARES.get(w);
+  if (share === undefined) {
+    return { label: columnsName(w), spoken: columnsName(w) };
+  }
+  return {
+    label: share.glyph,
+    detail: columnsName(w),
+    spoken: `${share.name}, ${columnsName(w)}`,
+  };
 }
 
 /** A height as the card menu says it: "4 rows". Never one: no card is under two rows high. */

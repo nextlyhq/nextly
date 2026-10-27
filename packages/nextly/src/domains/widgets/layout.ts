@@ -53,7 +53,13 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { GRID_COLUMNS, isGridSize, type GridSize } from "./grid-size";
+import {
+  GRID_COLUMNS,
+  isGridSize,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
+  type GridSize,
+} from "./grid-size";
 import { MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 
@@ -175,7 +181,7 @@ const PLACEMENT_RULES: readonly PlacementRule[] = [
   p =>
     isGridSize({ w: p.w, h: p.h })
       ? undefined
-      : `"w" and "h" must be whole numbers the grid can draw, "w" from 1 to ${GRID_COLUMNS}`,
+      : `"w" and "h" must be whole numbers the grid can draw, "w" from 1 to ${GRID_COLUMNS} and "h" from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}`,
   p =>
     typeof p.removed === "boolean" ? undefined : '"removed" must be a boolean',
   p =>

@@ -396,6 +396,8 @@ export { textLength } from "./shared/text-length";
 // imports nothing, so this entry stays safe for a browser.
 export {
   GRID_COLUMNS,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
   clampSize,
   isGridSize,
   narrowedSizeBounds,

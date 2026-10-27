@@ -58,10 +58,10 @@ import * as Icons from "@admin/components/icons";
 
 import type { MoveDirection } from "../layout-editor";
 import {
-  columnsName,
   heightChoices,
   rowsName,
   sizeName,
+  widthChoiceName,
   widthChoices,
 } from "../sizes";
 
@@ -129,7 +129,8 @@ interface SizeAxis {
   /** The value the card is drawn at in this direction. */
   value: number;
   choices: number[];
-  name: (value: number) => string;
+  /** How a choice reads: its label, a detail beneath it, and the whole name it is announced by. */
+  name: (value: number) => { label: string; detail?: string; spoken: string };
   choose: (value: number) => void;
 }
 
@@ -149,15 +150,30 @@ function AxisChoices({ axis }: { axis: SizeAxis }) {
           if (axis.choices.includes(chosen)) axis.choose(chosen);
         }}
       >
-        {axis.choices.map(option => (
-          <DropdownMenuRadioItem
-            key={option}
-            value={String(option)}
-            data-testid={`card-${axis.kind}-${option}`}
-          >
-            {axis.name(option)}
-          </DropdownMenuRadioItem>
-        ))}
+        {axis.choices.map(option => {
+          const name = axis.name(option);
+          return (
+            <DropdownMenuRadioItem
+              key={option}
+              value={String(option)}
+              data-testid={`card-${axis.kind}-${option}`}
+              aria-label={name.spoken}
+            >
+              {name.detail === undefined ? (
+                name.label
+              ) : (
+                // The share first and the columns beneath it, for sight. Hidden
+                // from screen readers: the item's label already says both.
+                <span aria-hidden className="flex flex-col leading-tight">
+                  <span>{name.label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {name.detail}
+                  </span>
+                </span>
+              )}
+            </DropdownMenuRadioItem>
+          );
+        })}
       </DropdownMenuRadioGroup>
     </>
   );
@@ -204,8 +220,8 @@ function sizeAxes(
       label: "Width",
       icon: MoveHorizontal,
       value: size.w,
-      choices: widthChoices(bounds),
-      name: columnsName,
+      choices: widthChoices(bounds, size.w),
+      name: widthChoiceName,
       // The other direction kept as drawn, which already lies within the bounds.
       choose: w => setSize({ w, h: size.h }),
     },
@@ -215,7 +231,7 @@ function sizeAxes(
       icon: MoveVertical,
       value: size.h,
       choices: heightChoices(bounds),
-      name: rowsName,
+      name: h => ({ label: rowsName(h), spoken: rowsName(h) }),
       choose: h => setSize({ w: size.w, h }),
     },
   ];

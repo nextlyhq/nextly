@@ -67,6 +67,12 @@ import {
 } from "./frame/card-state";
 import { frameIds } from "./frame/ids";
 import {
+  FRAME_BODY_GAP,
+  FRAME_FOOTER_GAP,
+  FRAME_HEADER,
+  FRAME_PADDING,
+} from "./frame/measures";
+import {
   CardEmpty,
   CardError,
   CardSkeleton,
@@ -174,7 +180,8 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
     // floats a one-line figure in the middle of whatever the tallest card happens to be.
-    "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0 pt-3",
+    "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
+    FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
     customizing && "opacity-55"
   );
@@ -250,7 +257,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
           // Read by the grid cell, which takes a card whose widget hides when empty out of the
           // grid while it is; never in customise mode, where the card must stay reachable.
           data-hidden-empty={flags.hiddenEmpty ? "" : undefined}
-          className={cn("flex h-full flex-col p-4", props.className)}
+          className={cn(
+            "flex h-full flex-col",
+            FRAME_PADDING.className,
+            props.className
+          )}
         >
           <WidgetCardHeader
             titleId={titleId}
@@ -405,7 +416,10 @@ function WidgetCardHeader({
       // No rule under the header: a divider is the difference between a card and a panel.
       noBorder
       data-testid="widget-card-header"
-      className="h-10 shrink-0 flex-row items-center gap-2 space-y-0 p-0"
+      className={cn(
+        FRAME_HEADER.className,
+        "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
+      )}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
       <div className="min-w-0 flex-1">
@@ -458,7 +472,8 @@ function WidgetCardFooter({
       // No top rule and no tint: `CardFooter` defaults to both, which reads as a separate element
       // attached to the card rather than as part of it.
       className={cn(
-        "flex items-center justify-end border-0 bg-transparent p-0 pt-3",
+        "flex items-center justify-end border-0 bg-transparent p-0",
+        FRAME_FOOTER_GAP.className,
         // Out of reach in customise mode, and dimmed with the body so it does not look usable.
         inert && "opacity-55"
       )}

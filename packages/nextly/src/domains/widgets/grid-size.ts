@@ -24,6 +24,13 @@ export const GRID_COLUMNS = 12;
  */
 export const MIN_GRID_ROWS = 2;
 
+/**
+ * The most rows a card may span: twelve rows is a card about a screen tall,
+ * and nothing on a dashboard needs to be taller. A ceiling, too, so a size can
+ * never ask the admin to offer thousands of heights to choose from.
+ */
+export const MAX_GRID_ROWS = 12;
+
 /** A card's size in grid units: `w` columns by `h` rows, both whole numbers. */
 export interface GridSize {
   w: number;
@@ -62,7 +69,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isWhole = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value);
 
-/** Whether a value is a size the grid can draw: whole `w` 1–12 and `h` 2 or more. */
+/** Whether a value is a size the grid can draw: whole `w` 1–12 and `h` 2–12. */
 export function isGridSize(value: unknown): value is GridSize {
   return (
     isRecord(value) &&
@@ -70,7 +77,8 @@ export function isGridSize(value: unknown): value is GridSize {
     value.w >= 1 &&
     value.w <= GRID_COLUMNS &&
     isWhole(value.h) &&
-    value.h >= MIN_GRID_ROWS
+    value.h >= MIN_GRID_ROWS &&
+    value.h <= MAX_GRID_ROWS
   );
 }
 
@@ -80,8 +88,8 @@ function gridSizeProblem(value: unknown, name: string): string | undefined {
   if (!isWhole(value.w) || value.w < 1 || value.w > GRID_COLUMNS) {
     return `${name}.w must be a whole number from 1 to ${GRID_COLUMNS}, got ${String(value.w)}`;
   }
-  if (!isWhole(value.h) || value.h < MIN_GRID_ROWS) {
-    return `${name}.h must be a whole number of ${MIN_GRID_ROWS} or more, got ${String(value.h)}`;
+  if (!isWhole(value.h) || value.h < MIN_GRID_ROWS || value.h > MAX_GRID_ROWS) {
+    return `${name}.h must be a whole number from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}, got ${String(value.h)}`;
   }
   return undefined;
 }

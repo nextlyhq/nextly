@@ -350,7 +350,7 @@ const MUST_AGREE: Array<{
   },
   {
     case: "a height that is not a whole number",
-    expect: /size\.max\.h must be a whole number of 2 or more/,
+    expect: /size\.max\.h must be a whole number from 2 to 12/,
     widget: {
       id: "acme/thing",
       title: "T",

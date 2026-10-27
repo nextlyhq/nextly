@@ -191,8 +191,16 @@ const CORE_WIDGET_LITERALS = [
     description:
       "The setup steps this reader could still take, detected from the install rather than ticked by hand.",
     archetype: "custom",
-    // Full width only, at one height: its steps are laid out across the row.
-    size: { default: { w: 12, h: 3 } },
+    // Full width only, and tall enough for every step it shows by default: a card never scrolls,
+    // so a shorter one cut its last steps off. Measured in the browser, the steps it draws before
+    // "Show N more" (a collection, an entry, five Singles and an invite, about 580 px with that
+    // control) fit the body of eight rows. Taller for a site that opens the rest of its Singles,
+    // never shorter. The end-to-end grid spec checks that the steps fit.
+    size: {
+      default: { w: 12, h: 8 },
+      min: { w: 12, h: 8 },
+      max: { w: 12, h: 12 },
+    },
     // First: it addresses a reader who has just arrived.
     defaultOrder: 0,
     component: "core#GetStartedCard",

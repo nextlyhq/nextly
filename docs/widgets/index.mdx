@@ -8,26 +8,26 @@ system runs that query on its behalf, scoped to the permissions of whoever is lo
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | The widget system, the built-in sources and admin rendering all ship |
+|                            |                                                                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Built in                   | The widget system, the built-in sources and admin rendering all ship                                                              |
 | Plugin-contributed widgets | **Experimental.** They render, but the contribution shape is still settling — see the [stability ladder](/docs/plugins/stability) |
-| Permission | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers |
+| Permission                 | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers                        |
 
 ## Archetypes
 
 A widget declares an archetype rather than drawing itself, so dashboards stay visually
 consistent no matter who contributed the widget:
 
-| Archetype | Shows |
-|---|---|
-| `metric` | One number |
-| `stats` | Several labelled, clickable numbers |
-| `table` | Rows and columns |
-| `list` | An ordered list of items |
-| `actions` | Buttons for things to do |
-| `text` | Prose you wrote, as markdown |
-| `custom` | Your own component, when none of the above fit |
+| Archetype | Shows                                          |
+| --------- | ---------------------------------------------- |
+| `metric`  | One number                                     |
+| `stats`   | Several labelled, clickable numbers            |
+| `table`   | Rows and columns                               |
+| `list`    | An ordered list of items                       |
+| `actions` | Buttons for things to do                       |
+| `text`    | Prose you wrote, as markdown                   |
+| `custom`  | Your own component, when none of the above fit |
 
 A `text` widget is its prose. It declares `content` instead of a query, and the host draws
 it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
@@ -56,7 +56,7 @@ the card, so it is for notes and a pointer to a runbook, not for the runbook its
 external link opens in a new tab.
 
 A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
-from 1 to 12 columns and `h` from 2 rows up. It declares the size a card starts at and, if it
+from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
 likes, the smallest and largest a reader may resize it to:
 `size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
 defaults to the default, and the maximum to the full width at the default's height. On the
@@ -82,11 +82,11 @@ It also means most widgets need no data-fetching code at all.
 
 A query names a source, and the source decides what the query may ask:
 
-| Source | Reads | Supports |
-|---|---|---|
-| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date |
-| `single:<slug>` | The single's one document, as a list of one row | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
-| `system:…` | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares |
+| Source              | Reads                                                                                                       | Supports                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API                                | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date                                                       |
+| `single:<slug>`     | The single's one document, as a list of one row                                                             | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
+| `system:…`          | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares                                                                                                             |
 
 Every collection and every single the install has is published as a source, and the dashboard
 offers a card derived from each: a count, a recent list, a table and a health breakdown per
@@ -95,9 +95,10 @@ changed. Offered, never placed — nobody's dashboard gains a card because a col
 created — and only to a reader who may read that collection or single.
 
 <Callout type="warn">
-Contributing a widget from a plugin works today, but `PluginAdminWidget` is marked
-`@experimental` and its shape may change before it settles. Building on it is reasonable;
-depending on it in something you cannot easily update is not.
+  Contributing a widget from a plugin works today, but `PluginAdminWidget` is
+  marked `@experimental` and its shape may change before it settles. Building on
+  it is reasonable; depending on it in something you cannot easily update is
+  not.
 </Callout>
 
 ## Related

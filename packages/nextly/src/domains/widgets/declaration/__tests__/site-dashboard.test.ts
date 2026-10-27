@@ -148,7 +148,7 @@ describe("a site config that names what exists", () => {
     );
     expect(message).toContain('overrides entry has "widht"');
     expect(message).toContain(
-      'overrides.size.default must be { w, h } with w a whole number from 1 to 12 and h a whole number of 2 or more, got {"w":13,"h":4}'
+      'overrides.size.default must be { w, h } with w a whole number from 1 to 12 and h a whole number from 2 to 12, got {"w":13,"h":4}'
     );
     expect(message).toContain(
       'defaultLayout places "collection/pages-count", which hide hides'
@@ -326,7 +326,7 @@ describe("a site config's sizes, in grid units", () => {
       'widget "acme/recent-orders": defaultLayout w must be a whole number from 1 to 12, got "half"'
     );
     expect(message).toContain(
-      'widget "acme/recent-orders": defaultLayout h must be a whole number of 2 or more, got 0'
+      'widget "acme/recent-orders": defaultLayout h must be a whole number from 2 to 12, got 0'
     );
   });
 

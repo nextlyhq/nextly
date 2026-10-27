@@ -32,6 +32,7 @@ import {
   isOneColumn,
   rowsName,
   sizeName,
+  widthChoiceName,
   widthChoices,
 } from "../sizes";
 
@@ -237,6 +238,22 @@ describe("the sizes the card menu offers", () => {
     ).toEqual([12]);
   });
 
+  it("offers the widget's declared default and the width the card is drawn at", () => {
+    // 🔴 A default of 5 in bounds of 3 to 12 is no common step: without it the card starts at a
+    // width no choice names, nothing is checked, and once moved it cannot go back to 5.
+    expect(
+      widthChoices(bounds({ w: 3, h: 2 }, { w: 5, h: 3 }, { w: 12, h: 3 }))
+    ).toEqual([3, 4, 5, 6, 8, 12]);
+    // A card drawn at 7 (stored so, within the bounds) has its width among the choices too.
+    expect(
+      widthChoices(bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 3 }), 7)
+    ).toEqual([3, 4, 6, 7, 8, 12]);
+    // The must-differ half: a drawn width outside the bounds is not offered.
+    expect(
+      widthChoices(bounds({ w: 4, h: 2 }, { w: 6, h: 3 }, { w: 8, h: 3 }), 12)
+    ).toEqual([4, 6, 8]);
+  });
+
   it("offers every height within the bounds", () => {
     expect(
       heightChoices(bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 5 }))
@@ -244,6 +261,15 @@ describe("the sizes the card menu offers", () => {
     expect(
       heightChoices(bounds({ w: 3, h: 3 }, { w: 6, h: 3 }, { w: 12, h: 3 }))
     ).toEqual([3]);
+  });
+
+  it("never offers more heights than the grid's twelve rows, whatever the bounds say", () => {
+    // 🔴 Bounds that reached the admin unchecked must not become thousands of menu items, or a
+    // RangeError from an array as long as the maximum.
+    const huge = heightChoices(
+      bounds({ w: 3, h: 2 }, { w: 6, h: 3 }, { w: 12, h: 1e9 })
+    );
+    expect(huge).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
   it("never offers a size past the bounds", () => {
@@ -261,5 +287,36 @@ describe("the sizes the card menu offers", () => {
     expect(columnsName(6)).toBe("6 columns");
     expect(rowsName(4)).toBe("4 rows");
     expect(sizeName({ w: 6, h: 4 })).toBe("6 columns by 4 rows");
+  });
+
+  it("offers a width that is an exact share of the row by its share, its columns beneath", () => {
+    // The design's ⅓, ½ and Full, with the column count as the detail; the whole name is what a
+    // screen reader hears. Every exact share of twelve that the menu can offer, and none other.
+    expect(widthChoiceName(6)).toEqual({
+      label: "½",
+      detail: "6 columns",
+      spoken: "Half width, 6 columns",
+    });
+    expect(widthChoiceName(12)).toEqual({
+      label: "Full",
+      detail: "12 columns",
+      spoken: "Full width, 12 columns",
+    });
+    expect([3, 4, 8, 9].map(w => widthChoiceName(w).label)).toEqual([
+      "¼",
+      "⅓",
+      "⅔",
+      "¾",
+    ]);
+  });
+
+  it("offers any other width by its columns alone", () => {
+    // The must-differ half: 5 and 7 are no share of the row, so no glyph is invented for them.
+    for (const w of [1, 2, 5, 7, 10, 11]) {
+      expect(widthChoiceName(w)).toEqual({
+        label: columnsName(w),
+        spoken: columnsName(w),
+      });
+    }
   });
 });

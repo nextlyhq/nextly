@@ -462,14 +462,18 @@ describe("choosing a size", () => {
     const widths = await openSizes(user, "Widget core/a");
     const items = within(widths).getAllByRole("menuitemradio");
     // 🔴 Never past the bounds: no 3 below the minimum, no 12 above the maximum.
-    expect(items.map(i => i.textContent)).toEqual([
-      "4 columns",
-      "6 columns",
-      "8 columns",
+    expect(items.map(i => i.getAttribute("aria-label"))).toEqual([
+      "Third width, 4 columns",
+      "Half width, 6 columns",
+      "Two thirds width, 8 columns",
     ]);
-    expect(
-      within(widths).getByRole("menuitemradio", { name: "6 columns" })
-    ).toHaveAttribute("aria-checked", "true");
+    const half = within(widths).getByRole("menuitemradio", {
+      name: "Half width, 6 columns",
+    });
+    expect(half).toHaveAttribute("aria-checked", "true");
+    // Drawn as the design names it: the share, and the columns beneath.
+    expect(within(half).getByText("½")).toBeInTheDocument();
+    expect(within(half).getByText("6 columns")).toBeInTheDocument();
   });
 
   it("lists every height within the widget's bounds, the current one checked", async () => {
@@ -508,7 +512,9 @@ describe("choosing a size", () => {
     const widths = await openSizes(user, "Widget core/a");
     // By keyboard: jsdom has no geometry, so a simulated pointer crossing from
     // the submenu's trigger into it reads as leaving, and Radix closes it.
-    within(widths).getByRole("menuitemradio", { name: "4 columns" }).focus();
+    within(widths)
+      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
+      .focus();
     await user.keyboard("{Enter}");
 
     expect(screen.getByTestId("widget-cell-core/a")).toHaveClass(
@@ -554,7 +560,9 @@ describe("choosing a size", () => {
 
     const widths = await openSizes(user, "Widget core/a");
     expect(
-      within(widths).getByRole("menuitemradio", { name: "8 columns" })
+      within(widths).getByRole("menuitemradio", {
+        name: "Two thirds width, 8 columns",
+      })
     ).toHaveAttribute("aria-checked", "true");
     await user.keyboard("{Escape}");
 
@@ -1604,20 +1612,22 @@ describe("at one column", () => {
     expect(
       within(menu)
         .getAllByRole("menuitemradio")
-        .map(item => item.textContent)
+        .map(item => item.getAttribute("aria-label"))
     ).toEqual([
-      "4 columns",
-      "6 columns",
-      "8 columns",
+      "Third width, 4 columns",
+      "Half width, 6 columns",
+      "Two thirds width, 8 columns",
       "2 rows",
       "3 rows",
       "4 rows",
     ]);
     expect(
-      within(menu).getByRole("menuitemradio", { name: "6 columns" })
+      within(menu).getByRole("menuitemradio", { name: "Half width, 6 columns" })
     ).toHaveAttribute("aria-checked", "true");
 
-    within(menu).getByRole("menuitemradio", { name: "4 columns" }).focus();
+    within(menu)
+      .getByRole("menuitemradio", { name: "Third width, 4 columns" })
+      .focus();
     await user.keyboard("{Enter}");
     expect(live()).toHaveTextContent(
       "Widget core/a set to 4 columns by 3 rows."

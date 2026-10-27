@@ -23,11 +23,36 @@ import {
  * relative to the grid, rounded to whole pixels.
  */
 const CARDS: DrawnCard[] = [
-  { id: "a", span: 6, rect: { left: 0, top: 0, right: 592, bottom: 248 } },
-  { id: "b", span: 6, rect: { left: 608, top: 0, right: 1200, bottom: 248 } },
-  { id: "c", span: 4, rect: { left: 0, top: 264, right: 389, bottom: 512 } },
-  { id: "d", span: 4, rect: { left: 405, top: 264, right: 795, bottom: 512 } },
-  { id: "e", span: 4, rect: { left: 811, top: 264, right: 1200, bottom: 512 } },
+  {
+    id: "a",
+    span: 6,
+    rows: 3,
+    rect: { left: 0, top: 0, right: 592, bottom: 248 },
+  },
+  {
+    id: "b",
+    span: 6,
+    rows: 3,
+    rect: { left: 608, top: 0, right: 1200, bottom: 248 },
+  },
+  {
+    id: "c",
+    span: 4,
+    rows: 3,
+    rect: { left: 0, top: 264, right: 389, bottom: 512 },
+  },
+  {
+    id: "d",
+    span: 4,
+    rows: 3,
+    rect: { left: 405, top: 264, right: 795, bottom: 512 },
+  },
+  {
+    id: "e",
+    span: 4,
+    rows: 3,
+    rect: { left: 811, top: 264, right: 1200, bottom: 512 },
+  },
 ];
 const GRID_WIDTH = 1200;
 
@@ -57,11 +82,13 @@ describe("finalPositionAt: which position the pointer is over", () => {
       {
         id: "x",
         span: 12,
+        rows: 3,
         rect: { left: 0, top: 0, right: 1200, bottom: 248 },
       },
       {
         id: "y",
         span: 12,
+        rows: 3,
         rect: { left: 0, top: 264, right: 1200, bottom: 512 },
       },
     ];
@@ -95,11 +122,63 @@ describe("dropLineFor: where the line is drawn", () => {
   });
 
   it("centres a vertical line in the wider gap across from a 1,280 px grid", () => {
-    // 🔴 The same move on a 1,440 px grid, whose columns sit 24 px apart: the line is 12 px
-    // past `c`, where a fixed gap would put it 8 px past and off the gap's centre.
+    // 🔴 The same move on a 1,440 px grid, whose columns are 98 px with 24 px between them:
+    // column four ends at 464 and column five starts at 488, so the line is at 476, the gap's
+    // centre. A fixed 16 px gap would put it at 477, off that centre.
     expect(dropLineFor(CARDS, 4, 3, 1440)).toMatchObject({
       orientation: "vertical",
-      x: 401,
+      x: 476,
+    });
+  });
+
+  it("places a card beside a taller one, under a shorter one, as the grid does", () => {
+    // 🔴 A tall half (four rows) and a short half (two rows), then a half moved after them.
+    // The grid puts it in the right-hand columns under the short half, beside the tall one's
+    // lower rows. Counting columns alone, it starts a row of its own after twelve columns and
+    // the line runs across the whole grid, below cards the card does not go below.
+    const cards: DrawnCard[] = [
+      {
+        id: "tall",
+        span: 6,
+        rows: 4,
+        rect: { left: 0, top: 0, right: 592, bottom: 336 },
+      },
+      {
+        id: "short",
+        span: 6,
+        rows: 2,
+        rect: { left: 608, top: 0, right: 1200, bottom: 160 },
+      },
+      {
+        id: "moved",
+        span: 6,
+        rows: 2,
+        rect: { left: 0, top: 352, right: 592, bottom: 512 },
+      },
+      {
+        id: "last",
+        span: 6,
+        rows: 2,
+        rect: { left: 608, top: 352, right: 1200, bottom: 512 },
+      },
+    ];
+    // `last` to just after `short`: it lands under `short`, at row three, column seven.
+    expect(dropLineFor(cards, 3, 2, GRID_WIDTH)).toEqual({
+      orientation: "vertical",
+      x: 600,
+      top: 176,
+      length: 160,
+    });
+    // The must-differ half: two full-height halves leave no room beside them, so the next half
+    // starts a row, and that line does run across the grid.
+    const even = cards.map(card =>
+      card.id === "short" ? { ...card, rows: 4 } : card
+    );
+    expect(dropLineFor(even, 3, 2, GRID_WIDTH)).toEqual({
+      orientation: "horizontal",
+      y: 344,
+      x: 0,
+      length: GRID_WIDTH,
     });
   });
 
