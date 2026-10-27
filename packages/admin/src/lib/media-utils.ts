@@ -1,4 +1,4 @@
-import type { MediaType } from "@admin/types/media";
+import type { Media, MediaType } from "@admin/types/media";
 
 /**
  * Determine media type from MIME type.
@@ -73,4 +73,36 @@ export function getMediaTypeBadgeVariant(
  */
 export function copyableMediaUrl(url: string): string {
   return new URL(url, window.location.origin).href;
+}
+
+/**
+ * Where to draw an item's whole image from.
+ *
+ * The stored thumbnail is a square cut from the middle of the image, so it
+ * shows the whole picture only when the picture is square. Anything else is
+ * drawn from the file itself, which a tile then fits inside its frame. Unknown
+ * dimensions count as not square: a crop shown as the whole image is the
+ * mistake this exists to prevent, and a larger download is the safe side.
+ */
+export function wholeImageSrc(
+  media: Pick<Media, "url" | "thumbnailUrl" | "width" | "height">
+): string {
+  const square =
+    typeof media.width === "number" &&
+    media.width > 0 &&
+    media.width === media.height;
+  return square && media.thumbnailUrl ? media.thumbnailUrl : media.url;
+}
+
+/**
+ * The day an item was uploaded, as the library shows it in the list's column
+ * and in the details panel. One formatter, so the two never disagree.
+ */
+export function formatUploadedDate(date: Date | string): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }

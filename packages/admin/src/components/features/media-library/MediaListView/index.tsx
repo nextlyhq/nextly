@@ -40,7 +40,11 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
-import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
+import {
+  formatFileSize,
+  formatUploadedDate,
+  getMediaType,
+} from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media } from "@admin/types/media";
 
@@ -102,16 +106,6 @@ function formatDimensions(
 ): string {
   if (width && height) return `${width} x ${height}`;
   return "-";
-}
-
-// Format date for display
-function formatDate(date: Date | string): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 export function MediaListView({
@@ -209,7 +203,7 @@ export function MediaListView({
         align: "right",
         cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatDate(value as string | Date)}
+            {formatUploadedDate(value as string | Date)}
           </span>
         ),
       },
