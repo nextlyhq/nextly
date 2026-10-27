@@ -423,8 +423,8 @@ function missingCard(
 }
 
 /**
- * A card drawn by a component, or `undefined` for any other: its error where the component is
- * missing, the component with no answer to wait for, or a declared widget's with its answer.
+ * The card for its outcome: its error where its component is missing, the component with no
+ * answer to wait for, a declared widget's component with its answer, or the frame's own state.
  *
  * A component drawn with the batch's answer: `custom` may carry a query, which the grid puts in
  * the batch rather than leaving the component to ask again. `undefined` while that answer is on
@@ -433,7 +433,7 @@ function missingCard(
  * say it: the slot holds the PREVIOUS answer during a refetch and is indistinguishable from
  * idle. The frame marks the card busy then, as for any card.
  */
-function componentCard(
+function cardFor(
   definition: WidgetRendererProps["definition"],
   shared: ReturnType<typeof sharedCardProps>,
   outcome: WidgetOutcome,
@@ -445,7 +445,7 @@ function componentCard(
     isFetching: boolean;
     onRetry: (() => void) | undefined;
   }
-): JSX.Element | undefined {
+): JSX.Element {
   if (live.missing !== undefined) {
     return missingCard(shared, live.missing, live.isFetching);
   }
@@ -460,7 +460,12 @@ function componentCard(
   if (outcome.state === "answered") {
     return declaredCard(definition, shared, outcome.data, live.draw, live);
   }
-  return undefined;
+  const drawn = cardForOutcome(outcome, live);
+  return (
+    <WidgetCard {...shared} state={drawn.state}>
+      {drawn.body}
+    </WidgetCard>
+  );
 }
 
 export function WidgetRenderer({
@@ -508,7 +513,7 @@ export function WidgetRenderer({
     onRetry,
   });
 
-  const byComponent = componentCard(definition, shared, outcome, {
+  return cardFor(definition, shared, outcome, {
     missing,
     draw,
     componentProps,
@@ -516,12 +521,4 @@ export function WidgetRenderer({
     isFetching,
     onRetry,
   });
-  if (byComponent !== undefined) return byComponent;
-
-  const drawn = cardForOutcome(outcome, { isFetching, onRetry });
-  return (
-    <WidgetCard {...shared} state={drawn.state}>
-      {drawn.body}
-    </WidgetCard>
-  );
 }
