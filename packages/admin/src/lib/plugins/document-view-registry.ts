@@ -113,8 +113,13 @@ function addressableFieldsWithin<F extends object>(
   });
 }
 
-/** The addressable fields alone, derived from the one walk above. */
-function addressableFields<F extends object>(
+/**
+ * The addressable fields alone, derived from the one walk above. Shared with
+ * a past version's changes view, which marks, folds and counts fields at
+ * this same level, so an unnamed group's fields are judged where the
+ * document keeps them.
+ */
+export function addressableFields<F extends object>(
   fields: readonly F[] | undefined
 ): F[] {
   return addressableFieldsWithin(fields).map(entry => entry.field);

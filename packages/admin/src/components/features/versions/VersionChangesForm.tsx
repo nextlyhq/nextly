@@ -18,6 +18,7 @@ import { Fragment } from "react";
 import type { JSX } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
+import { addressableFields } from "@admin/lib/plugins/document-view-registry";
 import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
@@ -67,7 +68,7 @@ function stretchesOf(
       stretches.push({ kind: "changed", name });
       continue;
     }
-    if (name !== undefined && holdsWithheld(name)) {
+    if (fieldHoldsWithheld(field, holdsWithheld)) {
       stretches.push({ kind: "withheld", field });
       continue;
     }
@@ -76,6 +77,26 @@ function stretchesOf(
     else stretches.push({ kind: "unchanged", fields: [field] });
   }
   return stretches;
+}
+
+/**
+ * Whether a field of the form holds anything the read held back. An unnamed
+ * group is presentation only: it lays its fields out on the document itself,
+ * where the read names them (`secret`, not `group.secret`), so it is asked
+ * through every field it lays out, at any depth, by the walk that answers
+ * which fields a document addresses at its own level. A named field is asked
+ * by its own path, which covers what lies inside it.
+ */
+function fieldHoldsWithheld(
+  field: FieldConfig,
+  holdsWithheld: (path: string) => boolean
+): boolean {
+  return addressableFields([field]).some(
+    laidOut =>
+      "name" in laidOut &&
+      typeof laidOut.name === "string" &&
+      holdsWithheld(laidOut.name)
+  );
 }
 
 export interface VersionChangesFormProps {

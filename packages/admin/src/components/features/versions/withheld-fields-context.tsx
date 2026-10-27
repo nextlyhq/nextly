@@ -19,9 +19,32 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
-const NONE: ReadonlySet<string> = new Set<string>();
+/**
+ * What the read held back, read two ways from the one list: the paths
+ * themselves, and every path that holds one of them, the path and each of
+ * its containers (`meta` and `meta.secret` for `meta.secret`). Both are made
+ * once, where the list arrives, so asking of any field is a lookup.
+ */
+interface Withheld {
+  paths: ReadonlySet<string>;
+  holding: ReadonlySet<string>;
+}
 
-const WithheldFieldsContext = createContext<ReadonlySet<string>>(NONE);
+const NONE: Withheld = { paths: new Set(), holding: new Set() };
+
+const WithheldFieldsContext = createContext<Withheld>(NONE);
+
+/** Each path, and each container above it, by its own path. */
+function holdingPaths(paths: readonly string[]): ReadonlySet<string> {
+  const holding = new Set<string>();
+  for (const path of paths) {
+    const parts = path.split(".");
+    for (let end = 1; end <= parts.length; end++) {
+      holding.add(parts.slice(0, end).join("."));
+    }
+  }
+  return holding;
+}
 
 export function WithheldFieldsProvider({
   paths,
@@ -32,7 +55,10 @@ export function WithheldFieldsProvider({
   children: ReactNode;
 }) {
   const withheld = useMemo(
-    () => (paths.length === 0 ? NONE : new Set(paths)),
+    () =>
+      paths.length === 0
+        ? NONE
+        : { paths: new Set(paths), holding: holdingPaths(paths) },
     [paths]
   );
   return (
@@ -51,7 +77,9 @@ export function useWithheldFields(): (
 ) => boolean {
   const withheld = useContext(WithheldFieldsContext);
   return fieldPath =>
-    fieldPath !== undefined && fieldPath !== "" && withheld.has(fieldPath);
+    fieldPath !== undefined &&
+    fieldPath !== "" &&
+    withheld.paths.has(fieldPath);
 }
 
 /**
@@ -62,12 +90,7 @@ export function useWithheldFields(): (
  */
 export function useHoldsWithheld(): (fieldPath: string) => boolean {
   const withheld = useContext(WithheldFieldsContext);
-  return fieldPath => {
-    if (fieldPath === "") return false;
-    if (withheld.has(fieldPath)) return true;
-    const below = `${fieldPath}.`;
-    return [...withheld].some(path => path.startsWith(below));
-  };
+  return fieldPath => fieldPath !== "" && withheld.holding.has(fieldPath);
 }
 
 /**
