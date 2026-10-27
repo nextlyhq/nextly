@@ -844,6 +844,11 @@ interface FilteredWriteCheck {
   };
 }
 
+/** A filter a write in the caller's own transaction was judged by. */
+interface FilteredTransactionWrite extends FilteredWriteCheck {
+  schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+}
+
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -7742,6 +7747,11 @@ export class CollectionMutationService extends BaseService {
     // stall against a small pool. Omitted (pooled connection) when a path
     // pre-resolves before opening its transaction, which is the common case.
     executor?: unknown;
+    /**
+     * A move the caller judges itself, with the filter its rule may answer,
+     * which is not asked here: it is left `null` for the caller to fill.
+     */
+    askedByCaller?: "publish" | "unpublish";
   }): Promise<TransitionAuthorization> {
     if (args.overrideAccess) {
       return { publishDenied: null, unpublishDenied: null };
@@ -7756,27 +7766,22 @@ export class CollectionMutationService extends BaseService {
     // Resolve both concurrently; each is judged on the caller's own grant (a
     // scoped API key on its scope), never route-authorized — the route attested
     // update/create, never publish/unpublish.
+    const asked = (operation: "publish" | "unpublish") =>
+      operation === args.askedByCaller
+        ? Promise.resolve(null)
+        : this.accessService.checkCollectionAccess({
+            collectionName: args.collectionName,
+            operation,
+            entryId: args.entryId,
+            user: args.accessUser,
+            overrideAccess: args.overrideAccess,
+            routeAuthorized: false,
+            authenticatedScope: args.authenticatedScope,
+            executor: args.executor,
+          });
     const [publishDenied, unpublishDenied] = await Promise.all([
-      this.accessService.checkCollectionAccess({
-        collectionName: args.collectionName,
-        operation: "publish",
-        entryId: args.entryId,
-        user: args.accessUser,
-        overrideAccess: args.overrideAccess,
-        routeAuthorized: false,
-        authenticatedScope: args.authenticatedScope,
-        executor: args.executor,
-      }),
-      this.accessService.checkCollectionAccess({
-        collectionName: args.collectionName,
-        operation: "unpublish",
-        entryId: args.entryId,
-        user: args.accessUser,
-        overrideAccess: args.overrideAccess,
-        routeAuthorized: false,
-        authenticatedScope: args.authenticatedScope,
-        executor: args.executor,
-      }),
+      asked("publish"),
+      asked("unpublish"),
     ]);
     return { publishDenied, unpublishDenied };
   }
@@ -11245,6 +11250,97 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The refusal of a write inside the caller's own transaction by the gate
+   * `params` names, asked on that transaction: the gate's own refusal or,
+   * where its rule answers a filter, that of an entry outside it. An entry
+   * inside the filter has it added to `filteredWrites`, which the written row
+   * is matched against again before the write may stand.
+   */
+  private async refusalOfWriteInTransaction(
+    tx: TransactionContext,
+    params: FilteredWriteCheck["params"],
+    filteredWrites: FilteredTransactionWrite[]
+  ): Promise<CollectionServiceResult | null> {
+    const access = await this.accessService.checkCollectionWrite(params);
+    if (access.denied) return access.denied;
+    const prepared = await this.matchInTransaction(
+      tx,
+      params.operation,
+      access,
+      params.collectionName
+    );
+    if (!prepared) return null;
+    const outside = await this.refusalOutsideWriteFilter(
+      tx.getDrizzle<typeof this.db>(),
+      prepared.schema,
+      String(params.entryId),
+      prepared.match,
+      params
+    );
+    if (!outside) filteredWrites.push({ ...prepared, params });
+    return outside;
+  }
+
+  /**
+   * The transition authorization of an update inside the caller's own
+   * transaction, asked on it. The one move the status this write names can
+   * make (`"published"` publishes; any other value unpublishes) is judged as
+   * the single update judges it: not again where its gate judged the write
+   * already, else by that gate with its filter, the entry matched against it
+   * now and again after the write. The other move cannot follow from that
+   * status, and is asked as before.
+   */
+  private async transitionAuthorizationInTransaction(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      hasLifecycle: boolean;
+      namedStatus: unknown;
+      judgedLifecycle?: "publish" | "unpublish";
+      filteredWrites: FilteredTransactionWrite[];
+    }
+  ): Promise<TransitionAuthorization> {
+    const named =
+      args.overrideAccess ||
+      !args.hasLifecycle ||
+      args.namedStatus === undefined
+        ? undefined
+        : args.namedStatus === "published"
+          ? "publish"
+          : "unpublish";
+    const auth = await this.resolveTransitionAuthorization({
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      accessUser: args.overrideAccess ? undefined : args.user,
+      overrideAccess: args.overrideAccess,
+      executor: tx.getDrizzle(),
+      askedByCaller: named,
+    });
+    if (!named || named === args.judgedLifecycle) return auth;
+    const denied = await this.refusalOfWriteInTransaction(
+      tx,
+      {
+        collectionName: args.collectionName,
+        operation: named,
+        entryId: args.entryId,
+        user: args.user,
+        overrideAccess: args.overrideAccess,
+        routeAuthorized: false,
+        authenticatedScope: args.authenticatedScope,
+        executor: tx.getDrizzle(),
+      },
+      args.filteredWrites
+    );
+    return named === "publish"
+      ? { ...auth, publishDenied: denied }
+      : { ...auth, unpublishDenied: denied };
+  }
+
+  /**
    * A filtered write's match, prepared on the caller's transaction: the
    * collection's schema and the filter's facts are read on it, as every read
    * a write in a caller's transaction makes is. `undefined` where the caller
@@ -12521,15 +12617,12 @@ export class CollectionMutationService extends BaseService {
     // return, so a committed item whose after-hook then throws still surfaces
     // its intent to the batch caller.
     let revalidationIntent: RevalidationIntent | undefined;
-    // The filter this write was judged by, where its rule answered one: the
-    // written row is matched against it again before the write may stand.
-    let filteredWrite:
-      | {
-          schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
-          match: FilteredWriteMatch;
-          params: FilteredWriteCheck["params"];
-        }
-      | undefined;
+    // The filters this write was judged by, where a rule answered one: the
+    // written row is matched against each again before the write may stand.
+    const filteredWrites: FilteredTransactionWrite[] = [];
+    // The publish or unpublish gate that judged a write changing the status
+    // alone, which its transition is not asked of again.
+    let judgedLifecycle: "publish" | "unpublish" | undefined;
     try {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
@@ -12582,7 +12675,10 @@ export class CollectionMutationService extends BaseService {
         // Handed on as the status alone: the system columns a status-only body
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
-        if (gate !== "update") body = { status: body.status };
+        if (gate !== "update") {
+          body = { status: body.status };
+          judgedLifecycle = gate;
+        }
         // The transaction API asks the access service for the whole verdict,
         // with the caller's overrideAccess / routeAuthorized forwarded.
         const gateParams = {
@@ -12599,31 +12695,14 @@ export class CollectionMutationService extends BaseService {
           authenticatedScope: params.authenticatedScope,
           executor: tx.getDrizzle(),
         };
-        const access =
-          await this.accessService.checkCollectionWrite(gateParams);
-        if (access.denied) {
-          return access.denied;
-        }
-        // A rule that answers a filter allows only the entries it matches:
-        // matched on the caller's transaction, against the row it already
-        // holds locked, before any hook runs, and again after the write.
-        const prepared = await this.matchInTransaction(
+        // Matched on the caller's transaction, against the row it already
+        // holds locked, before any hook runs.
+        const refused = await this.refusalOfWriteInTransaction(
           tx,
-          gate,
-          access,
-          params.collectionName
+          gateParams,
+          filteredWrites
         );
-        if (prepared) {
-          const outside = await this.refusalOutsideWriteFilter(
-            tx.getDrizzle<typeof this.db>(),
-            prepared.schema,
-            entryId,
-            prepared.match,
-            gateParams
-          );
-          if (outside) return outside;
-          filteredWrite = { ...prepared, params: gateParams };
-        }
+        if (refused) return refused;
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -12880,17 +12959,22 @@ export class CollectionMutationService extends BaseService {
       // before this shared transaction, so a concurrent writer cannot slip a
       // transition past the gate and no permission read runs inside the batch's
       // transaction.
+      //
+      // This fallback fires only for a direct caller-owned-tx write (the bulk
+      // paths always pre-resolve and pass transitionAuth), so its reads run on
+      // this transaction's connection rather than re-entering the pool.
       const transitionAuth =
         params.transitionAuth ??
-        (await this.resolveTransitionAuthorization({
+        (await this.transitionAuthorizationInTransaction(tx, {
           collectionName: params.collectionName,
           entryId,
-          accessUser: params.overrideAccess ? undefined : params.user,
+          user: params.user,
           overrideAccess: params.overrideAccess,
-          // This fallback fires only for a direct caller-owned-tx write (the bulk
-          // paths always pre-resolve and pass transitionAuth), so bind the reads
-          // to this transaction's connection rather than re-entering the pool.
-          executor: tx.getDrizzle(),
+          authenticatedScope: params.authenticatedScope,
+          hasLifecycle: (collection as { status?: boolean }).status === true,
+          namedStatus: finalData.status,
+          judgedLifecycle,
+          filteredWrites,
         }));
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
@@ -13122,17 +13206,19 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // The write may not move the entry out of the filter that judged it.
+      // The write may not move the entry out of a filter that judged it.
       // In the caller's transaction a returned failure would leave the row
       // written, so the refusal aborts the transaction, as a write that
-      // cannot stand does.
+      // cannot stand does. Every filter is of this one collection, so the
+      // first one's schema serves each.
+      const [firstFilter] = filteredWrites;
       const movedOut =
-        filteredWrite &&
+        firstFilter &&
         (await this.refusalMovedOutOfWriteFilters(
           tx,
-          filteredWrite.schema,
+          firstFilter.schema,
           entryId,
-          [filteredWrite]
+          filteredWrites
         ));
       if (movedOut) {
         throw markWriteIntegrityFailure(errorFromServiceEnvelope(movedOut));

@@ -268,6 +268,43 @@ describe("an update rule that answers a filter", () => {
 });
 
 describe("a publish or unpublish rule that answers a filter", () => {
+  it("publishes an entry the filter matches inside the caller's transaction, and refuses another's", async () => {
+    // A status-only write, judged by the publish rule alone, as a plugin
+    // service writes it.
+    const t = await boot();
+    const { own, others } = await seed(t, OPEN_POSTS);
+    const othersBefore = await stored(t, OPEN_POSTS, others);
+
+    const published = await updateInTransaction(t, own, {
+      status: "published",
+    });
+    const refused = await updateInTransaction(t, others, {
+      status: "published",
+    });
+
+    expect(published.result?.success).toBe(true);
+    expect((await stored(t, OPEN_POSTS, own))?.status).toBe("published");
+    expect(statusOf(refused)).toBe(403);
+    expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
+  });
+
+  it("publishes an edit of an entry both filters match inside the caller's transaction", async () => {
+    // An edit that also publishes is judged by the update rule and by the
+    // publish rule, each filter matching the author's own post.
+    const t = await boot();
+    const { own } = await seed(t, OPEN_POSTS);
+
+    const written = await updateInTransaction(t, own, {
+      title: "renamed",
+      status: "published",
+    });
+
+    expect(written.result?.success).toBe(true);
+    const row = await stored(t, OPEN_POSTS, own);
+    expect(row?.title).toBe("renamed");
+    expect(row?.status).toBe("published");
+  });
+
   it("publishes an entry the filter matches, and refuses another's, leaving it", async () => {
     const t = await boot();
     const { own, others } = await seed(t, OPEN_POSTS);
