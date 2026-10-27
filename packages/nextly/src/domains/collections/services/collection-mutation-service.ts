@@ -37,7 +37,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { holdsGrant } from "../../../auth/access/gate-adapters";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
-import { askEachLanguage } from "../../../auth/access/rule-language";
+import {
+  askEachLanguage,
+  currentRuleLanguage,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -8749,7 +8752,7 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
           languages: askedBeforeHooks,
           ask: () =>
-            this.accessService.checkCollectionAccess({
+            this.refusalOfLifecycleInLanguage(writeFilters, schema, {
               collectionName: params.collectionName,
               operation: "publish",
               entryId: params.entryId,
@@ -9112,21 +9115,6 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const transitionDenied = () =>
-          this.accessService.checkCollectionAccess({
-            collectionName: params.collectionName,
-            operation: transitionOp,
-            entryId: params.entryId,
-            user: accessUser,
-            overrideAccess: params.overrideAccess,
-            // Never route-authorized: the route authorizes the write as `update`,
-            // never as `publish`/`unpublish`, so the RBAC check must run.
-            routeAuthorized: false,
-            // A scoped API key is judged on its OWN publish/unpublish grant here,
-            // not the key owner's — the route only checked `update` against the
-            // key's scope.
-            authenticatedScope: params.authenticatedScope,
-          });
         if (sweepAllLocales && transitionOp === "publish") {
           // A write to every language that publishes asks the publish rule
           // once for each language it puts live, each time told that language
@@ -9153,7 +9141,20 @@ export class CollectionMutationService extends BaseService {
                     collectionName: params.collectionName,
                     entryId: params.entryId,
                     languages: askedLanguages,
-                    ask: transitionDenied,
+                    // Each language's rule may answer a filter, matched in it.
+                    // Never route-authorized: a route authorizes the write as
+                    // an update, never as a publish. A scoped key is judged on
+                    // its own grant.
+                    ask: () =>
+                      this.refusalOfLifecycleInLanguage(writeFilters, schema, {
+                        collectionName: params.collectionName,
+                        operation: transitionOp,
+                        entryId: params.entryId,
+                        user: accessUser,
+                        overrideAccess: params.overrideAccess,
+                        routeAuthorized: false,
+                        authenticatedScope: params.authenticatedScope,
+                      }),
                   })) ?? null)
                 : null,
             askedLanguages,
@@ -11671,6 +11672,31 @@ export class CollectionMutationService extends BaseService {
       .where(eq(schema.id as never, entryId))
       .limit(1);
     return writeMatchOf(row);
+  }
+
+  /**
+   * A publish or unpublish asked in the rule language now, as asking it in
+   * each language a write to every language puts live sets it: the gate's
+   * refusal or, where its rule answers a filter, that of an entry the filter
+   * does not match in that language. An entry it matches has the filter, in
+   * that language, added to `checks`, so the write matches it again under
+   * the row lock and once it is written.
+   */
+  private async refusalOfLifecycleInLanguage(
+    checks: FilteredWriteCheck[],
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    params: FilteredWriteCheck["params"]
+  ): Promise<CollectionServiceResult | null> {
+    const access = await this.accessService.checkCollectionWrite(params);
+    return (
+      access.denied ??
+      (await this.addWriteFilter(checks, {
+        schema,
+        access,
+        params,
+        locale: currentRuleLanguage().locale,
+      }))
+    );
   }
 
   /**
