@@ -388,6 +388,83 @@ async function releaseGrants(
   });
 }
 
+/**
+ * Takes back each grant a disabled plugin declared where boot seeding recorded
+ * it and Public still holds it, and forgets it, so enabling the plugin again
+ * grants it again. One Public no longer holds was taken away by an owner and
+ * stays recorded, so enabling never grants it back. One in `kept` is left
+ * alone. Each removal is logged, once: it is no longer recorded, so no later
+ * boot takes it back.
+ */
+async function withdrawGrants(
+  roleId: string,
+  ids: ReadonlyMap<string, string>,
+  withheld: ReturnType<PublicReadGrantSeeding["declared"]>["withheld"],
+  kept: ReadonlySet<string>,
+  {
+    withdraw,
+    meta,
+    logger,
+  }: Pick<PublicReadGrantSeeding, "withdraw" | "meta" | "logger">
+): Promise<void> {
+  const withdrawing = new Map(
+    withheld.flatMap(({ action, resource, owner }) => {
+      const slug = permissionSlug(action, resource);
+      const id = ids.get(slug);
+      return id === undefined || kept.has(id)
+        ? []
+        : [[id, { slug, owner, action, resource }] as const];
+    })
+  );
+  if (withdrawing.size === 0) return;
+  const removed = await withdraw(
+    roleId,
+    [...withdrawing].map(([id, { action, resource }]) => ({
+      id,
+      action,
+      resource,
+    })),
+    (held, executor) => releaseGrants(meta, roleId, held, executor)
+  );
+  for (const id of removed) {
+    const { slug, owner } = withdrawing.get(id)!;
+    logger.warn(
+      `[Nextly] Removed "${slug}" from the Public role: the plugin "${owner}" that declared it is disabled.`
+    );
+  }
+}
+
+/**
+ * Takes back what disabled plugins had Public granted, alone, for a boot that
+ * cannot grant: one where some permission failed to seed. Taking back needs
+ * no permission made. A plugin still enabled keeps what it declares; a read
+ * a rule opens is not asked here, so one a disabled plugin also declares is
+ * taken back and granted again by the next whole boot.
+ */
+export async function withdrawDisabledPluginGrants(
+  deps: Pick<
+    PublicReadGrantSeeding,
+    | "publicRoleId"
+    | "permissionIds"
+    | "declared"
+    | "withdraw"
+    | "meta"
+    | "logger"
+  >
+): Promise<void> {
+  const roleId = await deps.publicRoleId();
+  if (roleId === null) return;
+  const ids = await deps.permissionIds();
+  const { grants, withheld } = deps.declared();
+  const kept = new Set(
+    grants.flatMap(({ action, resource }) => {
+      const id = ids.get(permissionSlug(action, resource));
+      return id === undefined ? [] : [id];
+    })
+  );
+  await withdrawGrants(roleId, ids, withheld, kept, deps);
+}
+
 /** A target, with what its rules said about a visitor. */
 interface Asked {
   target: AccessTarget;
@@ -511,39 +588,15 @@ export async function seedPublicReadGrants({
     const id = ids.get(permissionSlug(action, resource));
     return id === undefined ? [] : [{ id, action, resource }];
   });
-  // A disabled plugin's grant is taken back where boot seeding recorded it
-  // and Public still holds it, and forgotten with it, so enabling the plugin
-  // again grants it again. One Public no longer holds was taken away by an
-  // owner and stays recorded, so enabling never grants it back. One this boot
-  // also wants, such as a read whose rule answers `true`, is left alone.
-  const kept = new Set(wanted.map(({ id }) => id));
-  const withdrawing = new Map(
-    withheld.flatMap(({ action, resource, owner }) => {
-      const slug = permissionSlug(action, resource);
-      const id = ids.get(slug);
-      return id === undefined || kept.has(id)
-        ? []
-        : [[id, { slug, owner, action, resource }] as const];
-    })
+  // One this boot also grants, such as a read whose rule answers `true`, is
+  // not taken back.
+  await withdrawGrants(
+    roleId,
+    ids,
+    withheld,
+    new Set(wanted.map(({ id }) => id)),
+    { withdraw, meta, logger }
   );
-  if (withdrawing.size > 0) {
-    const removed = await withdraw(
-      roleId,
-      [...withdrawing].map(([id, { action, resource }]) => ({
-        id,
-        action,
-        resource,
-      })),
-      (held, executor) => releaseGrants(meta, roleId, held, executor)
-    );
-    // Once: the grant is no longer recorded, so no later boot takes it back.
-    for (const id of removed) {
-      const { slug, owner } = withdrawing.get(id)!;
-      logger.warn(
-        `[Nextly] Removed "${slug}" from the Public role: the plugin "${owner}" that declared it is disabled.`
-      );
-    }
-  }
 
   // Claimed and made in one transaction, under the lock an edit of the
   // role's permissions takes, so a grant is made once: not by two boots at

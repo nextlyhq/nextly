@@ -13,6 +13,7 @@
  * @module plugins/public-grants/collect-public-grants
  */
 import type { PluginDefinition } from "../plugin-context";
+import { resolvePluginSelf } from "../self";
 
 /** The actions a plugin may grant the Public role. */
 const GRANTABLE = new Set(["read", "create"]);
@@ -51,23 +52,19 @@ export function collectPublicGrants(plugins: readonly PluginDefinition[]): {
     // one it made while enabled is withheld for the caller to take back. Its
     // refusals are not reported, since nothing it declares is acted on.
     const enabled = plugin.enabled !== false;
-    const own = new Set(
-      (plugin.contributes?.collections ?? []).map(({ slug }) => slug)
-    );
-    const renameMap = plugin.renameMap ?? {};
+    // Its own collections, declared slug to the slug the host installed it
+    // under: the map `ctx.self` reads, so a grant lands on the collection the
+    // plugin's own code works on.
+    const own = resolvePluginSelf(plugin).collections;
     for (const { collection, action } of plugin.contributes?.publicGrants ??
       []) {
-      if (!own.has(collection) || !GRANTABLE.has(action)) {
+      if (!Object.hasOwn(own, collection) || !GRANTABLE.has(action)) {
         if (enabled) refused.push({ action, collection, owner: plugin.name });
         continue;
       }
       (enabled ? grants : withheld).push({
         action,
-        // `Object.hasOwn`, for a slug such as `constructor`, which a plain
-        // lookup would answer with an inherited function.
-        resource: Object.hasOwn(renameMap, collection)
-          ? renameMap[collection]
-          : collection,
+        resource: own[collection],
         owner: plugin.name,
       });
     }

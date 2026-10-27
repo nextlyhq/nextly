@@ -10,7 +10,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../../services/shared";
 
-import { permissionIdsBySlug, seedPublicReadGrants } from "./public-read-grant";
+import {
+  permissionIdsBySlug,
+  seedPublicReadGrants,
+  withdrawDisabledPluginGrants,
+} from "./public-read-grant";
 
 const quiet = {
   debug() {},
@@ -283,6 +287,73 @@ describe("seedPublicReadGrants timing", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("withdrawDisabledPluginGrants", () => {
+  /**
+   * Public holding `create-tickets`, recorded as boot seeding's grant, and
+   * what a withdrawal took back and logged.
+   */
+  function withdrawal(granted: string[]) {
+    const meta = memoryMeta();
+    meta.rows.set(
+      "public-role-granted",
+      JSON.stringify({ role: "public", granted })
+    );
+    const held = new Set(["p-tickets"]);
+    const warned: string[] = [];
+    const deps = {
+      publicRoleId: async () => "public",
+      permissionIds: async () => new Map([["create-tickets", "p-tickets"]]),
+      declared: () => ({
+        grants: [],
+        withheld: [{ action: "create", resource: "tickets", owner: "tickets" }],
+        refused: [],
+      }),
+      withdraw: async (
+        _roleId: string,
+        unwanted: ReadonlyArray<{ id: string }>,
+        pick: (
+          ids: readonly string[],
+          executor: unknown
+        ) => Promise<readonly string[]>
+      ) => {
+        const removed = await pick(
+          unwanted.map(({ id }) => id).filter(id => held.has(id)),
+          TX
+        );
+        for (const id of removed) held.delete(id);
+        return removed;
+      },
+      meta,
+      logger: {
+        ...quiet,
+        warn: (message: unknown) => warned.push(String(message)),
+      } as unknown as Logger,
+    };
+    return { deps, held, meta, warned };
+  }
+
+  it("takes back and forgets a grant boot seeding recorded, and logs it", async () => {
+    const { deps, held, meta, warned } = withdrawal(["p-tickets"]);
+
+    await withdrawDisabledPluginGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(false);
+    expect(JSON.parse(meta.rows.get("public-role-granted")!).granted).toEqual(
+      []
+    );
+    expect(warned).toEqual([expect.stringContaining('"create-tickets"')]);
+  });
+
+  it("leaves a grant no boot recorded, as an owner gave it", async () => {
+    const { deps, held, warned } = withdrawal([]);
+
+    await withdrawDisabledPluginGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(true);
+    expect(warned).toEqual([]);
   });
 });
 
