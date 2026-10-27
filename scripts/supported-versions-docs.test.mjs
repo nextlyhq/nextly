@@ -20,10 +20,18 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The page that states the supported versions. */
 const CANONICAL = "docs/getting-started/installation.mdx";
-const NEXT_RANGE = "`^16.4.1`";
-const REACT_RANGE = "`^19.3.0`";
+// Read from the ranges themselves, so a release review that moves them moves
+// what this page is held to as well.
+const NEXT_RANGE = `\`${SUPPORTED_RANGES.next}\``;
+const REACT_RANGE = `\`${SUPPORTED_RANGES.react}\``;
+/** The version a range starts at: `^16.4.1` → `16.4.1`. */
+const versionOf = range => range.replace(/^[\^~]/, "");
 /** Any spelling of either range's version, so a restatement without backticks is caught too. */
-const RANGE_VERSION = /16\.4\.1|19\.3\.0/;
+const RANGE_VERSION = new RegExp(
+  [SUPPORTED_RANGES.next, SUPPORTED_RANGES.react]
+    .map(range => versionOf(range).replaceAll(".", "\\."))
+    .join("|")
+);
 
 /** Every file under `dir` (relative to the repository root) whose name passes `keep`. */
 function filesUnder(dir, keep) {
