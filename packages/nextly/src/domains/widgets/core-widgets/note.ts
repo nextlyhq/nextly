@@ -16,10 +16,11 @@
 
 import { defineWidget } from "../declaration/define-widget";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { NOTE_TEXT } from "./shared";
 
 export const noteWidget = defineWidget({
-  id: "core/note",
+  id: CORE_WIDGET_ID.note,
   title: "Note",
   description: "A note of your own, in Markdown, that only you see.",
   // Any width from a quarter, and as tall as its reader's text wants.

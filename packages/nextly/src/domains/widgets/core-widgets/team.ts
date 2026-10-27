@@ -9,8 +9,10 @@ import type { WidgetDefinition } from "../definition";
 import { TEAM_SOURCE_ID } from "../system-source-ids";
 import { TEAM_GATE } from "../team-gate";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const teamWidget = {
-  id: "core/team",
+  id: CORE_WIDGET_ID.team,
   title: "Team",
   // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
   description: "Your project's team at a glance.",
