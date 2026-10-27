@@ -116,13 +116,14 @@ interface PublicReadGrantSeeding {
     ) => Promise<readonly string[]>
   ) => Promise<readonly string[]>;
   /**
-   * Takes off the role the permission ids `pick` chooses among `ids`, under
-   * the same lock as `addOnce`; `pick` is told the ids among `ids` the role
-   * holds and handed the transaction's executor. The ids removed.
+   * Takes off the role the permissions `pick` chooses among `unwanted`, under
+   * the same lock as `addOnce`, leaving one whose permission was edited
+   * meanwhile into another; `pick` is told the ids still as named that the
+   * role holds and handed the transaction's executor. The ids removed.
    */
   withdraw: (
     roleId: string,
-    ids: readonly string[],
+    unwanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
     pick: (
       held: readonly string[],
       executor: unknown
@@ -522,13 +523,17 @@ export async function seedPublicReadGrants({
       const id = ids.get(slug);
       return id === undefined || kept.has(id)
         ? []
-        : [[id, { slug, owner }] as const];
+        : [[id, { slug, owner, action, resource }] as const];
     })
   );
   if (withdrawing.size > 0) {
     const removed = await withdraw(
       roleId,
-      [...withdrawing.keys()],
+      [...withdrawing].map(([id, { action, resource }]) => ({
+        id,
+        action,
+        resource,
+      })),
       (held, executor) => releaseGrants(meta, roleId, held, executor)
     );
     // Once: the grant is no longer recorded, so no later boot takes it back.

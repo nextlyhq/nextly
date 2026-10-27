@@ -265,6 +265,29 @@ describe.each(getConfiguredTestDialects())(
       expect(removals("create-tickets")).toHaveLength(0);
     });
 
+    it("leaves on Public a permission that no longer grants what it was taken back for", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      const {
+        data: [permission],
+      } = await services(nextly).permissions.listPermissions({
+        action: "create",
+        resource: "tickets",
+      });
+
+      // Named as `read-tickets`, which the row it names does not grant.
+      const removed = await services(
+        nextly
+      ).rolePermissions.withdrawRolePermissions(
+        await publicRoleId(nextly),
+        [{ id: String(permission.id), action: "read", resource: "tickets" }],
+        async ids => ids
+      );
+
+      expect(removed).toEqual([]);
+      expect(await publicHolds(nextly)).toContain("create-tickets");
+    });
+
     it("follows a host's rename of the collection", async () => {
       const nextly = await boot(dialect, { tickets: "issues" });
       await seedPermissionsAndRolePresets();
