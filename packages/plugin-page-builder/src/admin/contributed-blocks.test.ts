@@ -162,6 +162,46 @@ describe("an entry replaced while the editor is open", () => {
   });
 });
 
+describe("an entry whose supports alone change on a reload", () => {
+  it("registers the new support, so a block using its new flag arrives", () => {
+    /*
+     * The blocks registered before stay the same objects, so nothing about
+     * them says the entry changed: only the support does. Kept as the first
+     * object, the support would not know the new flag, and the block using it
+     * would be refused.
+     */
+    const warm = {
+      ...block("acme/warm"),
+      supports: { tone: { warm: true } },
+    } as unknown as AnyBlockDefinition;
+    contributed.registerBlockEditorModules({
+      entries: {
+        [ENTRY]: {
+          supports: [{ key: "tone", flags: ["warm"] }],
+          blocks: [warm],
+        },
+      },
+    });
+    contributed.ensureEditorBlocksRegistered();
+
+    const extended = { key: "tone", flags: ["warm", "cool"] };
+    const cool = {
+      ...block("acme/cool"),
+      supports: { tone: { cool: true } },
+    } as unknown as AnyBlockDefinition;
+    contributed.registerBlockEditorModules({
+      entries: { [ENTRY]: { supports: [extended], blocks: [warm, cool] } },
+    });
+    const quiet = vi.spyOn(console, "warn").mockImplementation(() => {});
+    contributed.ensureEditorBlocksRegistered();
+
+    expect(getSupport("tone")).toBe(extended);
+    expect(getBlock("acme/cool")).toBe(cool);
+    expect(getBlock("acme/warm")).toBe(warm);
+    expect(quiet).not.toHaveBeenCalled();
+  });
+});
+
 describe("an entry holding malformed elements", () => {
   // Each a value a plugin's own JavaScript could export in place of a
   // definition: none may stop the editor mounting, and every well-formed

@@ -214,9 +214,9 @@ export function ensureEditorBlocksRegistered(): void {
 }
 
 /**
- * The entries whose registered blocks are no longer the ones they export: a
- * hot reload handed over a new module for the same path, with new
- * definitions, or with a block taken out.
+ * The entries whose registered blocks or supports are no longer the ones they
+ * export: a hot reload handed over a new module for the same path, with new
+ * definitions, or with one taken out.
  *
  * Compared by identity, which is what separates a remount (the same objects,
  * nothing to do) from a replacement.
@@ -230,12 +230,30 @@ function replacedEntries(read: ReadEntries): Set<string> {
       if (!exported.has(registered)) replaced.add(path);
     }
   }
+  // The supports each entry registered, judged the same way. An entry whose
+  // blocks are unchanged may still have changed a support another plugin's
+  // blocks rely on, and only the support's identity says so.
+  const declared = new Set<unknown>(read.supports.map(each => each.support));
+  for (const [key, { path, support }] of supportSources) {
+    if (getSupport(key) !== support) continue;
+    if (!declared.has(support)) replaced.add(path);
+  }
   return replaced;
 }
 
 /**
+ * Which entry registered each support, by key: the engine records no source
+ * for a support, and a hot reload has to know whose supports went stale.
+ */
+const supportSources = new Map<
+  string,
+  { readonly path: string; readonly support: SupportDefinition }
+>();
+
+/**
  * Empty the registry and put back everything except the replaced entries'
- * blocks, which the caller then registers from their new definitions.
+ * blocks and supports, which the caller then registers from their new
+ * definitions.
  *
  * Rebuilt rather than patched because the engine's registry refuses a second
  * definition for a name and offers no removal: clearing is its one way to let
@@ -247,20 +265,18 @@ function rebuildWithout(
   replaced: ReadonlySet<string>,
   read: ReadEntries
 ): void {
-  const keptSupports = allSupports();
-  const keptBlocks = new Map<string, AnyBlockDefinition[]>();
-  for (const definition of allBlocks()) {
-    const source = getBlockSource(definition.name);
-    if (source === undefined || replaced.has(source)) continue;
-    keptBlocks.set(source, [...(keptBlocks.get(source) ?? []), definition]);
-  }
+  const keptSupports = allSupports().filter(
+    support => !ownedByReplaced(support, replaced)
+  );
+  const keptBlocks = blocksBySource(replaced);
   clearBlocks();
   const declared = new Set(read.supports.map(({ support }) => support.key));
   for (const support of keptSupports) {
-    if (getSupport(support.key) !== undefined || declared.has(support.key)) {
-      continue;
+    // The built-ins are back already, and an entry's own is registered from
+    // its current export just below.
+    if (getSupport(support.key) === undefined && !declared.has(support.key)) {
+      registerSupport(support);
     }
-    registerSupport(support);
   }
   for (const { path, support } of read.supports) {
     registerSupportOnce(path, support);
@@ -272,6 +288,31 @@ function rebuildWithout(
       warnOnce(`rebuild:${source}`, refusal(source, error));
     }
   }
+}
+
+/**
+ * Whether a registered support belongs to a replaced entry, which takes it
+ * along: its new export declares whichever it still has.
+ */
+function ownedByReplaced(
+  support: SupportDefinition,
+  replaced: ReadonlySet<string>
+): boolean {
+  const source = supportSources.get(support.key);
+  return source?.support === support && replaced.has(source.path);
+}
+
+/** Every registered block except the replaced entries', grouped by source. */
+function blocksBySource(
+  replaced: ReadonlySet<string>
+): Map<string, AnyBlockDefinition[]> {
+  const kept = new Map<string, AnyBlockDefinition[]>();
+  for (const definition of allBlocks()) {
+    const source = getBlockSource(definition.name);
+    if (source === undefined || replaced.has(source)) continue;
+    kept.set(source, [...(kept.get(source) ?? []), definition]);
+  }
+  return kept;
 }
 
 /** One contributed support, unless it is already known. */
@@ -288,6 +329,7 @@ function registerSupportOnce(path: string, support: SupportDefinition): void {
   }
   try {
     registerSupport(support);
+    supportSources.set(support.key, { path, support });
   } catch (error) {
     warnOnce(`support:${support.key}`, refusal(path, error));
   }
