@@ -80,24 +80,3 @@ function payloadToSessionUser(payload: NextlyJwtPayload): SessionUser {
 
   return user as SessionUser;
 }
-
-/**
- * Check if a session user has a specific role.
- */
-export function hasRole(user: SessionUser, roleSlug: string): boolean {
-  return user.roleIds.includes(roleSlug);
-}
-
-/**
- * Check if a session user has any of the specified roles.
- */
-export function hasAnyRole(user: SessionUser, roleSlugs: string[]): boolean {
-  return roleSlugs.some(slug => user.roleIds.includes(slug));
-}
-
-/**
- * Check if a session user has all of the specified roles.
- */
-export function hasAllRoles(user: SessionUser, roleSlugs: string[]): boolean {
-  return roleSlugs.every(slug => user.roleIds.includes(slug));
-}

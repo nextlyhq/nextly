@@ -1,18 +1,46 @@
 import { container } from "@nextly/di/container";
-import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 
+import { readOrGenerateRequestId } from "../../api/request-id";
+import {
+  isTruthyParam,
+  parseWhereParam,
+} from "../../dispatcher/helpers/validation";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../errors/error-codes";
+import { NextlyError } from "../../errors/nextly-error";
 import { presentedApiKey } from "../../middleware/rest-callers";
 import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
+import { answerForRefusal } from "../access/gate-adapters";
+import {
+  refusalMessageFor,
+  type RefusalScope,
+} from "../access/refusal-message";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
 } from "../access/route-gate-adapters";
-import { type GrantedPermission } from "../authenticated-scope";
+import {
+  everyLanguage,
+  registeredReadLanguagesFor,
+  registeredWriteAsNamedLanguagesFor,
+  registeredWriteLanguagesFor,
+  type RuleLanguage,
+  withRuleLanguage,
+} from "../access/rule-language";
+import type { GrantedPermission } from "../authenticated-scope";
 import { getSession } from "../session";
+import { startServicesForAuthentication } from "../session/session-standing";
 
 import { apiKeyRateLimitRefusal } from "./api-key-budget";
 import { createErrorResponse, type ErrorResponse } from "./error-response";
@@ -61,6 +89,65 @@ function getApiKeyService(): ApiKeyService | undefined {
     // DI container not initialized yet — safe to ignore
   }
   return undefined;
+}
+
+/**
+ * The key service, with the services started first when this process has not
+ * started them, through the same start the session check uses
+ * (`startServicesForAuthentication`).
+ *
+ * A key was presented, so a service that cannot be had is answered as a
+ * refusal rather than as "no key": falling through would treat a bearer token
+ * as unauthenticated. The refusal is the typed error's own status and generic
+ * message; why it happened goes to the log only, as a failed start can carry a
+ * driver's message naming hosts and credentials.
+ */
+async function startedApiKeyService(
+  req: Request
+): Promise<ApiKeyService | ErrorResponse> {
+  // A process whose key service is registered looks the key up with it, as
+  // the REST limit's own lookup does: the start is for a process that has
+  // none, and asking it of one already up only adds a wait to every request.
+  const registered = getApiKeyService();
+  if (registered) return registered;
+  let failure: NextlyError;
+  try {
+    await startServicesForAuthentication();
+    const service = getApiKeyService();
+    if (service) return service;
+    failure = NextlyError.serviceUnavailable({
+      logContext: {
+        reason: "api-key-read-before-nextly-initialised",
+        remedy:
+          "An API key was presented before Nextly was initialised in this " +
+          "process, and nothing loaded here can start it, so the key cannot " +
+          "be looked up. Call `await getNextly({ config })` before " +
+          "authenticating, or initialise Nextly in `instrumentation.ts` " +
+          "with `createRegister(config)`.",
+      },
+    });
+  } catch (error) {
+    // A typed error from the boot or its migrations gate already says what
+    // went wrong; anything else is a start that failed for a reason only the
+    // log may carry.
+    failure = NextlyError.is(error)
+      ? error
+      : NextlyError.serviceUnavailable({
+          cause: error instanceof Error ? error : undefined,
+          logContext: { reason: "api-key-services-failed-to-start" },
+        });
+  }
+  getNextlyLogger().error({
+    kind: "api-key-auth-unavailable",
+    ...failure.toLogJSON(readOrGenerateRequestId(req)),
+  });
+  return createErrorResponse(
+    failure.statusCode,
+    failure.publicMessage,
+    failure.publicMessage,
+    undefined,
+    failure.code
+  );
 }
 
 /**
@@ -114,6 +201,14 @@ export interface AuthContext {
   claims?: Record<string, unknown>;
 }
 
+/** Why a presented key was refused, as the server's log says it. */
+const KEY_REFUSED_BECAUSE: Readonly<Record<ApiKeyRefusalCause, string>> = {
+  unknown: "the API key is not one this site issued",
+  revoked: "the API key is revoked",
+  expired: "the API key has expired",
+  "creator-inactive": "the API key's creator is not active",
+};
+
 /**
  * API key authentication middleware.
  *
@@ -132,6 +227,11 @@ export interface AuthContext {
  *   has been exceeded. Includes `Retry-After` (seconds), `X-RateLimit-Limit`, and
  *   `X-RateLimit-Remaining` headers. Callers MUST propagate this via
  *   `createJsonErrorResponse()` so headers are forwarded to the client.
+ *
+ * - `ErrorResponse { statusCode: 503 }` — the services a key is looked up
+ *   through could not be started in this process. A cold process starts them
+ *   first, as a session check does, so this answers only a start that failed
+ *   or a process where nothing can start them.
  *
  * - `{ userId, permissions, roles }` — the key is valid and within rate limit.
  *   `permissions` is the resolved array of permission slugs for this key's token type.
@@ -165,29 +265,32 @@ export async function requireApiKeyAuth(req: Request): Promise<
   // budget when it resolved: its answer stands, so the key is neither looked
   // up again nor counted twice.
   const known = currentRestLimitGate(req)?.knownKey(rawKey);
-  const apiKeyService = getApiKeyService();
-  if (!apiKeyService) {
-    // Service unavailable during early bootstrap — key was attempted but cannot
-    // be validated. Return 503 rather than null so the caller does not silently
-    // treat a bearer token as "unauthenticated".
-    return createErrorResponse(
-      503,
-      "Service Unavailable",
-      "API key authentication service is not available"
-    );
-  }
+  // A key can only be judged from the database, so a process that has not
+  // started its services starts them here, as a session check does, rather
+  // than refusing the first keyed request a cold instance receives.
+  const apiKeyService = await startedApiKeyService(req);
+  if ("statusCode" in apiKeyService) return apiKeyService;
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
+  let cause: ApiKeyRefusalCause | undefined = known?.cause;
   const keyAuth = known
     ? known.resolved
-    : await apiKeyService.authenticateApiKey(rawKey);
+    : await apiKeyService.authenticateApiKey(rawKey, refused => {
+        cause = refused;
+      });
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
-    return createErrorResponse(
-      401,
-      "Invalid API key",
-      "The provided API key is invalid, expired, or revoked"
-    );
+    // Which way the key fails is for the server's log, not the caller.
+    return {
+      ...createErrorResponse(
+        401,
+        "Invalid API key",
+        "Authentication required."
+      ),
+      reason: cause
+        ? KEY_REFUSED_BECAUSE[cause]
+        : "the API key did not resolve",
+    };
   }
 
   // 4. Rate limit check — enforced after auth, before permission resolution.
@@ -289,10 +392,12 @@ export async function requireAuthentication(
   // silently instead of bouncing the user to login.
   if (apiKeyResult === null) {
     if (sessionResult.reason === "expired") {
+      // The code tells the admin to refresh; the message says no more than
+      // any other request needing sign-in is told.
       return createErrorResponse(
         401,
         "Session expired",
-        "Your session has expired, please refresh",
+        "Authentication required.",
         undefined,
         "TOKEN_EXPIRED"
       );
@@ -300,7 +405,7 @@ export async function requireAuthentication(
     return createErrorResponse(
       401,
       "Authentication required",
-      "You must be logged in to access this resource",
+      "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
@@ -359,7 +464,9 @@ export async function requirePermission(
 export async function authorizeCaller(
   authResult: AuthContext,
   action: string,
-  resource: string
+  resource: string,
+  // Whether the request names one entry, so the refusal says "this post".
+  scope: RefusalScope = "all"
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
@@ -370,18 +477,56 @@ export async function authorizeCaller(
     resource,
     getRBACService()
   );
-  // A caller whose access could not be read is not a caller without the
-  // permission: the read's error goes to the route's error handling, as it
-  // always has, rather than being answered as a refusal.
-  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${action} ${resource}`
+    // A caller naming one entry it may not read is answered exactly as if the
+    // entry did not exist, whatever it asked to do: a 403 would confirm the
+    // entry is there. A caller who may read it is told what it may not do.
+    const answer = await answerForRefusal(
+      verdict,
+      action,
+      scope === "one",
+      asked => routeGateVerdict(authResult, asked, resource, getRBACService())
     );
+    // A caller whose access could not be read is not a caller without the
+    // permission: the read's error goes to the route's error handling, as it
+    // always has, rather than being answered as a refusal.
+    if (answer.answer === "failed") throw answer.error;
+    if (answer.answer === "missing") {
+      return entryAnsweredAsMissing(action, resource);
+    }
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        await refusalMessageFor(action, resource, scope)
+      ),
+      // The one decision does not say whether the entity's own rule or a
+      // missing grant refused, so the reason names both rather than guess.
+      reason: `the access decision refused ${action} on ${resource}: its access rule, or no ${action}-${resource} grant`,
+    };
   }
   return authResult;
+}
+
+/**
+ * The answer a request naming one entry gets from a caller who may not read
+ * it: what a missing entry gets, `NOT_FOUND` in the generic words, so the two
+ * cannot be told apart. Which check refused goes to the log.
+ */
+function entryAnsweredAsMissing(
+  action: string,
+  resource: string
+): ErrorResponse {
+  return {
+    ...createErrorResponse(
+      NEXTLY_ERROR_STATUS.NOT_FOUND,
+      "Not Found",
+      genericPublicMessage("NOT_FOUND"),
+      undefined,
+      "NOT_FOUND"
+    ),
+    reason: `the caller may not read ${resource}, so the entry its ${action} names is answered as missing`,
+  };
 }
 
 /**
@@ -392,7 +537,8 @@ export async function authorizeCaller(
  */
 export async function requireAnyPermission(
   req: Request,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -400,7 +546,32 @@ export async function requireAnyPermission(
     return authResult;
   }
 
-  return authorizeCallerForAny(authResult, permissions);
+  return authorizeCallerForAny(authResult, permissions, target);
+}
+
+/**
+ * What a refusal names as refused, where it is not what the permissions
+ * asked for say: reading a permission may be granted by `read-roles`, and is
+ * still the reading of a permission.
+ */
+export interface RefusalTarget {
+  action: string;
+  resource: string;
+}
+
+/**
+ * What an any-of refusal names: the target given, else the one thing every
+ * alternative is about. Alternatives about different things name nothing.
+ */
+function anyOfTarget(
+  permissions: ReadonlyArray<{ action: string; resource: string }>,
+  target: RefusalTarget | undefined
+): RefusalTarget | undefined {
+  if (target) return target;
+  const [first] = permissions;
+  return first && permissions.every(p => p.resource === first.resource)
+    ? first
+    : undefined;
 }
 
 /**
@@ -409,7 +580,8 @@ export async function requireAnyPermission(
  */
 export async function authorizeCallerForAny(
   authResult: AuthContext,
-  permissions: Array<{ action: string; resource: string }>
+  permissions: Array<{ action: string; resource: string }>,
+  target?: RefusalTarget
 ): Promise<AuthContext | ErrorResponse> {
   // Any one of the permissions will do, judged on the key's own grants or the
   // session's permissions, asked of the one decision.
@@ -419,13 +591,201 @@ export async function authorizeCallerForAny(
     getRBACService()
   );
   if (!verdict.allowed) {
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have the required permissions to access this resource`
-    );
+    const named = anyOfTarget(permissions, target);
+    return {
+      ...createErrorResponse(
+        403,
+        "Forbidden",
+        named
+          ? await refusalMessageFor(named.action, named.resource)
+          : "You can't do that."
+      ),
+      reason: `the caller holds none of ${permissions
+        .map(p => `${p.action}-${p.resource}`)
+        .join(", ")}`,
+    };
   }
   return authResult;
+}
+
+/** How a REST operation's languages are worked out from its request. */
+type OperationLanguage =
+  | "read"
+  | "write"
+  | "as-named"
+  | "default-write"
+  | "duplicate"
+  | "filtered-history";
+
+/**
+ * The REST operations whose languages the request names, and how. Every
+ * other operation, and a caller that names none, is judged in every language:
+ * it acts on the whole entry, or on content the request does not choose.
+ *
+ * - `read`: a read of one language's content, the language `?locale=` names
+ *   (every language for `all`) or the default, with the languages
+ *   `?fallback-locale=` and the site's fallbacks add. A schema read is one,
+ *   read in the language the admin shows it in. An autosave read is not: it
+ *   returns the caller's latest autosave in whatever language it was saved.
+ *   A read that also reads translation states, `?translation-status=` or a
+ *   `_translated` filter, is told every language; see `readLanguagesFor`.
+ * - `write`: a write of one language's content, `?locale=` (every language
+ *   for `*`) or the default.
+ * - `as-named`: an autosave, discarding a working draft, or sharing a preview
+ *   link to one language, which keep the language as the request names it: a
+ *   language the site does not configure is told every language, not the
+ *   default a write resolves it to. A preview link naming no language is
+ *   shared with no operation named, so it is told every language.
+ * - `default-write`: a bulk update of named entries, which takes no locale
+ *   and writes the default language. A bulk update by query is not one: its
+ *   filter, in the request body, may choose its rows by any language's
+ *   translation state, so it is told every language.
+ * - `duplicate`: writes the default language, copying what a read of the
+ *   source shows there, so it is told the default and its fallbacks.
+ * - `filtered-history`: a history list, which `?locale=` filters to one
+ *   language's versions; unfiltered, it lists every language's.
+ */
+const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
+  ["listEntries", "read"],
+  ["getEntry", "read"],
+  ["countEntries", "read"],
+  ["getCollection", "read"],
+  ["getSingleDocument", "read"],
+  ["getSingleSchema", "read"],
+  ["createEntry", "write"],
+  ["updateEntry", "write"],
+  ["discardWorkingDraft", "as-named"],
+  ["autosaveEntry", "as-named"],
+  ["updateSingleDocument", "write"],
+  ["autosaveSingle", "as-named"],
+  ["discardSingleWorkingDraft", "as-named"],
+  ["sharePreviewLink", "as-named"],
+  ["bulkUpdateEntries", "default-write"],
+  ["duplicateEntry", "duplicate"],
+  ["listEntryVersions", "filtered-history"],
+  ["listSingleVersions", "filtered-history"],
+]);
+
+/** What a request names about its languages, as it is dispatched. */
+interface RequestedLanguage {
+  locale: string | undefined;
+  fallbackLocale: string | undefined;
+  translationStatus: boolean;
+  /** Its filter, or `UNREADABLE` where the dispatcher will refuse it. */
+  where: unknown;
+}
+
+const UNREADABLE = Symbol("unreadable filter");
+
+/** The languages each kind of operation is told, from what its request names. */
+const LANGUAGES_OF: Record<
+  OperationLanguage,
+  (asked: RequestedLanguage) => RuleLanguage
+> = {
+  // A filter the dispatcher refuses is never run, so it is told every
+  // language rather than read a second way here.
+  read: asked =>
+    asked.where === UNREADABLE
+      ? everyLanguage()
+      : registeredReadLanguagesFor(asked.locale, asked.fallbackLocale, asked),
+  write: asked => registeredWriteLanguagesFor(asked.locale),
+  "as-named": asked => registeredWriteAsNamedLanguagesFor(asked.locale),
+  "default-write": () => registeredWriteLanguagesFor(undefined),
+  duplicate: () => registeredReadLanguagesFor(undefined),
+  // A history list filters by language and falls back to none.
+  "filtered-history": asked =>
+    asked.locale === undefined
+      ? everyLanguage()
+      : registeredReadLanguagesFor(asked.locale, false),
+};
+
+/**
+ * The reads that consume a translation overview or a filter, each read as its
+ * handler reads it. Only these widen what the rule is told: a control a
+ * handler ignores reads nothing, and told every language for it, a rule that
+ * admits by what `locales` includes would pass a read it should refuse.
+ */
+/** How a read reads its overview and filter controls, where it reads them. */
+interface ReadControls {
+  translationStatus?: (params: Readonly<Record<string, string>>) => boolean;
+  where?: true;
+}
+
+const READ_CONTROLS: ReadonlyMap<string, ReadControls> = new Map<
+  string,
+  ReadControls
+>([
+  [
+    "listEntries",
+    {
+      translationStatus: params => isTruthyParam(params["translation-status"]),
+      where: true,
+    },
+  ],
+  ["countEntries", { where: true }],
+  [
+    "getEntry",
+    {
+      translationStatus: params => isTruthyParam(params["translation-status"]),
+    },
+  ],
+  // The Single handler attaches its overview for `1` alone.
+  [
+    "getSingleDocument",
+    { translationStatus: params => params["translation-status"] === "1" },
+  ],
+]);
+
+/**
+ * What the route's parameters name about its languages: the values the
+ * dispatcher acts on, read the way it reads them, so a request that names a
+ * language twice is judged in the one it is dispatched in.
+ */
+function requestedLanguage({
+  method,
+  params,
+}: RouteOperation): RequestedLanguage {
+  const controls = READ_CONTROLS.get(method);
+  let where: unknown;
+  try {
+    where = controls?.where
+      ? parseWhereParam(params.where, params.whereBrackets)
+      : undefined;
+  } catch {
+    where = UNREADABLE;
+  }
+  return {
+    // An empty value (`?locale=`) names nothing, as the handlers read it: a
+    // history list then lists every language's versions.
+    locale: params.locale || undefined,
+    fallbackLocale: params["fallback-locale"] || undefined,
+    translationStatus: controls?.translationStatus?.(params) ?? false,
+    where,
+  };
+}
+
+/** The languages the rule asked for a REST operation is told. */
+export function requestLanguage(
+  operation: RouteOperation | undefined
+): RuleLanguage {
+  if (operation === undefined) return everyLanguage();
+  const kind = OPERATION_LANGUAGES.get(operation.method);
+  if (kind === undefined) return everyLanguage();
+  return LANGUAGES_OF[kind](requestedLanguage(operation));
+}
+
+/** A REST route's method name, and the parameters it is dispatched with. */
+export interface RouteOperation {
+  method: string;
+  params: Readonly<Record<string, string>>;
+  /**
+   * The request names one entry or document: an entry its path names by id,
+   * or a Single's own document. It is refused about that one, and a caller
+   * who may not read it is answered as if it were missing. Set by the route,
+   * which knows what its path names; the parameters cannot say, since a
+   * query may carry an `entryId` that names nothing.
+   */
+  namesOne?: boolean;
 }
 
 /**
@@ -437,11 +797,17 @@ export async function authorizeCallerForAny(
  *
  * Use this for dynamic collection entry routes where the collection slug
  * is extracted from the URL (e.g., `/api/collections/:slug/entries`).
+ *
+ * `operation` is the route's method name and the parameters it is
+ * dispatched with, which decide the languages the rule is told; see
+ * {@link requestLanguage}. On REST this is the only place
+ * an entry's rule is asked, so it is told them here.
  */
 export async function requireCollectionAccess(
   req: Request,
   action: string,
-  collectionSlug: string
+  collectionSlug: string,
+  operation?: RouteOperation
 ): Promise<AuthContext | ErrorResponse> {
   const authResult = await requireAuthentication(req);
 
@@ -449,9 +815,21 @@ export async function requireCollectionAccess(
     return authResult;
   }
 
-  // The same question `requirePermission` asks, about the collection or
-  // Single the URL names.
-  return authorizeCaller(authResult, action, collectionSlug);
+  // Worked out after authentication, never before: on a cold worker the
+  // first request's authentication is what registers the site's languages,
+  // and worked out earlier a rule would be told none. Inside it, the same
+  // question `requirePermission` asks, about the collection or Single the
+  // URL names.
+  return withRuleLanguage(requestLanguage(operation), () =>
+    authorizeCaller(
+      authResult,
+      action,
+      collectionSlug,
+      // A route naming one entry is refused about that entry. Named by the
+      // route, never by a parameter: a query can carry an `entryId` too.
+      operation?.namesOne ? "one" : "all"
+    )
+  );
 }
 
 /**

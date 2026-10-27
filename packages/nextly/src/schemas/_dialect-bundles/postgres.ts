@@ -23,6 +23,9 @@
  * @module schemas/_dialect-bundles/postgres
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/postgres.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 // Users + Auth.js identity.
 export { users } from "../users/postgres";
@@ -59,7 +62,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/postgres";
 
 // API keys.
@@ -87,6 +89,8 @@ export { userFieldDefinitionsPg as userFieldDefinitions } from "../user-field-de
 export { emailProvidersPg as emailProviders } from "../email-providers/postgres";
 export { emailDeliveriesPg as emailDeliveries } from "../email-deliveries/postgres";
 export { emailSendClaimsPg as emailSendClaims } from "../email-send-claims/postgres";
+export { emailQueuePg as emailQueue } from "../email-queue/postgres";
+export { emailQueueRecipientsPg as emailQueueRecipients } from "../email-queue-recipients/postgres";
 export { emailTemplatesPg as emailTemplates } from "../email-templates/postgres";
 
 export { nextlySchemaEventsPg as nextlySchemaEvents } from "../schema-events/postgres";
@@ -130,6 +134,10 @@ export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";
 // above gives — this map is what the push creates.
 export { nextlyNoticesPg as nextlyNotices } from "../notices/postgres";
 
+// The site's email brand settings; in the bundle for the reason the releases
+// note above gives — this map is what the push creates.
+export { nextlyEmailBrandPg as nextlyEmailBrand } from "../email-brand/postgres";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
@@ -142,3 +150,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksPg as nextlyPreviewLinks } from "../preview-links/postgres";
+export { nextlyLanguagesPg as nextlyLanguages } from "../languages/postgres";

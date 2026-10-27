@@ -68,17 +68,15 @@ const gatedPosts = defineCollection({
 /**
  * A collection gated by a permission predicate, in the spelling the docs show.
  *
- * `AccessFunction` states `resource:action` as what a rule receives, and
- * `listEffectivePermissions` produces exactly that for a session caller. An API
- * key carries the STORED spelling (`read-notes`), which is what the coarse
- * grant check tests — so forwarding the stored form into the rule denies a key
- * that holds the grant, while the identical session caller is allowed.
+ * A rule is handed each permission as stored, `read-notes`, for a session and
+ * a key alike, which is also what the coarse grant check tests. A rule that
+ * refuses a key holding the grant means the key's own grants never reached it.
  */
 const spelledNotes = defineCollection({
   slug: "notes",
   access: {
     read: ({ permissions }: { permissions: string[] }) =>
-      permissions.includes("notes:read"),
+      permissions.includes("read-notes"),
   },
   fields: [
     text({ name: "title" }),
@@ -90,7 +88,7 @@ const spelledNotes = defineCollection({
       // this field is what makes the difference observable.
       access: {
         create: ({ permissions }: { permissions: string[] }) =>
-          permissions.includes("posts:read"),
+          permissions.includes("read-posts"),
       },
     } as never),
     text({
@@ -101,7 +99,7 @@ const spelledNotes = defineCollection({
       // for the wrong reason.
       access: {
         read: ({ permissions }: { permissions: string[] }) =>
-          permissions.includes("posts:read"),
+          permissions.includes("read-posts"),
       },
     } as never),
   ],
@@ -471,7 +469,7 @@ function post(
  *
  * Route params are strings, so the scope written into them recovered the stored
  * permission slugs and neither the caller's roles nor the rows a rule's
- * `resource:action` spelling comes from. Every gate reading it therefore judged
+ * permission list is built from. Every gate reading it therefore judged
  * an API key on a scope missing most of itself — in the direction that DENIES.
  */
 function restGet(
@@ -712,9 +710,9 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
 
   it("reads a rule written in the spelling the docs show", async () => {
     // The key HOLDS `read-notes`, so the coarse grant check passes and the
-    // collection's own rule is what decides. That rule asks for `notes:read` —
-    // the spelling `AccessFunction` documents — so a refusal here means the
-    // stored spelling reached the rule, not that the key lacked the grant.
+    // collection's own rule is what decides. That rule asks for `read-notes`,
+    // so a refusal here means the key's grants never reached the rule, not
+    // that the key lacked the grant.
     const key = await viewerKeyOwnedBySuperAdmin();
 
     const res = await post("read-spelled", { authorization: `Bearer ${key}` });
@@ -723,8 +721,8 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       body.read,
       "a documented permission predicate refused a key that holds the grant. " +
-        "The key carries `read-notes` and the rule asks for `notes:read`; the " +
-        `two name one permission row. ${body.reason ?? ""}`
+        "The key carries `read-notes` and the rule asks for it. " +
+        `${body.reason ?? ""}`
     ).toBe(true);
   });
 
@@ -746,9 +744,9 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       body.rows[0],
       "the route gave up `read-posts` and a field gated on it was returned " +
-        "anyway. The coarse check compares the stored slugs and the FIELD rule " +
-        "reads the other spelling, so a narrowing that only reached one of " +
-        "them left the field open."
+        "anyway. The coarse check and the FIELD rule both read the stored " +
+        "slugs, so a narrowing that only reached one of them left the field " +
+        "open."
     ).not.toHaveProperty("gatedByPermission");
   });
 
@@ -765,20 +763,19 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     const body = (await res.json()) as {
       items?: Record<string, unknown>[];
     };
-    // The collection's own rule reads `permissions.includes("notes:read")` and
-    // the key holds `read-notes`. A refusal here means the rule was handed the
-    // stored spelling, which no documented rule is written in.
+    // The collection's own rule reads `permissions.includes("read-notes")` and
+    // the key holds `read-notes`. A refusal here means the rule was handed a
+    // scope without the key's grants.
     expect(
       body.items?.length,
-      "the collection rule asks for `notes:read` and the key holds that grant"
+      "the collection rule asks for `read-notes` and the key holds that grant"
     ).toBeGreaterThan(0);
     // And the field rule, which asks for a grant the key also holds. Absent
     // means the same lossy scope reached one gate deeper.
     expect(
       body.items?.[0],
-      "a field gated on `posts:read` was withheld from a key that holds " +
-        "`read-posts`. The REST scope carried neither the rows that spelling " +
-        "is derived from nor the caller's roles."
+      "a field gated on `read-posts` was withheld from a key that holds " +
+        "it. The REST scope did not carry the key's grants to the field rule."
     ).toHaveProperty("gatedByPermission");
   });
 
@@ -845,8 +842,8 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       body.may,
       "`can()` said the caller may not do what the same caller then did. It " +
-        "builds its own scope by hand, so the rows a rule's `resource:action` " +
-        "spelling derives from never reach it and every documented permission " +
+        "builds its own scope by hand, so the rows a rule's permission list " +
+        "is built from never reach it and every documented permission " +
         "predicate answers false."
     ).toBe(true);
   });

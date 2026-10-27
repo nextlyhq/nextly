@@ -47,20 +47,20 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
   ).streamOverPost()
 );
 
-/** A list card asking eight rows of a collection, declared at `size`. */
-function listCard(id: string, source: string, size: string) {
+/** A list card asking eight rows of a collection, declared `w` columns wide. */
+function listCard(id: string, source: string, w: number) {
   return {
     id,
     title: id,
     archetype: "list",
-    defaultSize: size,
+    size: { default: { w, h: 4 } },
     query: { source, op: "list", select: ["title"], limit: 8 },
   };
 }
 
-// `lg` is drawn at a half, `full` at full width.
-const HALF = listCard("acme/half", "collection:posts", "lg");
-const FULL = listCard("acme/full", "collection:pages", "full");
+// Six columns is drawn at a half, twelve at full width.
+const HALF = listCard("acme/half", "collection:posts", 6);
+const FULL = listCard("acme/full", "collection:pages", 12);
 
 /** The widget queries each batch request sent, in order. */
 function sentQueries(): Array<Array<{ source: string; limit?: number }>> {
@@ -118,7 +118,7 @@ describe("the requests a dashboard sends as it is sized", () => {
   });
 
   it("sizes each card's first query for the tier it is drawn at", async () => {
-    // On 680 px the half spans six tracks and is 328 px wide: small, three rows asked as four.
+    // On 680 px the half spans six columns and is 332 px wide: small, three rows asked as four.
     // The full card is 680 px wide: medium, eight rows asked as nine.
     stubDashboardWidth(680);
     renderGrid();
@@ -242,7 +242,7 @@ describe("the requests a dashboard sends as it is sized", () => {
               title: "acme/custom",
               archetype: "custom",
               component: "@acme/admin#Custom",
-              defaultSize: "lg",
+              size: { default: { w: 6, h: 4 } },
               query: {
                 source: "collection:posts",
                 op: "list",
@@ -262,12 +262,48 @@ describe("the requests a dashboard sends as it is sized", () => {
     ]);
   });
 
+  it("sizes a custom widget's list query when it asks to be, as core's lists are sized", async () => {
+    // The opt-in: a component that draws by the card's tier is asked the rows it draws and
+    // the one more that says more exist, where an unsized custom card above gets exactly 8.
+    // At this width the card is small: three rows, and one more.
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [
+            {
+              id: "acme/sized",
+              title: "acme/sized",
+              archetype: "custom",
+              component: "@acme/admin#Sized",
+              size: { default: { w: 6, h: 4 } },
+              sizedQuery: true,
+              query: {
+                source: "collection:posts",
+                op: "list",
+                select: ["title"],
+                limit: 8,
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
+    stubDashboardWidth(680);
+    renderGrid();
+    await waitFor(() => expect(sentQueries()).toHaveLength(1));
+    expect(sentQueries()[0]).toEqual([
+      expect.objectContaining({ source: "collection:posts", limit: 4 }),
+    ]);
+  });
+
   it("asks again for the card that rose, alone, and for nothing when it shrinks", async () => {
     stubDashboardWidth(680);
     renderGrid();
     await waitFor(() => expect(sentQueries()).toHaveLength(1));
 
-    // 720 px: the half is 348 px wide and medium now, drawing eight rows where four were
+    // 720 px: the half is 352 px wide and medium now, drawing eight rows where four were
     // fetched. The full card stays medium.
     resizeDashboard(720);
     await waitFor(() => expect(sentQueries()).toHaveLength(2));

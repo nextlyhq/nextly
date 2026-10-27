@@ -17,6 +17,7 @@ vi.mock("../../../api/versions-access", () => ({
   assertDocumentUpdatable: vi.fn(),
   resolveVersionsPolicy: (...a: unknown[]) => policySpy(...a),
   tryResolveCurrentFields: vi.fn(async () => []),
+  stripAutosavePasswords: vi.fn(async () => undefined),
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
   assertDiffVersionPair: vi.fn(),
@@ -76,6 +77,23 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
+    });
+    expect(autosaveSpy).not.toHaveBeenCalled();
+  });
+
+  it("names a Single where the Single's autosave is off", async () => {
+    // The sentence names what the request is about: a collection or a Single.
+    policySpy.mockResolvedValue({
+      drafts: { autosave: { enabled: false, intervalMs: 2000 } },
+    });
+
+    await expect(
+      autosaveForDocument({ ...ARGS, scopeKind: "single", slug: "home" })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage: "Autosave is turned off for this Single.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });
@@ -87,6 +105,8 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });
@@ -99,6 +119,8 @@ describe("autosave policy is enforced server-side", () => {
 
     await expect(autosaveForDocument(ARGS)).rejects.toMatchObject({
       code: "FORBIDDEN",
+      // A setting, not a permission, and the caller is told which.
+      publicMessage: "Autosave is turned off for this collection.",
     });
     expect(autosaveSpy).not.toHaveBeenCalled();
   });

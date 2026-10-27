@@ -1,8 +1,8 @@
 /**
  * What the tab variants resolve to, and what they refuse to let a caller move.
  *
- * `tabs-contract.test.ts` scans CALL SITES for classes that repaint the
- * indicator. This file asserts the other half: that the appearance those call
+ * The `tab-indicator` lint rule (`lint/tab-indicator`) reports CALL SITES that
+ * repaint the indicator. This file asserts the other half: that the appearance those call
  * sites used to spell by hand is now named, and that naming it did not move the
  * parts of the tab a caller is not supposed to choose.
  *

@@ -14,6 +14,7 @@
 import { Button, Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type { RelationshipFieldConfig } from "nextly/config";
 import { useState, useCallback } from "react";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -306,7 +307,7 @@ export function RelationshipInput<
   disabled = false,
   readOnly = false,
   className,
-}: RelationshipInputProps<TFieldValues>) {
+}: RelationshipInputProps<TFieldValues>): JSX.Element {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   // Track which item is being edited (null when no edit modal is open)

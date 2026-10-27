@@ -92,6 +92,72 @@ export interface EmailTemplateRecord {
    * read deliveries.
    */
   lastSentAt?: string | null;
+  /** Fixed addresses every send of it copies. */
+  cc?: string[] | null;
+  /** Fixed addresses every send of it blind-copies. */
+  bcc?: string[] | null;
+  /**
+   * Its owner marks it as carrying a secret (a sign-in, reset or verification
+   * link): it takes no copies, and any stored on it are not sent.
+   */
+  carriesSecret?: boolean;
+}
+
+/**
+ * The parts of a template an owner versions and an override replaces.
+ *
+ * This and the four types after it restate the server's ownership types
+ * (`nextly`'s `EmailTemplateVersion`, `OwnerChange`, `OwnerChangeChoice`,
+ * `EmailTemplateComparison` and `OwnerUpdateUndo`, from
+ * `domains/email/template-merge.ts` and `email-template-service.ts`), as
+ * `EmailTemplateRecord` above restates the record: the admin reads server
+ * types only through the light `nextly/api/*-types` entries, and none carries
+ * these yet.
+ */
+export interface EmailTemplateVersion {
+  subject: string;
+  htmlContent: string;
+  plainTextContent: string | null;
+  preheader: string | null;
+}
+
+/** One change the owner made since the site's copy started from its version. */
+export interface OwnerChange {
+  /** Stable within one review. */
+  id: string;
+  field: "subject" | "preheader" | "htmlContent" | "plainTextContent";
+  /** The site edited the same lines. */
+  conflict: boolean;
+  /** The lines the change replaced in the version the copy started from. */
+  base: string[];
+  /** The owner's lines now. */
+  theirs: string[];
+  /** The site's lines at the same place now. */
+  mine: string[];
+}
+
+/** What the person chose for one change. */
+export type OwnerChangeChoice =
+  | { use: "mine" }
+  | { use: "theirs" }
+  | { use: "edited"; text: string };
+
+/** An overridden template beside its owner's current version. */
+export interface EmailTemplateComparison {
+  base: EmailTemplateVersion;
+  theirs: EmailTemplateVersion;
+  mine: EmailTemplateVersion;
+  changes: OwnerChange[];
+  /** Names the three versions; applying is refused once any of them moved. */
+  review: string;
+}
+
+/** What an applied review replaced, for Undo. */
+export interface OwnerUpdateUndo {
+  version: EmailTemplateVersion;
+  base: EmailTemplateVersion;
+  applied: string;
+  appliedBase: string;
 }
 
 /** Wire shape before normalization: legacy rows may carry a null `kind`. */
@@ -122,6 +188,9 @@ export interface CreateEmailTemplatePayload {
   isActive?: boolean;
   providerId?: string | null;
   attachments?: EmailTemplateAttachment[] | null;
+  description?: string | null;
+  cc?: string[] | null;
+  bcc?: string[] | null;
 }
 
 export interface UpdateEmailTemplatePayload {
@@ -138,6 +207,9 @@ export interface UpdateEmailTemplatePayload {
   isActive?: boolean;
   providerId?: string | null;
   attachments?: EmailTemplateAttachment[] | null;
+  description?: string | null;
+  cc?: string[] | null;
+  bcc?: string[] | null;
 }
 
 export interface EmailTemplatePreviewResult {
@@ -274,7 +346,9 @@ export type DraftPreviewResult = RenderedTemplate;
  */
 export async function previewDraft(
   template: DraftPreviewTemplate,
-  data: DraftPreviewData
+  data: DraftPreviewData,
+  /** Brand settings to render with instead of the saved ones, unsaved. */
+  brand?: DraftPreviewRequest["brand"]
 ): Promise<DraftPreviewResult> {
   /*
    * The WHOLE body is annotated, not just the template inside it. Typing only
@@ -282,7 +356,9 @@ export async function previewDraft(
    * another required top-level property still compiles here and fails as a 400
    * at runtime — which is the failure this derivation exists to prevent.
    */
-  const body: DraftPreviewRequest = { template, data };
+  const body: DraftPreviewRequest = brand
+    ? { template, data, brand }
+    : { template, data };
   return fetcher<DraftPreviewResult>(
     "/email-templates/preview",
     { method: "POST", body: JSON.stringify(body) },
@@ -296,25 +372,118 @@ export interface SendTestEmailResult {
 }
 
 /**
- * Send a real test email from a saved template via the shared
- * send-with-template endpoint. Tests the SAVED template (not unsaved edits).
+ * Send a real test email from a saved template to the signed-in user's own
+ * address: the server picks the recipient, never the caller. Tests the SAVED
+ * template (not unsaved edits).
  */
 export async function sendTestEmail(
-  slug: string,
-  to: string,
+  templateId: string,
   variables: Record<string, unknown>
 ): Promise<SendTestEmailResult> {
   return fetcher<SendTestEmailResult>(
-    "/email/send-with-template",
+    `/email-templates/${encodeURIComponent(templateId)}/send-test`,
     {
-      method: "POST",
-      body: JSON.stringify({ to, template: slug, variables }),
+      // PATCH: the server gates it by the update permission on templates.
+      method: "PATCH",
+      body: JSON.stringify({ variables }),
     },
     true
   );
 }
 
-export const emailTemplateApi = {
+// ============================================================
+// Ownership: override, reset, and an owner's update
+// ============================================================
+
+/**
+ * Make an owned template the site's: from now on it holds the site's version,
+ * starting from the owner's current one, or from `version` where given (Undo
+ * of a Reset puts the site's text back this way).
+ */
+export async function overrideTemplate(
+  id: string,
+  version?: EmailTemplateVersion
+): Promise<EmailTemplateRecord> {
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
+    `/email-templates/${id}/override`,
+    { method: "PATCH", body: JSON.stringify(version ? { version } : {}) },
+    true
+  );
+  return normalizeTemplate(result.item);
+}
+
+/** Return an overridden template to its owner's current version. */
+export async function resetTemplate(id: string): Promise<EmailTemplateRecord> {
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
+    `/email-templates/${id}/reset`,
+    { method: "PATCH", body: JSON.stringify({}) },
+    true
+  );
+  return normalizeTemplate(result.item);
+}
+
+/** An overridden template beside its owner's version, change by change. */
+export async function compareTemplate(
+  id: string
+): Promise<EmailTemplateComparison> {
+  return fetcher<EmailTemplateComparison>(
+    `/email-templates/${id}/compare`,
+    {},
+    true
+  );
+}
+
+/**
+ * Apply a review of the owner's update. Refused (409) when the template or
+ * the owner's version moved since `compareTemplate` returned `review`.
+ */
+export async function applyOwnerUpdate(
+  id: string,
+  choices: Record<string, OwnerChangeChoice>,
+  review: string
+): Promise<{ item: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
+  const result = await fetcher<{
+    item: RawEmailTemplateRecord;
+    undo: OwnerUpdateUndo;
+  }>(
+    `/email-templates/${id}/apply-update`,
+    { method: "PATCH", body: JSON.stringify({ choices, review }) },
+    true
+  );
+  return { item: normalizeTemplate(result.item), undo: result.undo };
+}
+
+/** Undo an applied review, while nothing has changed the template since. */
+export async function undoOwnerUpdate(
+  id: string,
+  undo: OwnerUpdateUndo
+): Promise<EmailTemplateRecord> {
+  const result = await fetcher<MutationResponse<RawEmailTemplateRecord>>(
+    `/email-templates/${id}/undo-update`,
+    { method: "PATCH", body: JSON.stringify({ undo }) },
+    true
+  );
+  return normalizeTemplate(result.item);
+}
+
+/** The type of {@link emailTemplateApi}. */
+type EmailTemplateApiType = {
+  readonly listTemplates: typeof listTemplates;
+  readonly getTemplate: typeof getTemplate;
+  readonly createTemplate: typeof createTemplate;
+  readonly updateTemplate: typeof updateTemplate;
+  readonly deleteTemplate: typeof deleteTemplate;
+  readonly previewTemplate: typeof previewTemplate;
+  readonly previewDraft: typeof previewDraft;
+  readonly sendTestEmail: typeof sendTestEmail;
+  readonly overrideTemplate: typeof overrideTemplate;
+  readonly resetTemplate: typeof resetTemplate;
+  readonly compareTemplate: typeof compareTemplate;
+  readonly applyOwnerUpdate: typeof applyOwnerUpdate;
+  readonly undoOwnerUpdate: typeof undoOwnerUpdate;
+};
+
+export const emailTemplateApi: EmailTemplateApiType = {
   listTemplates,
   getTemplate,
   createTemplate,
@@ -323,4 +492,9 @@ export const emailTemplateApi = {
   previewTemplate,
   previewDraft,
   sendTestEmail,
+  overrideTemplate,
+  resetTemplate,
+  compareTemplate,
+  applyOwnerUpdate,
+  undoOwnerUpdate,
 } as const;

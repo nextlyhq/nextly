@@ -1,10 +1,12 @@
 import { z } from "zod";
 
-import {
-  type CreateEmailTemplatePayload,
-  type EmailTemplateRecord,
-  type UpdateEmailTemplatePayload,
+import type {
+  CreateEmailTemplatePayload,
+  EmailTemplateRecord,
+  UpdateEmailTemplatePayload,
 } from "@admin/services/emailTemplateApi";
+
+import { ownsContent } from "./workbench-model";
 
 // ============================================================
 // Form id (external submit hooks may still reference it).
@@ -44,6 +46,11 @@ export interface TemplateFormValues {
   replyTo: string;
   variables: TemplateFormVariable[];
   attachments: TemplateFormAttachment[];
+  /** When the template is sent, in a sentence. */
+  description: string;
+  /** Fixed addresses every send copies; none on a template carrying a secret. */
+  cc: string[];
+  bcc: string[];
 }
 
 // ============================================================
@@ -63,6 +70,29 @@ const templateVariableSchema = z.object({
   required: z.boolean(),
 });
 
+/**
+ * One copied address, as the server takes it: `ops@example.com` or
+ * `Ops <ops@example.com>`, one mailbox, no line breaks. The server stays the
+ * authority (it checks again); this keeps a sendable address from being
+ * refused before it gets there.
+ */
+const COPY_ADDRESS =
+  /^(?:[^<>,]*<\s*[^\s@<>,]+@[^\s@<>,]+\s*>|[^\s@<>,]+@[^\s@<>,]+)$/;
+/** Whether `value` holds a C0 control character (line breaks included) or DEL. */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+const copyAddress = z
+  .string()
+  .refine(
+    value => !hasControlCharacter(value) && COPY_ADDRESS.test(value.trim()),
+    "Enter an address, or a name and an address in angle brackets"
+  );
+
 const templateAttachmentSchema = z.object({
   mediaId: z.string().min(1),
   filename: z.string().optional(),
@@ -80,7 +110,44 @@ const templateAttachmentSchema = z.object({
  * which kind it is editing, and a `superRefine` that reads a `kind` field the
  * form does not carry would be inventing one to interrogate.
  */
-export function templateSchemaFor(isLayoutRow: boolean) {
+export function templateSchemaFor(isLayoutRow: boolean): z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+  preheader: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  htmlContent: z.ZodString;
+  plainTextContent: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  useLayout: z.ZodBoolean;
+  isActive: z.ZodBoolean;
+  providerId: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  layoutId: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  fromOverride: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  replyTo: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  variables: z.ZodArray<
+    z.ZodObject<
+      {
+        name: z.ZodString;
+        description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+        required: z.ZodBoolean;
+      },
+      z.core.$strip
+    >
+  >;
+  attachments: z.ZodArray<
+    z.ZodObject<
+      {
+        mediaId: z.ZodString;
+        filename: z.ZodOptional<z.ZodString>;
+        displayName: z.ZodString;
+        mimeType: z.ZodOptional<z.ZodString>;
+      },
+      z.core.$strip
+    >
+  >;
+  description: z.ZodUnion<[z.ZodOptional<z.ZodString>, z.ZodLiteral<"">]>;
+  cc: z.ZodArray<z.ZodString>;
+  bcc: z.ZodArray<z.ZodString>;
+  subject: z.ZodString;
+}> {
   return templateSchema.extend({
     subject: isLayoutRow
       ? z.string().max(500)
@@ -110,6 +177,11 @@ const templateSchema = z.object({
   replyTo: z.string().max(320).optional().or(z.literal("")),
   variables: z.array(templateVariableSchema),
   attachments: z.array(templateAttachmentSchema),
+  // No length cap here: the description is the owner's on an owner's email,
+  // where it's locked, and the server keeps the rule for it.
+  description: z.string().optional().or(z.literal("")),
+  cc: z.array(copyAddress),
+  bcc: z.array(copyAddress),
 });
 
 export const DEFAULT_VALUES: TemplateFormValues = {
@@ -127,6 +199,9 @@ export const DEFAULT_VALUES: TemplateFormValues = {
   replyTo: "",
   variables: [],
   attachments: [],
+  description: "",
+  cc: [],
+  bcc: [],
 };
 
 // Sentinels for "Use Default" (Radix Select rejects empty values).
@@ -137,57 +212,84 @@ export const USE_DEFAULT_LAYOUT = "__default_layout__";
 // Payload transforms
 // ============================================================
 
-export function formValuesToCreatePayload(
+/** An optional text field as the API takes it: empty is none. */
+const orNull = (value: string): string | null => value || null;
+
+/** An optional list as the API takes it: empty is none. */
+function listOrNull<T>(list: T[]): T[] | null {
+  return list.length > 0 ? list : null;
+}
+
+/** Everything a save or a create sends, but the slug. */
+function payloadFields(
   values: TemplateFormValues
-): CreateEmailTemplatePayload {
+): Omit<CreateEmailTemplatePayload, "slug"> {
   return {
     name: values.name,
-    slug: values.slug,
     subject: values.subject,
-    preheader: values.preheader || null,
+    preheader: orNull(values.preheader),
     htmlContent: values.htmlContent,
-    plainTextContent: values.plainTextContent || null,
+    plainTextContent: orNull(values.plainTextContent),
     useLayout: values.useLayout,
     isActive: values.isActive,
-    providerId: values.providerId || null,
-    layoutId: values.layoutId || null,
-    fromOverride: values.fromOverride || null,
-    replyTo: values.replyTo || null,
-    variables: values.variables.length > 0 ? values.variables : null,
-    attachments:
-      values.attachments.length > 0
-        ? values.attachments.map(a => ({
-            mediaId: a.mediaId,
-            ...(a.filename ? { filename: a.filename } : {}),
-          }))
-        : null,
+    providerId: orNull(values.providerId),
+    layoutId: orNull(values.layoutId),
+    fromOverride: orNull(values.fromOverride),
+    replyTo: orNull(values.replyTo),
+    variables: listOrNull(values.variables),
+    attachments: listOrNull(
+      values.attachments.map(a => ({
+        mediaId: a.mediaId,
+        ...(a.filename ? { filename: a.filename } : {}),
+      }))
+    ),
+    description: orNull(values.description),
+    cc: listOrNull(values.cc),
+    bcc: listOrNull(values.bcc),
   };
 }
 
-export function formValuesToUpdatePayload(
+export function formValuesToCreatePayload(
   values: TemplateFormValues
+): CreateEmailTemplatePayload {
+  return { slug: values.slug, ...payloadFields(values) };
+}
+
+/** The fields an owner sets on its email: locked until the site overrides it. */
+const OWNER_FIELDS = [
+  "subject",
+  "preheader",
+  "htmlContent",
+  "plainTextContent",
+  "description",
+  "variables",
+] as const;
+
+/**
+ * The update a save sends. Given the saved record, it leaves out what the
+ * site can't change right now, rather than sending it back as it was read:
+ *
+ * - on an owner's email, the owner's fields. The owner can update them while
+ *   the form is open (the boot reconciles in the background), and the server
+ *   reads a stale copy sent back as an edit, which overrides the email with
+ *   the owner's previous text;
+ * - on an email that carries a secret, the copies. Ones stored before it was
+ *   marked stay stored but aren't sent, and the server refuses any it's sent,
+ *   so sending them back would refuse every save.
+ */
+export function formValuesToUpdatePayload(
+  values: TemplateFormValues,
+  record?: EmailTemplateRecord
 ): UpdateEmailTemplatePayload {
-  return {
-    name: values.name,
-    subject: values.subject,
-    preheader: values.preheader || null,
-    htmlContent: values.htmlContent,
-    plainTextContent: values.plainTextContent || null,
-    useLayout: values.useLayout,
-    isActive: values.isActive,
-    providerId: values.providerId || null,
-    layoutId: values.layoutId || null,
-    fromOverride: values.fromOverride || null,
-    replyTo: values.replyTo || null,
-    variables: values.variables.length > 0 ? values.variables : null,
-    attachments:
-      values.attachments.length > 0
-        ? values.attachments.map(a => ({
-            mediaId: a.mediaId,
-            ...(a.filename ? { filename: a.filename } : {}),
-          }))
-        : null,
-  };
+  const payload: UpdateEmailTemplatePayload = payloadFields(values);
+  if (record && !ownsContent(record)) {
+    for (const field of OWNER_FIELDS) delete payload[field];
+  }
+  if (record?.carriesSecret) {
+    delete payload.cc;
+    delete payload.bcc;
+  }
+  return payload;
 }
 
 export function templateToFormValues(
@@ -216,5 +318,8 @@ export function templateToFormValues(
       filename: a.filename,
       displayName: a.filename ?? a.mediaId,
     })),
+    description: template.description ?? "",
+    cc: template.cc ?? [],
+    bcc: template.bcc ?? [],
   };
 }

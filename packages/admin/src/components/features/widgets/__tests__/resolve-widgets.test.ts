@@ -8,6 +8,7 @@
  * returned list says whether that was the tightened rule being honoured or the
  * widget being absent for some other reason.
  */
+import { UNSTATED_WIDGET_SIZE, sizeBounds } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -16,7 +17,6 @@ import type {
 } from "@admin/types/branding";
 
 import { resolveDashboardWidgets } from "../resolve-widgets";
-import { widthFromDeclaredSize } from "../sizes";
 
 const allow = () => true;
 const deny = () => false;
@@ -31,7 +31,7 @@ const REGISTERED_SHARED = {
   id: "shared",
   title: "From the registry",
   archetype: "metric",
-  defaultSize: "sm",
+  size: { default: { w: 3, h: 3 } },
   query: { source: "collection:posts", op: "count" },
 } as unknown as RegisteredWidgetMeta;
 
@@ -54,6 +54,29 @@ describe("resolveDashboardWidgets", () => {
       source: "collection:posts",
       op: "count",
     });
+  });
+
+  it("carries the filters core published for a registered widget, alone and beside a contribution", () => {
+    // The knobs build a card's query from these, so a widget reading across
+    // collections that lost them would have its Collection setting replace its
+    // source instead of narrowing it.
+    const edits = {
+      ...REGISTERED_SHARED,
+      id: "edits",
+      archetype: "list",
+      query: { source: "system:edits", op: "list" },
+      sourceFilters: ["collection", "onlyMine"],
+    } as unknown as RegisteredWidgetMeta;
+    const alone = resolveDashboardWidgets([], [edits], allow);
+    expect(alone[0]?.sourceFilters).toEqual(["collection", "onlyMine"]);
+    const merged = resolveDashboardWidgets(
+      contributing([
+        { id: "edits", title: "Also contributed", archetype: "list" },
+      ]),
+      [edits],
+      allow
+    );
+    expect(merged[0]?.sourceFilters).toEqual(["collection", "onlyMine"]);
   });
 
   it("keeps the contribution's POSITION while taking the registry's definition", () => {
@@ -112,7 +135,7 @@ describe("resolveDashboardWidgets", () => {
           id: "acme/recent",
           title: "Recent posts",
           archetype: "table",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           query: { source: "collection:posts", op: "list", limit: 5 },
         } as unknown as RegisteredWidgetMeta,
       ],
@@ -144,7 +167,7 @@ describe("resolveDashboardWidgets", () => {
           id: "acme/recent",
           title: "Recent posts",
           archetype: "table",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: "read-secrets",
           query: { source: "collection:posts", op: "list", limit: 5 },
         } as unknown as RegisteredWidgetMeta,
@@ -264,7 +287,7 @@ describe("defaultOrder decides position, and only where it is stated", () => {
       id,
       title: id,
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       ...extra,
     }) as unknown as RegisteredWidgetMeta;
 
@@ -329,30 +352,30 @@ describe("defaultOrder decides position, and only where it is stated", () => {
 describe("a widget declared through BOTH channels keeps its new fields", () => {
   const ids = (widgets: { id: string }[]) => widgets.map(w => w.id);
 
-  it("carries defaultOrder and chrome through the collision merge", () => {
+  it("carries defaultOrder and hidesWhenEmpty through the collision merge", () => {
     // `mergeCollision` rebuilds the widget field by field, so a field added to
     // the contract and not to it is silently dropped -- the dual-channel widget
-    // loses its declared position and an unframed custom widget is wrapped in a
-    // card it asked not to have. Same shape as the result parser that dropped
+    // loses its declared position, and a card that should leave the dashboard
+    // while empty says so instead. Same shape as the result parser that dropped
     // `fields` when the result contract grew.
     const contribution = {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
       defaultOrder: 5,
-      chrome: "none",
+      hidesWhenEmpty: true,
     } as unknown as RegisteredWidgetMeta;
 
     const registration = {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
       defaultOrder: 1,
-      chrome: "none",
+      hidesWhenEmpty: true,
     } as unknown as RegisteredWidgetMeta;
 
     const [widget] = resolveDashboardWidgets(
@@ -362,13 +385,13 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
     );
 
     // The registry is authoritative over a field it can state, which is the
-    // rule `defaultSize` already follows here.
+    // rule `size` already follows here.
     expect(widget.defaultOrder).toBe(1);
-    expect(widget.chrome).toBe("none");
+    expect(widget.hidesWhenEmpty).toBe(true);
   });
 
   it("carries dismissible through the collision merge", () => {
-    // The same field-by-field rebuild `defaultOrder` and `chrome` guard above,
+    // The same field-by-field rebuild `defaultOrder` and `hidesWhenEmpty` guard above,
     // one field along. Dropped here, a merged card loses the only control its
     // reader has for sending it away outside edit mode -- and nothing about the
     // card looks wrong, because every other field survived.
@@ -376,7 +399,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
       dismissible: true,
     } as unknown as RegisteredWidgetMeta;
@@ -385,7 +408,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
     } as unknown as RegisteredWidgetMeta;
 
@@ -414,7 +437,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
       settings: [{ name: "limit", type: "number", defaultValue: 5 }],
     } as unknown as RegisteredWidgetMeta;
@@ -423,7 +446,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       id: "shared",
       title: "Shared",
       archetype: "custom",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       component: "@acme/p/admin#X",
     } as unknown as RegisteredWidgetMeta;
 
@@ -450,7 +473,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
           id: "shared",
           title: "Shared",
           archetype: "custom",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 3 } },
           component: "@acme/p/admin#X",
           settings: declared(5),
         },
@@ -460,7 +483,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
           id: "shared",
           title: "Shared",
           archetype: "custom",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 3 } },
           component: "@acme/p/admin#X",
           settings: declared(9),
         },
@@ -481,7 +504,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
         id: "notes",
         title: "Notes",
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         content,
       }) as unknown as RegisteredWidgetMeta;
 
@@ -504,7 +527,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
           id: "notes",
           title: "Notes",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           content: "from the contribution",
         },
       ] as unknown as RegisteredWidgetMeta[]),
@@ -513,7 +536,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
           id: "notes",
           title: "Notes",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 3 } },
           query: { source: "collection:posts", op: "count" },
         },
       ] as unknown as RegisteredWidgetMeta[],
@@ -531,13 +554,18 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       id: "shared",
       title: "Shared",
       archetype: "text",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       defaultOrder: 0,
     } as unknown as RegisteredWidgetMeta;
 
     const widgets = resolveDashboardWidgets(
       contributing([
-        { id: "first", title: "f", archetype: "text", defaultSize: "sm" },
+        {
+          id: "first",
+          title: "f",
+          archetype: "text",
+          size: { default: { w: 3, h: 3 } },
+        },
         merged,
       ] as unknown as RegisteredWidgetMeta[]),
       [merged],
@@ -574,7 +602,7 @@ describe("who may send a card away travels with the declaration", () => {
           id: "core/onboarding",
           title: "Set up your project",
           archetype: "custom",
-          defaultSize: "full",
+          size: { default: { w: 12, h: 3 } },
           component: "core#Onboarding",
           dismissible: true,
         } as unknown as RegisteredWidgetMeta,
@@ -607,25 +635,89 @@ describe("who may send a card away travels with the declaration", () => {
   });
 });
 
-describe("an unknown size survives, including the inherited names", () => {
-  it("falls back to full width for a size from a newer core", () => {
-    expect(widthFromDeclaredSize("enormous")).toBe("full");
+describe("a widget's size bounds, resolved once", () => {
+  it("fills in a registration's bounds through core's own rule", () => {
+    const [widget] = resolveDashboardWidgets(
+      undefined,
+      [
+        {
+          ...REGISTERED_SHARED,
+          size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 } },
+        } as unknown as RegisteredWidgetMeta,
+      ],
+      allow
+    );
+    // The minimum as stated; the maximum the full width at the default's height.
+    expect(widget.size).toEqual({
+      default: { w: 6, h: 3 },
+      min: { w: 4, h: 2 },
+      max: { w: 12, h: 3 },
+    });
   });
 
-  it("falls back for names that exist on Object.prototype", () => {
-    // A plain `obj[key] ?? fallback` returns the INHERITED member for these, so
-    // the fallback never runs and the grid receives a function or an object
-    // where it expected a width. The value reaches here from a plugin
-    // declaration over the wire, so any string is possible.
-    for (const size of ["constructor", "toString", "valueOf", "__proto__"]) {
-      expect(widthFromDeclaredSize(size)).toBe("full");
+  it("gives a contribution that states no size the size core gives one", () => {
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        { id: "acme/c", archetype: "custom", component: "@acme/a#C" },
+      ]),
+      [],
+      allow
+    );
+    expect(widget.size).toEqual(sizeBounds(UNSTATED_WIDGET_SIZE));
+  });
+
+  it("reads a size the grid could not use as stating none, rather than drawing it", () => {
+    // 🔴 A declaration over the wire may be anything: a named width from an older plugin, a
+    // minimum above its default, a row height of one. None of them is drawn as stated.
+    for (const size of [
+      "half",
+      { default: { w: 4, h: 3 }, min: { w: 6, h: 3 } },
+      { default: { w: 4, h: 1 } },
+      { default: { w: 13, h: 3 } },
+    ]) {
+      const [widget] = resolveDashboardWidgets(
+        contributing([
+          { id: "acme/c", archetype: "custom", component: "@acme/a#C", size },
+        ]),
+        [],
+        allow
+      );
+      expect(widget.size, JSON.stringify(size)).toEqual(
+        sizeBounds(UNSTATED_WIDGET_SIZE)
+      );
     }
   });
 
-  it("still returns the real width for a size this core knows", () => {
-    // The control. A function returning the fallback unconditionally would
-    // satisfy both assertions above while drawing every widget full.
-    expect(widthFromDeclaredSize("sm")).toBe("quarter");
+  it("keeps a contribution's own usable size", () => {
+    // The control: a resolver that always answered the unstated size passes the two above.
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "acme/c",
+          archetype: "custom",
+          component: "@acme/a#C",
+          size: { default: { w: 4, h: 2 } },
+        },
+      ]),
+      [],
+      allow
+    );
+    expect(widget.size.default).toEqual({ w: 4, h: 2 });
+  });
+
+  it("takes a colliding widget's size from the registration", () => {
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "shared",
+          archetype: "metric",
+          size: { default: { w: 12, h: 6 } },
+        },
+      ]),
+      [REGISTERED_SHARED],
+      allow
+    );
+    expect(widget.size.default).toEqual({ w: 3, h: 3 });
   });
 });
 

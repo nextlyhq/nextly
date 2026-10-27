@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * The accepted PR scopes are enforced in exactly one place —
- * .github/workflows/pr-title.yml — and stated in prose in AGENTS.md. Nothing else notices when the
+ * .github/workflows/small-checks.yml — and stated in prose in AGENTS.md. Nothing else notices when the
  * two lists disagree, so a contributor following the document can avoid a
  * scope the check accepts, or attempt one it refuses. These tests hold the
  * document to being a transcription of the enforced list, in both
@@ -22,9 +22,9 @@ const read = file => readFileSync(resolve(repoRoot, file), "utf8");
 
 /** The list the CI check actually enforces. */
 function enforcedScopes() {
-  const workflow = read(".github/workflows/pr-title.yml");
+  const workflow = read(".github/workflows/small-checks.yml");
   const block = workflow.match(/scopes: \|\n([\s\S]*?)\n\s+requireScope/);
-  expect(block, "scopes block not found in pr-title.yml — the anchor moved").toBeTruthy();
+  expect(block, "scopes block not found in small-checks.yml — the anchor moved").toBeTruthy();
   return block[1].split("\n").map(l => l.trim()).filter(Boolean).sort();
 }
 

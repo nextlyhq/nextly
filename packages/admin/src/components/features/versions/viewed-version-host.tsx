@@ -18,7 +18,7 @@
 
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode, type JSX } from "react";
 
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
@@ -643,7 +643,7 @@ export function ViewedVersionBody({
   values?: Record<string, unknown>;
   actionsDisabled: boolean;
   children?: ReactNode;
-}) {
+}): JSX.Element {
   const { viewing } = useDocumentHistory();
   return (
     <>

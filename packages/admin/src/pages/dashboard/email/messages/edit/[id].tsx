@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import {
   EmailTemplateForm,
@@ -38,7 +38,7 @@ function EditStateMessage({ message }: { message: string }) {
   );
 }
 
-export default function EditEmailTemplatePage() {
+export default function EditEmailTemplatePage(): JSX.Element {
   const { route } = useRouter();
 
   const rawId =
@@ -63,7 +63,7 @@ export default function EditEmailTemplatePage() {
     (values: TemplateFormValues) => {
       if (!templateId) return;
       updateTemplate(
-        { id: templateId, data: formValuesToUpdatePayload(values) },
+        { id: templateId, data: formValuesToUpdatePayload(values, template) },
         {
           onSuccess: () => {
             toast.success("Template updated", {
@@ -82,7 +82,7 @@ export default function EditEmailTemplatePage() {
         }
       );
     },
-    [templateId, updateTemplate, listedUnderDesign]
+    [templateId, updateTemplate, listedUnderDesign, template]
   );
 
   if (!templateId) {

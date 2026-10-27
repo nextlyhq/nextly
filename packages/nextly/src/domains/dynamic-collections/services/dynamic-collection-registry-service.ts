@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
 
+import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
 import type { RevalidateConfig } from "../../../revalidation/types";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
@@ -12,12 +13,23 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { BaseService } from "../../../shared/base-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
+import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
+import {
+  moveWebhookRecording,
+  renameEntity,
+} from "../../entity-rename/rename-entity";
 import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
+
+import {
+  cachedCollectionRow,
+  clearCollectionRowCache,
+} from "./collection-row-cache";
 
 export interface CollectionMetadata {
   id: string;
@@ -230,39 +242,45 @@ export class DynamicCollectionRegistryService extends BaseService {
   async registerCollection(metadata: CollectionMetadata): Promise<unknown> {
     await this.ensureGlobalSlugUniqueness(metadata.slug);
 
-    await this.db.insert(this.dynamicCollections).values({
-      id: metadata.id,
-      slug: metadata.slug,
-      tableName: metadata.tableName,
-      description: metadata.description,
-      labels: metadata.labels,
-      fields: metadata.fields,
-      timestamps: metadata.timestamps ?? true,
-      admin: metadata.admin,
-      source: metadata.source ?? "ui",
-      locked: metadata.locked ?? false,
-      // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
-      // bool on postgres/mysql both accept a JS boolean here.
-      status: metadata.status === true,
-      // i18n: persist the localized flag so the read/write path routes translatable
-      // fields to the companion table and the admin shows per-language editing. Without
-      // it, a UI-created localized collection is stored as non-localized (shared).
-      localized: metadata.localized === true,
-      // Resolved versioning config (or null when unversioned). Stored as JSON
-      // the same way `admin` is; Drizzle serializes the object per dialect.
-      versions: metadata.versions ?? null,
-      // Cache-revalidation config (or null). Stored as JSON like `versions`.
-      revalidate: metadata.revalidate ?? null,
-      // Webhook recording policy (or null). Stored as JSON like `revalidate`.
-      webhooks: metadata.webhooks ?? null,
-      configPath: metadata.configPath,
-      schemaHash: metadata.schemaHash,
-      schemaVersion: metadata.schemaVersion ?? 1,
-      migrationStatus: metadata.migrationStatus ?? "pending",
-      lastMigrationId: metadata.lastMigrationId,
-      hooks: metadata.hooks,
-      createdBy: metadata.createdBy,
-    });
+    // The cached rows are cleared once the insert has run, landed or not, so a
+    // row read while it ran is not served after it.
+    try {
+      await this.db.insert(this.dynamicCollections).values({
+        id: metadata.id,
+        slug: metadata.slug,
+        tableName: metadata.tableName,
+        description: metadata.description,
+        labels: metadata.labels,
+        fields: metadata.fields,
+        timestamps: metadata.timestamps ?? true,
+        admin: metadata.admin,
+        source: metadata.source ?? "ui",
+        locked: metadata.locked ?? false,
+        // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
+        // bool on postgres/mysql both accept a JS boolean here.
+        status: metadata.status === true,
+        // i18n: persist the localized flag so the read/write path routes translatable
+        // fields to the companion table and the admin shows per-language editing. Without
+        // it, a UI-created localized collection is stored as non-localized (shared).
+        localized: metadata.localized === true,
+        // Resolved versioning config (or null when unversioned). Stored as JSON
+        // the same way `admin` is; Drizzle serializes the object per dialect.
+        versions: metadata.versions ?? null,
+        // Cache-revalidation config (or null). Stored as JSON like `versions`.
+        revalidate: metadata.revalidate ?? null,
+        // Webhook recording policy (or null). Stored as JSON like `revalidate`.
+        webhooks: metadata.webhooks ?? null,
+        configPath: metadata.configPath,
+        schemaHash: metadata.schemaHash,
+        schemaVersion: metadata.schemaVersion ?? 1,
+        migrationStatus: metadata.migrationStatus ?? "pending",
+        lastMigrationId: metadata.lastMigrationId,
+        hooks: metadata.hooks,
+        createdBy: metadata.createdBy,
+      });
+    } finally {
+      clearCollectionRowCache();
+    }
 
     // Publish the decision into the live policy as well as the column. The
     // boot-time read only runs at startup, so without this a Builder-created
@@ -293,6 +311,9 @@ export class DynamicCollectionRegistryService extends BaseService {
         // Needed to keep code-first config outranking the stored row when the
         // recording switch is mirrored into the live policy below.
         source: this.dynamicCollections.source,
+        // The stored recording decision, which a rename carries to the new
+        // slug when this update does not set one.
+        webhooks: this.dynamicCollections.webhooks,
       })
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, collectionSlug))
@@ -325,14 +346,85 @@ export class DynamicCollectionRegistryService extends BaseService {
 
     updateData.updatedAt = new Date();
 
-    await this.db
-      .update(this.dynamicCollections)
-      .set(updateData)
-      .where(eq(this.dynamicCollections.slug, collectionSlug));
+    // The one statement that writes the row, on whichever handle it is given:
+    // the pooled one for an ordinary update, the rename's transaction below.
+    // Matched by the id read above as well as the slug: a collection deleted
+    // and another registered under the slug since then is not the one asked
+    // for, and is left alone, as a row that is gone is.
+    const writeRow = (db: DatabaseAdapter["db"]) =>
+      db
+        .update(this.dynamicCollections)
+        .set(updateData)
+        .where(
+          and(
+            eq(this.dynamicCollections.slug, collectionSlug),
+            eq(this.dynamicCollections.id, existing[0].id)
+          )
+        );
+
+    const move = {
+      kind: "collection" as const,
+      from: collectionSlug,
+      to: targetSlug,
+    };
+    // Cleared once the update has run, as after an insert, and after a
+    // rename too: the row then lives under the new slug.
+    try {
+      if (targetSlug === existing[0].slug) {
+        await writeRow(this.db);
+      } else {
+        // A changed slug is a rename. Everything keyed by the old slug (history,
+        // markers, events, release members, permissions, webhook filters) moves
+        // in the same transaction as the registry row, so the two commit
+        // together or neither does; otherwise the renamed collection would lose
+        // them and the next collection created under the old slug would inherit
+        // them.
+        const renamed = await renameEntity(this.adapter, {
+          dialect: this.dialect,
+          move,
+          writeRegistry: async tx => {
+            const written = await writeRow(
+              tx.drizzleWithRelations<DatabaseAdapter["db"]>(
+                resolveRelations(this.dialect)
+              )
+            );
+            // No row under the old slug with the id read above any more
+            // (deleted, replaced, or renamed by another request, since the
+            // lookup): nothing is moved, so no history follows a registry row
+            // that did not move.
+            return affectedRowCount(written, this.dialect) === 0 ? null : move;
+          },
+        });
+        if (renamed === null) {
+          throw NextlyError.notFound({
+            message: `Collection "${collectionSlug}" not found`,
+            logContext: { collection: collectionSlug },
+          });
+        }
+      }
+    } finally {
+      clearCollectionRowCache();
+    }
+
+    // A rename carries the live recording decision to the new slug and drops
+    // the old slug's entry, so a collection created there later starts from
+    // the default rather than inheriting this one's choice.
+    if (
+      targetSlug !== existing[0].slug &&
+      !isConfigOwnedSource(existing[0].source)
+    ) {
+      // The decision this update commits: the one it writes, or the one the
+      // row already held.
+      const stored =
+        updates.webhooks !== undefined
+          ? updates.webhooks
+          : existing[0].webhooks;
+      moveWebhookRecording(move, stored?.record !== false);
+    }
 
     // Mirror the stored change into the live policy so turning the switch off
     // takes effect on the next write rather than the next restart. Keyed on the
-    // slug the row is stored under rather than a requested rename target, so the
+    // slug the row is now stored under, the new one after a rename, so the
     // policy key and the persisted row can never disagree.
     if (
       updates.webhooks !== undefined &&
@@ -340,13 +432,15 @@ export class DynamicCollectionRegistryService extends BaseService {
     ) {
       setWebhookRecording(
         "collection",
-        collectionSlug,
+        targetSlug,
         updates.webhooks?.record !== false,
         "db"
       );
     }
 
-    return this.getCollection(collectionSlug);
+    // Read back under the slug the row is stored under now: after a rename the
+    // old one names nothing.
+    return this.getCollection(targetSlug);
   }
 
   /**
@@ -491,7 +585,27 @@ export class DynamicCollectionRegistryService extends BaseService {
     };
   }
 
+  /**
+   * One collection's registry row, by slug. Outside a transaction it comes
+   * from the row cache (`collection-row-cache`): a copy, at most a second old
+   * for a change made elsewhere, and current for one made here. Inside one it
+   * is read on the transaction, uncached, so the transaction sees its own
+   * writes.
+   */
   async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    if (executor !== undefined || this.adapter.transactionOpenInFlow()) {
+      return this.readCollection(slug, executor);
+    }
+    return cachedCollectionRow(this.adapter, slug, () =>
+      this.readCollection(slug)
+    );
+  }
+
+  /** One collection's registry row from the database, booleans normalized. */
+  private async readCollection(
+    slug: string,
+    executor?: unknown
+  ): Promise<Record<string, unknown>> {
     // Run on the caller's transaction executor when supplied so this metadata
     // read does not take a second pooled connection from inside the caller's
     // transaction (which can stall against a small pool); falls back to the
@@ -527,9 +641,14 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-    await this.db
-      .delete(this.dynamicCollections)
-      .where(eq(this.dynamicCollections.slug, slug));
+    // Cleared once the delete has run, as after an insert.
+    try {
+      await this.db
+        .delete(this.dynamicCollections)
+        .where(eq(this.dynamicCollections.slug, slug));
+    } finally {
+      clearCollectionRowCache();
+    }
 
     // Drop the in-process recording decision with the row: this is the path the
     // Builder's delete takes, and a later collection created under the same slug

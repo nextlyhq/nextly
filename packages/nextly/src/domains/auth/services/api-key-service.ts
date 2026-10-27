@@ -83,12 +83,25 @@ import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+
+import { refuseLinkingPublicRole } from "./public-role";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
 
 /** Token duration options for key expiry. "unlimited" means the key never expires. */
 export type ExpiresIn = "7d" | "30d" | "90d" | "unlimited";
+
+/**
+ * Why a presented key does not authenticate: for the server's log, never the
+ * caller, who is told the same thing whichever it is.
+ */
+export type ApiKeyRefusalCause =
+  | "unknown"
+  | "revoked"
+  | "expired"
+  | "creator-inactive";
 
 /** The key value returned by generateApiKey(). fullKey is shown once and never stored. */
 export interface GeneratedApiKey {
@@ -370,10 +383,9 @@ function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
  * Distinct rows, keyed on the slug — the identity a grant is stored under.
  *
  * A key's grants are kept as rows, not slugs: the slug (`read-posts`) is what
- * every check compares and what a rule is handed, and for one release a rule
- * is also handed the earlier `posts:read` spelling, made from the row's
- * `action` and `resource`. A stored slug cannot be decomposed back into those
- * parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
+ * every check compares and what a rule is handed, and the row also names
+ * the `action` and `resource` it grants. A stored slug cannot be decomposed
+ * back into those parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
  * explicitly supported by `RolePermissionService`, so splitting on the hyphen
  * would invent a resource that no row names.
  */
@@ -637,6 +649,14 @@ export class ApiKeyService extends BaseService {
           logContext: { tokenType },
         });
       }
+      // The Public role is what visitors hold, never a key's.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [roleId],
+        "assign",
+        { userId }
+      );
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);
@@ -853,10 +873,10 @@ export class ApiKeyService extends BaseService {
   /**
    * The key's grants, as the rows they were resolved from.
    *
-   * Rows rather than slugs, because a rule judging the key on its own scope is
-   * handed, for one release, each grant's earlier `resource:action` spelling
-   * beside the stored slug its coarse permission check tests, and only the
-   * row has the parts to make it.
+   * Rows rather than slugs, because a slug cannot be split back into the
+   * action and resource it grants, and the scope keeps both for whatever
+   * asks of the key. A rule judging the key is handed each grant's stored
+   * slug, the one its coarse permission check tests.
    *
    * Returns a COPY. The cached arrays are shared by every request this key
    * makes for the TTL, and the scope built from them is handed to plugin route
@@ -1123,8 +1143,10 @@ export class ApiKeyService extends BaseService {
    *
    * Returns `null` for any failure case (not found, revoked, expired) so the
    * middleware can respond with a uniform 401 without leaking the reason.
+   * Which one it was is told to `onRefused`, for the server's log.
    *
    * @param rawKey - The full raw key from the `Authorization: Bearer` header
+   * @param onRefused - Told why the key does not authenticate, when it does not
    * @returns Auth tuple `{ id, userId, tokenType, roleId }` on success, or `null`
    *
    * @example
@@ -1136,7 +1158,10 @@ export class ApiKeyService extends BaseService {
    * );
    * ```
    */
-  async authenticateApiKey(rawKey: string): Promise<{
+  async authenticateApiKey(
+    rawKey: string,
+    onRefused?: (cause: ApiKeyRefusalCause) => void
+  ): Promise<{
     id: string;
     userId: string;
     tokenType: ApiKeyTokenType;
@@ -1152,14 +1177,12 @@ export class ApiKeyService extends BaseService {
         roleId: this.apiKeysTable.roleId,
         expiresAt: this.apiKeysTable.expiresAt,
         lastUsedAt: this.apiKeysTable.lastUsedAt,
+        // Read rather than filtered on, so a revoked key is told from one
+        // that was never issued.
+        isActive: this.apiKeysTable.isActive,
       })
       .from(this.apiKeysTable)
-      .where(
-        and(
-          eq(this.apiKeysTable.keyHash, keyHash),
-          eq(this.apiKeysTable.isActive, true)
-        )
-      )
+      .where(eq(this.apiKeysTable.keyHash, keyHash))
       .limit(1);
 
     type AuthRow = {
@@ -1169,10 +1192,16 @@ export class ApiKeyService extends BaseService {
       roleId: string | null;
       expiresAt: Date | number | null;
       lastUsedAt: Date | number | null;
+      isActive: boolean | number;
     };
-    if ((rows as AuthRow[]).length === 0) return null;
+    const refused = (cause: ApiKeyRefusalCause): null => {
+      onRefused?.(cause);
+      return null;
+    };
+    if ((rows as AuthRow[]).length === 0) return refused("unknown");
 
     const row = (rows as AuthRow[])[0];
+    if (!row.isActive) return refused("revoked");
 
     // Normalise expiresAt — SQLite returns numeric timestamps, PG/MySQL return Date objects
     const expiresAt: Date | null =
@@ -1182,14 +1211,16 @@ export class ApiKeyService extends BaseService {
           ? new Date(row.expiresAt)
           : null;
 
-    if (isKeyExpired(expiresAt)) return null;
+    if (isKeyExpired(expiresAt)) return refused("expired");
 
     // A key acts with its creator's authority, so it is refused while the
     // creator is deactivated and works again once they are reactivated. Read
     // through the account-standing cache sessions use, so a deactivation is
     // refused at once on the instance that made it and within the cache's
     // lifetime elsewhere. A failed read throws rather than admitting the key.
-    if (!(await accountIsActive(row.userId))) return null;
+    if (!(await accountIsActive(row.userId))) {
+      return refused("creator-inactive");
+    }
 
     await this.recordLastUse(row.id, row.lastUsedAt);
 

@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 
@@ -30,7 +32,7 @@ const PAGE_LABELS = {
 export function CollectionBreadcrumbs({
   currentPage,
   collectionName,
-}: CollectionBreadcrumbsProps) {
+}: CollectionBreadcrumbsProps): JSX.Element {
   const currentLabel =
     currentPage === "edit" && collectionName
       ? collectionName

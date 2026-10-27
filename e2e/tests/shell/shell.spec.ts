@@ -418,6 +418,10 @@ test.describe("overlays opened inside the shell", () => {
 test.describe("the readiness diagnostic itself", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
+  // Each page here can never become ready, so the wait only has to be long
+  // enough to fail: a second rather than the allowance a real page gets.
+  const NEVER_READY = { timeout: 1_000 };
+
   test("names an unrendered page instead of reporting a missing box", async ({
     page,
   }) => {
@@ -430,7 +434,7 @@ test.describe("the readiness diagnostic itself", () => {
     // drives that branch against a page under the test's control.
     await page.setContent("<html><body></body></html>");
 
-    await expect(assertShellReady(page)).rejects.toThrow(
+    await expect(assertShellReady(page, NEVER_READY)).rejects.toThrow(
       /shell is not in the DOM/
     );
   });
@@ -443,7 +447,7 @@ test.describe("the readiness diagnostic itself", () => {
     // reader past the actual fault.
     await page.setContent("<html><body></body></html>");
 
-    const error = await assertShellReady(page).catch(
+    const error = await assertShellReady(page, NEVER_READY).catch(
       (thrown: unknown) => thrown
     );
 
@@ -464,7 +468,7 @@ test.describe("the readiness diagnostic itself", () => {
     // string passes when the promise RESOLVES — `error` is then `undefined`
     // and `String(undefined)` contains nothing — so the weaker form would
     // certify a readiness check that had silently stopped failing at all.
-    const error = await assertShellReady(page).then(
+    const error = await assertShellReady(page, NEVER_READY).then(
       () => null,
       (thrown: unknown) => thrown
     );

@@ -2,7 +2,7 @@
  * What the admin knows about a dashboard widget and about the data one asked
  * for.
  *
- * The enum vocabulary (`WidgetSize`, `WidgetArchetype`, `WidgetQuery`) is
+ * The shared vocabulary (`WidgetSizeBounds`, `WidgetArchetype`, `WidgetQuery`) is
  * IMPORTED from core rather than restated, through `nextly/config`: this
  * package's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
  * importing from `"nextly"` shadows the package exports and drags core's whole
@@ -23,14 +23,15 @@
 
 import type {
   AnyWidgetSetting,
+  GetStartedAnswer,
   WidgetAction,
   WidgetArchetype,
-  WidgetHeight,
+  SourcelessWidgetQuery,
   WidgetQuery,
-  WidgetSize,
+  WidgetQueryCell,
+  WidgetSizeBounds,
   WidgetStatCell,
-  WidgetChrome,
-  WidgetWidth,
+  WidgetDefinition,
 } from "nextly/config";
 
 /*
@@ -70,18 +71,33 @@ export interface DashboardWidget {
   /** Lucide icon name, resolved to a component by the card. */
   icon?: string;
   archetype: WidgetArchetype;
-  size: WidgetSize;
   /**
-   * The DECLARED default height, when its author stated one.
+   * The sizes this widget's cards may take, in grid units, with every end
+   * filled in: the size a new card starts at, and the smallest and largest it
+   * may be resized to.
    *
-   * Carried for the same reason as `defaultOrder`: it is the value a placement
-   * seeds its own geometry FROM. The server already copies it onto a default
-   * placement, so an admin that dropped it here could not re-create a card the
-   * reader removed with the height it was declared with.
+   * Resolved ONCE from the declaration, through core's `sizeBounds`, so the
+   * grid, the card menu and the editor read one answer and none of them fills
+   * a missing end its own way.
    */
-  height?: WidgetHeight;
-  /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
-  query?: WidgetQuery;
+  size: WidgetSizeBounds;
+  /**
+   * Present for the data archetypes; absent for `text`, `actions`, `custom`.
+   * Sourceless for a widget offered per collection until its card is set to
+   * one, and then never asked.
+   */
+  query?: WidgetQuery | SourcelessWidgetQuery;
+  /**
+   * Set when core builds this card's data on the server from the widget's
+   * declaration: the card is asked for by its id, never by a query, and has none.
+   */
+  serverData?: true;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own, its action already an href and already one this reader may
+   * take (the server withholds one they may not).
+   */
+  declaredEmpty?: { title?: string; action?: { label: string; href: string } };
   /**
    * What a reader may change about this card, as the widget declared it.
    *
@@ -97,7 +113,7 @@ export interface DashboardWidget {
    * Each carries its own query, so the card's numbers are ordinary
    * access-controlled reads rather than one composite answer.
    */
-  cells?: WidgetStatCell[];
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
   /**
@@ -119,13 +135,11 @@ export interface DashboardWidget {
    */
   defaultOrder?: number;
   /**
-   * Whether the host frames this widget; `"card"` when unstated.
-   *
-   * `"none"` belongs to a widget that is already a designed surface -- core's
-   * dashboard sections carry their own heading and rules, so framing one draws
-   * a second heading around the first.
+   * Whether the card leaves the grid while its answer is empty, rather than drawing the empty
+   * state. Never while it failed or is not available to the reader, and never in customise mode,
+   * where it is shown marked so it can still be moved or removed.
    */
-  chrome?: WidgetChrome;
+  hidesWhenEmpty?: boolean;
   /**
    * Whether this reader may send the card away from the card itself.
    *
@@ -135,27 +149,29 @@ export interface DashboardWidget {
    * a dismissed card is recoverable from the same controls as any other.
    */
   dismissible?: boolean;
+  /**
+   * Whether the batch sizes this `custom` widget's list query to the card, as
+   * it does for the lists core draws: the rows the card's size draws and one
+   * more. Unstated, a custom widget is asked exactly its declared query.
+   */
+  sizedQuery?: boolean;
+  /**
+   * The settings this widget's source narrows by rather than being replaced
+   * by, as core published them for a registered widget; the knobs read them
+   * when they apply the reader's settings to the query.
+   */
+  sourceFilters?: WidgetDefinition["sourceFilters"];
 }
 
 /**
- * The five widths a card may be drawn at, narrowest first: core's own type,
- * from `nextly/config`, so a width core adds or renames reaches every table
- * keyed by it here as a type error rather than a card drawn wrongly.
- */
-export type { WidgetWidth };
-
-/**
- * What the server says about one widget's widths, for this reader.
+ * What the server says about one widget's place on this reader's dashboard.
  *
- * The admin never works a width out for itself: which widths a card may take,
- * where a new card starts and whether a second card of the widget may be added
- * are all answered by the server from the widget's declaration.
+ * Its sizes are not here: they are the widget's own, read from its
+ * declaration (`DashboardWidget.size`). What is here is what only the server
+ * can answer: whether a second card of the widget may be added, and where the
+ * add panel lists it.
  */
-export interface WidgetWidthFacts {
-  /** Narrowest first, never empty. */
-  allowedWidths: WidgetWidth[];
-  /** The width a newly added card starts at. */
-  defaultWidth: WidgetWidth;
+export interface WidgetLayoutFacts {
   /** Whether the widget may be placed more than once. */
   allowsSeveral: boolean;
   /**
@@ -171,6 +187,11 @@ export interface WidgetWidthFacts {
   category?: string;
   /** Which sketch draws its row: the widget's archetype. */
   sketch?: string;
+  /**
+   * Listed once per collection the reader may read, each row adding a card set to that
+   * collection. @experimental
+   */
+  perCollection?: true;
   /**
    * The widget's place in the add panel's order, as core ranks it. Present for every widget the
    * panel lists, a placed one too, so the panel orders its rows without deciding an order itself.
@@ -188,23 +209,24 @@ export type AddPanelGroup = "overview" | "content" | "team" | "plugins";
 /**
  * One card in a reader's arrangement. Its position is its index in the list.
  *
- * 🔴 `width` is `string`, not {@link WidgetWidth}, and that is load-bearing
- * rather than sloppy. A newer core may store a width this admin has never heard
- * of, so the type promises only what this client can keep; the grid draws an
- * unknown width full, through the one function that decides a drawn width.
+ * Its size is `w` columns by `h` rows, and nothing else about its size is
+ * stored: no position, no named width.
  */
 export interface WidgetPlacement {
   /** Opaque, and unique within a layout. Not a widget id, except by default. */
   id: string;
   widgetId: string;
   /**
-   * The width the reader chose, kept as stored even when the widget no longer
-   * allows it: the grid draws the nearest allowed width instead, and the stored
-   * choice comes back if the widget allows it again.
+   * The columns the reader chose, kept as stored even when the widget's bounds
+   * no longer allow it: the grid draws the nearest size inside them instead
+   * (`drawnSize`), and the stored choice comes back if the widget allows it
+   * again.
    */
-  width: string;
+  w: number;
+  /** The rows the reader chose, kept as stored in the same way as `w`. */
+  h: number;
   /**
-   * A removed card stays in the list, width and settings included, so it can
+   * A removed card stays in the list, size and settings included, so it can
    * be put back exactly where it was. It is not drawn.
    */
   removed: boolean;
@@ -219,12 +241,10 @@ export interface DashboardLayoutResponse {
   /** The reader's cards, IN ORDER: the array order is the dashboard's order. */
   placements: WidgetPlacement[];
   /**
-   * Every widget this reader may see, with the widths its cards may take.
-   *
-   * Keyed by widget id. A placement whose widget is missing here is drawn at
-   * its stored width and offers no width choice.
+   * Every widget this reader may see, with what the server says of its place
+   * on the dashboard. Keyed by widget id.
    */
-  widgets: Record<string, WidgetWidthFacts>;
+  widgets: Record<string, WidgetLayoutFacts>;
   /**
    * Widget ids this reader may add: not placed, or allowed several times.
    *
@@ -260,4 +280,24 @@ export interface DashboardLayoutResponse {
    * than this layout, and is read again.
    */
   audience: string;
+  /**
+   * The Get started card's steps, from the computation that decided whether
+   * the card is drawn, so the card and its steps cannot disagree. Absent from a
+   * server that predates the card.
+   *
+   * @experimental
+   */
+  getStarted?: GetStartedLayoutView;
+}
+
+/** What the layout read says of the Get started card. */
+export interface GetStartedLayoutView {
+  /** Whether the reader's card is drawn. */
+  drawn: boolean;
+  /**
+   * The steps with the reader's skips applied, or `null` when the server
+   * worked none out: the card is removed (and its answer not asked for), or
+   * not in this reader's dashboard.
+   */
+  answer: GetStartedAnswer | null;
 }

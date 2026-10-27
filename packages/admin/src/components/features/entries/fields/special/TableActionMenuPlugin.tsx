@@ -21,6 +21,7 @@ import {
 } from "@lexical/table";
 import { usePortalContainer } from "@nextlyhq/ui";
 import { $getSelection, $isRangeSelection } from "lexical";
+import type { ReactPortal } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -138,7 +139,7 @@ export interface TableActionMenuPluginProps {
 
 export function TableActionMenuPlugin({
   disabled = false,
-}: TableActionMenuPluginProps) {
+}: TableActionMenuPluginProps): ReactPortal | null {
   const [editor] = useLexicalComposerContext();
   const [isInTable, setIsInTable] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);

@@ -9,9 +9,16 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import * as schemas from "../index";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 describe("schemas public API", () => {
   describe("getCoreSchema()", () => {
@@ -54,6 +61,14 @@ describe("schemas public API", () => {
       expect(schemas.CORE_TABLE_NAMES).not.toContain("sessions");
     });
 
+    it("no longer names the stored permission answers", () => {
+      // Nothing reads `user_permission_cache` any more: a user's
+      // access is kept in memory. Out of this list, an existing database
+      // keeps its copy until `nextly migrate` is asked to drop it.
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("user_permission_cache");
+      expect(schemas).not.toHaveProperty("userPermissionCache");
+    });
+
     it("includes the canonical core tables", () => {
       const required = [
         "users",
@@ -65,7 +80,6 @@ describe("schemas public API", () => {
         "role_permissions",
         "user_roles",
         "role_inherits",
-        "user_permission_cache",
         "api_keys",
         "audit_log",
         "activity_log",

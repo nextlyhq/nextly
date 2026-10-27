@@ -15,6 +15,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { RotateCcw, X } from "lucide-react";
+import type { JSX } from "react";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
@@ -37,7 +38,7 @@ export function AutosaveRecoveryBanner({
   onRestore,
   onDismiss,
   className,
-}: AutosaveRecoveryBannerProps) {
+}: AutosaveRecoveryBannerProps): JSX.Element {
   return (
     // `status` rather than `alert`: an offer to recover is advisory, and `alert`
     // interrupts a screen reader mid-sentence for something the reader can act
@@ -95,7 +96,7 @@ export function LiveDocumentRecoveryOffer({
   recovery,
   viewingVersion,
   className,
-}: LiveDocumentRecoveryOfferProps) {
+}: LiveDocumentRecoveryOfferProps): JSX.Element | null {
   if (viewingVersion !== null || recovery.offer === null) return null;
   return (
     <AutosaveRecoveryBanner

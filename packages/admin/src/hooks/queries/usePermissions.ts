@@ -1,5 +1,11 @@
 import type { TableParams, ListResponse } from "@nextlyhq/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   deletePermission,
@@ -8,6 +14,8 @@ import {
   updatePermission,
 } from "@admin/services/permissionApi";
 import type { Permission } from "@admin/types/entities";
+
+import { invalidateCurrentUserAccess } from "../current-user-access";
 
 /**
  * Query Keys:
@@ -75,7 +83,9 @@ const defaultParams: TableParams = {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function usePermissions(params?: TableParams) {
+export function usePermissions(
+  params?: TableParams
+): UseQueryResult<ListResponse<Permission>, Error> {
   return useQuery<ListResponse<Permission>, Error>({
     queryKey: ["permissions", params],
     queryFn: async () => {
@@ -124,7 +134,9 @@ export function usePermissions(params?: TableParams) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function usePermission(permissionId?: string) {
+export function usePermission(
+  permissionId?: string
+): UseQueryResult<Permission, Error> {
   return useQuery<Permission, Error>({
     queryKey: ["permissions", permissionId],
     queryFn: async () => {
@@ -199,7 +211,17 @@ export function usePermission(permissionId?: string) {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdatePermission() {
+export function useUpdatePermission(): UseMutationResult<
+  Permission,
+  Error,
+  {
+    permissionId: string;
+    updates: Partial<Permission>;
+  },
+  {
+    previousPermission: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -243,6 +265,12 @@ export function useUpdatePermission() {
           context.previousPermission
         );
       }
+    },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
     },
     onSettled: (_, __, { permissionId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
@@ -304,7 +332,12 @@ export function useUpdatePermission() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeletePermission() {
+export function useDeletePermission(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -314,6 +347,7 @@ export function useDeletePermission() {
     onSuccess: () => {
       // Invalidate all permissions queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["permissions"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }

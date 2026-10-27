@@ -4,6 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   esbuild: { jsx: "automatic", jsxImportSource: "react" },
   test: {
+    // What each file loaded on its last run, so `--changed` and `related` pick
+    // tests from real dependencies rather than a static import graph.
+    experimental: { recordDependencies: true },
     environment: "node",
     // Unit tests live in src/. The Playwright e2e/ suite runs separately (needs a live
     // playground + browser) and must not be collected by vitest.

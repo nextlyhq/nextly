@@ -9,6 +9,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { FileText, Plus } from "@admin/components/icons";
 
@@ -24,8 +25,12 @@ export interface EntryEmptyStateProps {
   collectionName: string;
   /** Singular name of the collection (e.g., "Post", "User") */
   singularName: string;
-  /** Callback when create button is clicked */
-  onCreateClick: () => void;
+  /**
+   * Callback when create button is clicked. Absent where no entry can be
+   * created here, and then the empty state offers nothing to create: a
+   * button that leads nowhere reads as broken.
+   */
+  onCreateClick?: () => void;
 }
 
 // ============================================================================
@@ -57,7 +62,7 @@ export function EntryEmptyState({
   collectionName,
   singularName,
   onCreateClick,
-}: EntryEmptyStateProps) {
+}: EntryEmptyStateProps): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center py-16 px-4  border border-border border-dashed rounded-lg bg-card">
       <div className="rounded-lg bg-primary/5 p-4 mb-4">
@@ -66,13 +71,17 @@ export function EntryEmptyState({
       <h3 className="text-lg font-semibold mb-1">
         No {collectionName.toLowerCase()} yet
       </h3>
-      <p className="text-muted-foreground text-center max-w-sm mb-6">
-        Get started by creating your first {singularName.toLowerCase()}.
-      </p>
-      <Button onClick={onCreateClick}>
-        <Plus className="h-4 w-4" />
-        Create {singularName}
-      </Button>
+      {onCreateClick && (
+        <>
+          <p className="text-muted-foreground text-center max-w-sm mb-6">
+            Get started by creating your first {singularName.toLowerCase()}.
+          </p>
+          <Button onClick={onCreateClick}>
+            <Plus className="h-4 w-4" />
+            Create {singularName}
+          </Button>
+        </>
+      )}
     </div>
   );
 }

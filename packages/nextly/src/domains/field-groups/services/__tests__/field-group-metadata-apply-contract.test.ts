@@ -13,7 +13,7 @@
  * Driven through doubles rather than an engine because the case being described is a query failure
  * at one specific moment, which a real database will not reproduce on request.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 /**
  * Every table the runtime was pointed at, in order.
@@ -58,6 +58,13 @@ import {
   FieldGroupMetadataService,
   type CreateFieldGroupInput,
 } from "../field-group-metadata-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const logger: Logger = {
   debug: vi.fn(),

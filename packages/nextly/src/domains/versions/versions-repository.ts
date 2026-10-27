@@ -355,18 +355,7 @@ export class VersionsRepository {
    * error or a NULL write.
    */
   private serializeSnapshot(snapshot: unknown): string {
-    try {
-      const serialized = JSON.stringify(snapshot);
-      if (typeof serialized !== "string") {
-        throw new TypeError("snapshot did not serialize to a JSON string");
-      }
-      return serialized;
-    } catch (cause) {
-      throw NextlyError.internal({
-        cause: cause instanceof Error ? cause : undefined,
-        logContext: { reason: "version-snapshot-not-serializable" },
-      });
-    }
+    return serializeVersionSnapshot(snapshot);
   }
 
   /**
@@ -636,9 +625,11 @@ export class VersionsRepository {
           { column: "scopeKind", op: "=", value: scopeKind },
           { column: "scopeSlug", op: "=", value: scopeSlug },
           { column: "entryId", op: "IN", value: entryIds },
-          { column: "isAutosave", op: "=", value: false },
-          { column: "versionNo", op: "IS NULL" },
-          { column: "status", op: "=", value: "draft" },
+          // The shape itself, not a copy of its three conditions: the
+          // languages a list row marks as pending and the `_pendingChange`
+          // filter that keeps the row both read it, and a copy would let the
+          // badge and the filter disagree the first time the shape changed.
+          ...WORKING_DRAFT_SHAPE,
         ],
       },
     });
@@ -843,6 +834,39 @@ export class VersionsRepository {
       limit: 1,
     });
     return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
+  }
+
+  /**
+   * Each named language's newest durable version number on a document: the
+   * order in which those parts last saved. Version numbers rise with every
+   * write, so they order two saves made within one second, which a
+   * whole-second timestamp cannot. One indexed lookup per language, reading a
+   * single row each, however long the history is.
+   */
+  async newestVersionNoByLocale(
+    ref: VersionRef,
+    locales: readonly (string | null)[]
+  ): Promise<Map<string | null, number>> {
+    const newest = new Map<string | null, number>();
+    for (const locale of new Set(locales)) {
+      const rows = await this.db.select<{ versionNo: number }>(TABLE, {
+        columns: ["versionNo"],
+        where: {
+          and: [
+            ...this.docWhere(ref),
+            { column: "isAutosave", op: "=", value: false },
+            { column: "versionNo", op: "IS NOT NULL" },
+            locale === null
+              ? { column: "locale", op: "IS NULL" }
+              : { column: "locale", op: "=", value: locale },
+          ],
+        },
+        orderBy: [{ column: "versionNo", direction: "desc" }],
+        limit: 1,
+      });
+      if (rows[0]) newest.set(locale, rows[0].versionNo);
+    }
+    return newest;
   }
 
   /** Fetch one durable version by its number, snapshot included. */
@@ -1315,5 +1339,25 @@ export class VersionsRepository {
       });
     }
     return deleted;
+  }
+}
+
+/**
+ * A snapshot as the versions table stores it: its JSON text, or a refusal when
+ * it has none. Exported so a caller that must copy a snapshot before storing
+ * it copies exactly what the store would keep, rather than by rules of its own.
+ */
+export function serializeVersionSnapshot(snapshot: unknown): string {
+  try {
+    const serialized = JSON.stringify(snapshot);
+    if (typeof serialized !== "string") {
+      throw new TypeError("snapshot did not serialize to a JSON string");
+    }
+    return serialized;
+  } catch (cause) {
+    throw NextlyError.internal({
+      cause: cause instanceof Error ? cause : undefined,
+      logContext: { reason: "version-snapshot-not-serializable" },
+    });
   }
 }

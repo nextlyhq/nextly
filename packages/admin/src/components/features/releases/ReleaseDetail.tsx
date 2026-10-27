@@ -11,6 +11,7 @@
  * @module components/features/releases/ReleaseDetail
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { CalendarClock, ExternalLink, Trash2 } from "@admin/components/icons";
@@ -326,7 +327,7 @@ function Header({
   );
 }
 
-export function ReleaseDetail({ id }: { id: string }) {
+export function ReleaseDetail({ id }: { id: string }): JSX.Element {
   const release = useRelease(id);
   const members = useReleaseMembers(id);
 

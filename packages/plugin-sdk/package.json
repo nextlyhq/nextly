@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-sdk",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.72",
   "description": "Nextly Plugin SDK — the author-facing surface for building Nextly plugins; the plugin API stability boundary (see STABILITY.md).",
   "license": "MIT",
   "repository": {
@@ -67,16 +67,15 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
-    "lint": "eslint . --max-warnings 0",
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "clean": "rimraf dist",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "engines": {
-    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
     "@nextlyhq/blocks-engine": "workspace:*"
@@ -100,16 +99,15 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
-    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/node": "^20.19.17",
-    "@types/react": "19.2.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "19.3.0",
     "nextly": "workspace:*",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tsdown": "^0.23.1",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.5"
   },
   "publishConfig": {
     "access": "public",

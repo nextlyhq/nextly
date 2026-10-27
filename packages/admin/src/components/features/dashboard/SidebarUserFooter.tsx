@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
   Skeleton,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { ChevronUp, User, HelpCircle, LogOut } from "@admin/components/icons";
 import { useLogout } from "@admin/hooks/useLogout";
@@ -50,7 +51,7 @@ export function SidebarUserFooter({
   collapsed,
   isUserPanelOpen: _isUserPanelOpen,
   onTogglePanel: _onTogglePanel,
-}: SidebarUserFooterProps) {
+}: SidebarUserFooterProps): JSX.Element {
   const logout = useLogout();
 
   if (collapsed) {

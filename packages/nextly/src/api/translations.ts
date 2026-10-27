@@ -16,6 +16,10 @@
  * @since 1.0.0
  */
 
+import {
+  readLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { container } from "../di";
 import { getAdapterFromDI } from "../dispatcher/helpers/di";
@@ -26,6 +30,7 @@ import {
   type TranslationFilterState,
 } from "../domains/i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { appLocalization } from "../domains/i18n/configured-locales";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
@@ -94,11 +99,11 @@ function parseLimit(raw: string | null): number {
  * Asked of `canReadEntity`, which is the SAME decision the row read makes, and
  * whose own docblock says reproducing any of it would be a second
  * implementation to keep in step. That is exactly what a permission-only
- * approximation is: `checkAccess` resolves a code-defined `access.read` — `true`
- * or a callback — BEFORE falling back to stored grants, so a collection
- * authorized purely in code has no `slug:read` pair to find. Filtering on those
- * pairs removed it before the row read could allow it, and its outstanding work
- * vanished from the worklist without any refusal being reported.
+ * approximation is: `checkAccess` asks a code-defined `access.read` — `true` or
+ * a callback — after the stored grant, so a collection refused in code still
+ * has its `slug:read` pair. Filtering on those pairs kept it although the row
+ * read refuses it, and its outstanding work showed on the worklist of a
+ * caller who may not read it.
  *
  * Coarse only in WHAT it decides — whether a collection is worth querying at
  * all. The per-row rules inside `listEntries` still decide which documents come
@@ -148,9 +153,7 @@ async function readableCollections(
  * it, so "which languages exist" has one answer.
  */
 function configuredLocalization(): SanitizedLocalizationConfig | undefined {
-  if (!container.has("config")) return undefined;
-  return container.get<{ localization?: SanitizedLocalizationConfig }>("config")
-    .localization;
+  return appLocalization();
 }
 
 /**
@@ -367,9 +370,20 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // `skippedCollections` — where its work is never queried AND its slug is
   // named back to someone with no right to know it exists.
   const localized = await localizedCollections();
-  const readable = await readableCollections(
-    caller,
-    localized.map(c => c.slug)
+  // The read decision is told the languages this worklist reads: the one
+  // worked on, and those its titles are read in, the default language and
+  // each it falls back to, as the list read below resolves them.
+  const titleLanguages = readLanguagesFor(
+    configuredLocalization(),
+    undefined
+  ).locales;
+  const readable = await withRuleLanguage(
+    { locale, locales: [...new Set([...titleLanguages, locale])] },
+    () =>
+      readableCollections(
+        caller,
+        localized.map(c => c.slug)
+      )
   );
   // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a negative verdict is
   // deliberately not remembered, so asking for every state would put one catalogue read per

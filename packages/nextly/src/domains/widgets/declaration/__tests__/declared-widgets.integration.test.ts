@@ -12,6 +12,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../../config";
@@ -23,6 +25,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import {
+  countLayoutRows,
+  deleteRunRows,
+} from "../../../../services/widgets/__tests__/layout-rows";
 import { WidgetLayoutService } from "../../../../services/widgets/widget-layout-service";
 import type { WidgetPlacement } from "../../layout";
 import { resolveCardSettings } from "../card-query";
@@ -31,6 +37,16 @@ import { defineWidget } from "../define-widget";
 import { settings } from "../setting-builders";
 
 const ORDERS = "orders";
+
+/**
+ * This run's own suffix for the layouts it saves.
+ *
+ * PostgreSQL and MySQL keep a slot's test database between runs, and the case saves at version 0,
+ * which a row an earlier run left under the same scope refuses: a second run on one database failed
+ * with a conflict while CI's fresh databases never saw it. A suffix fresh for each run gives every
+ * run rows of its own. The whole UUID, because the teardown deletes by it on shared databases.
+ */
+const RUN = randomUUID();
 
 const orders = defineCollection({
   slug: ORDERS,
@@ -44,8 +60,7 @@ function recentOrders(startingItems: number) {
     title: "Recent orders",
     description: "The newest orders",
     category: "Shop",
-    widths: ["half", "full"],
-    width: "full",
+    size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
     permission: `read-${ORDERS}`,
     settings: {
       collection: settings.collection(),
@@ -86,7 +101,8 @@ function card(id: string, config: Record<string, unknown>): WidgetPlacement {
   return {
     id,
     widgetId: "acme/recent-orders",
-    width: "full",
+    w: 12,
+    h: 4,
     removed: false,
     config,
   };
@@ -105,16 +121,30 @@ function declaredWidgetSuite(
 ) {
   describe(`declared widgets (${label})`, () => {
     let handle: TestNextly | undefined;
+    // The layouts the case saved through, and how many rows the table held before it wrote any:
+    // a server database keeps whatever an earlier run, or another suite, wrote there.
+    let layouts: WidgetLayoutService | undefined;
+    let startingRows: number | undefined;
 
+    // The rows this run wrote go with it rather than piling up, and the case fails if any stayed.
+    // Before the handle goes, since the rows are read and deleted through its database.
     afterEach(async () => {
+      if (layouts !== undefined && startingRows !== undefined) {
+        await deleteRunRows(layouts, RUN);
+        expect(await countLayoutRows(layouts, RUN)).toBe(0);
+        expect(await countLayoutRows(layouts)).toBe(startingRows);
+      }
+      layouts = undefined;
+      startingRows = undefined;
       await handle?.destroy();
       handle = undefined;
     });
 
     it("hand a saved card a new starting value, and leave a value its person chose", async () => {
       handle = await boot(5);
-      const layouts = new WidgetLayoutService(handle.adapter, silentLogger);
-      const scope = `starting-values-${label}`;
+      layouts = new WidgetLayoutService(handle.adapter, silentLogger);
+      startingRows = await countLayoutRows(layouts);
+      const scope = `starting-values-${label}-${RUN}`;
       await layouts.saveLayout(
         "user",
         scope,
@@ -159,7 +189,12 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       contributes: {
         dashboard: {
           widgets: [
-            { ...recentOrders(5), id: "core/orders", width: "quarter" },
+            {
+              ...recentOrders(5),
+              id: "core/orders",
+              // Below the minimum it states beside it.
+              size: { default: { w: 3, h: 4 }, min: { w: 6, h: 4 } },
+            },
           ] as unknown as NonNullable<
             NonNullable<
               Parameters<typeof definePlugin>[0]["contributes"]
@@ -182,7 +217,7 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
       'plugin "@test/broken", widget "core/orders": id "core/orders" is in the reserved "core/" namespace'
     );
     expect(message).toContain(
-      'plugin "@test/broken", widget "core/orders": width "quarter" is not one of the widths it allows'
+      'plugin "@test/broken", widget "core/orders": size.min must not be larger than size.default'
     );
   });
 });
@@ -202,8 +237,7 @@ function listingPlugin(name: string, collection: string, sort: string) {
             title: "Listing",
             description: "Entries of one collection",
             category: "Shop",
-            widths: ["full"],
-            width: "full",
+            size: { default: { w: 12, h: 4 } },
             settings: {
               collection: {
                 ...settings.collection(),

@@ -460,11 +460,10 @@ describe("what a rule is handed", () => {
     expect(ctx.collection).toBe("pages");
   });
 
-  it("is the role screen's permission spelling, with the earlier one after it for one release", async () => {
+  it("is the role screen's permission spelling, and no other", async () => {
     const ctx = await contextFor(callers["user-with"]);
     const stored = ACTIONS.map(action => `${action}-posts`);
-    const earlier = ACTIONS.map(action => `posts:${action}`);
-    expect([...ctx.permissions]).toEqual([...stored, ...earlier]);
+    expect([...ctx.permissions]).toEqual(stored);
   });
 
   it("names a key's maker as the user, with the key's own roles", async () => {
@@ -504,7 +503,12 @@ describe("askRule", () => {
       slug: "posts",
       access: { read: untypedRule(rule) },
     });
-    expect(outcome).toEqual({ declared: true, value: null });
+    // With what it means, read from that one call.
+    expect(outcome).toEqual({
+      declared: true,
+      value: null,
+      answer: { kind: "refuse" },
+    });
     expect(rule).toHaveBeenCalledTimes(1);
   });
 
@@ -599,12 +603,14 @@ describe("the judge seam", () => {
       access: { publish, update },
     };
     const refused = await askRules(callers["user-with"], "publish", target);
-    expect(refused).toEqual({ action: { declared: true, value: false } });
+    expect(refused).toEqual({
+      action: { declared: true, value: false, answer: { kind: "refuse" } },
+    });
     expect(update).not.toHaveBeenCalled();
     publish.mockReturnValue(true);
     expect(await askRules(callers["user-with"], "publish", target)).toEqual({
-      action: { declared: true, value: true },
-      update: { declared: true, value: true },
+      action: { declared: true, value: true, answer: { kind: "allow" } },
+      update: { declared: true, value: true, answer: { kind: "allow" } },
     });
     expect(publish).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledTimes(1);
@@ -753,5 +759,215 @@ describe("something no rule can name", () => {
       allowed: false,
       reason: "principal-without-rule",
     });
+  });
+});
+
+describe("a rule that answers with a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  const TEAM = { team: { equals: "t1" } };
+  /** `posts` declaring `rule` for every action. */
+  const postsAnswering = (rule: unknown): AccessTarget => ({
+    kind: "collection",
+    slug: "posts",
+    access: Object.fromEntries(
+      ACTIONS.map(action => [action, () => rule])
+    ) as CollectionAccessControl,
+  });
+
+  it.each(["read", "update", "delete"] as const)(
+    "allows only the entries it matches on a collection's %s, and nothing for every entry",
+    async action => {
+      const decision = await decide(
+        callers["user-with"],
+        action,
+        postsAnswering(OWN)
+      );
+      // POPULATION CONTROL: not `allowed`, so a way in reading `allowed`
+      // alone refuses it.
+      expect(decision.allowed).toBe(false);
+      expect(decision).toEqual({
+        allowed: false,
+        reason: "only-matching-entries",
+        filter: OWN,
+      });
+    }
+  );
+
+  it("answers the same from a promise, for a key as for a user", async () => {
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: untypedRule(async () => OWN) },
+    };
+    expect(await decide(callers["key-with"], "read", target)).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("limits a publish by both its own rule's filter and the update rule's", async () => {
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        publish: untypedRule(() => OWN),
+        update: untypedRule(() => TEAM),
+      },
+    };
+    expect(await decide(callers["user-with"], "publish", target)).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { and: [OWN, TEAM] },
+    });
+  });
+
+  it("is still refused where the caller lacks the permission", async () => {
+    expect(
+      await decide(callers["user-without"], "read", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "no-permission" });
+  });
+
+  it("is never applied to a super-admin or trusted work, which pass every rule", async () => {
+    const target = postsAnswering(OWN);
+    expect(await decide(callers["super-admin"], "read", target)).toEqual({
+      allowed: true,
+    });
+    expect(await decide(systemActor(), "read", target)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("limits a plugin's person to the matching entries too", async () => {
+    expect(
+      await decide(callers.principal, "read", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "only-matching-entries", filter: OWN });
+  });
+
+  it("is refused from a create rule, which has no entries to match", async () => {
+    expect(
+      await decide(callers["user-with"], "create", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "rule-filter-misplaced" });
+  });
+
+  it("is refused from a Single's rule, which is one entry", async () => {
+    const settings: AccessTarget = {
+      kind: "single",
+      slug: "settings",
+      access: { read: untypedRule(() => OWN) },
+    };
+    const editor = userActor({
+      userId: "u7",
+      roles: ["editor"],
+      permissions: only("settings", ["read"]),
+    });
+    expect(await decide(editor, "read", settings)).toEqual({
+      allowed: false,
+      reason: "rule-filter-misplaced",
+    });
+  });
+
+  it.each([
+    ["an unknown operator", { slug: { resembles: "probe" } }],
+    ["an empty in", { slug: { in: [] } }],
+    ["an and that is not a list", { and: { slug: { equals: "x" } } }],
+  ])("is refused when it is not well formed: %s", async (_name, filter) => {
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    expect(
+      await decide(callers["user-with"], "read", postsAnswering(filter))
+    ).toEqual({ allowed: false, reason: "rule-filter-malformed" });
+  });
+
+  it("refuses a publish whose update rule answers a filter that is not well formed", async () => {
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        publish: () => true,
+        update: untypedRule(() => ({ and: "x" })),
+      },
+    };
+    expect(await decide(callers["user-with"], "publish", target)).toEqual({
+      allowed: false,
+      reason: "rule-filter-malformed",
+    });
+  });
+
+  it("keeps the filter a rule answered with, however its answer reads afterwards", async () => {
+    let reads = 0;
+    const shifting = {
+      get author() {
+        reads += 1;
+        return reads <= 2 ? { equals: "u1" } : undefined;
+      },
+    };
+    expect(
+      await decide(callers["user-with"], "read", postsAnswering(shifting))
+    ).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+  });
+
+  it("keeps each caller's filter apart when a rule answers with one shared object", async () => {
+    // A rule that writes the caller into one object it keeps, and answers it.
+    const shared: Record<string, unknown> = {};
+    const posts: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        read: untypedRule(({ user }) => {
+          shared.author = { equals: user?.id };
+          return shared;
+        }),
+      },
+    };
+    const reader = (userId: string) =>
+      userActor({
+        userId,
+        roles: ["editor"],
+        permissions: only("posts", ["read"]),
+      });
+    const first = await decide(reader("u1"), "read", posts);
+    const second = await decide(reader("u2"), "read", posts);
+    expect(first).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+    expect(second).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u2" } },
+    });
+  });
+
+  it("is refused from a Single's publish rule before the update rule is asked", async () => {
+    const update = vi.fn(() => true);
+    const settings: AccessTarget = {
+      kind: "single",
+      slug: "settings",
+      access: { publish: untypedRule(() => OWN), update: untypedRule(update) },
+    };
+    const editor = userActor({
+      userId: "u7",
+      roles: ["editor"],
+      permissions: only("settings", ["read", "update", "publish"]),
+    });
+    expect(await decide(editor, "publish", settings)).toEqual({
+      allowed: false,
+      reason: "rule-filter-misplaced",
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("is not mistaken for a filter when the answer is a list or a class instance", async () => {
+    for (const answer of [[OWN], new Date()]) {
+      expect(
+        await decide(callers["user-with"], "read", postsAnswering(answer))
+      ).toEqual({ allowed: false, reason: "rule-refused" });
+    }
   });
 });

@@ -118,7 +118,8 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: source.label,
     description: `How many entries ${source.label} holds`,
     archetype: "metric",
-    defaultSize: "sm",
+    // One figure: a quarter of the row, two rows tall, and any wider.
+    size: { default: { w: 3, h: 2 } },
     query: { source: source.id, op: "count", status: "all" },
   };
 }
@@ -189,7 +190,8 @@ function statsWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} health`,
     description: `How ${source.label} splits across its lifecycle states`,
     archetype: "stats",
-    defaultSize: "md",
+    // A row of figures: a third by default, from a quarter to the full width.
+    size: { default: { w: 4, h: 2 }, min: { w: 3, h: 2 } },
     cells: [
       {
         key: "total",
@@ -292,7 +294,13 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `Recent ${source.label}`,
     description: `The ${source.label} entries changed most recently`,
     archetype: "list",
-    defaultSize: "md",
+    // A list: a third by default, from a quarter to the full width, and taller
+    // for more rows.
+    size: {
+      default: { w: 4, h: 4 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     query: {
       source: source.id,
       op: "list",
@@ -331,9 +339,10 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
  * declared, on a card the reader did not misconfigure.
  *
  * The result is three columns for a collection with a status and two without,
- * rather than a fixed shape padded with blanks. `defaultSize` is `lg` for the
- * same reason the renderer caps its rows: a table narrower than its content
- * scrolls inside a card, and a table that scrolls is one nobody reads.
+ * rather than a fixed shape padded with blanks. Its size starts and stays at
+ * half the row or wider for the same reason the renderer caps its rows: a
+ * table narrower than its content scrolls inside a card, and a table that
+ * scrolls is one nobody reads.
  */
 function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
   const recent = recentEntries(source);
@@ -347,7 +356,11 @@ function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} table`,
     description: `Recent ${source.label} entries across their columns`,
     archetype: "table",
-    defaultSize: "lg",
+    size: {
+      default: { w: 6, h: 4 },
+      min: { w: 6, h: 3 },
+      max: { w: 12, h: 6 },
+    },
     query: {
       source: source.id,
       op: "list",
@@ -408,7 +421,12 @@ function timelineWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} over time`,
     description: `How many ${source.label} entries there are per day`,
     archetype: "timeseries",
-    defaultSize: "md",
+    // A chart: a third by default, from a quarter to the full width.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 4 },
+    },
     query: {
       source: source.id,
       op: "timeseries",
@@ -457,7 +475,12 @@ function breakdownWidget(source: WidgetSource): WidgetDefinition | undefined {
     title: `${source.label} by status`,
     description: `How ${source.label} entries divide between draft and published`,
     archetype: "bars",
-    defaultSize: "md",
+    // A chart: a third by default, from a quarter to the full width.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 12, h: 4 },
+    },
     query: {
       source: source.id,
       op: "groupBy",
@@ -504,69 +527,6 @@ export function collectionWidgets(
     if (claimed.get(widget.id) === 1) widgets.push(widget);
   }
   return widgets;
-}
-
-/**
- * The status card for a single: the one document, as its lifecycle state and
- * when it last changed.
- *
- * A single has one document, so the only card worth deriving is the one that
- * says what state it is in: a `list` of one row, its label the publish state
- * where the single has a lifecycle and the last change otherwise, and the
- * last change as the detail line. A count of one row is a constant and a
- * timeline over one row is a point, so neither is offered.
- *
- * The footer link opens the single itself, which is where a reader who sees
- * "draft" goes next.
- */
-function singleStatusWidget(
-  source: WidgetSource
-): WidgetDefinition | undefined {
-  if (!source.supports.includes("list")) return undefined;
-  const id = widgetId(source, "status");
-  if (id === undefined) return undefined;
-  const slug = sourceTarget(source.id);
-  return {
-    id,
-    title: source.label,
-    description:
-      source.lifecycleStatus === true
-        ? `Whether ${source.label} is published, and when it last changed`
-        : `When ${source.label} last changed`,
-    archetype: "list",
-    defaultSize: "sm",
-    query: {
-      source: source.id,
-      op: "list",
-      status: "all",
-      select:
-        source.lifecycleStatus === true
-          ? ["status", "updatedAt"]
-          : ["updatedAt"],
-    },
-    link: { label: `Open ${source.label}`, href: `/admin/singles/${slug}` },
-  };
-}
-
-/**
- * Every generated card the given single sources support, in source order.
- *
- * Pure, like {@link collectionWidgets}, and with the same collision rule: two
- * singles reducing to one id cost both their card.
- */
-export function singleWidgets(
-  sources: readonly WidgetSource[]
-): WidgetDefinition[] {
-  const claimed = new Map<string, number>();
-  const candidates: WidgetDefinition[] = [];
-  for (const source of sources) {
-    if (source.kind !== "single") continue;
-    const widget = singleStatusWidget(source);
-    if (!widget) continue;
-    claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
-    candidates.push(widget);
-  }
-  return candidates.filter(widget => claimed.get(widget.id) === 1);
 }
 
 /**
@@ -620,16 +580,11 @@ export async function refreshContentSources(): Promise<boolean> {
  * without this produces a set one request out of date.
  */
 export async function refreshCollectionWidgets(): Promise<void> {
-  // Both kinds of content source, then both kinds of card from the one
-  // source list: a single's card is derived the way a collection's is, and a
-  // refresh that rebuilt one kind and not the other would offer cards for a
-  // single deleted since beside none for one created since.
+  // Both kinds of content source, since a single's source is still read by the
+  // Content card and by queries naming it. Cards are derived for collections
+  // only: a single is listed on the Content card, and has no card of its own.
   await refreshContentSources();
-  const sources = listSources();
-  setGeneratedWidgets([
-    ...collectionWidgets(sources),
-    ...singleWidgets(sources),
-  ]);
+  setGeneratedWidgets(collectionWidgets(listSources()));
 }
 
 /**

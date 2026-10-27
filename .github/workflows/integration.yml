@@ -35,8 +35,8 @@ on:
 permissions:
   contents: read
 
-# The wall-clock budget for ONE job's share of a dialect's suite: the whole
-# suite on the sqlite leg, one shard of it on the postgres and mysql legs.
+# The wall-clock budget for ONE job's share of a dialect's suite: one shard
+# of it, on every leg.
 # Enforced per step rather than per job — see scripts/run-with-budget.sh for
 # why the distinction decides whether a slow leg reports at all.
 #
@@ -54,6 +54,11 @@ permissions:
 # drifts back into firing on variance.
 env:
   INTEGRATION_SUITE_BUDGET: 55m
+  # Turborepo's shared remote cache, written only by `main`'s pushes and read
+  # everywhere else, the merge queue included: the reasons are beside the same
+  # block in ci.yml.
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+  TURBO_CACHE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
 
 # Keyed per commit on `main` for the same reason as the CI workflow: a shared
 # `github.ref` group cancelled the previous commit's run on every merge, and
@@ -64,9 +69,14 @@ env:
 # work. The `changes` job asks first, and a run a newer push has overtaken
 # skips its legs; queued runs therefore start, ask and stop within seconds, and
 # only the newest tests. The queue stays short without anything being cancelled.
+#
+# Off a pull request the key also names the event, for the reason the CI
+# workflow gives: a dispatched catch-up run and the push run of the same commit
+# shared one group, and whichever started later cancelled the other. Only a
+# pull request's runs cancel each other.
 concurrency:
-  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Whether this run's legs have anything to do. Two answers skip them.
@@ -122,9 +132,13 @@ jobs:
           substantive-job: |
             Integration (postgres) shard (1)
             Integration (postgres) shard (2)
+            Integration (postgres) shard (3)
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
-            Integration (sqlite)
+            Integration (mysql) shard (3)
+            Integration (sqlite) shard (1)
+            Integration (sqlite) shard (2)
+            Integration (sqlite) shard (3)
           token: ${{ github.token }}
       - name: Decide
         id: decide
@@ -163,8 +177,8 @@ jobs:
   integration-postgres-shards:
     # Not a required check: `Integration (postgres)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
     name: Integration (postgres) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -175,16 +189,28 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
       # Each shard's verdict is its own: one that fails does not cancel the
       # other, so a red run still says how the rest of the suite did.
       fail-fast: false
       # `--shard` hands each job the same number of files, not the same amount
       # of time, so shards finish apart by however their files differ. The
-      # count is read from `strategy.job-total`, so adding a value here is the
-      # whole change to run three.
+      # count is read from `strategy.job-total`; the `changes` job's list and
+      # scripts/main-catch-up.mjs name each shard, and tests hold both to this.
+      #
+      # Three, because two were not enough on any leg: MySQL shards ran into
+      # INTEGRATION_SUITE_BUDGET, postgres shards took 32 to 53 minutes of it,
+      # and the core suite only grows (its files run one at a time on purpose).
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     # A BACKSTOP now, not the bound that should ever fire.
     #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
@@ -218,12 +244,18 @@ jobs:
         ports:
           - 5432:5432
         # Health-gate so test steps never race a database that is still
-        # starting up.
+        # starting up. The data directory lives in memory, as the mysql leg's
+        # does: the job throws the database away, so nothing gains from
+        # surviving a crash, and the runner's shared disk sets no pace. With
+        # the data in memory, also turning off fsync, synchronous_commit and
+        # full_page_writes was measured and made the suite no faster, so the
+        # server keeps its defaults.
         options: >-
           --health-cmd "pg_isready -U nextly"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - name: Checkout
@@ -259,14 +291,19 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers, each on a database of its own
+          # (nextly_test_pool1, nextly_test_pool2) that the run's global setup
+          # creates beside nextly_test and drops at the end
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        # One shard saves: both build the same packages under the same key,
-        # and a cache key can be written once.
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
         if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -305,8 +342,8 @@ jobs:
   integration-mysql-shards:
     # Not a required check: `Integration (mysql)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
     name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -317,11 +354,19 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
       # The same split as the postgres leg, for the same reasons.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 
@@ -415,8 +460,8 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        # One shard saves: both build the same packages under the same key,
-        # and a cache key can be written once.
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
         if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -455,8 +500,12 @@ jobs:
   # sqlite runs in-process against a throwaway file, so this job declares no
   # `services:` at all and has no external network dependency: a
   # container-registry outage cannot fail a leg that needs no database.
-  integration-sqlite:
-    name: Integration (sqlite)
+  integration-sqlite-shards:
+    # Not a required check: `Integration (sqlite)` below is, and it passes
+    # only when every shard did. GitHub appends the matrix value to a name
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (3)`, and a skipped run as one `... shard`.
+    name: Integration (sqlite) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
     # its timeout) does not skip this leg: with no `always()`-style override,
@@ -466,11 +515,25 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
-    # A BACKSTOP, for the same reason as the database legs above: the bound that
-    # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
-    # a failure. This one passed at 22m18s, so it has the most room of the
-    # three, and it moves with its siblings so there is one rule to reason about
-    # rather than a per-leg ceiling nobody re-derives.
+    # The remote cache's credentials, unlocked only on `main` and in the
+    # merge queue (see `env:` at the top of this file).
+    environment:
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+    strategy:
+      # The same split as the postgres leg, for the same reasons: run whole,
+      # this leg's suite ran past INTEGRATION_SUITE_BUDGET on main and on pull
+      # requests alike, so a run ended red with files still to go.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    # The same backstop as the database legs, for the same reasons: the bound
+    # that should ever fire is INTEGRATION_SUITE_BUDGET on the step, which
+    # reports as a failure. It moves with its siblings so there is one rule to
+    # reason about rather than a per-leg ceiling nobody re-derives.
     timeout-minutes: 75
 
     steps:
@@ -498,22 +561,62 @@ jobs:
       # each case boots a real instance, and doing that while every other
       # package's suite runs in parallel is what took one past a 30s budget on
       # CI while it finishes in about 1.5s alone.
+      #
+      # Every package of the lane takes the same shard, so each one splits its
+      # own files between the jobs; a package with fewer files than shards
+      # passes the shards that get none (merge-queue-workflows.test.mjs).
       - name: Run integration tests (sqlite)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
-            "the SQLite integration suite" \
-            pnpm lane:test:integration:sqlite
+            "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the SQLite integration suite" \
+            pnpm lane:test:integration:sqlite -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers. This leg sets no TEST_*_URL, so
+          # each worker runs on its own in-memory SQLite database; the MySQL
+          # leg shares one server database and stays on one worker
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        if: success()
+        # One shard saves: all of them build the same packages under the same
+        # key, and a cache key can be written once.
+        if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The required check `Integration (sqlite)`, read by the ruleset and by
+  # scripts/verify-merge.mjs: it passes only when every shard above passed.
+  #
+  # It runs on the same conditions as the shards, so a run that skips them
+  # skips this too and reports `skipped` under this literal name, as the
+  # unsharded leg did. When they did run, `needs.<id>.result` is `success`
+  # only if every shard succeeded; anything else fails it, including a shard
+  # cancelled by its own backstop, which on its own would read as no verdict.
+  integration-sqlite:
+    name: Integration (sqlite)
+    needs: [changes, integration-sqlite-shards]
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        env:
+          SHARDS: ${{ needs.integration-sqlite-shards.result }}
+        run: |
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::the sqlite integration shards ended '$SHARDS', not 'success'"
+            exit 1
+          fi

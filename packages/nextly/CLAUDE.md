@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (7e69207e4ae87d11). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (000f29562772d499). Edit that file, never this one. -->
 
 # packages/nextly: Agent Guide
 
@@ -25,31 +25,32 @@ inside `packages/nextly`.
 - `overrideAccess` defaults to `true` (trusted server context) and returns
   before any check. Under `overrideAccess: false` there is ONE decision, the
   RBAC gate (`checkCollectionAccess` → `rbacAccessControlService.checkAccess`,
-  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then the
-  code-defined `access` from `defineCollection`/`defineSingle` when it names
-  the operation, else DB permissions. There is no stored rule layer; the
+  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then DB
+  permissions, then the code-defined `access` from
+  `defineCollection`/`defineSingle` when it names the operation (only
+  `true` allows). There is no stored rule layer; the
   `access_rules` registry column is retired, nothing reads it, and a database
   that still carries values in it is named at boot and by `nextly migrate`.
 - Only the DB-permission half of the gate needs a `user`. An anonymous
   caller under `overrideAccess: false` is still judged by the collection's
   code-defined rule (`checkAnonymousCodeAccess`, handed `user: null`, no
-  roles, no permissions); a rule that says nothing about the operation lets
-  the request fall through to the public default. The Single gate
-  (`checkSingleAccess`) and relationship expansion (`judgeTarget`) ask that
-  same question, so one rule gives one answer on every door. Two exceptions
-  fail closed regardless: `publish`/`unpublish` with no user, and
-  `routeAuthorized` with no user.
-- A code-defined rule reads permissions as `resource:action` (`posts:read`);
-  a key's scope stores them as `action-resource` (`read-posts`). The one
-  conversion is `ruleFacingPermissions`, and `ReadAccessCaller` carries both
-  spellings (`permissions` for coarse checks, `rulePermissions` for rules) so
-  no path hands a rule the stored form. Build callers with `readAccessCaller`;
-  a hand-assembled literal is how two doors came to answer one key differently.
+  roles, no permissions); with no rule for the operation a read falls
+  through to the public default and a write is refused. The Single gate
+  (`checkSingleAccess`) and relationship expansion (`relatedRowReads`) ask
+  that same question, so one rule gives one answer on every door. With no
+  user, `publish`/`unpublish` and `routeAuthorized` fail closed regardless.
+- A permission is spelled `read-posts` everywhere, rules included; their
+  context comes from `buildRuleContext`, and the earlier `posts:read` is not
+  in it, so a rule checking that spelling does not allow. `ReadAccessCaller`
+  carries a key's slugs (`permissions`) and rows (`grants`). Build callers with
+  `readAccessCaller`; a hand-assembled literal is how two doors came to answer
+  one key differently.
 - A collection whose code-defined `access` says nothing about an operation
-  falls through to DB permissions; a caller with no matching grant is refused.
-  A rule that throws denies. Relationship expansion (`judgeTarget`) asks a
-  populated TARGET the same: no read rule means a person needs a grant, and a
-  key needs `read-<target>` in its own scope before any rule; `users` and
+  falls through to DB permissions (a visitor's read: the default above); a
+  caller with no matching grant is refused.
+  A rule that throws denies. Relationship expansion (`relatedRowReads`) asks
+  a populated TARGET the same: a person needs a grant, a key
+  `read-<target>` in its own scope, before any rule; `users` and
   media need `read-users` / `read-media` of a person or key; a visitor keeps
   media and never gets a user.
   A row refused by name is withheld from a relationship too.
@@ -79,12 +80,12 @@ inside `packages/nextly`.
 ## Testing in this package
 
 - Unit: `vitest run` (excludes `*.integration.test.ts`).
-- Integration: separate config (`vitest.integration.config.ts`), forks pool,
-  single fork, `fileParallelism: false`. Test-owned tables use a unique
-  per-file prefix (see
+- Integration: separate config (`vitest.integration.config.ts`), forks
+  pool, a database per worker (`src/__tests__/worker-database-guard.ts`).
+  Test-owned tables take a per-file prefix (see
   `src/database/__tests__/integration/helpers/test-db.ts`); fixed-name
-  system tables (created via the production DDL helpers) cannot be prefixed
-  and rely on the sequential run for isolation.
+  system tables (production DDL helpers) cannot be prefixed
+  and rely on each worker running its files in turn.
 - Integration tests self-skip when `TEST_POSTGRES_URL` / `TEST_MYSQL_URL` is
   unset; SQLite falls back to in-memory. Run from the repo root so turbo
   builds first.

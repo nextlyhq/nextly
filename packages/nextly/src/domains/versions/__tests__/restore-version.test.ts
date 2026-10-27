@@ -13,6 +13,7 @@ const {
   singleRegistrySpy,
   componentSpy,
   configSpy,
+  appLocalizationSpy,
 } = vi.hoisted(() => ({
   getVersionSpy: vi.fn(),
   updateEntrySpy: vi.fn(),
@@ -21,17 +22,33 @@ const {
   singleRegistrySpy: vi.fn(),
   componentSpy: vi.fn(),
   configSpy: vi.fn(),
+  appLocalizationSpy: vi.fn(),
+}));
+
+// The site's languages as they are now. By default the configuration's block, as on a site that
+// declares its languages there; a site whose languages are stored answers from the registry.
+vi.mock("../../i18n/configured-locales", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../i18n/configured-locales")>()),
+  appLocalization: appLocalizationSpy,
 }));
 
 // Field-level write rules are evaluated by the update path too; stubbed here so
 // these tests exercise restore's own decisions rather than access configuration.
-vi.mock("../../../shared/lib/field-level-registry", () => ({
+vi.mock("../../../shared/lib/field-level-registry", async importOriginal => ({
   applyFieldWriteAccess: vi.fn(),
   applyFieldReadAccess: vi.fn(),
   callerAccessGrants: vi.fn(
     () => () => Promise.resolve({ permissions: [], roles: [] })
   ),
   getFieldFunctions: vi.fn(),
+  // A pure parse of a container's value, which the field-group walk shares
+  // with the entity's own pass: the real one, so the walk reaches what it
+  // would in a live read.
+  openNestedContainer: (
+    await importOriginal<
+      typeof import("../../../shared/lib/field-level-registry")
+    >()
+  ).openNestedContainer,
 }));
 
 vi.mock("../../../di", () => ({
@@ -102,6 +119,10 @@ describe("restoreVersion", () => {
         locales: [{ code: "en" }, { code: "de" }],
       },
     });
+    appLocalizationSpy.mockImplementation(
+      () =>
+        (configSpy() as { localization?: unknown } | undefined)?.localization
+    );
   });
 
   it("writes the snapshot through the normal update path", async () => {
@@ -145,6 +166,31 @@ describe("restoreVersion", () => {
     expect(updateEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ locale: "de" }),
       expect.anything()
+    );
+  });
+
+  it("writes into the captured locale on a site whose languages are stored, not configured", async () => {
+    configSpy.mockReturnValue({ localization: undefined });
+    appLocalizationSpy.mockReturnValue({
+      defaultLocale: "en",
+      locales: [{ code: "en" }, { code: "de" }],
+    });
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "de",
+      snapshot: { title: "Hallo" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [{ name: "title", type: "text", localized: true }],
+      localized: true,
+      versions: { enabled: true },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "de" }),
+      { title: "Hallo" }
     );
   });
 
@@ -331,8 +377,9 @@ describe("restoreVersion", () => {
 
     // Both layers were walked: the password only becomes visible through the
     // second one.
-    expect(componentSpy).toHaveBeenCalledWith("wrapper");
-    expect(componentSpy).toHaveBeenCalledWith("leaf");
+    // No transaction here, so no executor: the lookups run on the pool.
+    expect(componentSpy).toHaveBeenCalledWith("wrapper", undefined);
+    expect(componentSpy).toHaveBeenCalledWith("leaf", undefined);
   });
 
   it("does not pass a stale locale to an entity that is no longer localized", async () => {

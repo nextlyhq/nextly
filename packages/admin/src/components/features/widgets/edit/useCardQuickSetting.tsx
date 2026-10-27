@@ -7,17 +7,23 @@
  * Announced once the card SHOWS it, not when the write lands: a change that alters the card's
  * query is asked again for this card alone, and saying "set to" while the old answer is still on
  * screen would describe a card the reader cannot see yet. A change the query does not read
- * (a custom card reading its settings itself) is announced as soon as it lands.
+ * (a custom card reading its settings itself) is announced as soon as it lands. A change whose
+ * re-ask was refused is still announced, as saved but not shown: the save did land, and a reader
+ * who hears nothing cannot tell whether it did.
  *
  * @module components/features/widgets/edit/useCardQuickSetting
  */
 
-import { resolveWidgetSettings } from "nextly/config";
+import {
+  resolveWidgetSettings,
+  type PublishedContentSource,
+} from "nextly/config";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { widgetAsAsked } from "../widget-as-asked";
+import { questionOf } from "../widget-as-asked";
 
 import { CardQuickSetting } from "./CardQuickSetting";
 import {
@@ -25,20 +31,24 @@ import {
   quickValueLabel,
   type QuickSetting,
 } from "./quick-setting";
+import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import { initialValues, toStoredConfig } from "./WidgetSettingsSheet";
 
 /** How a cell at rest saves its card's settings, bound to that card by the grid. */
 export interface CellSettingsWrite {
   write: (
     config: Record<string, unknown>,
-    callbacks: { onLanded: () => void; onFailed: () => void }
+    callbacks: CardSettingsWriteCallbacks
   ) => void;
   /** A layout write is in flight anywhere on the dashboard. */
   isWriting: boolean;
   /** Why the card's settings cannot be saved now, when they cannot. */
   unavailable?: string;
-  /** Say that one of the card's settings changed, once the card shows it. */
-  announce: (setting: string, value: string) => void;
+  /**
+   * Say that one of the card's settings changed, once its request has ended: `shown` when the
+   * card shows the change, false when its new answer was refused and it kept the one it had.
+   */
+  announce: (setting: string, value: string, shown: boolean) => void;
 }
 
 interface PendingAnnouncement {
@@ -56,11 +66,11 @@ interface PendingAnnouncement {
 function changesQuery(
   widget: DashboardWidget,
   current: Record<string, unknown> | undefined,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  sources: readonly PublishedContentSource[] | undefined
 ): boolean {
   return (
-    JSON.stringify(widgetAsAsked(widget, current).query) !==
-    JSON.stringify(widgetAsAsked(widget, config).query)
+    questionOf(widget, current, sources) !== questionOf(widget, config, sources)
   );
 }
 
@@ -89,6 +99,9 @@ export function useCardQuickSetting(args: {
   settingsWrite: CellSettingsWrite | undefined;
 }): Partial<CardQuickSettingState> {
   const { widget, config, isEditing, isFetching, settingsWrite } = args;
+  // The same collections the grid asked the card with, so a change is judged
+  // against the query the card actually sent.
+  const sources = useBranding().widgetSources;
   const shownAt = args.updatedAt?.getTime() ?? null;
   const [pending, setPending] = useState<PendingAnnouncement | null>(null);
 
@@ -101,10 +114,13 @@ export function useCardQuickSetting(args: {
     }
     if (isFetching) return;
     // A refused quiet re-ask keeps the answer the card had, and its time with it: the card does
-    // not show the change, so it is not said. Only an answer that arrived after the change is.
-    if (!pending.asksAgain || shownAt !== pending.shownAt) {
-      settingsWrite.announce(pending.setting, pending.value);
-    }
+    // not show the change, so it is said as saved but not shown. Only an answer that arrived
+    // after the change shows it.
+    settingsWrite.announce(
+      pending.setting,
+      pending.value,
+      !pending.asksAgain || shownAt !== pending.shownAt
+    );
     setPending(null);
   }, [pending, isFetching, shownAt, settingsWrite]);
 
@@ -120,7 +136,7 @@ export function useCardQuickSetting(args: {
   const change = (next: string | boolean, reverted: () => void = () => {}) => {
     const values = { ...initialValues(settings, config), [quick.name]: next };
     const stored = toStoredConfig(settings, values, config);
-    const asksAgain = changesQuery(widget, config, stored);
+    const asksAgain = changesQuery(widget, config, stored, sources);
     settingsWrite.write(stored, {
       onLanded: () =>
         setPending({

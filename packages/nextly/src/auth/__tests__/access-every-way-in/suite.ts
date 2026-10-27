@@ -53,8 +53,9 @@
  * related row is asked by a visitor, a user with and without the permission
  * and a role-based key, under no rule, a rule returning `true`, one returning
  * `false` and one returning `null`: the callers and rules whose answer a
- * missing service can change. Some rows join this table later (`table.ts`,
- * `joinsLater`).
+ * missing service can change. A visitor is asked to create, update and
+ * delete as every other caller is, so an anonymous write with no rule naming
+ * it is pinned as refused at every door that can make it.
  *
  * **Without the service.** Lookups that ask the container per call are shown
  * no service. The Direct API's gates took the service when the instance
@@ -84,7 +85,8 @@ import {
   type TestDialect,
 } from "../../../plugins/test-nextly";
 
-import { ask } from "./doors";
+import { ask, targetSlug } from "./doors";
+import { renderRefusals, type Refusal } from "./refusals";
 import {
   doorsAsking,
   oneAnswer,
@@ -105,15 +107,7 @@ import { boot, type World } from "./world";
  * then on every row it asks must give the one answer. Until then, each of its
  * rows that disagrees is an expected failure named `NOT YET ONE ANSWER`.
  */
-const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
-  "rest",
-  "can",
-  "entity",
-  "schema",
-  "population",
-  "system",
-  "widget",
-]);
+const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>(["rest"]);
 
 /**
  * The ways in that ask the one decision, keeping today's answer through named
@@ -127,10 +121,21 @@ const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
   "website",
   "route",
   "lock",
+  "system",
+  "entity",
+  "population",
+  "can",
+  "schema",
+  "widget",
+  "capabilities",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");
 const DISAGREEMENTS_FILE = join(__dirname, "known-disagreements.txt");
+const REFUSALS_FILE = join(__dirname, "refusals-today.txt");
+
+/** An answer that is a refusal's status, rather than a verdict or no answer. */
+const isStatus = (answer: Answer) => /^\d{3}$/.test(answer);
 
 /** One cell of the table: a row at a door, as the disagreements file names it. */
 const cellKey = (row: Row, door: Door) => `${rowKey(row)} at ${door}`;
@@ -169,6 +174,8 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     const answers = new Map<string, Map<Door, Answer>>();
     // The deviations that changed each cell's answer, by cell.
     const deviated = new Map<string, Deviation[]>();
+    // How each refused cell at a door with a status was answered, by cell.
+    const refused = new Map<string, { refusal: Refusal; slug: string }>();
     // For each write a door was asked to make: the cell, its answer, and
     // whether the write reached the database.
     const writes: {
@@ -185,13 +192,28 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       for (const row of rows()) {
         const byDoor = new Map<Door, Answer>();
         for (const door of doorsAsking(row)) {
-          const { answer, deviations, landed, done } = await ask(
+          const { answer, deviations, refusal, landed, done } = await ask(
             world,
             row,
             door
           );
           byDoor.set(door, answer);
           deviated.set(cellKey(row, door), deviations);
+          // Every answer that is a status is a refusal some door answered with,
+          // so every one is recorded: no list of doors to fall out of date.
+          if (isStatus(answer)) {
+            // A status with nothing noted is recorded as such, so a door
+            // that stops noting its refusals shows rather than drops out.
+            refused.set(cellKey(row, door), {
+              refusal: refusal ?? {
+                status: Number(answer),
+                code: "?",
+                shape: "other",
+                message: "",
+              },
+              slug: targetSlug(row),
+            });
+          }
           if (landed !== undefined && done !== undefined) {
             writes.push({ cell: cellKey(row, door), answer, landed, done });
           }
@@ -208,6 +230,15 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     describe("today's answers", () => {
       it("are the answers the file records, for every row at every door", async () => {
         await expect(renderAnswers(answers)).toMatchFileSnapshot(ANSWERS_FILE);
+      });
+
+      it("refuse as the refusals file records: status, code, body and message", async () => {
+        // POPULATION CONTROL: refusals were recorded, so the file is not
+        // vacuously empty.
+        expect(refused.size).toBeGreaterThan(0);
+        await expect(renderRefusals(refused)).toMatchFileSnapshot(
+          REFUSALS_FILE
+        );
       });
     });
 

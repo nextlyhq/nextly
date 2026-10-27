@@ -12,6 +12,7 @@
 import {
   type EmailFailure,
   failureOf,
+  lostAnswerFailure,
   networkFailure,
   smtpFailure,
   unclassifiedFailure,
@@ -165,13 +166,16 @@ const SMTP_NETWORK_CODES = new Set([
  * otherwise as unclassified.
  */
 function smtpErrorFailure(error: unknown): EmailFailure {
-  const { responseCode, code } = (error ?? {}) as {
+  const { responseCode, code, command } = (error ?? {}) as {
     responseCode?: unknown;
     code?: unknown;
+    command?: unknown;
   };
   if (typeof responseCode === "number") return smtpFailure(responseCode);
   if (typeof code === "string" && SMTP_NETWORK_CODES.has(code)) {
-    return networkFailure();
+    // Lost during DATA, the message may already be with the server, which
+    // had yet to answer: unknown. Before it, nothing was sent.
+    return command === "DATA" ? lostAnswerFailure() : networkFailure();
   }
   return unclassifiedFailure();
 }

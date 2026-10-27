@@ -16,6 +16,7 @@ import {
   Badge,
   Button,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import {
@@ -130,7 +131,7 @@ export function MediaListView({
   className = "",
   emptyStateMessage,
   pagination,
-}: MediaListViewProps) {
+}: MediaListViewProps): JSX.Element {
   const columns = useMemo<NextlyColumn<Media>[]>(() => {
     const allColumns: NextlyColumn<Media>[] = [
       {

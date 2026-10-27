@@ -8,13 +8,12 @@
  * by a resolver that only ever looks at permission slugs, which is what this
  * file exists to disprove.
  *
- * A collection may be authorized ENTIRELY in code:
+ * A collection may narrow its grant in code:
  *
  *     defineCollection({ slug: "posts", access: { read: ctx => ... } })
  *
- * `checkAccess` consults that rule BEFORE it falls back to the stored grants,
- * so a slug-only resolver answers a different question from the one the row
- * read answers. Both directions are wrong and only one is visible: a rule that
+ * `checkAccess` asks that rule after the stored grant, so a slug-only resolver
+ * answers a different question from the one the row read answers: a rule that
  * REFUSES a collection the caller holds `posts:read` for made `/stats` disclose
  * that collection's count and `/activity` disclose its entry titles, user names
  * and emails, while `GET /api/collections/posts` correctly returned 403.
@@ -82,6 +81,8 @@ vi.mock("../../services/lib/permissions", async importOriginal => ({
   resolveRoleSlugs: vi.fn(),
 }));
 
+import { grant } from "../../auth/access/__tests__/gate-answer-fixtures";
+import { clearDeclaredTargets } from "../../auth/access/declared-rules";
 import { requireAuthentication } from "../../auth/middleware";
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
@@ -103,6 +104,12 @@ const asMock = (fn: unknown): ReturnType<typeof vi.fn> =>
 /** Two collections and one single, standing in for a real registry. */
 const COLLECTIONS = ["posts", "pages"];
 const SINGLES = ["site-settings"];
+/** Every resource the dashboard offers for a decision. */
+const CANDIDATES = [
+  ...COLLECTIONS,
+  ...SINGLES,
+  ...SETTINGS_ACTIVITY_NAMESPACES,
+];
 
 let rbac: RBACAccessControlService;
 
@@ -117,6 +124,9 @@ function scopeOf(spy: ReturnType<typeof vi.fn>): Set<string> {
 beforeEach(() => {
   vi.clearAllMocks();
   rbac = new RBACAccessControlService();
+  // The service writes each rule through to the declared rules, which outlive
+  // it: forget the last test's, as a re-sync does.
+  clearDeclaredTargets();
 
   // 🔴 `has` must agree with what `get` resolves. A real container answers both
   // from one registration map, so a harness reporting `has: false` for a service
@@ -171,10 +181,20 @@ beforeEach(() => {
     "pages:read",
     "site-settings:read",
   ]);
-  asMock(listRoleSlugsForUser).mockResolvedValue(["editor"]);
-  // A rule is handed the grants beside the roles, and a lookup with no
-  // database behind it refuses rather than answering none.
-  asMock(listEffectiveGrants).mockResolvedValue([]);
+  // The caller's role slugs and grant rows, which the decision reads, follow
+  // `isSuperAdmin` and `hasPermission`, as one database answers all four: a
+  // test that changes either stub changes the caller everywhere.
+  asMock(listRoleSlugsForUser).mockImplementation(async (userId: string) =>
+    (await isSuperAdmin(userId)) ? ["super-admin"] : ["editor"]
+  );
+  asMock(listEffectiveGrants).mockImplementation(async (userId: string) => {
+    const held = await Promise.all(
+      CANDIDATES.map(async resource =>
+        (await hasPermission(userId, "read", resource)) ? [resource] : []
+      )
+    );
+    return held.flat().map(resource => grant("read", resource));
+  });
   asMock(resolveRoleSlugs).mockResolvedValue(["editor"]);
 });
 
@@ -214,11 +234,9 @@ describe("a code-defined access.read rule bounds the dashboard scope", () => {
     expect(scope.has("posts")).toBe(true);
   });
 
-  it("admits a collection authorized ONLY in code, with no stored grant at all", async () => {
-    // The other direction of the same defect. A slug-only resolver drops a
-    // collection whose `read` rule allows it but whose row the permissions
-    // table says nothing about, so the dashboard under-reports what the caller
-    // can actually open.
+  it("leaves out a collection allowed ONLY in code, with no stored grant at all", async () => {
+    // A code rule only narrows the read permission, so a `read` rule that
+    // allows cannot put a collection in scope for a caller without the grant.
     asMock(hasPermission).mockResolvedValue(false);
     asMock(listEffectivePermissions).mockResolvedValue([]);
     rbac.registerCollectionAccess("posts", { read: true });
@@ -226,9 +244,19 @@ describe("a code-defined access.read rule bounds the dashboard scope", () => {
     await getDashboardStats(new Request("http://x/api/dashboard/stats"));
 
     const scope = scopeOf(getStats);
-    expect(scope.has("posts")).toBe(true);
+    expect(scope.has("posts")).toBe(false);
     // `pages` has no rule and no grant, so it must still be refused.
     expect(scope.has("pages")).toBe(false);
+  });
+
+  it("keeps a collection whose code rule allows a caller holding the grant", async () => {
+    // The control: the refusal above is the missing grant's.
+    asMock(hasPermission).mockResolvedValue(true);
+    rbac.registerCollectionAccess("posts", { read: true });
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats).has("posts")).toBe(true);
   });
 
   it("applies the same rule to a SINGLE", async () => {
@@ -253,14 +281,15 @@ describe("a code-defined access.read rule bounds the dashboard scope", () => {
 
 describe("the resolver no longer parses permission slugs", () => {
   it("does not consult listEffectivePermissions at all", async () => {
-    // `checkAccess` reaches the stored grants through `hasPermission`, which
-    // asks about ONE resource. `listEffectivePermissions` was the slug-parsing
-    // path's own source, and the access layer uses it only to build the context
-    // a code rule reads — never registered here, so it must go unused.
+    // The decision reaches the stored grants through `listEffectiveGrants`,
+    // whose rows each name their resource. `listEffectivePermissions` was the
+    // slug-parsing path's own source, and the access layer uses it only to
+    // build the context a code rule reads — never registered here, so it must
+    // go unused.
     await getDashboardStats(new Request("http://x/api/dashboard/stats"));
 
     expect(listEffectivePermissions).not.toHaveBeenCalled();
-    expect(hasPermission).toHaveBeenCalled();
+    expect(listEffectiveGrants).toHaveBeenCalled();
   });
 
   it("keeps a hyphenated resource name whole without splitting anything", async () => {
@@ -304,8 +333,8 @@ describe("the resolver no longer parses permission slugs", () => {
 
 describe("a super-admin session", () => {
   it("is granted every registered entity, by the access layer's own bypass", async () => {
-    // `checkAccess` short-circuits on `isSuperAdmin` before it reads any rule,
-    // so the resolver needs no super-admin branch of its own.
+    // The decision admits a super-admin before it reads any rule, so the
+    // resolver needs no super-admin branch of its own.
     asMock(isSuperAdmin).mockResolvedValue(true);
     asMock(hasPermission).mockResolvedValue(false);
     rbac.registerCollectionAccess("posts", { read: false });

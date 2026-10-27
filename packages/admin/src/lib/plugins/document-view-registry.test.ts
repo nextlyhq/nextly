@@ -9,10 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
-import EditEntryPage from "@admin/pages/dashboard/entries/[slug]/[id]/index";
-import EntryVersionsPage from "@admin/pages/dashboard/entries/[slug]/[id]/versions";
-import SingleEditPage from "@admin/pages/dashboard/singles/[slug]/index";
-import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
+import { routeConfig } from "@admin/pages/registry";
 
 import {
   clearDocumentViews,
@@ -23,6 +20,15 @@ import {
   registerDocumentViews,
   routedDocumentView,
 } from "./document-view-registry";
+
+// Pages load on demand through lazyRoute, so the resolver hands back the
+// route table's own wrapper for each page. Identity is asserted against
+// those entries rather than against the raw page modules.
+const EditEntryPage = routeConfig[ROUTES.COLLECTION_ENTRY_EDIT].component;
+const EntryVersionsPage =
+  routeConfig[ROUTES.COLLECTION_ENTRY_VERSIONS].component;
+const SingleEditPage = routeConfig[ROUTES.SINGLE_EDIT].component;
+const SingleVersionsPage = routeConfig[ROUTES.SINGLE_VERSIONS].component;
 
 afterEach(() => clearDocumentViews());
 
@@ -150,7 +156,7 @@ describe("a view scoped to a field type", () => {
     ).toBeUndefined();
   });
 
-  it("routes an entry address at its path to the entry page, gated as editing", () => {
+  it("routes an entry address at its path to the entry page, gated as the editor it draws is", () => {
     registerDocumentViews([blocksBuilder]);
     const resolved = resolveRoute(
       buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
@@ -161,7 +167,7 @@ describe("a view scoped to a field type", () => {
       ""
     );
     expect(resolved.Component).toBe(EditEntryPage);
-    expect(resolved.requiredPermission).toBe("update-pages");
+    expect(resolved.requiredPermission).toBe("read-pages");
   });
 });
 
@@ -299,7 +305,7 @@ describe("which field a field-type view edits", () => {
 });
 
 describe("resolveRoute for a document view", () => {
-  it("resolves an entry's registered view to the entry page, gated as editing", () => {
+  it("resolves an entry's registered view to the entry page, gated as the editor it draws is", () => {
     registerDocumentViews([builder]);
     const href = buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
       slug: "pages",
@@ -315,13 +321,13 @@ describe("resolveRoute for a document view", () => {
       id: "e1",
       view: "builder",
     });
-    expect(resolved.requiredPermission).toBe("update-pages");
+    expect(resolved.requiredPermission).toBe("read-pages");
     expect(resolved.routeType).toBe("private");
     // A refused view names what it opens, as the entry page it draws does.
     expect(resolved.accessSubject).toBe("collection");
   });
 
-  it("resolves a Single's field-type view to the Single page, gated as editing", () => {
+  it("resolves a Single's field-type view to the Single page, gated as the editor it draws is", () => {
     // A Single is reached only by a field-type view: `views[slug]` declares
     // for a collection.
     registerDocumentViews([{ ...blocksBuilder, path: "builder" }]);
@@ -334,7 +340,7 @@ describe("resolveRoute for a document view", () => {
 
     expect(resolved.Component).toBe(SingleEditPage);
     expect(resolved.params).toEqual({ slug: "homepage", view: "builder" });
-    expect(resolved.requiredPermission).toBe("update-homepage");
+    expect(resolved.requiredPermission).toBe("read-homepage");
     expect(resolved.accessSubject).toBe("single");
   });
 

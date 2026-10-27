@@ -186,19 +186,23 @@ export function useDocumentLock({
   slug,
   entryId,
   enabled = true,
-}: UseDocumentLockOptions) {
+}: UseDocumentLockOptions): {
+  state: DocumentLockState;
+  takeOver: () => void;
+  requestAccess: () => void;
+} {
   const [state, setState] = useState<DocumentLockState>({ status: "idle" });
 
   // Published by the running effect, which is the only thing that may touch a
   // claim. A stable callback delegating through it keeps the consumer's
   // reference identity while the claim state stays inside one closure.
   const takeOverRef = useRef<() => void>(() => {});
-  const takeOver = useCallback(() => takeOverRef.current(), []);
+  const takeOver = useCallback((): void => takeOverRef.current(), []);
 
   // Published the same way and for the same reason: the intent belongs to the
   // effect that owns the claim, and the consumer gets a stable reference.
   const requestAccessRef = useRef<() => void>(() => {});
-  const requestAccess = useCallback(() => requestAccessRef.current(), []);
+  const requestAccess = useCallback((): void => requestAccessRef.current(), []);
 
   // 🔴 The cross-RUN half of the fencing, which the token fence cannot cover. A
   // run whose cleanup has already happened can still have a request in flight,

@@ -13,8 +13,9 @@
  * - Error handling in access evaluation (fail-secure)
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
+import { container } from "../../../di/container";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { CollectionAccessService } from "../services/collection-access-service";
 import { normalizeLocalization } from "../../i18n/config/normalize";
@@ -41,8 +42,22 @@ import {
   fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// Where a refusal's reason is recorded, watched rather than written.
+const recordedRefusals = vi.hoisted(() => vi.fn());
+vi.mock("../../../auth/access/refusal-message", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  recordRefusalReason: recordedRefusals,
+}));
 
 // The caller the collection gate decides for: a signed-in user's actions are
 // set per test (`callerMay`), and every test starts from one holding all.
@@ -199,7 +214,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
-      expect(result.message).toContain("denied");
+      // What was refused, in words; never the permission or the check.
+      expect(result.message).toBe("You can't see posts.");
     });
 
     it("should allow listEntries when access is granted", async () => {
@@ -229,7 +245,46 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // A caller who may not read the one entry it names is answered as if it
+      // were missing, so the refusal does not confirm it exists.
+      expect(result.message).toBe("Not found.");
+    });
+
+    it("names a Schema Builder collection by the label its registry holds", async () => {
+      // Made in the builder, so the configuration holds no label for it.
+      const registry = {
+        getCollectionBySlug: vi.fn(async (slug: string) =>
+          slug === "press"
+            ? { slug, labels: { singular: "Story", plural: "Newsroom" } }
+            : null
+        ),
+      };
+      vi.mocked(container.has).mockImplementation(
+        name => name === "collectionRegistryService"
+      );
+      vi.mocked(container.get).mockImplementation((name: string) => {
+        if (name === "collectionRegistryService") return registry;
+        throw new Error(`Service "${name}" is not registered in container`);
+      });
+      try {
+        const rbac = createMockRbacAccessControlService();
+        callerMay();
+        const { service } = buildService({ rbacAccessControlService: rbac });
+
+        const result = await service.listEntries({
+          collectionName: "press",
+          user: { id: "user-1", role: "viewer" },
+        });
+
+        expect(result.statusCode).toBe(403);
+        expect(result.message).toBe("You can't see newsroom.");
+      } finally {
+        vi.mocked(container.has).mockReturnValue(false);
+        vi.mocked(container.get).mockImplementation((name: string) => {
+          throw new Error(`Service "${name}" is not registered in container`);
+        });
+      }
     });
 
     it("should deny countEntries when access is denied", async () => {
@@ -283,6 +338,25 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   // ── Collection-level access: update ───────────────────────────────────
 
   describe("update access control", () => {
+    it("refuses an update in words, to a caller who may read the entry", async () => {
+      // The other half of the rule: one it may read, the caller is told what
+      // it may not do, since the entry's existence is no secret to it.
+      const rbac = createMockRbacAccessControlService();
+      callerMay("read");
+      const { service, selectData } = buildService({
+        rbacAccessControlService: rbac,
+      });
+      selectData.rows = [createSampleEntry()];
+
+      const result = await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { title: "Updated" }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(result.message).toBe("You can't edit this entry.");
+    });
+
     it("should deny updateEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
       // First call: for the getEntry check pass (we need the entry to exist)
@@ -303,13 +377,67 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      expect(result.message).toBe("Not found.");
+    });
+  });
+
+  describe("a batch refused as a whole", () => {
+    it("records the refusal it folds into every item", async () => {
+      recordedRefusals.mockClear();
+      const rbac = createMockRbacAccessControlService();
+      callerMay();
+      const { service } = buildService({ rbacAccessControlService: rbac });
+
+      const result = await service.createEntries(
+        { collectionName: "posts", user: { id: "user-1" } },
+        [{ title: "a" }, { title: "b" }]
+      );
+
+      expect(result).toMatchObject({ successful: 0, failed: 2 });
+      expect(recordedRefusals).toHaveBeenCalledTimes(1);
+      expect(recordedRefusals).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 403,
+          reason: "the caller may not create posts",
+        })
+      );
     });
   });
 
   // ── Collection-level access: delete ───────────────────────────────────
 
   describe("delete access control", () => {
+    it("answers a delete in a transaction the caller may not read as missing", async () => {
+      // The transaction API reaches the same gate, and must answer the same
+      // caller the same way the ordinary delete does.
+      const rbac = createMockRbacAccessControlService();
+      callerMay();
+      const { service, selectData, adapter } = buildService({
+        rbacAccessControlService: rbac,
+      });
+      selectData.rows = [createSampleEntry()];
+
+      // The row exists, so the gate is what answers: a missing row would be
+      // answered by the lookup before it ("Entry not found").
+      const result = (await adapter.transaction((tx: object) =>
+        service.deleteEntryInTransaction(
+          { ...tx, selectOne: async () => createSampleEntry() } as never,
+          {
+            collectionName: "posts",
+            entryId: "entry-1",
+            user: { id: "user-1" },
+          }
+        )
+      )) as { statusCode: number; message: string; code?: string };
+
+      expect(result).toMatchObject({
+        statusCode: 404,
+        code: "NOT_FOUND",
+        message: "Not found.",
+      });
+    });
+
     it("should deny deleteEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
       callerMay();
@@ -325,7 +453,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      expect(result.message).toBe("Not found.");
     });
   });
 
@@ -563,6 +692,31 @@ describe("publish-transition access control", () => {
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
+  });
+
+  it("answers a publish in a transaction as missing to a caller who may not read the entry", async () => {
+    // May update, so the write's own gate passes; may neither publish nor
+    // read, so the transition's refusal is the missing entry's answer, as the
+    // ordinary update's is.
+    callerMay("update");
+    const rbac = createMockRbacAccessControlService();
+    const { service, adapter } = buildService({
+      rbacAccessControlService: rbac,
+      collectionService: lifecycle(),
+    });
+
+    const result = (await adapter.transaction((tx: object) =>
+      service.updateEntryInTransaction(
+        {
+          ...tx,
+          selectOne: async () => createSampleEntry({ status: "draft" }),
+        } as never,
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { status: "published" }
+      )
+    )) as { statusCode: number; code?: string };
+
+    expect(result).toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
   });
 
   it("denies unpublishing without the unpublish permission", async () => {
@@ -989,6 +1143,6 @@ describe("publish-transition access control", () => {
     );
 
     // The gate ran and denied — the super-admin bypass did not fire.
-    expect(result.statusCode).toBe(403);
+    expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
   });
 });

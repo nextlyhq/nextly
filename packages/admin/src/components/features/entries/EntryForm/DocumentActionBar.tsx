@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { Loader2, MoreHorizontal } from "lucide-react";
+import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -255,7 +256,7 @@ export function DocumentActionBar({
   className,
   narrowItems = [],
   narrowPending = false,
-}: DocumentActionBarProps) {
+}: DocumentActionBarProps): JSX.Element {
   const wired = bound(actions, bindings);
   const available = wired.map(entry => entry.action);
   const primary = bound(actionsAt(available, "primary"), bindings)[0];

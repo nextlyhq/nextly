@@ -33,15 +33,11 @@
  * ```
  */
 
+import { warnIfCacheComponentsOn } from "./cache-components";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
-import {
-  getService,
-  isServicesRegistered,
-  registerServices,
-  shutdownServices,
-} from "./di/register";
 import { recordRegisteredLocalization } from "./di/registered-localization";
+import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
@@ -209,6 +205,8 @@ function buildNextlyInstance(
 
     // Shutdown method
     shutdown: async () => {
+      // Loaded on use, as the boot loads it: see `getNextly` below.
+      const { shutdownServices } = await import("./di/register");
       await shutdownServices();
       globalForInit.__nextly_cachedInstance = null;
       consoleLogger.info("Nextly shutdown complete");
@@ -342,6 +340,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
       // entirely, so this is also the only place the public factory learns that
       // another surface is still waiting on the migrate lock.
       await awaitBootMigrations();
+
+      // The registry imports every service registration, so it is loaded
+      // here, where a boot needs it, rather than by importing this module.
+      // Loaded before the check, so the check, the seeding hold and the
+      // registration below still run with nothing awaited between them.
+      const { registerServices } = await import("./di/register");
 
       if (!isServicesRegistered()) {
         // Build final config from provided options
@@ -591,9 +595,16 @@ export function isServerStartRegisterRunning(): boolean {
  *
  * export const register = createRegister(nextlyConfig);
  * ```
+ *
+ * @param host - What the app's own `instrumentation.ts` knows about the Next.js
+ *               build it runs in. `cacheComponents` is the value Next.js
+ *               inlines there for `process.env.__NEXT_CACHE_COMPONENTS`; Nextly
+ *               warns when it says Cache Components is on, which it does not
+ *               support yet.
  */
 export function createRegister(
-  config: SanitizedNextlyConfig
+  config: SanitizedNextlyConfig,
+  host: { cacheComponents?: string | boolean } = {}
 ): () => Promise<void> {
   return async function register() {
     // Before the first await, so the whole of register() — its dynamic
@@ -604,6 +615,11 @@ export function createRegister(
     // is not told a start is under way that finished long ago.
     globalForInit.__nextly_serverStartRegisterRunning = true;
     try {
+      // Before anything starts. Nextly cannot read this itself: Next.js inlines
+      // the setting only into code it bundles, and Nextly is a server-external
+      // package. `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
+      // `cache-components.test.ts` pins it, so a rename fails loudly there.
+      warnIfCacheComponentsOn(host.cacheComponents, "this Next.js build");
       await getNextly({ config });
     } finally {
       globalForInit.__nextly_serverStartRegisterRunning = false;

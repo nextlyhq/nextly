@@ -12,6 +12,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import {
@@ -131,6 +135,11 @@ describe.each(getConfiguredTestDialects())(
       // — reading through it would pass against a materialiser that wrote
       // nothing at all.
       const t = await boot(dialect);
+      // A code rule only narrows the permission, so the author holds read,
+      // update and publish on posts.
+      await userWhoMay(t, "author-1", "read", [SLUG]);
+      await grantTo(t, "author-1", "update", [SLUG]);
+      await grantTo(t, "author-1", "publish", [SLUG]);
       const id = await draftInRelease(t, PAST, "author-1");
       expect(await storedStatus(t, id)).toBe("draft");
 

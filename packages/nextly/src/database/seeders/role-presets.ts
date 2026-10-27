@@ -14,8 +14,6 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { ServiceContainer } from "@nextly/services/index";
-
 import {
   ROLE_PRESETS,
   resolvePreset,
@@ -23,6 +21,7 @@ import {
   type PresetPermission,
   type RolePreset,
 } from "../../auth/role-presets";
+import { serviceContainerFor } from "../../services/service-container-for";
 import type { Logger } from "../../services/shared";
 
 import { createSeededRole } from "./create-seeded-role";
@@ -57,7 +56,9 @@ export async function seedRolePresets(
   adapter: DrizzleAdapter,
   logger: Logger
 ): Promise<void> {
-  const container = new ServiceContainer(adapter);
+  // Loaded when the presets are seeded, not by importing this module: the
+  // container imports every core service.
+  const container = await serviceContainerFor(adapter);
   const roleService = container.roles;
   const permissionService = container.permissions;
   const rolePermissionService = container.rolePermissions;

@@ -1,0 +1,257 @@
+/**
+ * A placed widget as its batch asks it: the reader's Collection and Only mine
+ * reach the query's `where` on a source that narrows by them, as the widget's
+ * `sourceFilters` say, and replace the source on a collection source.
+ */
+import type { PublishedContentSource } from "nextly/config";
+import { describe, expect, it } from "vitest";
+
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
+import {
+  askableQuery,
+  askableWith,
+  settingsAsAsked,
+  titleAsAsked,
+  widgetAsAsked,
+} from "../widget-as-asked";
+import { gridBounds } from "./grid-bounds";
+
+const settings: DashboardWidget["settings"] = [
+  {
+    name: "onlyMine",
+    label: "Only mine",
+    type: "checkbox",
+    defaultValue: false,
+  },
+  { name: "collection", label: "Collection", type: "collection" },
+];
+
+const recentlyEdited: DashboardWidget = {
+  id: "core/recently-edited",
+  title: "Recently edited",
+  archetype: "list",
+  size: gridBounds(4),
+  query: { source: "system:recent-edits", op: "list", limit: 5 },
+  settings,
+  sourceFilters: ["collection", "onlyMine"],
+};
+
+describe("a widget as it is asked", () => {
+  it("narrows a filtering source by the reader's Collection and Only mine", () => {
+    const asked = widgetAsAsked(recentlyEdited, {
+      collection: "pages",
+      onlyMine: true,
+    });
+    expect(asked.query?.source).toBe("system:recent-edits");
+    expect(asked.query?.where).toEqual({ collection: "pages", onlyMine: true });
+  });
+
+  it("asks a source without declared filters by its collection instead", () => {
+    // 🔴 The must-differ case: the same settings without `sourceFilters` take
+    // the collection knob's other branch, so the card's source is replaced.
+    const { sourceFilters: _filters, ...unfiltered } = recentlyEdited;
+    const asked = widgetAsAsked(
+      {
+        ...unfiltered,
+        query: { source: "collection:posts", op: "list", limit: 5 },
+      },
+      { collection: "pages", onlyMine: true }
+    );
+    expect(asked.query?.source).toBe("collection:pages");
+    expect(asked.query?.where).toBeUndefined();
+  });
+
+  it("keeps the widget itself when nothing is chosen", () => {
+    expect(widgetAsAsked(recentlyEdited, {}).query?.where).toBeUndefined();
+  });
+});
+
+describe("a custom card asking through cells", () => {
+  const posts: PublishedContentSource = {
+    collection: "posts",
+    label: "Posts",
+    lifecycle: true,
+    fields: [{ name: "title", label: "Title", type: "string" }],
+  };
+  const pages: PublishedContentSource = {
+    ...posts,
+    collection: "pages",
+    label: "Pages",
+    lifecycle: false,
+  };
+  const count: DashboardWidget = {
+    id: "core/count",
+    title: "Count",
+    archetype: "custom",
+    size: gridBounds(3),
+    settings: [
+      { name: "collection", label: "Collection", type: "collection" },
+      { name: "filter", label: "Filter", type: "filter", of: "collection" },
+    ],
+    cells: [
+      {
+        key: "split",
+        when: "lifecycle",
+        query: { op: "groupBy", groupBy: "status", status: "all" },
+      },
+      { key: "total", when: "no-lifecycle", query: { op: "count" } },
+    ],
+  } as DashboardWidget;
+  const keys = (widget: DashboardWidget) => widget.cells?.map(cell => cell.key);
+
+  it("asks the cells the collection it is set to answers", () => {
+    expect(
+      keys(widgetAsAsked(count, { collection: "posts" }, [posts, pages]))
+    ).toEqual(["split"]);
+    expect(
+      keys(widgetAsAsked(count, { collection: "pages" }, [posts, pages]))
+    ).toEqual(["total"]);
+  });
+
+  it("judges a cell by the collection it declares, with no Collection setting set", () => {
+    // 🔴 Judged by the Collection setting alone, an unset one reads as no
+    // lifecycle and drops the split this cell reads of posts.
+    const declared = {
+      ...count,
+      cells: [
+        {
+          key: "split",
+          when: "lifecycle",
+          query: {
+            source: "collection:posts",
+            op: "groupBy",
+            groupBy: "status",
+          },
+        },
+        {
+          key: "total",
+          when: "no-lifecycle",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ],
+    } as DashboardWidget;
+    expect(keys(widgetAsAsked(declared, {}, [posts]))).toEqual(["split"]);
+  });
+
+  it("hands the card the Filter its cells were asked with, not a stored one they set aside", () => {
+    const stored = { collection: "posts", filter: { salary: { gt: 1 } } };
+    expect(settingsAsAsked(count, stored, [posts]).filter).toBeUndefined();
+    const kept = { collection: "posts", filter: { title: { equals: "a" } } };
+    expect(settingsAsAsked(count, kept, [posts]).filter).toEqual({
+      title: { equals: "a" },
+    });
+  });
+
+  it("is titled by its subject, the collection it is set to, with its widget's name beneath", () => {
+    expect(titleAsAsked(count, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Count",
+    });
+    // A collection with no published label is named as stored.
+    expect(titleAsAsked(count, { collection: "drafts" }, [posts])).toEqual({
+      title: "drafts",
+      subtitle: "Count",
+    });
+  });
+
+  it("is titled as its widget, with no subtitle, when set to no collection", () => {
+    expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
+  });
+});
+
+describe("whether a card can be asked", () => {
+  const choices = [{ value: "a", label: "A" }];
+  const sources: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      fields: [{ name: "status", type: "string", choices }],
+    },
+    {
+      collection: "notes",
+      label: "Notes",
+      lifecycle: false,
+      fields: [{ name: "title", type: "string" }],
+    },
+  ];
+  const breakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "bars",
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+    query: { op: "groupBy", status: "all" },
+  } as unknown as DashboardWidget;
+
+  it("is asked where its collection gives it a source and a group key", () => {
+    expect(
+      widgetAsAsked(breakdown, { collection: "posts" }, sources).query
+    ).toMatchObject({ source: "collection:posts", groupBy: "status" });
+    expect(askableWith(breakdown, { collection: "posts" }, sources)).toBe(true);
+  });
+
+  it("is not asked where the collection has nothing to divide by", () => {
+    // 🔴 The query has a source, so a test of the source alone sends it, and
+    // the endpoint refuses a grouping of nothing.
+    expect(
+      widgetAsAsked(breakdown, { collection: "notes" }, sources).query?.source
+    ).toBe("collection:notes");
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("is not asked where every cell it declares falls away on the collection", () => {
+    // Its only cell needs a lifecycle: on Notes nothing is left to ask.
+    const lifecycleOnly = {
+      id: "core/lifecycle-only",
+      title: "Lifecycle only",
+      archetype: "custom",
+      settings: [{ name: "collection", type: "collection" }],
+      cells: [
+        {
+          key: "split",
+          when: "lifecycle",
+          query: { op: "groupBy", groupBy: "status", status: "all" },
+        },
+      ],
+    } as unknown as DashboardWidget;
+    // 🔴 Read from the cells as asked, an empty list fell through to "no
+    // query, so askable", and the card was offered asking nothing.
+    expect(askableWith(lifecycleOnly, { collection: "notes" }, sources)).toBe(
+      false
+    );
+    // The control: where the cell applies, it is asked.
+    expect(askableWith(lifecycleOnly, { collection: "posts" }, sources)).toBe(
+      true
+    );
+  });
+
+  it("judges each collection from the declaration, not from a card already asked", () => {
+    // What the settings sheet must be handed: the card as asked on Posts has
+    // Posts' group key, which a test of Notes would then carry along.
+    const asked = widgetAsAsked(breakdown, { collection: "posts" }, sources);
+    expect(asked.query?.groupBy).toBe("status");
+    expect(askableWith(asked, { collection: "notes" }, sources)).toBe(true);
+    expect(askableWith(breakdown, { collection: "notes" }, sources)).toBe(
+      false
+    );
+  });
+
+  it("asks a query with a source and, where grouped, a group key", () => {
+    expect(askableQuery({ source: "collection:posts", op: "list" })).toBe(true);
+    expect(askableQuery({ op: "list" })).toBe(false);
+    expect(askableQuery({ source: "collection:posts", op: "groupBy" })).toBe(
+      false
+    );
+  });
+});

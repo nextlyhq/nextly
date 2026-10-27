@@ -12,6 +12,7 @@
  *
  * @module components/features/releases/ReleaseCalendarZoneControl
  */
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
 import { Check, ChevronDown, Globe } from "@admin/components/icons";
@@ -52,7 +53,7 @@ export function ReleaseCalendarZoneControl({
   /** The instant offsets are read at: a day of the month shown. */
   at: Date;
   onChange: (zone: string) => void;
-}) {
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   const groups = useMemo(
     () =>

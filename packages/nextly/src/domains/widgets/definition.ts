@@ -11,15 +11,29 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import { requiredPermissionSlugs } from "./gate";
+import { requiredPermissionSlugs, type WidgetPermissionGate } from "./gate";
+import {
+  sizeDeclarationProblems,
+  type WidgetSizeDeclaration,
+} from "./grid-size";
 import {
   lifecycleProblem,
   type WidgetCondition,
   type WidgetLifecycle,
 } from "./lifecycle";
-import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type WidgetSetting } from "./settings";
-import type { WidgetOp } from "./sources";
+import type {
+  SettingSourcedQuerySpec,
+  WidgetQuery,
+  WidgetQuerySpec,
+} from "./query";
+import {
+  drivesQuery,
+  isLimitSetting,
+  settingsSourceOf,
+  validateWidgetSettings,
+  type AnyWidgetSetting,
+} from "./settings";
+import type { WidgetOp, WidgetSourceFilter } from "./sources";
 
 /*
  * Re-exported from the contract's home so a caller reading a definition finds
@@ -34,37 +48,11 @@ export type { WidgetSetting } from "./settings";
 
 export {
   holdsWidgetPermission,
+  requiredPermissionGroups,
   requiredPermissionSlugs,
   widgetGateHolds,
+  type WidgetPermissionGate,
 } from "./gate";
-
-/** Column span at the large breakpoint, as a named step rather than a number. */
-export const WIDGET_SIZES = ["sm", "md", "lg", "xl", "full"] as const;
-export type WidgetSize = (typeof WIDGET_SIZES)[number];
-
-/**
- * The deprecated `size?: "full" | "half"` alias, as a real size.
- *
- * Contributed declarations still carry it, and `half` meant "6 of 12" -- which
- * is `lg` in the enum.
- *
- * 🔴 It lives HERE, beside the vocabulary it translates into, rather than in
- * the admin where it was first written. Both the admin's resolver and the
- * server's canonical summary have to read a legacy declaration, and the second
- * one did not: it read `defaultSize` only, so a contribution declaring the alias
- * produced a default placement with NO size while the grid rendered it at half
- * width. The first save then stored an arrangement whose geometry disagreed
- * with what the reader was looking at. One translation, asked by both.
- */
-export function legacySizeToWidgetSize(
-  size: "full" | "half" | undefined
-): WidgetSize {
-  return size === "half" ? "lg" : "full";
-}
-
-/** Vertical step. Two values, because ragged card bottoms are the tell of a cheap grid. */
-export const WIDGET_HEIGHTS = ["short", "tall"] as const;
-export type WidgetHeight = (typeof WIDGET_HEIGHTS)[number];
 
 /**
  * How a widget renders. Every archetype but `custom` is drawn by core from the
@@ -199,6 +187,51 @@ const ARCHETYPE_RESULTS: ReadonlyMap<
 export const MAX_STAT_CELLS = 8;
 
 /**
+ * One read a `custom` card asks beside its others, its answer handed to the
+ * card's component under `key`.
+ *
+ * For a card that draws several answers together, such as a number beside the
+ * trend it comes from: each read is batched, streamed and refused on its own,
+ * so one the reader may not have is answered as not available while the rest
+ * draw. Any query a card may ask, including one whose source the card's
+ * Collection setting supplies.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export interface WidgetQueryCell {
+  /** Identifies this cell's answer within the card. Unique across the card. */
+  key: string;
+  query: WidgetQuerySpec | SettingSourcedQuerySpec;
+  /**
+   * Asked only for a card whose collection has (`"lifecycle"`) or has not
+   * (`"no-lifecycle"`) a draft and published lifecycle, so a card reads a
+   * status split where there is one and a plain count where there is not,
+   * once either way. Absent, the cell is always asked.
+   */
+  when?: WidgetCellCondition;
+  /**
+   * The narrowest tier of the card that draws this cell: `"medium"` for a
+   * cell a small card leaves out, `"large"` for one only a large card draws.
+   * The admin asks only the cells the card's tier draws, and the rest once the
+   * card widens to draw them. Absent, the cell is drawn, and asked, at every
+   * tier.
+   */
+  drawnFrom?: WidgetCellTier;
+}
+
+/** The tiers a card is drawn at, narrowest first. @experimental */
+export const WIDGET_CELL_TIERS = ["small", "medium", "large"] as const;
+
+/** @experimental */
+export type WidgetCellTier = (typeof WIDGET_CELL_TIERS)[number];
+
+/** When a cell is asked: the closed set of conditions. @experimental */
+export const WIDGET_CELL_CONDITIONS = ["lifecycle", "no-lifecycle"] as const;
+
+/** @experimental */
+export type WidgetCellCondition = (typeof WIDGET_CELL_CONDITIONS)[number];
+
+/**
  * One number on a `stats` card.
  *
  * 🔴 Each cell carries its OWN query rather than the card carrying one query
@@ -295,9 +328,55 @@ export interface WidgetDefinition {
    * already has and a plugin author needs no new vocabulary. The stored values
    * live on the placement, not here: this is the offer, and the placement is
    * one reader's answer to it.
+   *
+   * Any of the eight setting types. A content setting (a collection, and the
+   * filter, sort and grouping over it) is admitted only where core builds the
+   * query from it, `serverData`; see `widgetSettingsProblem`.
    */
-  settings?: WidgetSetting[];
-  defaultSize: WidgetSize;
+  settings?: AnyWidgetSetting[];
+  /**
+   * How big a card of this widget is, in grid units: the size a new card
+   * starts at, and the smallest and largest a reader may resize it to.
+   *
+   * 🔴 The only way a widget states its size. The minimum defaults to the
+   * default and the maximum to the full width at the default's height, and
+   * every reader fills them through `sizeBounds`, so the registry, the layout
+   * and the admin agree about a declaration that leaves an end out.
+   */
+  size: WidgetSizeDeclaration;
+  /** Whether one dashboard may hold more than one card of this widget. */
+  allowsSeveral?: boolean;
+  /**
+   * Which of core's displays the add panel sketches this widget's row with,
+   * when it is not its archetype: a widget drawn by its own component says
+   * what it most looks like.
+   */
+  sketch?: DataWidgetArchetype;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own: one line, and one action, a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`.
+   *
+   * 🔴 Published by core for a declared widget alone (with `serverData`), from
+   * a declaration startup already held to the empty state's rules. Whether
+   * the card is empty is decided on the server, so no test travels here.
+   */
+  empty?: {
+    message?: string;
+    action?: { label: string; link: string; requiredPermission?: string };
+  };
+  /**
+   * The settings the widget's source narrows by rather than being replaced by
+   * (`WidgetSource.filters`), so the admin's knobs build the card's query as
+   * the server admits its settings.
+   *
+   * 🔴 Set by core when it publishes a registered widget, read from the source
+   * registry then, and never taken from the registration: a stated value is
+   * replaced, so a widget cannot claim a filter its source does not take.
+   *
+   * @experimental The shape may grow while the content widgets are built.
+   */
+  sourceFilters?: readonly WidgetSourceFilter[];
   /**
    * Where this widget sits by default, ascending. Omitted means "after
    * everything that states one".
@@ -348,19 +427,30 @@ export interface WidgetDefinition {
    */
   dismissible?: boolean;
   /**
-   * Whether the host frames this widget. Defaults to `"card"`.
+   * Whether the dashboard takes this widget's card out of the grid while its
+   * answer is empty, rather than drawing the empty state. Judged after the
+   * answer arrives; a card that failed, or whose source is not available to
+   * the reader, is never hidden. Customise mode still shows it, marked.
    *
-   * Only a `custom` widget may decline the frame, because only a `custom`
-   * widget supplies the component that would replace it. For every archetype
-   * core draws, the card IS the surface the body is composed against -- it owns
-   * the title, the footer and the busy state -- so an unframed one would render
-   * content with no heading and nothing to report its own loading.
+   * @experimental
    */
-  chrome?: WidgetChrome;
-  /** Bounds what a user may resize to. Omitted means unconstrained. */
-  minSize?: WidgetSize;
-  maxSize?: WidgetSize;
-  defaultHeight?: WidgetHeight;
+  hidesWhenEmpty?: boolean;
+  /**
+   * Whether the host sizes this `custom` widget's list query to the card, as it
+   * sizes the lists it draws itself: it asks the rows the card's size draws, at
+   * most the reader's "Number of items", and one more, the row that says more
+   * exist.
+   *
+   * Only for a `custom` widget whose query is a `list`. Unstated, a custom
+   * widget is asked exactly its declared query, because its component draws the
+   * raw answer and would draw the extra row as an ordinary one. A component that
+   * opts in draws `rowsDrawn(tier, query.limit)` rows of the answer and says
+   * more exist when the answer holds more, from the `query` it is handed.
+   *
+   * @experimental The shape may change while custom cards adopt the host's
+   * sizing.
+   */
+  sizedQuery?: boolean;
   /**
    * Gates whether the CARD renders. It does NOT constrain the rows the query
    * returns -- that is `execute`'s job, and it is not optional there.
@@ -379,22 +469,59 @@ export interface WidgetDefinition {
    *
    * Any-of rather than all-of because that is the shape every consumer of this
    * vocabulary already has -- `requireAnyPermission` at the route layer, the
-   * capability lists in the admin. A card needing all of several grants has no
-   * consumer yet, and inventing the second form before something needs it is
-   * how a declaration ends up with two meanings nobody can keep straight.
+   * capability lists in the admin. A card that needs several grants together
+   * says so with the separate `{ allOf }` form (@experimental), whose entries
+   * are slugs or any-of arrays: the Team card needs a reader who may read people
+   * AND may add or change them. An array never means all-of, so no declaration
+   * reads two ways.
    *
    * `WidgetAction.requiredPermission` stays a single slug. It gates one
    * shortcut rather than a card, and nothing has asked it for more.
    */
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   /**
-   * Required for every data archetype; forbidden for `text` and `actions`.
+   * Required for every data archetype unless `serverData` is set; forbidden
+   * for `text` and `actions`.
    *
    * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
    * op that ignores it, or a `groupBy` op carrying no key, fails to compile
    * rather than booting and failing on every request the card makes.
+   *
+   * A widget with a Collection setting declares no source
+   * ({@link SettingSourcedQuerySpec}): each card reads the collection it is
+   * set to.
    */
-  query?: WidgetQuerySpec;
+  query?: WidgetQuerySpec | SettingSourcedQuerySpec;
+  /**
+   * Where the add panel offers this widget, when not as one card for the
+   * whole dashboard.
+   *
+   * - Absent: placed on the default dashboard, and offered as one card.
+   * - `"per-collection"`: offered only inside each collection's group of the
+   *   add panel, one row per collection, a card starting with that collection
+   *   as its Collection setting.
+   * - `"on-request"`: offered only from the add panel, as a card a reader asks
+   *   for, such as a note; nothing to show until they set it up.
+   *
+   * Either value keeps the widget off the default dashboard and allows any
+   * number of cards, unless it says otherwise (`allowsSeveral`). One fact, so
+   * the placement, the panel and the count cannot disagree.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  offered?: "per-collection" | "on-request";
+  /**
+   * The card's data is built on the server from the widget's declaration (a
+   * data function, or a query written from its settings), so the definition
+   * carries no query of its own and the browser never holds the code that
+   * builds one.
+   *
+   * 🔴 Set by core when it publishes a declared widget, never by hand: the
+   * public registration doors refuse it, because a definition claiming its
+   * data is built on the server, with no declaration to build it from, is a
+   * card that can never be answered.
+   */
+  serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
@@ -407,17 +534,16 @@ export interface WidgetDefinition {
    * bounds it at registration rather than letting a card carry a document.
    */
   content?: string;
-  /** Required for `stats`; forbidden otherwise. */
-  cells?: WidgetStatCell[];
+  /**
+   * Required for `stats`; optional for `custom`, whose component is handed
+   * each cell's answer by key ({@link WidgetQueryCell}); forbidden otherwise.
+   */
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Where a "view all" footer link points. */
   link?: { label: string; href: string };
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
-
-function sizeRank(size: WidgetSize): number {
-  return WIDGET_SIZES.indexOf(size);
-}
 
 // A malformed widget definition is a plugin author's mistake, not end-user
 // input, so this uses `invalidInput` (message is developer-facing and safe to
@@ -462,7 +588,7 @@ function validateId(d: Partial<WidgetDefinition>): void {
  * the direction that ships.
  *
  * SHAPE is deliberately not here, because the two channels genuinely disagree
- * about it: a contribution may omit `title` and `defaultSize`, which resolution
+ * about it: a contribution may omit `title` and `size`, which resolution
  * fills in, while a `WidgetDefinition` is the resolved widget and requires
  * both. Those differences belong to their own validators and are listed by name
  * in `plugins/__tests__/channel-divergence.test.ts`. What is here is only what
@@ -491,6 +617,36 @@ type ArchetypeStanding =
   /** Not a string at all, which no version of this contract permits. */
   | { kind: "invalid" };
 
+/**
+ * Why this widget cannot ask the host to size its query, or `undefined`.
+ *
+ * A BOOLEAN in every version, so anything else is a mistake rather than version
+ * skew. Only a `custom` widget may ask, since core already sizes the lists it
+ * draws, and only for a `list` query, the one kind with rows to size: asked of
+ * anything else it would be a validated option that changes nothing. Asked of
+ * the archetype only where this core knows it (`archetypeStanding`), so a
+ * newer core's archetype is not judged here.
+ */
+function sizedQueryProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  const sized = widget.sizedQuery;
+  if (sized === undefined) return undefined;
+  if (typeof sized !== "boolean") {
+    return "sizedQuery, when given, must be a boolean";
+  }
+  if (!sized) return undefined;
+  const standing = archetypeStanding(widget.archetype);
+  if (standing.kind === "known" && standing.name !== "custom") {
+    return `sizedQuery is only valid for archetype "custom", not "${standing.name}" -- core already sizes the lists it draws`;
+  }
+  const query = widget.query as { op?: unknown } | undefined;
+  if (query?.op !== "list") {
+    return "sizedQuery needs a list query: only a list has rows to size";
+  }
+  return undefined;
+}
+
 function archetypeStanding(value: unknown): ArchetypeStanding {
   if (value === undefined) return { kind: "resolved-custom" };
   if (typeof value !== "string") return { kind: "invalid" };
@@ -499,82 +655,66 @@ function archetypeStanding(value: unknown): ArchetypeStanding {
     : { kind: "newer" };
 }
 
+/** The fields read as booleans, which a truthy non-boolean must not stand in for. */
+const BOOLEAN_FIELDS = ["dismissible", "hidesWhenEmpty"] as const;
+
 /**
- * Why a widget's declared geometry is the wrong SHAPE, or `undefined`.
+ * Why a widget's title, frame or boolean fields are unusable, or `undefined`.
  *
- * `defaultSize` and `defaultHeight` are strings in every version, and a blank
- * one names nothing in any of them -- so this is a shape rule rather than a
- * vocabulary rule, shared by both declaration channels, and an unknown value
- * like `"xxl"` still passes. That is the distinction that lets it live outside
- * the registry: a contribution may come from a plugin built against a newer
- * core, and refusing an unfamiliar size would drop a card over a value the
- * admin already survives.
+ * A title is a STRING in every version, so this is not a vocabulary rule. Blank is permitted
+ * deliberately -- `resolveTitle` trims it and falls back to the widget id -- but a non-string is a
+ * different case: that helper calls `.trim()` on the value, so a number or object throws and takes
+ * widget resolution down rather than rendering a differently-named card.
  *
- * Blank is REFUSED rather than read as absent, because the two channels
- * disagreed about which it was. The server's summary reader treats `""` as
- * unstated and falls back to the deprecated `size` alias; the admin's resolver
- * uses `??`, for which `""` is present, and keeps it -- so a declaration
- * carrying `defaultSize: ""` beside `size: "half"` was stored as `lg` and drawn
- * full width, and the card changed width when the arrangement arrived and
- * changed back when it was re-added. Refusing the declaration is the only place
- * that mistake is still visible to the author who made it.
- *
- * A non-string height is the same hole one field over: it reached the resolved
- * widget, and re-adding that card copied it into a placement the next write
- * refuses -- an ordinary edit turned into a draft that could never be saved.
+ * The booleans are BOOLEANS in every version: there is no vocabulary here that a newer core could
+ * extend, so anything else is a mistake rather than version skew. Each decides whether the admin
+ * hides a card, and the admin copies a registration's fields verbatim, so a truthy non-boolean
+ * such as `dismissible: "false"` would act on a card whose author declared the opposite. Refusing
+ * the declaration is the only place that mistake is visible to the person who made it.
  */
-function geometryShapeProblem(
+function presentationProblem(
   widget: Record<string, unknown>
 ): string | undefined {
-  for (const field of ["defaultSize", "defaultHeight"] as const) {
-    const value = widget[field];
-    if (value === undefined) continue;
-    if (typeof value !== "string") {
-      return `${field}, when given, must be a string`;
-    }
-    if (value === "") return `${field}, when given, must not be empty`;
+  if (widget.title !== undefined && typeof widget.title !== "string") {
+    return "title, when given, must be a string";
   }
-  return undefined;
+  const framed = chromeFieldProblem(widget);
+  if (framed !== undefined) return framed;
+  const field = BOOLEAN_FIELDS.find(
+    name => widget[name] !== undefined && typeof widget[name] !== "boolean"
+  );
+  return field === undefined
+    ? undefined
+    : `${field}, when given, must be a boolean`;
+}
+
+/**
+ * Why a widget's stated size cannot be used, or `undefined`.
+ *
+ * The same rule on both declaration channels, through the grid size module's
+ * one check: a size is whole grid units in every version, so there is no
+ * newer vocabulary for a contribution to be excused for. A default outside its
+ * own bounds is refused rather than drawn, since a card that starts at a size
+ * its reader may not return it to has bounds that mean nothing. Only a stated
+ * size is judged here; whether one is required is each channel's own rule.
+ */
+function sizeProblem(widget: Record<string, unknown>): string | undefined {
+  if (widget.size === undefined) return undefined;
+  const problems = sizeDeclarationProblems(widget.size);
+  return problems.length === 0 ? undefined : problems.join("; ");
 }
 
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
-  // A title is a STRING in every version, so this is not a vocabulary rule.
-  // Blank is permitted deliberately -- `resolveTitle` trims it and falls back
-  // to the widget id -- but a non-string is a different case: that helper calls
-  // `.trim()` on the value, so a number or object throws and takes widget
-  // resolution down rather than rendering a differently-named card.
-  if (widget.title !== undefined && typeof widget.title !== "string") {
-    return "title, when given, must be a string";
-  }
+  const presented = presentationProblem(widget);
+  if (presented !== undefined) return presented;
 
-  // Chrome is a STRING in every version. Moving the closed-vocabulary check to
-  // the registry took the shape check with it, so `chrome: 42` was published as
-  // a `WidgetChrome` -- and the renderer treats anything but `"none"` as
-  // `"card"`, so it renders and boot says nothing about a configuration its
-  // author got wrong. Unknown STRING values still pass, which is the version
-  // skew this boundary exists for.
-  if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
-    return "chrome, when given, must be a string";
-  }
+  const sized = sizedQueryProblem(widget);
+  if (sized !== undefined) return sized;
 
-  // A BOOLEAN in every version -- unlike `chrome`, there is no vocabulary here
-  // that a newer core could extend, so anything else is a mistake rather than
-  // version skew. It decides whether the admin draws a control that HIDES a
-  // card, and the admin copies a registration's fields verbatim, so a truthy
-  // non-boolean such as `dismissible: "false"` would draw the control on a card
-  // whose author declared the opposite. Refusing the declaration is the only
-  // place that mistake is visible to the person who made it.
-  if (
-    widget.dismissible !== undefined &&
-    typeof widget.dismissible !== "boolean"
-  ) {
-    return "dismissible, when given, must be a boolean";
-  }
-
-  const geometry = geometryShapeProblem(widget);
-  if (geometry !== undefined) return geometry;
+  const size = sizeProblem(widget);
+  if (size !== undefined) return size;
 
   // Asked HERE rather than in the registration validator, because both channels
   // must answer it the same way. Left on the registration side, a plugin using
@@ -603,7 +743,7 @@ export function widgetValueProblem(
     widget.requiredPermission !== undefined &&
     requiredPermissionSlugs(widget.requiredPermission) === undefined
   ) {
-    return "requiredPermission, when given, must be a permission slug or a non-empty array of them";
+    return "requiredPermission, when given, must be a permission slug, a non-empty array of them, or { allOf: [...] } whose entries are each a slug or a non-empty array of slugs";
   }
 
   // A query is an OBJECT in every version, so it belongs here rather than
@@ -616,9 +756,6 @@ export function widgetValueProblem(
   ) {
     return "query must be an object";
   }
-
-  const rangeProblem = sizeRangeProblem(widget);
-  if (rangeProblem !== undefined) return rangeProblem;
 
   return archetypeRelatedProblem(widget);
 }
@@ -707,72 +844,6 @@ function payloadPlacementProblem(
   return undefined;
 }
 
-/** The ordering rules between the three sizes, once each is known to be valid. */
-/**
- * The three sizes as ranks, with an unrankable one reported as absent.
- *
- * A size this core does not know has no rank, and ordering it would be the
- * vocabulary check by another route -- which must not cross the contributions
- * boundary. Reporting it as `undefined` rather than poisoning the whole set
- * means each comparison skips only the operand it cannot rank: a widget whose
- * `maxSize` came from a newer core is still checked for a `defaultSize` below
- * its `minSize`, which are values this core reads perfectly well.
- */
-function orderableRanks(widget: Record<string, unknown>): {
-  min?: number;
-  max?: number;
-  dflt?: number;
-} {
-  const rank = (value: unknown): number | undefined =>
-    typeof value === "string" && WIDGET_SIZES.includes(value as WidgetSize)
-      ? sizeRank(value as WidgetSize)
-      : undefined;
-
-  return {
-    min: rank(widget.minSize),
-    max: rank(widget.maxSize),
-    dflt: rank(widget.defaultSize),
-  };
-}
-
-/** One ordering rule between the sizes, given their ranks. */
-type SizeOrderRule = (
-  ranks: { min?: number; max?: number; dflt?: number },
-  widget: Record<string, unknown>
-) => string | undefined;
-
-/**
- * The orderings that must hold between the three sizes.
- *
- * A list rather than a ladder for the same reason `FIELD_RULES` is one: they
- * are independent, none depends on another's answer, and the shape stopped
- * saying what it was doing once there were three.
- */
-const SIZE_ORDER_RULES: readonly SizeOrderRule[] = [
-  ({ min, max }, w) =>
-    min !== undefined && max !== undefined && min > max
-      ? `minSize (${String(w.minSize)}) exceeds maxSize (${String(w.maxSize)})`
-      : undefined,
-  ({ min, dflt }, w) =>
-    dflt !== undefined && min !== undefined && dflt < min
-      ? `defaultSize (${String(w.defaultSize)}) is below minSize (${String(w.minSize)})`
-      : undefined,
-  ({ max, dflt }, w) =>
-    dflt !== undefined && max !== undefined && dflt > max
-      ? `defaultSize (${String(w.defaultSize)}) is above maxSize (${String(w.maxSize)})`
-      : undefined,
-];
-
-function sizeRangeProblem(widget: Record<string, unknown>): string | undefined {
-  const ranks = orderableRanks(widget);
-
-  for (const rule of SIZE_ORDER_RULES) {
-    const problem = rule(ranks, widget);
-    if (problem !== undefined) return problem;
-  }
-  return undefined;
-}
-
 function validateTitle(d: Partial<WidgetDefinition>): void {
   // Channel-specific, and deliberately not shared. This is the RESOLVED widget,
   // so a blank title is a card labelled with whitespace. A contribution is a
@@ -797,56 +868,19 @@ function validateArchetype(d: Partial<WidgetDefinition>): void {
   }
 }
 
-/** Confirms each of the three size fields names a real size. */
-function validateSizeValues(d: Partial<WidgetDefinition>): void {
-  // Registry-only, deliberately. A closed vocabulary states THIS core's
-  // version: a plugin built against a newer one may name a size this core has
-  // never heard of, and the admin already survives that by falling back to full
-  // width -- `sizes.ts` calls that fallback expected input rather than
-  // defensive decoration. Refusing it on the contributions side aborts a whole
-  // plugin install over a card that renders.
-  if (!WIDGET_SIZES.includes(d.defaultSize as WidgetSize)) {
-    fail(`${d.id}: defaultSize must be one of ${WIDGET_SIZES.join(", ")}`);
-  }
-  for (const key of ["minSize", "maxSize"] as const) {
-    const value = d[key];
-    if (value !== undefined && !WIDGET_SIZES.includes(value)) {
-      fail(`${d.id}: ${key} must be one of ${WIDGET_SIZES.join(", ")}`);
-    }
+/**
+ * Confirms the widget states a size.
+ *
+ * Registry-only: this is the resolved widget, and a card with no size has
+ * nowhere on the grid to start. A contribution may leave it out, and its
+ * summary reads that as the default every reader shares. What a stated size
+ * must be is the shared rule's (`sizeProblem`), asked before this.
+ */
+function validateSize(d: Partial<WidgetDefinition>): void {
+  if (d.size === undefined) {
+    fail(`${d.id}: size is required, as { default: { w, h }, min?, max? }`);
   }
 }
-
-/** Registry-only, for the same version reason as {@link validateSizeValues}. */
-function validateHeight(d: Partial<WidgetDefinition>): void {
-  if (
-    d.defaultHeight !== undefined &&
-    !WIDGET_HEIGHTS.includes(d.defaultHeight)
-  ) {
-    fail(`${d.id}: defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`);
-  }
-}
-
-/**
- * Confirms the size fields describe a range the widget can actually occupy.
- *
- * Two properties, not one. The bounds must not invert -- a min larger than its
- * max leaves no size at all, so every resize the user attempts fails. And the
- * DEFAULT must sit inside them: comparing only the bounds against each other
- * accepts a widget that renders at a size the user is then forbidden to return
- * it to, because `defaultSize` is where the card starts and `minSize`/`maxSize`
- * are what a resize is clamped to. Both bounds are inclusive, so a default
- * equal to either is in range.
- */
-
-/**
- * Confirms `defaultHeight`, when present, names a real height.
- *
- * `WIDGET_HEIGHTS` was enforced by the TYPE alone, which reaches a TypeScript
- * caller and nothing else -- a plugin authored in JavaScript, or one whose
- * definition arrives as parsed JSON, registered `"medium"` at boot and left the
- * grid resolving a height that does not exist. The two size fields are checked
- * against their vocabulary here; this is the third field of the same kind.
- */
 
 /**
  * Confirms `component` is present exactly when the archetype requires it, and
@@ -890,23 +924,6 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  * `DATA_ARCHETYPES` above.
  */
 export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
-
-/**
- * Whether the HOST frames a widget, or the widget draws its own surface.
- *
- * `"card"` is the default and the only value most widgets want: the host draws
- * the standard card and the widget supplies a body, so every card on the
- * dashboard shares one anatomy, one busy state and one place its title lives.
- *
- * `"none"` is for a widget that IS already a designed surface -- core's own
- * dashboard sections carry their own heading and rules, and framing one draws a
- * second heading around the first. The distinction Backstage draws between a
- * framed `InfoCard` and bare `Content`.
- */
-export const WIDGET_CHROME = ["card", "none"] as const;
-
-/** How a widget is framed. See {@link WIDGET_CHROME}. */
-export type WidgetChrome = (typeof WIDGET_CHROME)[number];
 
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
@@ -1078,69 +1095,18 @@ export function querylessQueryProblem(
  * arbitrarily against each other.
  */
 /**
- * `chrome`, when stated, must be in the vocabulary -- and `"none"` only on
- * `custom`.
+ * Why a declaration that still names `chrome` is refused, or `undefined`.
  *
- * The archetype restriction is the load-bearing half. Accepting `"none"` on an
- * archetype core draws would be a validated option that produces a broken card
- * rather than a refusal: the body renders with no heading and no owner for its
- * loading and error states, and nothing anywhere says why.
+ * Every card is drawn in the dashboard's one frame, which draws its header and
+ * every state; no widget may decline it. A declaration naming the field is
+ * refused rather than ignored, so a plain-JavaScript author who wrote it learns
+ * at startup that their card will be framed, rather than from the dashboard.
+ * Exported, so the contributions channel asks the same question.
  */
-/**
- * Why this `chrome` cannot stand beside this `archetype`, or `undefined`.
- *
- * Non-throwing and exported, like {@link actionProblem},
- * {@link querylessQueryProblem} and {@link defaultOrderProblem}: the
- * CONTRIBUTIONS channel needs the same answer without a throw. Every one of
- * those four was added to one validator and missed by the other, and each time
- * the contributed value was the more permissive of the two.
- *
- * The archetype half is the load-bearing one. Accepting `"none"` on an
- * archetype core draws would be a validated option producing a broken card
- * rather than a refusal: the body renders with no heading and nothing owning
- * its loading and error states, and nothing anywhere says why.
- */
-export function chromeProblem(
-  chrome: unknown,
-  archetype: unknown
-): string | undefined {
-  if (chrome === undefined) return undefined;
-
-  // The VOCABULARY check is not here, and that is the same version boundary the
-  // sizes obey: a newer core may add a chrome value, and refusing it would
-  // abort the install of a plugin whose card this admin would simply frame,
-  // since anything that is not "none" already frames. `validateChrome` keeps
-  // that check on the registry side.
-  //
-  // The archetype rule likewise only where this core KNOWS the archetype --
-  // otherwise it judges a newer core's shape and refuses the whole install.
-  // Through the same four-state reading as the placement rule, so the two
-  // cannot drift into disagreeing about what an absent or newer archetype
-  // means. An ABSENT one resolves to `custom`, which is exactly where `"none"`
-  // is legal; a NEWER one is exempt, since this core cannot say whether its
-  // body is composed into a card.
-  const standing = archetypeStanding(archetype);
-  const effective =
-    standing.kind === "resolved-custom"
-      ? "custom"
-      : standing.kind === "known"
-        ? standing.name
-        : undefined;
-
-  if (chrome === "none" && effective !== undefined && effective !== "custom") {
-    return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
-  }
-
-  return undefined;
-}
-
-function validateChrome(d: Partial<WidgetDefinition>): void {
-  // Registry-only vocabulary, for the reason `chromeProblem` gives.
-  if (d.chrome !== undefined && !WIDGET_CHROME.includes(d.chrome)) {
-    fail(`${d.id}: chrome must be one of ${WIDGET_CHROME.join(", ")}`);
-  }
-  const problem = chromeProblem(d.chrome, d.archetype);
-  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+export function chromeFieldProblem(widget: object): string | undefined {
+  return Object.hasOwn(widget, "chrome")
+    ? "chrome is not a widget field: every card is drawn in the dashboard's frame"
+    : undefined;
 }
 
 /**
@@ -1293,6 +1259,59 @@ export function cellsProblem(
 }
 
 /**
+ * Why a `custom` card's cells cannot be asked, or `undefined` when they can:
+ * at least one, at most {@link MAX_STAT_CELLS}, each a keyed query, no key
+ * twice. Each query's shape is judged with the card's own query
+ * ({@link widgetQueryShapeProblem}).
+ */
+function queryCellsProblem(cells: unknown): string | undefined {
+  if (!Array.isArray(cells) || cells.length === 0) {
+    return "a custom card's cells, when declared, must be a non-empty array";
+  }
+  if (cells.length > MAX_STAT_CELLS) {
+    return `a custom card may declare at most ${MAX_STAT_CELLS} cells, got ${cells.length}`;
+  }
+  const seen = new Set<string>();
+  for (const [index, cell] of cells.entries()) {
+    const problem = queryCellProblem(cell, index);
+    if (problem !== undefined) return problem;
+    // Well formed now, so the key is a string.
+    const key = (cell as WidgetQueryCell).key;
+    if (seen.has(key)) return `cells declare the key "${key}" more than once`;
+    seen.add(key);
+  }
+  return undefined;
+}
+
+/** Why one cell cannot be asked: no key, a condition it may not name, or no query. */
+/** Why an optional value is outside its closed set, or nothing when it is absent or inside. */
+function closedValueProblem(
+  name: string,
+  value: unknown,
+  allowed: readonly string[]
+): string | undefined {
+  if (value === undefined || allowed.includes(value as string))
+    return undefined;
+  return `has ${name} ${JSON.stringify(value)}, which is not one of ${allowed.join(", ")}`;
+}
+
+function queryCellProblem(cell: unknown, index: number): string | undefined {
+  const { key, query, when, drawnFrom } = (cell ??
+    {}) as Partial<WidgetQueryCell>;
+  if (typeof key !== "string" || key.trim() === "") {
+    return `cells[${index}] needs a non-empty key`;
+  }
+  const outside =
+    closedValueProblem("when", when, WIDGET_CELL_CONDITIONS) ??
+    closedValueProblem("drawnFrom", drawnFrom, WIDGET_CELL_TIERS);
+  if (outside !== undefined) return `cells[${index}] ("${key}") ${outside}`;
+  if (typeof query !== "object" || query === null) {
+    return `cells[${index}] ("${key}") needs a query`;
+  }
+  return undefined;
+}
+
+/**
  * Confirms `cells` is present exactly for `stats`, and well formed.
  *
  * The duplicate-key check matters more than it looks: the card keys each
@@ -1300,10 +1319,73 @@ export function cellsProblem(
  * answer and the card would draw the same number twice under two different
  * labels -- which is not wrong-looking in any way a reader could detect.
  */
+/**
+ * Why a custom card that asks twice is refused, or `undefined`: a card answered
+ * through its cells has no top-level query, since nothing would hand the
+ * component that query's answer. One rule for both declaration channels, the
+ * registry's and a plugin's contributed widgets, so neither accepts a shape the
+ * other refuses.
+ */
+export function customAsksTwiceProblem(widget: {
+  archetype?: unknown;
+  query?: unknown;
+  cells?: unknown;
+}): string | undefined {
+  return widget.archetype === "custom" &&
+    widget.cells !== undefined &&
+    widget.query !== undefined
+    ? "a custom card asks through its query or its cells, not both"
+    : undefined;
+}
+
+/**
+ * Why a widget's `limit` setting cannot reach its query, or `undefined`. A
+ * number setting named `limit` sets how many rows the card asks for, and a
+ * query over a `range` refuses a limit, since its range sets how many points
+ * are drawn: offered beside one, the setting would fail every request it
+ * changed. Shared by the registry and the contributed-widget check.
+ */
+export function rangedLimitSettingProblem(widget: {
+  query?: unknown;
+  cells?: unknown;
+  settings?: unknown;
+}): string | undefined {
+  // The setting the limit knob drives, by the knob's own test.
+  const limited =
+    Array.isArray(widget.settings) && widget.settings.some(isLimitSetting);
+  if (!limited) return undefined;
+  const queries = [
+    widget.query,
+    ...(Array.isArray(widget.cells)
+      ? widget.cells.map(cell =>
+          typeof cell === "object" && cell !== null
+            ? (cell as { query?: unknown }).query
+            : undefined
+        )
+      : []),
+  ];
+  const ranged = queries.some(
+    query =>
+      typeof query === "object" &&
+      query !== null &&
+      (query as { range?: unknown }).range !== undefined
+  );
+  return ranged
+    ? 'declares a "limit" setting, and a query with a range draws the points its range sets'
+    : undefined;
+}
+
 function validateCells(d: Partial<WidgetDefinition>): void {
+  if (d.archetype === "custom" && d.cells !== undefined) {
+    const twice = customAsksTwiceProblem(d);
+    if (twice !== undefined) fail(`${d.id}: ${twice}`);
+    const problem = queryCellsProblem(d.cells);
+    if (problem !== undefined) fail(`${d.id}: ${problem}`);
+    return;
+  }
   if (d.archetype !== "stats") {
     if (d.cells !== undefined) {
-      fail(`${d.id}: cells are only valid for archetype "stats"`);
+      fail(`${d.id}: cells are only valid for archetype "stats" or "custom"`);
     }
     return;
   }
@@ -1319,7 +1401,9 @@ function validateCells(d: Partial<WidgetDefinition>): void {
  */
 export function archetypeResultProblem(
   archetype: WidgetArchetype,
-  query: WidgetQuerySpec | undefined
+  // Sourceless too: the op decides what an archetype can draw, whichever way
+  // the source arrives.
+  query: WidgetQuerySpec | SettingSourcedQuerySpec | undefined
 ): string | undefined {
   // A Map, not an object literal. A contribution's archetype is caller text,
   // and `"toString"` or `"constructor"` indexes an object literal to something
@@ -1333,11 +1417,86 @@ export function archetypeResultProblem(
   );
 }
 
-function validateQuery(d: Partial<WidgetDefinition>): void {
+/**
+ * Confirms `allowsSeveral` and `sketch`, when stated, are values the add panel
+ * can act on: a boolean, and one of the displays core draws.
+ */
+function validateOfferTerms(d: Partial<WidgetDefinition>): void {
+  if (d.allowsSeveral !== undefined && typeof d.allowsSeveral !== "boolean") {
+    fail(`${d.id}: allowsSeveral must be true or false`);
+  }
+  if (d.sketch !== undefined && !DATA_ARCHETYPE_SET.has(d.sketch)) {
+    fail(`${d.id}: sketch must be one of ${DATA_ARCHETYPES.join(", ")}`);
+  }
+}
+
+/**
+ * Confirms `empty`, when stated, comes with `serverData` and has its shape.
+ *
+ * Only a declared widget's empty state is published, and its words and link
+ * were judged at startup by the empty state's own rules. A registered widget
+ * stating one would bypass them, so it is refused; the shape is still checked,
+ * as a guard over values already in hand.
+ */
+function validateEmpty(d: Partial<WidgetDefinition>): void {
+  const empty: unknown = d.empty;
+  if (empty === undefined) return;
+  if (d.serverData !== true) {
+    fail(`${d.id}: empty is published by core for a declared widget only`);
+  }
+  const { message, action } = empty as { message?: unknown; action?: unknown };
+  if (
+    (message !== undefined && !isText(message)) ||
+    !emptyActionIsText(action)
+  ) {
+    fail(`${d.id}: empty has a message or an action that is not text`);
+  }
+}
+
+/** Words a person reads: a string with something in it. */
+const isText = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "";
+
+/** An empty state's action, when stated: a label and a link, each of them text. */
+function emptyActionIsText(action: unknown): boolean {
+  if (action === undefined) return true;
+  if (typeof action !== "object" || action === null) return false;
+  const { label, link } = action as { label?: unknown; link?: unknown };
+  return isText(label) && isText(link);
+}
+
+/**
+ * Why a definition's query, or its want of one, does not fit its archetype:
+ * the ONE reading of that question, for every way a data archetype's card can
+ * be answered.
+ *
+ * A data archetype is answered by a query it carries, or, marked `serverData`,
+ * by core from the widget's declaration, with no query. The mark may only be
+ * `true`, and a query beside it would leave two answers to what the card
+ * shows: the one the definition carries and the one core builds.
+ */
+export function widgetQueryShapeProblem(
+  d: Partial<WidgetDefinition>
+): string | undefined {
+  const marked: unknown = d.serverData;
+  if (marked !== undefined) {
+    if (marked !== true) return "serverData may only be true";
+    if (d.query !== undefined) {
+      return "a widget whose data is built on the server takes no query";
+    }
+    return undefined;
+  }
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
-    fail(`${d.id}: archetype "${d.archetype}" requires a query`);
+    return `archetype "${d.archetype}" requires a query`;
   }
+  return sourceProblem(d);
+}
+
+function validateQuery(d: Partial<WidgetDefinition>): void {
+  const archetype = d.archetype as WidgetArchetype;
+  const shape = widgetQueryShapeProblem(d);
+  if (shape !== undefined) fail(`${d.id}: ${shape}`);
   // Refused with its OWN reason rather than the queryless one, which would say
   // this archetype takes no data -- the opposite of true. Its numbers come from
   // `cells`, and an author who wrote `query` needs to be told where to move it.
@@ -1350,6 +1509,131 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
   if (mismatch !== undefined) fail(`${d.id}: ${mismatch}`);
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
+/**
+ * Why a definition's query cannot name what it reads, or `undefined` when it
+ * can: it declares a source, or it declares none and a Collection setting
+ * supplies one. Both together is a source the card's Collection setting
+ * replaces once it is set, and reads while it is not.
+ *
+ * A grouped query's group key is read the same way: stated, or supplied by a
+ * Group by setting that always has a value to give, a static default or one
+ * taken from the collection. Left to a setting that may give none, the card
+ * would be asked a grouping of nothing, which the endpoint refuses.
+ */
+function sourceProblem(d: Partial<WidgetDefinition>): string | undefined {
+  const fromSetting = declaresCollectionSetting(d.settings);
+  // The card's own query and each of a custom card's cells, judged alike: the
+  // Collection setting supplies every one of their sources, or none.
+  const asked: Array<[string, AskedQuery | undefined]> = [
+    ["its query", d.query],
+    // Judged before the cells' own rule runs, so a malformed list is left to
+    // that rule to refuse by name.
+    ...(d.archetype === "custom" && Array.isArray(d.cells)
+      ? (d.cells as Partial<WidgetQueryCell>[]).map(
+          (cell): [string, AskedQuery | undefined] => [
+            `its cell "${String(cell?.key)}"`,
+            typeof cell?.query === "object" && cell.query !== null
+              ? cell.query
+              : undefined,
+          ]
+        )
+      : []),
+  ];
+  for (const [what, query] of asked) {
+    if (query === undefined) continue;
+    if (query.source === undefined && !fromSetting) {
+      return `${what} names no source, and no Collection setting supplies one`;
+    }
+    // Per query: a Group by setting reaches only the queries its knob drives
+    // (a collection's, or one a Collection setting fills), so a cell on
+    // another kind of source is not supplied by it.
+    if (
+      query.op === "groupBy" &&
+      query.groupBy === undefined &&
+      !suppliesGrouping(d.settings, query)
+    ) {
+      return `${what} names no groupBy, and no Group by setting with a default supplies one`;
+    }
+  }
+  return undefined;
+}
+
+/** The parts of a declared query `sourceProblem` reads, read defensively. */
+interface AskedQuery {
+  source?: string;
+  op?: unknown;
+  groupBy?: unknown;
+}
+
+/**
+ * Whether a definition declares a Group by setting that always gives `query`
+ * a value: one with a default, or one taking its default from the collection,
+ * that a knob drives on that query. Read defensively, as
+ * {@link declaresCollectionSetting} reads.
+ */
+function suppliesGrouping(settings: unknown, query: AskedQuery): boolean {
+  return (
+    Array.isArray(settings) &&
+    settings.some((setting: unknown) => {
+      if (typeof setting !== "object" || setting === null) return false;
+      const { type, defaultValue, defaultFrom } = setting as {
+        type?: unknown;
+        defaultValue?: unknown;
+        defaultFrom?: unknown;
+      };
+      return (
+        type === "groupBy" &&
+        (typeof defaultValue === "string" || defaultFrom === "collection") &&
+        drivesQuery(setting as AnyWidgetSetting, query)
+      );
+    })
+  );
+}
+
+/**
+ * Whether a definition declares a Collection setting. Read defensively:
+ * malformed settings are the settings rule's to refuse by name, so here they
+ * simply declare none.
+ */
+function declaresCollectionSetting(settings: unknown): boolean {
+  return (
+    Array.isArray(settings) &&
+    settings.some(
+      (setting: unknown) =>
+        typeof setting === "object" &&
+        setting !== null &&
+        (setting as { type?: unknown }).type === "collection"
+    )
+  );
+}
+
+/** The modes `offered` may name, the closed list its type spells. */
+const OFFERED_MODES = [
+  "per-collection",
+  "on-request",
+] as const satisfies readonly NonNullable<WidgetDefinition["offered"]>[];
+
+/**
+ * Refuses an `offered` mode outside its closed list, and a widget offered per
+ * collection that declares no Collection setting:
+ * its add-panel rows each start a card set to a collection, so without one the
+ * widget could be added nowhere.
+ */
+function validateOffered(d: Partial<WidgetDefinition>): void {
+  // An untyped registration with a misspelt mode would otherwise be read as an
+  // ordinary widget: placed by default, perhaps with no collection to read.
+  const outside = closedValueProblem("offered", d.offered, OFFERED_MODES);
+  if (outside !== undefined) fail(`${d.id}: ${outside}`);
+  if (
+    d.offered === "per-collection" &&
+    !declaresCollectionSetting(d.settings)
+  ) {
+    fail(
+      `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
+    );
+  }
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
@@ -1366,14 +1650,25 @@ export function validateWidgetDefinition(
 
   validateTitle(d);
   validateArchetype(d);
-  validateSizeValues(d);
-  validateHeight(d);
+  validateSize(d);
   validateComponent(d);
   validateActions(d);
   validateText(d);
   validateQuery(d);
+  validateOfferTerms(d);
+  validateEmpty(d);
   validateCells(d);
+  const rangedLimit = rangedLimitSettingProblem(d);
+  if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
+  validateOffered(d);
   validateDefaultOrder(d);
-  validateChrome(d);
-  validateWidgetSettings(d.settings, d.id ?? "widget");
+  // Judged on what the widget asks, with the filters each source declares: a
+  // content setting is admitted where core builds the query, or where a knob
+  // drives it on the query's source or on at least one cell's.
+  validateWidgetSettings(
+    d.settings,
+    d.id ?? "widget",
+    d.serverData === true,
+    settingsSourceOf(d)
+  );
 }

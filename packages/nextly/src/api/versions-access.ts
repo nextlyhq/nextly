@@ -24,7 +24,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
-import { configuredLocales } from "../domains/i18n/configured-locales";
+import {
+  appLocalization,
+  configuredLocales,
+} from "../domains/i18n/configured-locales";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -65,7 +68,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -88,7 +90,13 @@ export async function requireRouteVersionReadAccess(
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
-  const auth = await requireRouteCollectionAccess(request, "read", slug);
+  // A history names one document: a caller who may not read it is answered
+  // as if it were missing, as the dispatcher's history routes answer.
+  const auth = await requireRouteCollectionAccess(request, "read", slug, {
+    method: "readDocumentHistory",
+    params: {},
+    namesOne: true,
+  });
 
   // Resolved role slugs so field-level `access.read` evaluates against the
   // caller's roles (session auth carries role ids; API-key auth carries slugs).
@@ -291,13 +299,51 @@ export async function historyLanguagesOf(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return configured;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return new Set(
     defaultLocale !== null && configured.has(defaultLocale)
       ? [defaultLocale]
       : []
   );
+}
+
+/**
+ * Refuse a caller the language of one version, before anything is written or
+ * returned about it. Returns the version's part, or undefined when there is no
+ * such version, which the read or write that follows refuses in its own way.
+ * Shared by REST's version routes and the plugin service's checked label.
+ */
+export async function assertVersionLanguageReadable(
+  document: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  versionNo: number,
+  // What the caller's own read carries, for the language's read hooks.
+  hookInputs: DocumentReadHookInputs = {}
+): Promise<string | null | undefined> {
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    versionNo
+  );
+  if (part === undefined) return undefined;
+  await assertHistoryLocalesReadable(
+    document.scopeKind,
+    document.slug,
+    document.entryId,
+    document.user,
+    document.authenticatedScope,
+    hookInputs,
+    [part]
+  );
+  return part;
 }
 
 /**
@@ -582,8 +628,9 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * read judges it.
  *
  * Returns what the read rules removed: top-level keys, and dotted paths below
- * them (`banner.secret`), so a comparison can say a field is hidden from this
- * reader rather than leave it out unexplained. Password values are stripped
+ * them (`banner.secret`), with a list row named by its index in this version
+ * (`items.1.secret`), so a comparison can say a field is hidden from this
+ * reader, in the row it was hidden in, rather than leave it out unexplained. Password values are stripped
  * too, but are not reported: a comparison never shows a password field at all.
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
@@ -629,12 +676,7 @@ export async function redactSnapshotForUser(
   // field is declared. The same map takes the read rules into components.
   const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -757,20 +799,163 @@ export async function tryResolveCurrentFields(
   slug: string
 ): Promise<FieldConfig[] | null> {
   try {
+    // An entity that is not there is a lookup that found nothing, not one
+    // with no fields: answered as `null`, so a caller that must fail closed
+    // does, rather than treating a missing schema as nothing to look for.
     if (scopeKind === "single") {
       const registry = getService("singleRegistryService");
       const record = await registry.getSingleBySlug(slug);
-      return record?.fields ?? [];
+      return record ? (record.fields ?? []) : null;
     }
     const collections = getService("collectionService");
     // Metadata lookup only; the context carries no user because the access
     // decision was already made above and this is just a field-shape read.
     const collection = await collections.getCollection(slug, {});
-    return ((collection as { fields?: unknown[] } | null)?.fields ??
+    if (!collection) return null;
+    return ((collection as { fields?: unknown[] }).fields ??
       []) as FieldConfig[];
   } catch {
     return null;
   }
+}
+
+/**
+ * Leave a recovery point's password-field values out of `snapshot`, in place.
+ *
+ * The snapshot of an autosave arrives from whoever is editing, so it carries
+ * whatever they have typed, a new password included, which no write has hashed
+ * yet. Durable capture never faces this: it snapshots the stored row, where the
+ * value is already hashed or absent. One function for every door that records
+ * an autosave, REST and the plugin service alike, with the same schema-driven
+ * recursive helper the version reads use, so no door stores a value another
+ * would have left out.
+ */
+export async function stripAutosavePasswords(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  snapshot: unknown
+): Promise<void> {
+  // `page` scopes hold block documents rather than user-defined fields, and
+  // field resolution has no answer for them.
+  if (scopeKind !== "collection" && scopeKind !== "single") return;
+  // An object or a list of rows: the stripper walks both. REST's autosave
+  // takes only an object; a plugin's may be any value the store takes.
+  if (!snapshot || typeof snapshot !== "object") return;
+  const fields = await autosaveFieldsOrRefuse(scopeKind, slug);
+  if (fields.length === 0) return;
+
+  // Walks the SNAPSHOT rather than an expanded schema. A component may
+  // reference itself, so a schema-side expansion has to stop at some
+  // depth, and everything below that cut-off would keep its passwords.
+  // The data is finite, so this terminates on its own and strips every
+  // level that actually exists.
+  stripPasswordsThroughComponents(
+    snapshot,
+    fields,
+    await autosaveComponentFields(fields, scopeKind, slug)
+  );
+}
+
+/**
+ * The entity's fields, or a refusal when they cannot be read.
+ *
+ * Fail CLOSED on a failed LOOKUP, which is what `null` means here. An empty
+ * list is a different answer: a valid entity can have no user-defined fields
+ * at all (a freshly created Single, whose identity columns alone form a
+ * document), and there is genuinely nothing to strip from one. Treating those
+ * alike would refuse every autosave for such an entity, while treating a
+ * failed lookup as "nothing to strip" would write whatever the editor sent,
+ * credentials included, exactly when the lookup meant to find them had broken.
+ */
+async function autosaveFieldsOrRefuse(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "autosave-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
+  return fields;
+}
+
+/**
+ * The schemas of the components `fields` reference, by slug.
+ *
+ * A `component` field is a REFERENCE: its schema lives under another slug, so
+ * the stripper sees `{ type: "component" }` and has nothing to descend into. A
+ * password declared inside a referenced component would survive in the
+ * snapshot. Resolved here so the stripper can rewrite the references into the
+ * container shapes it already walks, and strip once.
+ */
+async function autosaveComponentFields(
+  fields: FieldConfig[],
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<Map<string, FieldConfig[]>> {
+  const dataService = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
+  // propagates a lookup error rather than reporting the component absent, so
+  // an unresolvable schema arrives here as a thrown error and refuses the
+  // write; what this guards is the other case, a registry that is not wired at
+  // all while the schema still declares references.
+  if (!dataService) {
+    if (declaresComponentReference(fields)) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "autosave-component-schema-unavailable",
+          scopeKind,
+          scopeSlug: slug,
+        },
+      });
+    }
+    return new Map();
+  }
+  // No executor: autosave runs outside any transaction by design, and the
+  // parameter exists so an in-transaction caller can read on its own
+  // connection rather than take a second one.
+  return resolveComponentFieldMap(fields, component =>
+    dataService.getComponentFields(component)
+  );
+}
+
+/**
+ * Whether any field in this schema references a component by slug, at any
+ * depth. Used to decide whether an unavailable component registry is a problem
+ * for THIS entity: a schema with no references has nothing unresolvable in it.
+ */
+function declaresComponentReference(fields: FieldConfig[]): boolean {
+  for (const field of fields) {
+    // Either spelling declares a reference: a migrated definition whose keys
+    // went unread would skip the registry-unavailable guard entirely.
+    if (typeof (field as { component?: unknown }).component === "string") {
+      return true;
+    }
+    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
+      return true;
+    }
+    if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
+      return true;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (
+      Array.isArray(children) &&
+      declaresComponentReference(children as FieldConfig[])
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1131,8 +1316,7 @@ async function onePart(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return false;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return [a, b].every(tag => tag === null || tag === defaultLocale);
 }
 
@@ -1160,7 +1344,7 @@ async function partIsLiveNow(
     entity,
     entryId,
     part,
-    defaultLocale: getService("config").localization?.defaultLocale ?? null,
+    defaultLocale: appLocalization()?.defaultLocale ?? null,
   });
 }
 
@@ -1261,7 +1445,10 @@ export async function diffDocumentVersions(args: {
     fields,
     {
       modifiedOnly: args.modifiedOnly,
-      withheld: new Set([...withheldFrom, ...withheldTo]),
+      // Each version's own: a list row is named by its index in that
+      // version, so merging the two would hide a field in the wrong row.
+      withheldFrom,
+      withheldTo,
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,

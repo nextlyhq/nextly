@@ -110,7 +110,7 @@ export function EntryFieldsPanel({
   disabled,
   mode,
   slugName,
-}: EntryFieldsPanelProps) {
+}: EntryFieldsPanelProps): React.JSX.Element {
   return (
     <div className="space-y-4 p-4" onKeyDown={blockImplicitSubmit}>
       {page.length === 0 ? null : (

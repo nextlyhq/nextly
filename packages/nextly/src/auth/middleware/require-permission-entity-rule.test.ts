@@ -17,11 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionAccessControl } from "@nextly/domains/auth/services/access-control-types";
 
-import {
-  apiKeyScope,
-  callerMayPerform,
-  type GrantedPermission,
-} from "../authenticated-scope";
+import { callerMayPerform } from "../access/route-gate-adapters";
+import { apiKeyScope, type GrantedPermission } from "../authenticated-scope";
 
 const state = vi.hoisted(() => ({
   rules: new Map<string, CollectionAccessControl>(),

@@ -26,6 +26,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useRef } from "react";
 
 import { ExternalLink, Loader2, RefreshCw, X } from "@admin/components/icons";
@@ -82,7 +83,7 @@ export function PreviewFrame({
   requestedWidth,
   onRequestWidth,
   viewports,
-}: PreviewFrameProps) {
+}: PreviewFrameProps): JSX.Element {
   /*
    * The area the frame is drawn into, measured rather than assumed. Its width
    * is what decides whether a requested viewport fits, and it changes when the

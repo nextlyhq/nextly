@@ -191,15 +191,18 @@ describe("hashes from other settings and formats", () => {
     };
     const real: number[] = [];
     const decoy: number[] = [];
-    for (let round = 0; round < 5; round++) {
+    for (let round = 0; round < 7; round++) {
       real.push(await time(hash));
       decoy.push(await time(null));
     }
-    const median = (values: number[]) =>
-      [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
-    // Stated tolerance: the two medians within 35% of each other.
-    expect(Math.abs(median(decoy) - median(real))).toBeLessThanOrEqual(
-      0.35 * median(real)
+    // Each side's fastest run, not its median. Other test files share the
+    // machine's CPU, which only ever adds time to a run, so the fastest of
+    // several is the closest to what each derivation costs, while a decoy that
+    // skipped the derivation would still be far faster on every run. Stated
+    // tolerance: the two fastest runs within 35% of each other.
+    const fastestReal = Math.min(...real);
+    expect(Math.abs(Math.min(...decoy) - fastestReal)).toBeLessThanOrEqual(
+      0.35 * fastestReal
     );
     expect(await passwords.verify("a guess at a password", null)).toBe(false);
   });

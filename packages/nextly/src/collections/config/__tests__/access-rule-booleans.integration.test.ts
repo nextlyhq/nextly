@@ -3,9 +3,10 @@
  * access key stops the instance from starting.
  *
  * A collection whose `read` and `create` rules are `true` is read and written
- * by a signed-in person holding no permission on it; a field whose `read` rule
- * is `false` is withheld from them, and one whose `update` rule is `false`
- * keeps its value when they change it. A collection naming an access key it
+ * by a signed-in person holding the permission on it, and refused to one who
+ * holds none, since a rule only narrows the permission; a field whose `read`
+ * rule is `false` is withheld from the person, and one whose `update` rule is
+ * `false` keeps its value when they change it. A collection naming an access key it
  * does not have (`reed`) is refused when the instance boots, naming the key.
  */
 
@@ -16,6 +17,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { Nextly } from "../../../direct-api/nextly";
 import {
@@ -33,6 +35,7 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     let t: TestNextly;
     let personId: string;
+    let strangerId: string;
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -59,7 +62,7 @@ describe.each(getConfiguredTestDialects())(
         };
       };
       // The install's first account holds super-admin; the person is another,
-      // holding no role at all.
+      // holding the permissions, and the stranger a third, holding none.
       await direct.users.create({
         email: "owner@example.com",
         password: "Password123!",
@@ -72,6 +75,16 @@ describe.each(getConfiguredTestDialects())(
           data: { name: "Person", isActive: true },
         })
       ).item.id;
+      for (const action of ["read", "create", "update"]) {
+        await grantTo(t, personId, action, [NOTES]);
+      }
+      strangerId = (
+        await direct.users.create({
+          email: "stranger@example.com",
+          password: "Password123!",
+          data: { name: "Stranger", isActive: true },
+        })
+      ).item.id;
     }, 120_000);
 
     afterAll(async () => {
@@ -79,7 +92,20 @@ describe.each(getConfiguredTestDialects())(
       await t?.destroy();
     });
 
-    it("lets a person with no permission read and write by a true rule, and withholds a false field", async () => {
+    it("refuses a person with no permission, whatever a true rule says", async () => {
+      const asStranger = new Nextly({
+        overrideAccess: false,
+        user: { id: strangerId },
+      });
+      await expect(
+        asStranger.create({
+          collection: NOTES,
+          data: { title: "t" },
+        } as never)
+      ).rejects.toThrow();
+    });
+
+    it("lets a person holding the permission read and write by a true rule, and withholds a false field", async () => {
       const asPerson = new Nextly({
         overrideAccess: false,
         user: { id: personId },

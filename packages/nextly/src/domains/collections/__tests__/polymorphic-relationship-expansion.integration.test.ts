@@ -16,6 +16,7 @@
 
 import { afterEach, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   checkbox,
   defineCollection,
@@ -193,6 +194,9 @@ describeEachDialect("polymorphic relationship expansion", dialect => {
         }),
       ],
     });
+    // The signed-in reader. A code rule only narrows the permission, so it
+    // holds read on pages, which the populated row is judged by.
+    await userWhoMay(current, "reader-1", "read", ["pages"]);
 
     const handler = current.getService<Handler>("collectionsHandler");
     const page = await handler.createEntry(

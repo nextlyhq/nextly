@@ -24,6 +24,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
@@ -224,7 +225,7 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
-}: DocumentViewBodyProps) {
+}: DocumentViewBodyProps): JSX.Element {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
    * because this body renders no way back of its own — the view is handed

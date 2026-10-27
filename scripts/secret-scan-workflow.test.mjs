@@ -15,8 +15,9 @@ import { delimiter, join } from "node:path";
 import { load } from "js-yaml";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const WORKFLOW = load(readFileSync(new URL("../.github/workflows/secret-scan.yml", import.meta.url), "utf8"));
-const STEP = WORKFLOW.jobs.gitleaks.steps.find(step => step.name === "Run gitleaks on the commits this run adds");
+const WORKFLOW = load(readFileSync(new URL("../.github/workflows/small-checks.yml", import.meta.url), "utf8"));
+const STEPS = WORKFLOW.jobs.checks.steps;
+const STEP = STEPS.find(step => step.name === "Run gitleaks on the commits this run adds");
 const ZERO = "0".repeat(40);
 const UNKNOWN = "f".repeat(40);
 
@@ -24,7 +25,7 @@ describe("the secret scan's inputs", () => {
   it("takes each value from the event field it names", () => {
     expect(STEP.env).toEqual({
       EVENT: "${{ github.event_name }}",
-      BASE_REF: "${{ github.base_ref }}",
+      BASE_REF: "${{ github.event.pull_request.base.ref }}",
       PUSH_BEFORE: "${{ github.event.before }}",
       PUSH_AFTER: "${{ github.event.after }}",
       QUEUE_BASE: "${{ github.event.merge_group.base_sha }}",
@@ -34,6 +35,19 @@ describe("the secret scan's inputs", () => {
 
   it("reads them from the environment, never spliced into the script's text", () => {
     expect(STEP.run).not.toContain("${{");
+  });
+
+  // The scan reads the change, which is checked out apart from the code that
+  // judges it; scanning the workspace root would scan `main` instead and pass
+  // whatever the change added.
+  it("scans the change's checkout, the one checked out at the change's commit", () => {
+    const change = STEPS.find(step => step.name === "Checkout the change");
+    expect(change.with.path).toBe("change");
+    expect(change.with.ref).toBe("${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/head', github.event.pull_request.number) || github.sha }}");
+    expect(change.with["fetch-depth"]).toBe(0);
+    expect(STEP["working-directory"]).toBe(change.with.path);
+    // And gitleaks reads the working directory itself, not a path that leads back to the root.
+    expect([...STEP.run.matchAll(/--source\s+(\S+)/g)].map(match => match[1])).toEqual(["."]);
   });
 });
 
@@ -81,10 +95,14 @@ describe.runIf(process.platform !== "win32")("the range the secret scan reads", 
     expect(result.status, result.output).toBe(0);
     expect(result.scans).toHaveLength(1);
     expect(result.scans[0].split(" ")).toEqual(expect.arrayContaining(["detect", `--log-opts=${range}`, "--redact"]));
+    // The repository scanned is the one the step runs in: the change's checkout.
+    expect(result.scans[0]).toMatch(/(?:^| )--source \.(?: |$)/);
   }
 
   it("scans a pull request's own commits, from the base branch it targets", () => {
-    expectScanOf(scan({ EVENT: "pull_request", BASE_REF: "main" }), "origin/main..HEAD");
+    expectScanOf(scan({ EVENT: "pull_request_target", BASE_REF: "main" }), "origin/main..HEAD");
+    // The workflow runs on `pull_request_target`; a `pull_request` event has no range here.
+    expect(scan({ EVENT: "pull_request", BASE_REF: "main" }).status).toBe(1);
   });
 
   it("scans a push's range, and the head commit alone on a branch's first push", () => {
@@ -108,7 +126,7 @@ describe.runIf(process.platform !== "win32")("the range the secret scan reads", 
     const refusals = [
       [{ EVENT: "schedule" }, "no range to scan for a schedule event"],
       [{}, "no range to scan for a unnamed event"],
-      [{ EVENT: "pull_request" }, "a pull_request event with no base branch"],
+      [{ EVENT: "pull_request_target" }, "a pull_request_target event with no base branch"],
       [{ EVENT: "push", PUSH_BEFORE: base }, "a push event with no head commit"],
       [{ EVENT: "merge_group", QUEUE_BASE: base }, "a merge_group event with no base or no head commit"],
       [{ EVENT: "merge_group", QUEUE_BASE: head, QUEUE_HEAD: head }, `the range ${head}..${head} holds no commits`],

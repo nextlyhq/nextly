@@ -9,11 +9,11 @@ creating a second post.
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | Language switcher on edit screens, plus a translations overview |
-| Permission | The same access as editing the document |
+|            |                                                                 |
+| ---------- | --------------------------------------------------------------- |
+| Built in   | No plugin required                                              |
+| Admin      | Language switcher on edit screens, plus a translations overview |
+| Permission | The same access as editing the document                         |
 
 ## Turn it on
 
@@ -38,12 +38,38 @@ export default defineConfig({
 
 A locale is either a bare code or an object. The object form carries:
 
-| Key | Meaning |
-|---|---|
-| `code` | The locale code, e.g. `es` |
-| `label` | What the admin shows in the language switcher |
-| `rtl` | Renders that language right-to-left |
+| Key              | Meaning                                          |
+| ---------------- | ------------------------------------------------ |
+| `code`           | The locale code, e.g. `es`                       |
+| `label`          | What the admin shows in the language switcher    |
+| `rtl`            | Renders that language right-to-left              |
 | `fallbackLocale` | Which language (or ordered list) to fall back to |
+
+### Or keep the list out of your code
+
+Leave the `localization` block out, and the site's languages are stored in its database instead,
+managed through the languages API. The admin has no screen for them yet. A site starts with one
+language, English, and nothing is stored until a change is made.
+
+| Request                                | What it does                                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET /api/languages`                   | Lists the languages, removed ones included: `{ items, meta }`, with `meta.lockedByConfig` |
+| `GET /api/languages?defaultPreview=fr` | Says how many translations each language holds, before French becomes the default         |
+| `POST /api/languages`                  | Makes one change, named by `kind`: `add`, `update`, `reorder`, `remove` or `setDefault`   |
+
+```json
+{ "kind": "add", "code": "fr", "label": "Français", "fallback": ["en"] }
+```
+
+- Codes are BCP 47 (`fr`, `pt-BR`) and unique whatever their letter case.
+- Removing a language keeps its content: it stops being served, other languages' fallback lists
+  skip it, and adding it back restores it. The default language cannot be removed.
+- Making another language the default must be confirmed (`"confirmed": true`), moves no content,
+  and is refused while the current default has unpublished changes.
+- Reading needs the settings read or manage permission; changing needs update or manage.
+
+A `localization` block in `nextly.config.ts` always wins: the list is then read-only through the
+API. A language added on one server is served by every other server within a second.
 
 ## Choose what gets translated
 
@@ -106,7 +132,9 @@ A translated field renamed in code is not yet carried over: the old column keeps
 
 `fallback: true` means a missing translation falls back rather than rendering empty. A
 locale can name its own chain — `fallbackLocale: ["es", "en"]` tries Spanish, then
-English. Without a chain, the default locale is used.
+English. Without a chain, the default locale is used. A chain may pass through other languages but never back to the one it
+starts from: a loop is refused when the configuration loads, and when the list is changed through
+the API.
 
 ## Publishing one language at a time
 
@@ -129,15 +157,70 @@ With both set, publishing the Spanish version does not publish the French one, a
 still being translated stays invisible while the others are live.
 
 <Callout type="warn">
-With `localized: true` alone you get translations and no lifecycle — there is nothing to
-publish per language, because the entity has no draft/published state at all.
+  With `localized: true` alone you get translations and no lifecycle — there is
+  nothing to publish per language, because the entity has no draft/published
+  state at all.
 </Callout>
 
 <Callout type="warn">
-This is per-locale **publishing**, not per-locale scheduling. A
-[content release](/docs/releases) schedules the whole document across every language;
-it cannot schedule one language on its own.
+  This is per-locale **publishing**, not per-locale scheduling. A [content
+  release](/docs/releases) schedules the whole document across every language;
+  it cannot schedule one language on its own.
 </Callout>
+
+## Access rules and languages
+
+Every access rule — a collection's, a Single's and a field's — is told which languages it is
+judging, so a rule can answer by language:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  localized: true,
+  access: {
+    // The French translation is not open to editing yet.
+    update: ({ permissions, locales }) =>
+      permissions.includes("update-posts") && !locales.includes("fr"),
+  },
+  fields: [text({ name: "title" })],
+});
+```
+
+- `locale` is the one language the operation is in: the language a read reads or a write
+  writes. An unknown or missing `?locale=` is judged as the default it resolves to, and so is
+  `*` on a read and `all` on a write, which each resolves the same way. A bulk create or update,
+  and a duplicate, write the default language, and are judged in it.
+- `locales` is every language the operation involves: `[locale]` for one language, followed,
+  on a read, by each language a missing value falls back to (the site's fallback chain, or
+  `?fallback-locale=`), since a value shown from a fallback is that language's content; and every
+  configured language for a read of every translation (`locale=all`), a write to every language
+  (`locale=*`), and an operation on the whole entry, such as a delete. There `locale` is absent.
+  A duplicate copies what a read of the source shows in the default language, so its `locales`
+  also lists each language that falls back to. A read that also reads each language's
+  translation state (`?translation-status=1`, or a `_translated` filter) keeps its `locale` and
+  lists every configured language, and so does an autosave that names a language the site
+  doesn't configure. A collection or Single that isn't localized, and has no localized field
+  group, stores the same content in every language, so an operation on it is told every
+  language with no `locale`, whatever `?locale=` names.
+
+A rule that limits someone to some languages should check `locales`, not only `locale`, so it
+refuses an operation that reaches beyond them: a delete removes every language.
+
+Write a language rule as a restriction, refusing when `locales` includes a language
+(`!locales.includes("fr")`), not as an admission that allows when it does
+(`locales.includes("fr")`). Where the languages an operation involves can't be known exactly,
+such as an operation that names none or a collection built in the admin, the rule is told every
+configured language. A restriction then refuses, which is safe; an admission by inclusion would
+allow.
+
+Publishing several languages at once — publishing every language of an entry or a Single, or
+writing `status: "published"` with `locale: "*"` — asks the publish rule once for each language
+it puts live, each time with `locale` set to that language and `locales` to all of them. A rule
+such as `publish: ({ locale }) => locale !== "fr"` therefore refuses a publish that would put
+French live, and since the publish is one transaction, no language goes live. A publish that
+puts no French live is allowed.
 
 ## Related
 

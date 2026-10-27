@@ -59,7 +59,8 @@ import {
  * `Number("1.")` quietly answering `1` would store a value the author never
  * wrote a valid spelling of.
  */
-export const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+export const CSS_NUMBER: RegExp =
+  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /**
  * One measurement split into the parts a control edits separately.

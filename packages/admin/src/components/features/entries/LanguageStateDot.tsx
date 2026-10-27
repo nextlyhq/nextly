@@ -16,6 +16,8 @@
  * @module components/features/entries/LanguageStateDot
  */
 
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 import type { LanguageState } from "./translation-meta";
@@ -25,7 +27,7 @@ import type { LanguageState } from "./translation-meta";
  * positive scale (translated), half-filled (draft), outline (missing). Colour
  * comes from the semantic scales only.
  */
-export function StateDot({ state }: { state: LanguageState }) {
+export function StateDot({ state }: { state: LanguageState }): JSX.Element {
   return (
     <span
       aria-hidden="true"

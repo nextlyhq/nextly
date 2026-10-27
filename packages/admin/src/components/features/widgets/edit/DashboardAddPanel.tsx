@@ -10,8 +10,10 @@
  * @module components/features/widgets/edit/DashboardAddPanel
  */
 
+import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type {
   DashboardWidget,
@@ -32,7 +34,7 @@ export interface DashboardAddPanelProps {
     LayoutEditor,
     "isEditing" | "placements" | "available" | "atCapacity" | "add"
   >;
-  /** The layout read, whose widget facts (widths, group and rank) the rows are built from. */
+  /** The layout read, whose widget facts (group and rank) the rows are built from. */
   layout: Pick<UseDashboardLayoutResult, "layout">;
   byId: ReadonlyMap<string, DashboardWidget>;
   isDrawn: IsDrawn;
@@ -86,7 +88,9 @@ export function useAddPanelState(isEditing: boolean): AddPanelState {
 const NO_WIDGET_FACTS: Readonly<Record<string, never>> = {};
 
 /** The add panel, which exists only while customising. */
-export function DashboardAddPanel(props: DashboardAddPanelProps) {
+export function DashboardAddPanel(
+  props: DashboardAddPanelProps
+): JSX.Element | null {
   return props.editor.isEditing ? <CustomizingAddPanel {...props} /> : null;
 }
 
@@ -109,6 +113,8 @@ function CustomizingAddPanel({
     if (open) lastAdded.current = null;
   }, [open]);
 
+  // The collections the reader may read: a widget offered per collection is listed once for each.
+  const sources = useBranding().widgetSources;
   const rows = useMemo(
     () =>
       addPanelRows({
@@ -116,8 +122,9 @@ function CustomizingAddPanel({
         offered: editor.available,
         widgets: layout.layout?.widgets ?? NO_WIDGET_FACTS,
         byId,
+        collections: sources ?? [],
       }),
-    [editor.placements, editor.available, layout.layout, byId]
+    [editor.placements, editor.available, layout.layout, byId, sources]
   );
 
   const titleOf = useCallback(
@@ -126,16 +133,19 @@ function CustomizingAddPanel({
   );
 
   const onAdd = useCallback(
-    (widgetId: string): AddedCard | null => {
-      const id = editor.add(widgetId);
+    (
+      widgetId: string,
+      settings?: Record<string, unknown>
+    ): AddedCard | null => {
+      const id = editor.add(widgetId, settings);
       if (id === null) return null;
       lastAdded.current = id;
       highlight(id);
-      // At the end: the list as it will be once the add lands. A width counts for nothing in a
+      // At the end: the list as it will be once the add lands. A size counts for nothing in a
       // position, so the card stands in at any.
       const after = [
         ...editor.placements,
-        { id, widgetId, width: "full" as const, removed: false },
+        { id, widgetId, w: 12, h: 2, removed: false },
       ];
       return {
         title: titleOf(widgetId),

@@ -20,7 +20,8 @@ interface CommitsPublish {
   commitPublish(
     tx: TransactionContext,
     plan: Record<string, unknown>,
-    options: Record<string, unknown>
+    options: Record<string, unknown>,
+    refused: { denied?: unknown }
   ): Promise<unknown>;
 }
 
@@ -60,7 +61,11 @@ describe("publishing every language of a Single", () => {
       actor: null,
     };
 
-    await expect(service.commitPublish(tx, plan, {})).rejects.toMatchObject({
+    // A trusted call, so the publish permission (asked first, inside the same
+    // transaction) admits it and the judgement of what goes live is reached.
+    await expect(
+      service.commitPublish(tx, plan, { overrideAccess: true }, {})
+    ).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
     });
 

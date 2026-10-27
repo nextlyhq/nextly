@@ -40,7 +40,7 @@ export interface DocumentLockNotice {
    * `awaited`, which is the only one that is not about a loss at all: the reader
    * holds the document and is simply being told a colleague would like it.
    */
-  readonly tone: "held" | "surrendered" | "unchecked" | "awaited";
+  readonly tone: "held" | "surrendered" | "unchecked" | "awaited" | "reader";
   /** A whole sentence: the banner is read on its own, without the chrome. */
   readonly message: string;
   /** Present when the editor may claim the document. */
@@ -111,6 +111,29 @@ const AWAITED: DocumentLockAffordances = {
     // is a standing one that any locked-out editor refreshes, so there may be
     // more than one of them.
     message: "Someone is waiting to edit this document.",
+    takeOverLabel: null,
+    accessRequest: null,
+  },
+};
+
+/**
+ * A user who may read the document but not change it.
+ *
+ * Read-only for the same reason a colleague's claim makes it so, and said in
+ * the same strip, but nothing about a claim: the reader makes none, so nobody
+ * is named and nothing can be taken over or asked for. The actions stay
+ * enabled because the ones still offered (publishing, unpublishing, deleting)
+ * each follow their own permission; those that change the content are not
+ * offered at all. It names no role or permission, so it reads the same for
+ * one role or several.
+ */
+export const READ_ONLY_FOR_READER: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: false,
+  notice: {
+    tone: "reader",
+    message:
+      "Your access lets you view this, but not change it. If you need to change it, ask an admin.",
     takeOverLabel: null,
     accessRequest: null,
   },

@@ -2,8 +2,8 @@
  * A dashboard chart's values reached in a real browser: by pointer, by keyboard and by a screen
  * reader's live region, with axe over the charts themselves.
  *
- * Drawn with the generated "Posts by status" and "Posts over time" cards, over posts this file
- * creates. The pointer cases are here rather than in the component tests because jsdom's pointer
+ * Drawn with a Breakdown card and an Over time card, each set to Posts, over posts this file
+ * creates: the cards a dashboard holds for a collection's chart. The pointer cases are here rather than in the component tests because jsdom's pointer
  * events carry no related target, so React reads every move as leaving: whether a tooltip STAYS
  * while the pointer moves onto it (WCAG 2.2 1.4.13) can only be seen in a browser.
  */
@@ -13,16 +13,22 @@ import {
   type APIRequestContext,
   type Page,
   type PlaywrightWorkerArgs,
+  type TestInfo,
 } from "@playwright/test";
-
-import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
+import { widestSizeOf } from "./support/dashboard-sizes";
+import { LOCK } from "./support/locks";
 
-const BREAKDOWN = "collection/posts-breakdown";
-const TIMELINE = "collection/posts-timeline";
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
+
+const BREAKDOWN = "core/breakdown";
+const TIMELINE = "core/over-time";
+/** Both charts read Posts, the collection this file writes to. */
+const POSTS = { collection: "posts" };
 const ENTRIES = "/admin/api/collections/posts/entries";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
@@ -33,32 +39,32 @@ const created: string[] = [];
 interface Layout {
   version: number;
   scope: string;
-  /**
-   * Every widget this reader may see, by id. Generated collection cards are never offered in
-   * `available`, but one placed is still drawn, and the layout write accepts any visible widget.
-   */
+  /** Every widget this reader may see, by id: the layout write accepts any of them. */
   widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
+    config?: Record<string, unknown>;
   }>;
 }
 
 async function signedIn(
   playwright: PlaywrightWorkerArgs["playwright"],
-  baseURL: string | undefined
+  testInfo: TestInfo
 ): Promise<APIRequestContext> {
+  const baseURL = testInfo.project.use.baseURL;
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
   return playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 }
 
 test.beforeAll(async ({ playwright }, testInfo) => {
-  const api = await signedIn(playwright, testInfo.project.use.baseURL);
+  const api = await signedIn(playwright, testInfo);
   try {
     // Two drafts and a published post, so the breakdown draws at least two bars.
     for (const [index, status] of ["draft", "draft", "published"].entries()) {
@@ -76,7 +82,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
 });
 
 test.afterAll(async ({ playwright }, testInfo) => {
-  const api = await signedIn(playwright, testInfo.project.use.baseURL);
+  const api = await signedIn(playwright, testInfo);
   try {
     for (const id of created) {
       await expectOk(await api.delete(`${ENTRIES}/${id}`), "deleting a post");
@@ -86,21 +92,34 @@ test.afterAll(async ({ playwright }, testInfo) => {
   }
 });
 
-/** Place both chart cards, full width, at the top of the saved layout. */
+/** Place both chart cards, each at its widest, at the top of the saved layout. */
 async function placeCharts(page: Page): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
   for (const id of [BREAKDOWN, TIMELINE]) {
     const placed = layout.placements.some(p => p.widgetId === id);
     if (!placed && !(id in layout.widgets))
-      throw new Error(`the generated ${id} card is not visible to this reader`);
+      throw new Error(`${id} is not visible to this reader`);
   }
   const others = layout.placements.filter(
     p => p.widgetId !== BREAKDOWN && p.widgetId !== TIMELINE
   );
   const placements = [
-    { id: "e2e-breakdown", widgetId: BREAKDOWN, width: "full", removed: false },
-    { id: "e2e-timeline", widgetId: TIMELINE, width: "full", removed: false },
+    {
+      id: "e2e-breakdown",
+      widgetId: BREAKDOWN,
+      // The widest each allows; the layout write holds a card to its widget's bounds.
+      ...(await widestSizeOf(page, BREAKDOWN)),
+      removed: false,
+      config: POSTS,
+    },
+    {
+      id: "e2e-timeline",
+      widgetId: TIMELINE,
+      ...(await widestSizeOf(page, TIMELINE)),
+      removed: false,
+      config: POSTS,
+    },
     ...others,
   ];
   const write = await page.request.put("/admin/api/dashboard/layout", {

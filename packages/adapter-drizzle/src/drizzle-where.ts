@@ -20,8 +20,8 @@ import {
   not,
   sql,
   type SQL,
+  getColumns,
 } from "drizzle-orm";
-import { getColumns } from "drizzle-orm";
 
 import { caseInsensitiveContains, containsPattern } from "./text-match";
 import type { WhereClause, WhereCondition } from "./types";

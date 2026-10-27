@@ -32,7 +32,9 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { UserContext } from "../../domains/collections/services/collection-types";
+import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
@@ -87,12 +89,12 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -121,6 +123,7 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -319,6 +322,20 @@ export const COLLECTION_VERSION_METHODS: Record<
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  takeLiveSharedValues: {
+    execute: async (_svc, p) => {
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
     },
   },
   autosaveEntry: {
@@ -571,11 +588,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
@@ -663,11 +676,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const {
         fields,
         confirmed,
@@ -855,8 +864,7 @@ const COLLECTIONS_METHODS: Record<
             uiTargetKind: "collection" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -897,7 +905,7 @@ const COLLECTIONS_METHODS: Record<
         // or no single candidate), the preflight finds it from the fields and refuses what it must.
         renamed: companionRename,
         tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
         kind: "collection",
@@ -905,6 +913,8 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
 
       const result = await apply(desired, "ui", {
@@ -931,8 +941,7 @@ const COLLECTIONS_METHODS: Record<
           const oldFields = (collection.fields ??
             []) as unknown as FieldDefinition[];
           const newFields = fields as unknown as FieldDefinition[];
-          const defaultLocale =
-            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const defaultLocale = appLocalization()?.defaultLocale ?? "en";
           const companionExists = await adapter.tableExists(
             `${tableName}_locales`
           );
@@ -1062,6 +1071,9 @@ const COLLECTIONS_METHODS: Record<
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
         );
+        // Written past the registry services, so the cached rows are cleared
+        // here: a read during the save may have cached the row from before it.
+        clearCollectionRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

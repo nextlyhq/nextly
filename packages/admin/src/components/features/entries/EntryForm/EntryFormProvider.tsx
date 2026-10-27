@@ -8,6 +8,7 @@
  * @since 1.0.0
  */
 
+import type { JSX } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 // ============================================================================
@@ -56,7 +57,7 @@ export function EntryFormProvider({
   onSubmit,
   className,
   formId = "entry-form",
-}: EntryFormProviderProps) {
+}: EntryFormProviderProps): JSX.Element {
   return (
     <FormProvider {...form}>
       <form

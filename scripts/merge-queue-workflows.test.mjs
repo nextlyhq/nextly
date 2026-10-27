@@ -10,16 +10,21 @@
  * on, so the shape is checked here, before it is.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { load } from "js-yaml";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 
 import { describe, expect, it } from "vitest";
 
+import { filesThatRun } from "./change-scope.mjs";
+import { parseJsonc } from "./jsonc.mjs";
+
 const read = path => load(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+/** A JSON file of the repository, such as a package manifest. */
+const readJson = path => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
 /** js-yaml reads the bare key `on` as the boolean `true`, as YAML 1.1 does. */
 const triggersOf = workflow => workflow.on ?? workflow[true];
 
@@ -27,10 +32,7 @@ const triggersOf = workflow => workflow.on ?? workflow[true];
 const QUEUE_CHECKS = {
   ".github/workflows/ci.yml": ["CI gate", "Comment convention (describes code, not process)"],
   ".github/workflows/integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
-  ".github/workflows/pr-title.yml": ["Validate PR title follows Conventional Commits"],
-  ".github/workflows/independent-review.yml": ["Independent review of the revision being merged"],
-  ".github/workflows/secret-scan.yml": ["gitleaks"],
-  ".github/workflows/ai-credit.yml": ["No AI credit"],
+  ".github/workflows/small-checks.yml": ["Small checks (title, AI credit, secret scan, review)"],
 };
 
 describe("every workflow behind a required check, in the merge queue", () => {
@@ -108,6 +110,133 @@ describe("the last commit Integration tested", () => {
   });
 });
 
+describe("the Windows and macOS legs", () => {
+  /*
+   * A pull request runs them only when it changes a platform-sensitive path or
+   * asks with the `ci:all-os` label; every other event runs them all, so the
+   * merge queue and `main` never skip a platform. Held on the expression
+   * itself, evaluated, and on every job that can land on a non-Linux runner.
+   */
+  const ci = read(".github/workflows/ci.yml");
+  const allOs = ci.jobs.changes.outputs["all-os"];
+  const answer = (event, { inert = "true", labels = [] } = {}) =>
+    String(
+      evaluate(conditionTokens(allOs.replace(/^\$\{\{|\}\}$/g, "")), allOs, {
+        "github.event_name": event,
+        "steps.os.outputs.inert": inert,
+        "github.event.pull_request.labels.*.name": labels,
+      })
+    );
+
+  it("runs every platform off a pull request, whatever the change", () => {
+    for (const event of ["push", "merge_group", "workflow_dispatch"]) expect(answer(event, { inert: "true" }), event).toBe("true");
+  });
+
+  it("runs Linux alone on a pull request that touches no platform-sensitive path", () => {
+    expect(answer("pull_request", { inert: "true" })).toBe("false");
+  });
+
+  it("runs every platform on a pull request that touches one, asks with the label, or could not be decided", () => {
+    expect(answer("pull_request", { inert: "false" })).toBe("true");
+    expect(answer("pull_request", { inert: "true", labels: ["ci:all-os"] })).toBe("true");
+    // A step that failed or never ran has no output.
+    expect(answer("pull_request", { inert: "" })).toBe("true");
+  });
+
+  // What a Windows gate job decides, from both answers it reads, evaluated as
+  // the job's own `if:`: the label adds the legs to a pull request whose CI
+  // runs, and an inert change runs no test job on any operating system.
+  it("adds the Windows gate jobs to a pull request's CI when it carries the label", () => {
+    const gate = ci.jobs["windows-gates"].if;
+    const runs = ({ inert, osInert, labels = [] }) =>
+      String(
+        evaluate(conditionTokens(gate), gate, {
+          "needs.changes.outputs.inert": inert,
+          "needs.changes.outputs.all-os": answer("pull_request", { inert: osInert, labels }),
+        })
+      );
+    expect(runs({ inert: "false", osInert: "true" })).toBe("false");
+    expect(runs({ inert: "false", osInert: "true", labels: ["ci:all-os"] })).toBe("true");
+    expect(runs({ inert: "false", osInert: "false" })).toBe("true");
+    expect(runs({ inert: "true", osInert: "true", labels: ["ci:all-os"] })).toBe("false");
+  });
+
+  // The step's own patterns, read by the same function `change-scope.mjs` runs
+  // them through: each platform-sensitive path asks for the legs on its own,
+  // and a pull request of product code and docs asks for none.
+  it("asks for them from the paths where the platforms differ, and only those", () => {
+    const { env } = ci.jobs.changes.steps.find(step => step.id === "os");
+    const running = files => filesThatRun(files, { inert: new RegExp(env.INERT_PATHS), alwaysRun: new RegExp(env.ALWAYS_RUN_PATHS) });
+    const sensitive = [
+      "packages/create-nextly-app/src/utils/template.ts",
+      "templates/blank/package.json",
+      "packages/nextly/src/cli/commands/add.ts",
+      "packages/admin-css/bin/nextly-build-admin-css.mjs",
+      "scripts/bounded.mjs",
+      ".husky/pre-push",
+      ".github/workflows/ci.yml",
+      "package.json",
+      "apps/playground/package.json",
+      "e2e/package.json",
+      "pnpm-lock.yaml",
+      "turbo.jsonc",
+      ".gitattributes",
+      "packages/ui/scripts/build-css.mjs",
+      "apps/playground/scripts/provision-empty.ts",
+      "packages/nextly/tsdown.config.ts",
+      "packages/admin/tsup.config.ts",
+      "packages/ui/vitest.config.ts",
+      "vitest.config.ts",
+      "eslint.config.mjs",
+      "apps/playground/vitest.config.ts",
+      "apps/playground/next.config.ts",
+      "packages/telemetry/src/environment.ts",
+      "packages/nextly/src/storage/adapters/local-adapter.ts",
+      "packages/nextly/src/shared/lib/generated-output-paths.ts",
+      "packages/nextly/src/plugins/codegen/component-import-map.ts",
+      "packages/nextly/src/domains/widgets/declaration/component-map-check.ts",
+    ];
+    for (const file of sensitive) expect(running([file]), file).toEqual([file]);
+    const neutral = [
+      "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts",
+      "packages/admin/src/components/features/dashboard/TeamSummary.tsx",
+      "packages/ui/src/components/button.tsx",
+      "packages/nextly/src/domains/schema/services/field-column-descriptor.ts",
+      "docs/guides/deployment.mdx",
+      "AGENTS.md",
+      ".changeset/a-change.md",
+    ];
+    expect(running(neutral)).toEqual([]);
+  });
+
+  /** Everything that decides where a job runs and whether it does: its `if:`, `runs-on` and matrix. */
+  const placement = job => `${job.if ?? ""} ${job["runs-on"]} ${JSON.stringify(job.strategy?.matrix ?? {})}`;
+
+  it("gates every job that can land on Windows or macOS by that answer", () => {
+    const nonLinux = Object.entries(ci.jobs).filter(([, job]) => /windows|macos/.test(placement(job)));
+    // A floor, so a reader that matched no jobs cannot pass by checking none.
+    expect(nonLinux.length).toBeGreaterThanOrEqual(6);
+    for (const [id, job] of nonLinux) {
+      expect(placement(job), id).toContain("needs.changes.outputs.all-os");
+      expect([job.needs].flat(), id).toContain("changes");
+    }
+  });
+});
+
+describe("the labels the workflows read", () => {
+  // `labels-sync.yml` creates every label in this file, and GitHub's label API
+  // refuses a description over 100 characters, which fails the whole sync: a
+  // label a workflow reads, such as `ci:all-os`, then never exists to apply.
+  it("each fit GitHub's 100-character description limit", () => {
+    const labels = read(".github/labels.yml");
+    expect(labels.length).toBeGreaterThan(0);
+    const over = labels
+      .filter(label => (label.description ?? "").length > 100)
+      .map(label => `${label.name}: ${label.description.length}`);
+    expect(over).toEqual([]);
+  });
+});
+
 describe("which runs a pull-request workflow's concurrency group cancels", () => {
   /*
    * A group cancels its running and pending runs when a newer run joins it.
@@ -138,7 +267,7 @@ describe("which runs a pull-request workflow's concurrency group cancels", () =>
   });
 
   it("finds the pull-request workflows", () => {
-    expect(pullRequestWorkflows.map(([file]) => file)).toEqual(expect.arrayContaining(["ci.yml", "integration.yml", "pr-title.yml", "ai-credit.yml", "labeler.yml", "secret-scan.yml", "independent-review.yml"]));
+    expect(pullRequestWorkflows.map(([file]) => file)).toEqual(expect.arrayContaining(["ci.yml", "integration.yml", "small-checks.yml", "labeler.yml"]));
   });
 
   for (const [file, workflow] of pullRequestWorkflows) {
@@ -179,7 +308,12 @@ describe("which runs a pull-request workflow's concurrency group cancels", () =>
     expect(closing.permissions).toEqual({});
     const [job] = Object.values(closing.jobs);
     expect(job.permissions).toEqual({ contents: "read", actions: "write" });
-    expect(job.steps.at(-1).run).toBe("node scripts/cancel-closed-pull-request-runs.mjs");
+    // Cancel first, then delete a closed pull request's caches whatever the cancel's verdict.
+    expect(job.steps.filter(step => step.run).map(step => step.run)).toEqual([
+      "node scripts/cancel-closed-pull-request-runs.mjs",
+      "node scripts/delete-closed-pull-request-caches.mjs",
+    ]);
+    expect(job.steps.at(-1).if).toBe("${{ !cancelled() }}");
     // The script holding `actions: write` comes from the default branch, never the closed pull request.
     expect(job.steps.find(step => String(step.uses).startsWith("actions/checkout@")).with.ref).toBe("${{ github.event.repository.default_branch }}");
   });
@@ -247,6 +381,276 @@ describe("Integration on request", () => {
   });
 });
 
+describe("when the Release job runs", () => {
+  /*
+   * A push to `main` runs it only for the Version Packages merge, the moment to
+   * publish; a dispatch from `main` runs it on demand, versioning pending
+   * changesets into that pull request or publishing when none are pending.
+   * Release health then skips the runs where Release itself skipped. Each
+   * condition is evaluated for the events it meets, not read by spelling.
+   */
+  const decide = (condition, known) =>
+    String(evaluate(conditionTokens(condition), condition, { "github.repository": "nextlyhq/nextly", "github.ref": "refs/heads/main", ...known }));
+  const workflow = read(".github/workflows/release.yml");
+  const job = workflow.jobs.release;
+  const release = job.if;
+  const health = read(".github/workflows/release-health.yml").jobs.finalized.if;
+
+  it("runs on the Version Packages merge, stable or pre-release", () => {
+    for (const message of ["chore: version packages (#2400)", "chore: version packages (alpha) (#2295)"]) {
+      expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": message }), message).toBe("true");
+    }
+  });
+
+  it("skips every other push to main, and runs on a dispatch", () => {
+    expect(decide(release, { "github.event_name": "push", "github.event.head_commit.message": "fix(nextly): type the send-test error (#2563)" })).toBe("false");
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.event.head_commit.message": "" })).toBe("true");
+  });
+
+  it("runs a dispatch only from main, since the job publishes whatever ref it checks out", () => {
+    for (const ref of ["refs/heads/feature/try-a-release", "refs/tags/v0.0.2-alpha.66"]) {
+      expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": ref }), ref).toBe("false");
+    }
+    expect(decide(release, { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" })).toBe("true");
+  });
+
+  it("never runs in a fork", () => {
+    expect(decide(release, { "github.repository": "someone/nextly", "github.event_name": "workflow_dispatch" })).toBe("false");
+  });
+
+  it("queues releases on the job, so a push whose job skips never displaces a waiting release", () => {
+    // A workflow-level group is entered by every run, skipped job or not.
+    expect(workflow.concurrency).toBeUndefined();
+    expect(job.concurrency).toMatchObject({ group: expect.stringMatching(/\S/), "cancel-in-progress": false, queue: "max" });
+  });
+
+  /*
+   * Which of the job's steps a run takes, in order. Each step's `if:` is
+   * evaluated with what the steps before it left: its outcome, the
+   * `hasChangesets` the Changesets action reports (`pending`, on a run that
+   * reaches it), and each `name=$VAR` a run step writes to `$GITHUB_OUTPUT`,
+   * valued from that step's `env:`. A skipped step leaves empty outputs.
+   */
+  const valueOf = (template, known) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => decide(expression, known));
+  const isChangesetsAction = step => String(step.uses).startsWith("changesets/action@");
+  const publishesDirectly = step => String(step.run).includes("pnpm release:publish");
+  const verifies = step => String(step.run).includes("pnpm release:verify");
+  const finalizes = step => String(step.run).includes("gh release create");
+  const OUTPUT_LINE = /([\w-]+)=\$\{?(\w+)\}?"?\s*>>\s*"?\$GITHUB_OUTPUT/g;
+  /** The outputs a step sets when it runs, by lowercased name. */
+  const outputsOf = (step, known, pending) => [
+    ...(isChangesetsAction(step) ? [["haschangesets", String(pending)]] : []),
+    ...[...String(step.run ?? "").matchAll(OUTPUT_LINE)].map(([, name, variable]) => [name.toLowerCase(), valueOf(step.env?.[variable], known)]),
+  ];
+  /** What a step leaves for the steps after it, under its id: its outcome, and its outputs, empty when it was skipped. */
+  const leftBy = (step, runs, known, pending) => {
+    const at = `steps.${step.id.toLowerCase()}`;
+    const outputs = outputsOf(step, known, pending).map(([name, value]) => [`${at}.outputs.${name}`, runs ? value : ""]);
+    return Object.fromEntries([[`${at}.outcome`, runs ? "success" : "skipped"], ...outputs]);
+  };
+  const stepsRun = (event, { pending, publish = null }) => {
+    const known = {
+      "github.event_name": event,
+      "github.event.head_commit.message": event === "push" ? "chore: version packages (alpha) (#2600)" : null,
+      // A push carries no inputs, so the context reads null there.
+      "inputs.publish": event === "workflow_dispatch" ? publish ?? false : null,
+    };
+    expect(decide(release, known), event).toBe("true");
+    return job.steps.filter(step => {
+      const runs = decide(String(step.if ?? ""), known) === "true";
+      if (step.id) Object.assign(known, leftBy(step, runs, known, pending));
+      return runs;
+    });
+  };
+
+  it("publishes the Version Packages merge whatever changesets landed after it, then verifies and finalizes it", () => {
+    const ran = stepsRun("push", { pending: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch with changesets pending, versions them and neither publishes nor finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: true });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(false);
+    expect(ran.some(finalizes)).toBe(false);
+  });
+
+  it("on a dispatch with none pending, publishes through the action, then verifies and finalizes", () => {
+    const ran = stepsRun("workflow_dispatch", { pending: false });
+    expect(ran.some(isChangesetsAction)).toBe(true);
+    expect(ran.some(publishesDirectly)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("on a dispatch asked to publish, publishes the current manifests directly with changesets pending, then verifies and finalizes", () => {
+    // The recovery path after a partial publish: the action would version
+    // the pending changesets instead, and the failed version would never finish.
+    const ran = stepsRun("workflow_dispatch", { pending: true, publish: true });
+    expect(ran.some(publishesDirectly)).toBe(true);
+    expect(ran.some(isChangesetsAction)).toBe(false);
+    expect(ran.some(verifies)).toBe(true);
+    expect(ran.some(finalizes)).toBe(true);
+  });
+
+  it("offers that publish as a dispatch input that is off unless chosen", () => {
+    expect(triggersOf(workflow).workflow_dispatch?.inputs?.publish).toMatchObject({ type: "boolean", default: false });
+  });
+
+  it("publishes on a push with the environment the action publishes with", () => {
+    const direct = job.steps.find(publishesDirectly);
+    const action = job.steps.find(isChangesetsAction);
+    expect(direct?.env).toEqual(action.env);
+    expect(String(direct?.run)).toContain(action.with.publish);
+  });
+
+  /*
+   * A Release run whose only job skipped concludes `success`, as a skipped job
+   * reports success, so Release health tells the runs apart by what started
+   * them: every value below is one a real `workflow_run` payload carries,
+   * conclusion included.
+   */
+  const releaseRun = ({ event = "push", branch = "main", message = "fix(nextly): type the send-test error (#2563)" } = {}) => ({
+    "github.event_name": "workflow_run",
+    "github.event.workflow_run.conclusion": "success",
+    "github.event.workflow_run.event": event,
+    "github.event.workflow_run.head_branch": branch,
+    "github.event.workflow_run.head_commit.message": message,
+  });
+
+  it("runs Release health after a Release run that released, or was dispatched, from main", () => {
+    expect(decide(health, releaseRun({ message: "chore: version packages (alpha) (#2600)" }))).toBe("true");
+    expect(decide(health, releaseRun({ event: "workflow_dispatch", message: "fix(nextly): anything (#1)" }))).toBe("true");
+  });
+
+  it("skips Release health after an ordinary push, whose skipped job still concludes success", () => {
+    expect(decide(health, releaseRun())).toBe("false");
+  });
+
+  it("skips Release health after a dispatch from another ref", () => {
+    for (const branch of ["feature/try-a-release", "v0.0.2-alpha.66"]) {
+      expect(decide(health, releaseRun({ event: "workflow_dispatch", branch })), branch).toBe("false");
+    }
+  });
+
+  it("runs Release health on its schedule and on its own dispatch, and never in a fork", () => {
+    expect(decide(health, { "github.event_name": "schedule" })).toBe("true");
+    expect(decide(health, { "github.event_name": "workflow_dispatch" })).toBe("true");
+    expect(decide(health, { ...releaseRun({ event: "workflow_dispatch" }), "github.repository": "someone/nextly" })).toBe("false");
+  });
+});
+
+describe("a Version Packages pull request that went stale", () => {
+  /*
+   * A public package added to `main` after that pull request was last
+   * refreshed keeps its old version while every other package takes the next
+   * one, and the merge's publish would then refuse the release. The queue's
+   * run checks the combined tree, so the check there keeps it from merging.
+   */
+  const steps = read(".github/workflows/ci.yml").jobs.ci.steps;
+  const step = steps.find(candidate => /\bnode scripts\/release\/check-lockstep\.mjs\b/.test(String(candidate.run)));
+
+  it("checks every pull request's and every queued group's packages share one version", () => {
+    expect(step, "a ci step runs check-lockstep.mjs").toBeDefined();
+    expect(String(step.if)).not.toMatch(/event_name/);
+  });
+});
+
+describe("Turborepo's shared remote cache", () => {
+  /*
+   * Only `main`'s pushes write to it: every later run starts from what they
+   * built, and a pull request's own build must not become an entry another
+   * pull request replays. The merge queue runs the queued pull requests' code
+   * (its branch is the base plus their changes), so it reads like a pull
+   * request: with the signing key that code could sign an entry it never built. TURBO_CACHE asks for that,
+   * but the code under test could ask otherwise, so the credentials are
+   * secrets of an environment GitHub admits only those refs to. Each
+   * expression is evaluated for the events it meets, not read by spelling.
+   */
+  const valueOf = (template, known) => {
+    const expression = String(template);
+    return evaluate(conditionTokens(expression), expression, known);
+  };
+  const MAIN = { "github.event_name": "push", "github.ref": "refs/heads/main" };
+  const QUEUE = { "github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1-abc" };
+  const PULL = { "github.event_name": "pull_request", "github.ref": "refs/pull/1/merge" };
+  const DISPATCH = { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" };
+  const SECRETS = { "secrets.turbo_token": "t", "secrets.turbo_remote_cache_signature_key": "k".repeat(64) };
+  const CREDENTIAL = /\bsecrets\.TURBO_(TOKEN|REMOTE_CACHE_SIGNATURE_KEY)\b/;
+
+  for (const path of [".github/workflows/ci.yml", ".github/workflows/integration.yml"]) {
+    const workflow = read(path);
+    const holders = Object.entries(workflow.jobs).filter(([, job]) => CREDENTIAL.test(JSON.stringify(job.env ?? {})));
+
+    it(`${path}: main's pushes write, every other run only reads, the queue's included`, () => {
+      expect(valueOf(workflow.env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:r");
+      expect(valueOf(workflow.env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
+      expect(valueOf(workflow.env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
+    });
+
+    it(`${path}: reads the credentials only inside jobs, never at the workflow level`, () => {
+      expect(JSON.stringify(workflow.env ?? {})).not.toMatch(CREDENTIAL);
+      expect(holders.length, "jobs that hold the cache credentials").toBeGreaterThan(0);
+    });
+
+    it(`${path}: every job holding them names the write environment only for a push to main`, () => {
+      for (const [name, job] of holders) {
+        expect(job.environment, name).toMatchObject({ deployment: false });
+        expect(valueOf(job.environment.name, MAIN), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache-read");
+        expect(valueOf(job.environment.name, PULL), name).toBe("turbo-cache-read");
+        expect(valueOf(job.environment.name, DISPATCH), name).toBe("turbo-cache-read");
+      }
+    });
+
+    it(`${path}: hands turbo the token only with a signing key beside it`, () => {
+      for (const [name, job] of holders) {
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS }), name).toBe("t");
+        expect(valueOf(job.env.TURBO_TOKEN, { ...MAIN, ...SECRETS, "secrets.turbo_remote_cache_signature_key": "" }), name).toBe("");
+      }
+    });
+  }
+
+  it("signs every artifact", () => {
+    const config = load(
+      readFileSync(new URL("../turbo.jsonc", import.meta.url), "utf8")
+        .replace(/^\s*\/\/.*$/gm, "")
+        .replace(/\s\/\/ .*$/gm, "")
+    );
+    expect(config.remoteCache).toMatchObject({ signature: true });
+  });
+
+  it("is never used by a release, which builds what it publishes from its own checkout", () => {
+    expect(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")).not.toMatch(/TURBO_(TOKEN|TEAM|API)\b/);
+  });
+});
+
+describe("a dispatched run and the push run of one commit", () => {
+  /*
+   * main-catch-up.yml dispatches CI and Integration on a commit whose push run
+   * may still be queued. Sharing one group, whichever started later cancelled
+   * the other, and the commit lost the run meant to test it. Each workflow's
+   * group and cancellation are evaluated for both events on one commit.
+   */
+  const valueFor = (workflow, template, event) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) =>
+      String(evaluate(conditionTokens(expression), expression, { "github.workflow": workflow.name, "github.event_name": event, "github.ref": "refs/heads/main", "github.sha": "s1", "github.event.pull_request.number": null }))
+    );
+
+  it.each([".github/workflows/ci.yml", ".github/workflows/integration.yml"])("%s keeps them in separate groups, and a dispatch cancels nothing", path => {
+    const workflow = read(path);
+    const { group, "cancel-in-progress": cancels } = workflow.concurrency;
+    expect(valueFor(workflow, group, "workflow_dispatch")).not.toBe(valueFor(workflow, group, "push"));
+    expect(valueFor(workflow, cancels, "workflow_dispatch")).toBe("false");
+  });
+});
+
 describe("a sharded leg", () => {
   /*
    * The lane check takes a matrix job that hands the lane its own shard as
@@ -266,10 +670,11 @@ describe("a sharded leg", () => {
           .filter(([, job]) => (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim())))
           .map(([id, job]) => [`${name}#${id}`, job])
       );
-    // A floor: the postgres and mysql legs are sharded.
+    // A floor: every integration leg is sharded.
     expect(sharded.map(([id]) => id).sort()).toEqual([
       "integration.yml#integration-mysql-shards",
       "integration.yml#integration-postgres-shards",
+      "integration.yml#integration-sqlite-shards",
     ]);
     for (const [id, job] of sharded) {
       const matrix = job.strategy?.matrix ?? {};
@@ -280,7 +685,59 @@ describe("a sharded leg", () => {
       expect(job.strategy["fail-fast"], id).toBe(false);
     }
   });
+
+  /*
+   * Turbo hands every package of the lane the same `--shard`, and vitest
+   * refuses a shard count larger than a package's number of test files unless
+   * the package passes with none: a one-file suite fails each shard before a
+   * test runs. So each package either has a file for every shard or lets an
+   * empty shard pass. The packages are read from the lane's own `--filter`s.
+   */
+  it("hands the shard only to packages that have a file for every shard, or pass with none", async () => {
+    const { MATRIX_SHARD } = await import("./check-test-lanes.mjs");
+    const lanes = readJson("package.json").scripts;
+    const dirs = packageDirsByName();
+    const legs = Object.values(read(".github/workflows/integration.yml").jobs).flatMap(job => shardedLane(job, MATRIX_SHARD.trim()));
+    const checked = [];
+    for (const { lane, shards } of legs) {
+      for (const [, name] of String(lanes[lane]).matchAll(/--filter=['"]?([^'"\s]+)/g)) {
+        const dir = dirs.get(name);
+        expect(dir, `${lane} names ${name}, which no package is`).toBeDefined();
+        const suite = integrationSuite(dir);
+        // The one include every integration config uses, so the count is the
+        // set vitest shards; another pattern fails here, not silently.
+        expect(suite.config, dir).toMatch(/include: \["src\/\*\*\/\*\.integration\.test\.ts"\]/);
+        expect(suite.files >= shards || suite.passesWithNone, `${dir}: ${suite.files} file(s) for ${shards} shards of ${lane}`).toBe(true);
+        checked.push(dir);
+      }
+    }
+    // A floor, so a reader that matched no lane cannot pass by checking nothing.
+    expect(checked.length).toBeGreaterThanOrEqual(3);
+  });
 });
+
+/** Each workspace package's directory, by the name its manifest gives it. */
+function packageDirsByName() {
+  return new Map(
+    readdirSync(new URL("../packages/", import.meta.url))
+      .filter(dir => existsSync(new URL(`../packages/${dir}/package.json`, import.meta.url)))
+      .map(dir => [readJson(`packages/${dir}/package.json`).name, `packages/${dir}`])
+  );
+}
+
+/** The lane a job hands its matrix shard and how many shards it has, or none. */
+function shardedLane(job, handOff) {
+  const line = (job.steps ?? []).flatMap(step => String(step.run).split("\n")).find(text => text.includes(handOff));
+  return line ? [{ lane: /pnpm (\S+) --/.exec(line)[1], shards: job.strategy.matrix.shard.length }] : [];
+}
+
+/** A package's integration config, its file count, and whether a shard with no file passes. */
+function integrationSuite(dir) {
+  const script = readJson(`${dir}/package.json`).scripts["test:integration"];
+  const config = readFileSync(new URL(`../${dir}/${/--config (\S+)/.exec(script)[1]}`, import.meta.url), "utf8");
+  const files = readdirSync(new URL(`../${dir}/src/`, import.meta.url), { recursive: true }).filter(file => String(file).endsWith(".integration.test.ts"));
+  return { config, files: files.length, passesWithNone: script.includes("--passWithNoTests") || /^\s*passWithNoTests: true\b/m.test(config) };
+}
 
 describe("a sharded leg's required check", () => {
   /*
@@ -295,7 +752,7 @@ describe("a sharded leg's required check", () => {
     const verdicts = Object.entries(workflow.jobs).filter(([, job]) =>
       (job.needs ?? []).some?.(need => String(need).endsWith("-shards"))
     );
-    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres"]);
+    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres", "integration-sqlite"]);
     for (const [id, job] of verdicts) {
       const shards = workflow.jobs[`${id}-shards`];
       expect(String(job.if), id).toMatch(/^\$\{\{\s*always\(\)/);
@@ -456,8 +913,8 @@ describe("conditions that skip the queue's run", () => {
   it("reads a gate's dependencies as part of it, and leaves a job no required check stands on out", () => {
     const ci = read(".github/workflows/ci.yml");
     expect(requiredJobs(ci, QUEUE_CHECKS[".github/workflows/ci.yml"])).toEqual(expect.arrayContaining(["gate", "ci", "changes", "comments"]));
-    const title = read(".github/workflows/pr-title.yml");
-    expect(requiredJobs(title, QUEUE_CHECKS[".github/workflows/pr-title.yml"])).toEqual(["lint"]);
+    const small = read(".github/workflows/small-checks.yml");
+    expect(requiredJobs(small, QUEUE_CHECKS[".github/workflows/small-checks.yml"])).toEqual(["checks"]);
   });
 });
 
@@ -935,8 +1392,9 @@ function truth(value) {
 }
 
 describe("the independent-review gate", () => {
-  const workflow = read(".github/workflows/independent-review.yml");
-  const job = workflow.jobs.review;
+  const workflow = read(".github/workflows/small-checks.yml");
+  const job = workflow.jobs.checks;
+  const step = job.steps.find(candidate => candidate.name === "Independent review of the revision being merged");
 
   /*
    * The queue is where the reviews a pull request will get have had time to
@@ -945,33 +1403,57 @@ describe("the independent-review gate", () => {
    * of itself.
    */
   it("decides in the queue, from the queue's base, with read access only", () => {
-    expect(job.if).toBe("github.event_name == 'merge_group'");
-    const checkout = job.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(step.if).toBe("${{ !cancelled() && github.event_name == 'merge_group' }}");
+    const checkout = job.steps.find(candidate => String(candidate.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.path).toBeUndefined();
     expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
-    expect(checkout.with["fetch-depth"]).toBe(0);
+    expect(checkout.with["fetch-depth"]).toBe("${{ github.event_name == 'merge_group' && '0' || '1' }}");
     expect(workflow.permissions).toEqual({});
     expect(Object.values(job.permissions)).toEqual(["read", "read", "read"]);
-    expect(job.steps.at(-1).run).toBe("node scripts/independent-review.mjs");
+    // From the workspace root, the queue base's copy, never the change's.
+    expect(step["working-directory"]).toBeUndefined();
+    expect(step.run).toBe("node scripts/independent-review.mjs");
   });
 
   // The job installs no packages, so the script must run with none; that is
   // proven beside the script, by running it from a copy with none above it.
+  // The one install is gitleaks' release binary, held to its pinned digest.
   it("installs no packages for the script it runs", () => {
-    expect(job.steps.some(step => /\binstall\b/.test(String(step.run)))).toBe(false);
+    const packageManager = /\b(?:npm|pnpm|yarn|bun|npx|corepack)\b/;
+    for (const candidate of job.steps) expect(String(candidate.run ?? ""), candidate.name).not.toMatch(packageManager);
+    const installs = job.steps.filter(candidate => /\binstall\b/i.test(String(candidate.run ?? "")) || /\binstall\b/i.test(String(candidate.name ?? "")));
+    expect(installs.map(candidate => candidate.name)).toEqual(["Install gitleaks"]);
+    // Each command of that step, continuation lines joined, is one of these exactly.
+    const commands = installs[0].run
+      .replace(/\s*\\\n\s*/g, " ")
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean);
+    const allowed = [
+      /^GITLEAKS_VERSION=[\d.]+$/,
+      /^GITLEAKS_SHA256=[0-9a-f]{64}$/,
+      /^curl -sSL -o \/tmp\/gitleaks\.tar\.gz "https:\/\/github\.com\/gitleaks\/gitleaks\/releases\/download\/v\$\{GITLEAKS_VERSION\}\/gitleaks_\$\{GITLEAKS_VERSION\}_linux_x64\.tar\.gz"$/,
+      /^echo "\$\{GITLEAKS_SHA256\} {2}\/tmp\/gitleaks\.tar\.gz" \| sha256sum -c -$/,
+      /^sudo tar -xz -C \/usr\/local\/bin gitleaks < \/tmp\/gitleaks\.tar\.gz$/,
+      /^gitleaks version$/,
+    ];
+    expect(commands).toHaveLength(allowed.length);
+    commands.forEach((command, at) => expect(command).toMatch(allowed[at]));
   });
 });
 
 describe("the title check's permissions", () => {
-  const workflow = read(".github/workflows/pr-title.yml");
+  const workflow = read(".github/workflows/small-checks.yml");
   const writes = job => Object.values(job.permissions ?? {}).includes("write");
+  const titleStep = workflow.jobs.checks.steps.find(step => step.id === "lint_pr_title");
 
   it("grants nothing at the workflow level, so each job holds only what it declares", () => {
     expect(workflow.permissions).toEqual({});
   });
 
   it("checks the title with a read-only token", () => {
-    const lint = Object.values(workflow.jobs).find(job => job.name === "Validate PR title follows Conventional Commits");
-    expect(writes(lint)).toBe(false);
+    const checks = Object.values(workflow.jobs).find(job => job.name === "Small checks (title, AI credit, secret scan, review)");
+    expect(writes(checks)).toBe(false);
   });
 
   /*
@@ -991,20 +1473,51 @@ describe("the title check's permissions", () => {
   });
 
   /*
-   * In the queue the checked-out tree holds the queued changes, so a queued
-   * change to the validator would judge its own title. The checkout is the
-   * queue's base instead, with the history the queued commits are read from.
+   * In the queue the change's tree holds the queued changes, so a queued
+   * change to the validator would judge its own title. The validator comes
+   * from the workspace root, checked out at the queue's base, with the history
+   * the queued commits are read from.
    */
   it("runs the queue's check from the queue's base, with the queued commits in reach", () => {
-    const checkout = workflow.jobs.lint.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    const checkout = workflow.jobs.checks.steps.find(step => String(step.uses).startsWith("actions/checkout@"));
+    expect(checkout.with.path).toBeUndefined();
     expect(checkout.with.ref).toBe("${{ github.event.merge_group.base_sha }}");
     expect(checkout.with["fetch-depth"]).toBe("${{ github.event_name == 'merge_group' && '0' || '1' }}");
   });
 
-  it("never checks out the pull request's own head", () => {
-    for (const job of Object.values(workflow.jobs)) {
-      for (const step of job.steps) expect(JSON.stringify(step.with ?? {})).not.toMatch(/pull_request\.head/);
-    }
+  // A pull request's head is checked out under its own path for the steps
+  // that only read it; the title's validator never runs from there.
+  it("runs the validator from the root's checkout, never the pull request's head", () => {
+    expect(titleStep.uses).toBe("./.github/actions/pr-title");
+    expect(titleStep["working-directory"]).toBeUndefined();
+    const action = read(".github/actions/pr-title/action.yml");
+    expect(action.runs.steps[0].run).toBe('node "$GITHUB_WORKSPACE/scripts/pr-title.mjs"');
+    const heads = workflow.jobs.checks.steps.filter(step => JSON.stringify(step.with ?? {}).includes("refs/pull/"));
+    expect(heads.map(step => step.with.path)).toEqual(["change"]);
+  });
+
+  /*
+   * The comment is cleared only on a title verdict that passed. A job that
+   * failed before the title step ran leaves the message empty too, and
+   * clearing on that would delete a standing refusal no new verdict replaced.
+   */
+  it("clears the title comment only after the title step ran and passed", () => {
+    expect(workflow.jobs.checks.outputs.title_outcome).toBe("${{ steps.lint_pr_title.outcome }}");
+    const clear = workflow.jobs.comment.steps.find(step => step.name === "Clear sticky comment on success").if;
+    const clears = ({ outcome, message = "", result }) =>
+      evaluate(conditionTokens(clear), clear, {
+        "needs.checks.outputs.title_outcome": outcome,
+        "needs.checks.outputs.error_message": message,
+        "needs.checks.result": result,
+      });
+    // The title step never ran: the checkout or Node failed first.
+    expect(clears({ outcome: "", result: "failure" })).toBe(false);
+    expect(clears({ outcome: "skipped", result: "failure" })).toBe(false);
+    // The title was refused.
+    expect(clears({ outcome: "failure", message: "bad title", result: "failure" })).toBe(false);
+    // The title passed and another step failed the job: the title's comment still goes.
+    expect(clears({ outcome: "success", result: "failure" })).toBe(true);
+    expect(clears({ outcome: "success", result: "success" })).toBe(true);
   });
 
   it("hands the script every rule the workflow sets, through the environment", () => {
@@ -1013,9 +1526,8 @@ describe("the title check's permissions", () => {
     for (const name of ["TYPES", "SCOPES", "REQUIRE_SCOPE", "SUBJECT_PATTERN", "SUBJECT_PATTERN_ERROR"]) {
       expect(Object.keys(env)).toContain(name);
     }
-    const passed = workflow.jobs.lint.steps.find(step => step.id === "lint_pr_title").with;
     for (const [input, spec] of Object.entries(action.inputs)) {
-      if (spec.required) expect(Object.keys(passed), input).toContain(input);
+      if (spec.required) expect(Object.keys(titleStep.with), input).toContain(input);
     }
   });
 });
@@ -1055,9 +1567,9 @@ describe("who owns what the required checks run", () => {
   it("owns every manifest, task graph, and test, compiler, lint and build configuration in the repository", () => {
     const definitions = trackedFiles().filter(path => LANE_DEFINITIONS.test(path));
     // The control: the walk finds the repository's manifests and configurations, not nothing,
-    // and a Rollup configuration by its name alone, as `rollup -c` finds one without being told.
+    // and a tsdown configuration by its name alone, as `tsdown` finds one without being told.
     expect(definitions.length).toBeGreaterThan(50);
-    expect(definitions).toContain("packages/nextly/rollup.dts.config.ts");
+    expect(definitions).toContain("packages/nextly/tsdown.config.ts");
     // And every Next.js configuration, wherever it sits: the playground's,
     // which the required build builds, and each template's.
     expect(definitions).toEqual(expect.arrayContaining(["apps/playground/next.config.ts", "templates/base/next.config.ts", "templates/plugin/dev/next.config.ts"]));
@@ -1072,9 +1584,9 @@ describe("who owns what the required checks run", () => {
     const shared = files.filter(path => SHARING_CONFIGURATION.test(path)).flatMap(path => sharedConfigurationOf(path, packages));
     // The control: the walk reaches the shared packages, not nothing.
     expect(shared.some(path => path.startsWith("packages/tsconfig/"))).toBe(true);
-    expect(shared.some(path => path.startsWith("packages/eslint-config/"))).toBe(true);
-    // And a relative import, as the nextly package's lint configuration makes of its own rule.
-    expect(shared.some(path => path.startsWith("packages/nextly/"))).toBe(true);
+    // And the lint configuration's plugins, a workspace package by name and a
+    // module of the repository's own by path.
+    expect(shared).toEqual(expect.arrayContaining(["packages/eslint-plugin/package.json", "lint/guards.mjs"]));
     for (const path of new Set(shared)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1084,18 +1596,18 @@ describe("who owns what the required checks run", () => {
   it("owns every file a package's own scripts run for the tasks the required checks run", () => {
     const tasks = tasksRequiredChecksRun();
     // The control: the lanes' tasks, and what the task graph adds to them, but no task only a developer runs.
-    expect([...tasks]).toEqual(expect.arrayContaining(["build", "lint", "check-types", "test", "test:integration", "build:surface-declarations"]));
+    expect([...tasks]).toEqual(expect.arrayContaining(["build", "check-types", "test", "test:integration", "build:surface-declarations"]));
     expect(tasks.has("dev")).toBe(false);
     // Every task reached is one the task graph defines: a dependency on
     // another package's task (`^build`) or a named package's (`nextly#build`)
     // is that task, never a name of its own that no script answers to.
-    const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+    const graph = parseJsonc(readRepositoryFile("turbo.jsonc")).tasks;
     expect([...tasks].filter(task => !Object.hasOwn(graph, task))).toEqual([]);
     const files = trackedFiles();
     const tracked = new Set(files);
     const run = files.filter(path => WORKSPACE_MANIFEST.test(path)).flatMap(manifest => filesTasksRun(manifest, tracked, tasks));
     // The control: the build steps a package runs from its own directory, directly and through `pnpm run`.
-    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/nextly/rollup.dts.config.ts", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
+    expect(run).toEqual(expect.arrayContaining(["packages/nextly/scripts/postbuild.cjs", "packages/ui/scripts/check-server-safe-artifacts.ts"]));
     for (const path of new Set(run)) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1106,8 +1618,8 @@ describe("who owns what the required checks run", () => {
     const files = trackedFiles();
     const tracked = new Set(files);
     const loaded = loadedThrough(files.filter(path => LINT_CONFIGURATION.test(path)), tracked);
-    // The control: the nextly package's rule, the rule it imports and the allowlist it reads.
-    expect(loaded).toEqual(expect.arrayContaining(["packages/nextly/eslint-bare-error-rule.js", "packages/nextly/eslint-api-key-scope-rule.js", "packages/nextly/eslint-bare-error-allowlist.json"]));
+    // The control: the repository's own rules, which oxlint loads as a plugin, and the allowlists the configuration reads.
+    expect(loaded).toEqual(expect.arrayContaining(["lint/guards.mjs", "packages/nextly/bare-error-allowlist.json", "packages/nextly/console-allowlist.json"]));
     for (const path of loaded) expect(ownersOf(rules, path), path).not.toEqual([]);
   });
 
@@ -1170,6 +1682,21 @@ describe("who owns what the required checks run", () => {
     expect(loads.map(load => load.target).sort()).toEqual(["dynamic.mjs", "list.json", "re-export.js", "required.cjs", "rule.js", "side-effect.js"].map(file => `packages/a/${file}`));
     // A file it reads is not an import, and is not held to resolving.
     expect(loads.filter(load => !load.imported).map(load => load.specifier)).toEqual(["././list.json"]);
+  });
+
+  it("reads an oxlint configuration's JS plugins as imports, and not the names they are given", () => {
+    const text = [
+      "export default defineConfig({",
+      "  jsPlugins: [",
+      '    "eslint-plugin-turbo",',
+      '    // "./commented-out.mjs"',
+      '    { name: "renamed", specifier: "./renamed.mjs" },',
+      '    "./guards.mjs",',
+      "  ],",
+      "});",
+    ].join("\n");
+    expect(jsPluginsIn(text)).toEqual(["eslint-plugin-turbo", "./renamed.mjs", "./guards.mjs"]);
+    expect(loadsIn(text, "oxlint.config.mjs").map(load => [load.target, load.imported])).toEqual([["renamed.mjs", true], ["guards.mjs", true]]);
   });
 
   it("takes nothing for an import that sits in a comment or a string", () => {
@@ -1306,11 +1833,10 @@ const CHECK_CONFIGURATION = [
   ".commitlintrc.json",
   ".fallowrc.jsonc",
   ".gitleaks.toml",
-  "eslint.config.mjs",
-  "eslint.scripts.config.mjs",
   "fallow-health-baseline.json",
   "lint-staged.config.mjs",
-  "tsconfig.base.json",
+  "oxlint.config.mjs",
+  "oxlint.scripts.config.mjs",
   "vitest.config.ts",
 ];
 
@@ -1354,20 +1880,16 @@ function ownersOf(rules, path) {
 }
 
 /** Manifests, task graphs, and the test, compiler, lint and build configuration the lanes run with. */
-const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|tsup|rollup)[^/]*\.config\.[^/]+)$/;
+const LANE_DEFINITIONS = /(?:^|\/)(?:package\.json|turbo\.jsonc?|tsconfig[^/]*\.json|next\.config\.[^/]+|(?:vitest|playwright|eslint|oxlint|tsdown|rollup)[^/]*\.config\.[^/]+)$/;
 
 /** A workspace package's manifest, whose scripts Turbo runs. */
 const WORKSPACE_MANIFEST = /^(?:packages|apps)\/[^/]+\/package\.json$|^e2e\/package\.json$/;
-const LINT_CONFIGURATION = /(?:^|\/)eslint[^/]*\.config\.[^/]+$/;
+const LINT_CONFIGURATION = /(?:^|\/)(?:eslint|oxlint)[^/]*\.config\.[^/]+$/;
 const TEST_CONFIGURATION = /(?:^|\/)(?:vitest|playwright)[^/]*\.config\.[^/]+$/;
 /** A file a package script names from the package's own directory, as a program in any JavaScript or TypeScript form, a shell script or data. */
 const LOCAL_FILE = /(?:^|[\s="'])(\.{0,2}\/?[\w./-]+\.(?:[cm]?js|jsx|[cm]?ts|tsx|sh|json))(?=$|[\s"';&|)])/g;
 
 /** A JSONC text as data: comments outside strings removed, and trailing commas. */
-function parsedJsonc(text) {
-  const withoutComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? "");
-  return JSON.parse(withoutComments.replace(/,(\s*[}\]])/g, "$1"));
-}
 
 /**
  * The Turbo tasks the required checks run: each `turbo run <task>` in the
@@ -1381,7 +1903,7 @@ function tasksRequiredChecksRun() {
     return runBy(workflow, requiredJobs(workflow, checks)).texts;
   });
   const named = [...commandsRunBy(texts)].flatMap(turboTasksIn);
-  const graph = parsedJsonc(readRepositoryFile("turbo.jsonc")).tasks;
+  const graph = parseJsonc(readRepositoryFile("turbo.jsonc")).tasks;
   return reachable(named, task => dependenciesOf(graph, task));
 }
 
@@ -1508,7 +2030,8 @@ function toolingImportedBy(roots, tracked, readFile = readRepositoryFile) {
 function loadsIn(text, path) {
   const beside = imported => specifier => ({ specifier, target: repositoryPathOf(specifier, path, new Map()), imported });
   const read = [...text.matchAll(/readFileSync\(([^;]*?)["']utf-?8["']/g)].flatMap(match => [...match[1].matchAll(/["']([^"']+)["']/g)].map(literal => `./${literal[1]}`));
-  return [...importsIn(text).filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
+  const modules = [...importsIn(text, path), ...jsPluginsIn(text)];
+  return [...modules.filter(specifier => specifier.startsWith(".")).map(beside(true)), ...read.map(beside(false))];
 }
 
 /** The modules a test configuration's setup keys name, as repository paths. */
@@ -1537,17 +2060,30 @@ const SETUP_SHORTHAND = /\b(setupFiles|globalSetup|globalTeardown)\s*[,}]/;
 const SETUP_VALUE = /^(?:\[\s*(?:["'][^"'\n]+["']\s*,?\s*)*\]|["'][^"'\n]+["'])/;
 
 /** Compiler and lint configuration, which may extend or import shared configuration. */
-const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|eslint[^/]*\.config\.[^/]+)$/;
+const SHARING_CONFIGURATION = /(?:^|\/)(?:tsconfig[^/]*\.json|(?:eslint|oxlint)[^/]*\.config\.[^/]+)$/;
 const EXTENDS = /"extends"\s*:\s*(\[[^\]]*\]|"[^"]*")/;
 /**
  * The modules a module's text imports, as written: `import … from`,
  * `export … from`, a bare `import` for its side effects, `require()` and
- * `import()`. TypeScript's own scanner reads them, so text that only looks like
- * an import, in a comment or in a string such as a child process's source, is
- * never taken for one.
+ * `import()`. Read by the repository's one reader of imports, from the parsed
+ * module, so text that only looks like an import, in a comment or in a string
+ * such as a child process's source, is never taken for one. `path` names the
+ * language the module is written in.
  */
-function importsIn(text) {
-  return ts.preProcessFile(text, true, true).importedFiles.map(file => file.fileName);
+function importsIn(text, path) {
+  return importedSpecifiers(text, path);
+}
+
+/**
+ * The modules an oxlint configuration's `jsPlugins` names, which oxlint loads
+ * as surely as an import: each string, or an entry's `specifier`, but never
+ * the `name` an entry gives its plugin. Comments are set aside first, so one
+ * naming a module is not taken for it.
+ */
+function jsPluginsIn(text) {
+  const list = /\bjsPlugins\s*:\s*\[([\s\S]*?)\]/.exec(text)?.[1] ?? "";
+  const entries = list.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "").replace(/\bname\s*:\s*["'][^"']*["']/g, "");
+  return [...entries.matchAll(/["']([^"']+)["']/g)].map(match => match[1]);
 }
 
 function readRepositoryFile(path) {
@@ -1564,7 +2100,10 @@ function workspacePackages(files) {
 function sharedConfigurationOf(path, packages) {
   const text = readRepositoryFile(path);
   const extended = EXTENDS.exec(text)?.[1] ?? "";
-  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...importsIn(text)];
+  // A JSON configuration is not a module: it has no imports to parse, though its
+  // `jsPlugins` are read like any configuration's.
+  const imported = path.endsWith(".json") ? [] : importsIn(text, path);
+  const specifiers = [...[...extended.matchAll(/"([^"]+)"/g)].map(match => match[1]), ...imported, ...jsPluginsIn(text)];
   return specifiers.map(specifier => repositoryPathOf(specifier, path, packages)).filter(Boolean);
 }
 

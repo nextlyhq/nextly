@@ -50,7 +50,8 @@ packages/
 ├── storage-uploadthing │
 ├── create-nextly-app   scaffolding CLI (consumes /templates)
 ├── telemetry           anonymous CLI telemetry (private)
-└── eslint-config, prettier-config, tsconfig   shared tooling (private)
+├── prettier-config, tsconfig                  shared tooling (private)
+└── eslint-config       empty placeholder until the alpha pre-release ends
 apps/playground         contributor dev harness
 templates/              base, blank, blog, plugin (scaffolded into user apps)
 e2e/                    Playwright suite (boots its own playground on :3100)
@@ -249,7 +250,7 @@ Plugins are declared with `definePlugin` and registered in `nextly.config.ts`:
   pickers render from the field-type catalog. The field-UI kit
   (`src/components/field-ui/`) is the shared, plugin-facing set of field
   editors, re-exported through the plugin SDK.
-- Heavy dependencies listed in the tsup externals (React Query, Lexical,
+- Heavy dependencies listed in the tsdown externals (React Query, Lexical,
   CodeMirror, ...) are excluded from the bundle and resolve from the
   consumer's node_modules.
 

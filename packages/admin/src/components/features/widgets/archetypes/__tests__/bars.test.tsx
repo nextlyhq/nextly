@@ -18,13 +18,14 @@ import type {
 
 import { barsAccepts, barsBody } from "../bars";
 import { CardEmpty } from "../../frame/states";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (): DashboardWidget =>
   ({
     id: "acme/by-status",
     title: "Entries by status",
     archetype: "bars",
-    size: "md",
+    size: gridBounds(4),
     query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
   }) as DashboardWidget;
 

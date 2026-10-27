@@ -1,5 +1,7 @@
 "use client";
 
+import type { JSX } from "react";
+
 import { DocumentPanel } from "./panels";
 import type { EntryFormMode, EntryData } from "./useEntryForm";
 
@@ -24,6 +26,8 @@ export interface EntryFormSidebarProps {
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the language panel's mutating actions (reading a past version). */
   actionsDisabled?: boolean;
+  /** Withholds opening another language; the same as `actionsDisabled` unless given. */
+  navigationDisabled?: boolean;
   /** Whether the form has unsaved local changes. Forwarded to DocumentPanel
    *  so it can render the "Modified" pill state on a dirty published entry. */
   isDirty?: boolean;
@@ -37,8 +41,9 @@ export function EntryFormSidebar({
   locale,
   onLocaleChange,
   actionsDisabled = false,
+  navigationDisabled = actionsDisabled,
   isDirty = false,
-}: EntryFormSidebarProps) {
+}: EntryFormSidebarProps): JSX.Element | null {
   if (hidden) return null;
 
   return (
@@ -50,6 +55,7 @@ export function EntryFormSidebar({
         {...(locale === undefined ? {} : { locale })}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
         isDirty={isDirty}
       />
     </div>

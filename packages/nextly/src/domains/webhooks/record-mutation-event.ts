@@ -26,6 +26,7 @@ import { markWriteIntegrityFailure } from "../../shared/write-integrity";
 import {
   recordMutationActivity,
   recordSingleActivity,
+  type PublicationFacts,
   type RecordMutationActivityInput,
   type RecordSingleActivityInput,
 } from "../audit/record-activity";
@@ -90,6 +91,12 @@ export interface RecordMutationEventArgs {
   newId?: () => string;
   /** Status delta for a lifecycle event; forwarded to the envelope. */
   statusChange?: { from: string | null; to: string };
+  /**
+   * What the write did to whether the document is live, from a path that can
+   * publish. Read by the activity trail alone, which has no publish action of
+   * its own; the envelope keeps `statusChange`, which receivers already read.
+   */
+  publication?: PublicationFacts;
 }
 
 /**
@@ -200,6 +207,9 @@ async function recordActivity(
       data: args.data,
       previous: args.previous ?? null,
       actor: webhookActorOf(args.actor),
+      ...(args.publication !== undefined
+        ? { publication: args.publication }
+        : {}),
     })
   );
 }

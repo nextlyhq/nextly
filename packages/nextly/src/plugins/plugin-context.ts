@@ -87,10 +87,16 @@ import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
 import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
+import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
+import {
+  PLUGIN_VERSIONS_READS,
+  pluginVersionWrites,
+  type PluginVersionWrites,
+} from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import {
@@ -390,32 +396,11 @@ const PLUGIN_USER_METHODS = [
   "updateProfile",
 ] as const satisfies readonly (keyof UserService)[];
 
-const PLUGIN_MEDIA_METHODS = [
-  "upload",
-  "findById",
-  "listMedia",
-  "update",
-  "delete",
-  "bulkUpload",
-  "bulkDelete",
-  "moveToFolder",
-  "getStorageType",
-  "hasStorage",
-  "createFolder",
-  "findFolderById",
-  "listRootFolders",
-  "listSubfolders",
-  "getFolderContents",
-  "updateFolder",
-  "deleteFolder",
-  "isImage",
-  "validateImage",
-  "getImageDimensions",
-] as const satisfies readonly (keyof MediaService)[];
-
 const PLUGIN_EMAIL_METHODS = [
   "send",
   "sendWithTemplate",
+  "queue",
+  "queueWithTemplate",
   "sendPasswordResetEmail",
   "sendEmailVerificationEmail",
   "sendWelcomeEmail",
@@ -423,26 +408,13 @@ const PLUGIN_EMAIL_METHODS = [
   "canSendTemplate",
 ] as const satisfies readonly (keyof EmailService)[];
 
-const PLUGIN_VERSIONS_METHODS = [
-  "list",
-  "get",
-  "setLabel",
-  "deleteWorkingDraft",
-  "autosave",
-  "getAutosave",
-  "pendingEditRows",
-] as const satisfies readonly (keyof VersionsService)[];
-
 /** @experimental `ctx.services.users`: the plugin view of the user service. */
 export type PluginUserService = Pick<
   UserService,
   (typeof PLUGIN_USER_METHODS)[number]
 >;
 /** @experimental `ctx.services.media`. */
-export type PluginMediaService = Pick<
-  MediaService,
-  (typeof PLUGIN_MEDIA_METHODS)[number]
->;
+export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
@@ -451,20 +423,21 @@ export type PluginEmailService = Pick<
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
-  (typeof PLUGIN_VERSIONS_METHODS)[number]
-> & {
-  /**
-   * @experimental A subject's content events (a document's or a release's),
-   * filtered by kind and part, newest first, as `{ items, meta }`; the next
-   * page passes the last item's id as `before`. Runs as the system unless
-   * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
-   */
-  listEvents(
-    subject: ContentEventSubject,
-    query?: SubjectEventsQuery,
-    opts?: ServiceOpts
-  ): ReturnType<typeof readSubjectEvents>;
-};
+  (typeof PLUGIN_VERSIONS_READS)[number]
+> &
+  PluginVersionWrites & {
+    /**
+     * @experimental A subject's content events (a document's or a release's),
+     * filtered by kind and part, newest first, as `{ items, meta }`; the next
+     * page passes the last item's id as `before`. Runs as the system unless
+     * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
+     */
+    listEvents(
+      subject: ContentEventSubject,
+      query?: SubjectEventsQuery,
+      opts?: ServiceOpts
+    ): ReturnType<typeof readSubjectEvents>;
+  };
 
 /**
  * The plugin path to a subject's events: the one read REST and the Direct API
@@ -2104,7 +2077,7 @@ export function createPluginContext(
       get users() {
         return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
-      media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
+      media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
       email: methodFacade(
@@ -2116,11 +2089,10 @@ export function createPluginContext(
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
+        const versions = getServiceFn("versionsService");
         return Object.freeze({
-          ...methodFacade(
-            getServiceFn("versionsService"),
-            PLUGIN_VERSIONS_METHODS
-          ),
+          ...methodFacade(versions, PLUGIN_VERSIONS_READS),
+          ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
       },

@@ -24,6 +24,7 @@ import {
   type WidgetCondition,
 } from "./lifecycle";
 import { onboardingIsIncomplete } from "./onboarding";
+import { queryableSlugs } from "./reader-content";
 
 /**
  * Whether this reader can see any content at all.
@@ -98,6 +99,76 @@ async function singlesArePresent(probe: ConditionProbe): Promise<boolean> {
 }
 
 /**
+ * Whether this reader may read at least one collection or one single.
+ *
+ * DERIVED from the two answers above rather than read again, so the card that
+ * lists both is offered exactly when one of the cards listing a kind would be.
+ * Both reads come from the probe's memo.
+ */
+async function contentIsPresent(probe: ConditionProbe): Promise<boolean> {
+  const [collections, singles] = await Promise.all([
+    collectionsArePresent(probe),
+    singlesArePresent(probe),
+  ]);
+  return collections || singles;
+}
+
+/**
+ * Whether the Create card would offer this reader anything: a collection they
+ * may create in that the card offers, which leaves out any whose definition
+ * turns creating off. Asked over the card's own eligibility, so the card is
+ * never offered to draw nothing.
+ */
+function createIsAvailable(probe: ConditionProbe): Promise<boolean> {
+  return probe.mayCreateOnDashboard();
+}
+
+/**
+ * Whether this reader may read any kind Needs attention can count: content
+ * (its unpublished changes), or releases (due and overdue). Content first, so
+ * a reader with some needs no release decision.
+ *
+ * Each kind of content as the card reads it:
+ * - a collection only with a published source: the card counts collections
+ *   through their sources, and one whose migration is pending or failed has
+ *   none, so offered on it alone the card would answer "not available";
+ * - any readable Single: the card reads Singles from their registry and their
+ *   version rows, never through a source, so a Single without one still has
+ *   changes to count.
+ */
+async function attentionIsReadable(probe: ConditionProbe): Promise<boolean> {
+  const [collections, singles] = await Promise.all([
+    probe.readableSlugs(),
+    probe.readableSingles(),
+  ]);
+  const countable =
+    queryableSlugs("collection", collections).length > 0 || singles.length > 0;
+  return countable || probe.mayReadReleases();
+}
+
+/** Whether a release exists that this reader may read. */
+function releasesArePresent(probe: ConditionProbe): Promise<boolean> {
+  return probe.releasesExist();
+}
+
+/**
+ * Whether setup is left to do, answering "yes" when the check itself failed.
+ *
+ * 🔴 The one condition that fails VISIBLE. Every other evaluator that throws
+ * is left unanswered, which hides its card; that is right for a card that is
+ * merely optional, and wrong for this one, whose card is where a reader learns
+ * setup could not be checked. Hidden on failure, a broken check reads exactly
+ * like a finished setup.
+ */
+async function setupNotKnownToBeDone(probe: ConditionProbe): Promise<boolean> {
+  try {
+    return await onboardingIsIncomplete(probe);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * One arm per condition, exhaustively.
  *
  * A `Record` keyed by the union rather than a `switch` with a default: a
@@ -110,10 +181,14 @@ const EVALUATORS: Record<
   (probe: ConditionProbe) => Promise<boolean>
 > = {
   "content:empty": contentIsEmpty,
-  "onboarding:incomplete": onboardingIsIncomplete,
+  "onboarding:incomplete": setupNotKnownToBeDone,
   "seed:unanswered": seedIsUnanswered,
   "collections:present": collectionsArePresent,
   "singles:present": singlesArePresent,
+  "content:present": contentIsPresent,
+  "create:available": createIsAvailable,
+  "attention:readable": attentionIsReadable,
+  "releases:present": releasesArePresent,
 };
 
 /**
@@ -127,7 +202,10 @@ const EVALUATORS: Record<
  */
 export async function evaluateConditions(
   needed: ReadonlySet<WidgetCondition>,
-  caller: ReadCaller
+  caller: ReadCaller,
+  // The request's probe, when the caller has one to share: the layout read
+  // asks the same reads again for the Get started steps.
+  probe: ConditionProbe = conditionProbe(caller)
 ): Promise<ReadonlyMap<WidgetCondition, boolean>> {
   const wanted = [...needed];
   // SETTLED, not all-or-nothing. `Promise.all` rejects on the first evaluator
@@ -140,7 +218,6 @@ export async function evaluateConditions(
   // each. Built here rather than per evaluator, which is what made the sharing
   // accidental before: a helper calling another helper re-resolved what its
   // caller had just resolved.
-  const probe = conditionProbe(caller);
   const settled = await Promise.allSettled(
     wanted.map(condition => EVALUATORS[condition](probe))
   );
@@ -243,11 +320,15 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
  */
 export async function widgetsWhoseConditionHolds<
   T extends ConditionalDeclaration,
->(widgets: readonly T[], caller: ReadCaller): Promise<T[]> {
+>(
+  widgets: readonly T[],
+  caller: ReadCaller,
+  probe?: ConditionProbe
+): Promise<T[]> {
   const needed = conditionsNeeded(widgets);
   if (needed.size === 0) return [...widgets];
   return widgetsHeldByVerdict(
     widgets,
-    await evaluateConditions(needed, caller)
+    await evaluateConditions(needed, caller, probe)
   );
 }

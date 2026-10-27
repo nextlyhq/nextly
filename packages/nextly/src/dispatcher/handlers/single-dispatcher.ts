@@ -37,6 +37,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -94,11 +95,11 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -125,6 +126,7 @@ import {
   assertLabelRequestValid,
   autosaveForDocument,
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
   getVersionDiffForDocument,
@@ -427,6 +429,24 @@ export const SINGLE_VERSION_METHODS: Record<
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  takeLiveSingleSharedValues: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The document id comes from the live row, as for a discard: it is what
+      // the authorization checks are made against.
+      const entryId = await requireLiveSingleId(slug);
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
     },
   },
 };
@@ -831,9 +851,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         throw new Error(`Single "${slug}" not found`);
       }
       if (single.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be deleted. Code-first Singles must be removed from code.`
-        );
+        throw NextlyError.definedInCode({
+          thing: "Single",
+          change: "delete",
+          logContext: { reason: "single-locked-delete", slug },
+        });
       }
 
       // The storage drop and the registry delete are one operation, so they are issued as one. Held
@@ -954,11 +976,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
-      if (existing.locked) {
-        throw new Error(
-          `Single "${slug}" is locked and cannot be modified via UI. Code-first Singles must be updated in code.`
-        );
-      }
+      refuseChangeDefinedInCode(existing, "Single", slug);
 
       const updateData: Record<string, unknown> = {};
       if (b.label !== undefined) updateData.label = b.label;
@@ -1069,11 +1087,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
@@ -1137,11 +1151,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
       const single = await svc.registry.getSingleBySlug(slug);
       if (!single) throw new Error("Single not found");
-      if (single.locked) {
-        throw new Error(
-          "This single is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(single, "Single", slug);
 
       const {
         fields,
@@ -1218,7 +1228,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // or no single candidate), the preflight finds it from the fields and refuses what it must.
         renamed: companionRename,
         tableName: single.tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: slug,
         kind: "single",
@@ -1226,6 +1236,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
@@ -1282,7 +1294,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         uiTargetKind: "single" as const,
         // A field becoming translated keeps its value as this language's; the apply moves it after
         // its prompts and refusals, before it drops the main column.
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
       });
 
       if (!result.success) {
