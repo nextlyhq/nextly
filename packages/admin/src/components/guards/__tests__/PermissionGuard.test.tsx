@@ -393,10 +393,11 @@ describe("PermissionGuard", () => {
       expect(screen.getByText("the page")).toBeTruthy();
     });
 
-    it("keeps the page it opened on screen while the next language's answer is on its way", () => {
+    it("shows the page it opened only once the next language's answer allows it", () => {
       // The language moved from allowed the page; the new one's answer is not
-      // in yet. The page stays mounted, its writes held by the editor, rather
-      // than swapped for a spinner or a refusal nothing supports.
+      // in yet. The page reads the new language's document, which a cache may
+      // already hold, so it is not shown on the old answer's word: the guard
+      // waits for the new one, as on a first visit.
       holding([], false, { allows: ["read-posts"] });
       // A new element each render: React re-renders the guard only for
       // props that changed, and the same element would leave it as it was.
@@ -412,17 +413,19 @@ describe("PermissionGuard", () => {
       const { rerender } = render(guarded());
       expect(screen.getByText("the page")).toBeTruthy();
 
+      pageRendered.mockClear();
       holding([], false, {
-        allows: [],
+        allows: ["read-posts"],
         content: { hasAnswer: false, isPlaceholder: true },
       });
       rerender(guarded());
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+
+      // The new language's answer allows the page: it opens again.
+      holding([], false, { allows: ["read-posts"] });
+      rerender(guarded());
       expect(screen.getByText("the page")).toBeTruthy();
-      expect(
-        screen.queryByRole("heading", {
-          name: "You don't have access to this collection",
-        })
-      ).toBeNull();
     });
 
     it("does not reopen a page a later language refused while the next is asked", () => {
@@ -483,32 +486,6 @@ describe("PermissionGuard", () => {
         content: { isLoading: true, hasAnswer: false },
       });
       rerender(guarded());
-      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
-      expect(screen.queryByText("the page")).toBeNull();
-    });
-
-    it("does not keep a page for another route that asks the same while a language is asked", () => {
-      // The entry this guard opened is not the one navigated to: another
-      // address asking the same of the same entity waits for its answer.
-      holding([], false, { allows: ["read-posts"] });
-      const guarded = (page: string) => (
-        <PermissionGuard
-          requiredPermission="read-posts"
-          subject="collection"
-          entity={POSTS}
-          page={page}
-        >
-          <Page />
-        </PermissionGuard>
-      );
-      const { rerender } = render(guarded("/admin/collections/posts/1"));
-      expect(screen.getByText("the page")).toBeTruthy();
-
-      holding([], false, {
-        allows: [],
-        content: { hasAnswer: false, isPlaceholder: true },
-      });
-      rerender(guarded("/admin/collections/posts/2"));
       expect(screen.getByText("Setting up your workspace")).toBeTruthy();
       expect(screen.queryByText("the page")).toBeNull();
     });

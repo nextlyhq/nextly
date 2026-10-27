@@ -40,7 +40,7 @@ const RestartOverlay = lazy(() =>
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
 function AdminAppContent({ nonce }: RootLayoutProps) {
-  const { route, isHydrated, pathname } = useRouter();
+  const { route, isHydrated } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -115,7 +115,6 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
           requiredPermission={requiredPermission}
           subject={accessSubject}
           entity={entityAccess}
-          page={pathname}
         >
           {componentElement}
         </PermissionGuard>
