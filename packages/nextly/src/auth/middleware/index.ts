@@ -21,11 +21,12 @@ import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 import { getNextlyLogger } from "../../observability/logger";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
-import { answerForRefusal } from "../access/gate-adapters";
+import { answerForRefusal, type GateVerdict } from "../access/gate-adapters";
 import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
+import { rememberRouteVerdict } from "../access/request-memo";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -35,6 +36,7 @@ import {
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
+  ruleLanguageKey,
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
@@ -474,18 +476,33 @@ export async function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  const verdict = await routeGateVerdict(
+  const answered = await routeGateVerdict(
     authResult,
     action,
     resource,
     getRBACService(),
     appliesFilter
   );
-  // The handler limits the read to the entries the filter matches, asking
-  // the rule again in the request, where it runs once.
-  if (!verdict.allowed && verdict.refusal === "only-matching-entries") {
-    return authResult;
+  // The route keeps its verdict for the request, every entry or the entries
+  // a read rule's filter matches, so the handler it authorizes applies it
+  // without asking the rule again. A request that cannot keep a filter
+  // refuses the caller, as a route that applies no filter does, rather than
+  // let the read run unfiltered.
+  const question = {
+    userId: authResult.userId,
+    slug: resource,
+    action,
+    language: ruleLanguageKey(),
+  };
+  if (answered.allowed) rememberRouteVerdict(question, { all: true });
+  if (!answered.allowed && answered.refusal === "only-matching-entries") {
+    const kept = rememberRouteVerdict(question, { filter: answered.filter });
+    if (kept) return authResult;
   }
+  const verdict: GateVerdict =
+    !answered.allowed && answered.refusal === "only-matching-entries"
+      ? { allowed: false, refusal: "insufficient" }
+      : answered;
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
