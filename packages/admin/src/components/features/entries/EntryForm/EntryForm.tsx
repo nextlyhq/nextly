@@ -38,6 +38,7 @@ import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales"
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useCan } from "@admin/hooks/useCan";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
   useDocumentAutosave,
@@ -619,9 +620,14 @@ export function EntryForm({
   // create permission their mode needs: those modals open from a related
   // field, not through the route guard the full editor sits behind.
   const canDelete = useCan(`delete-${collectionSlug}`);
-  const canSave = useCan(
-    `${mode === "create" ? "create" : "update"}-${collectionSlug}`
+  // The modals send no language, so the server writes the default one: a
+  // create is answered so already, and an update by its own cell.
+  const canCreate = useCan(`create-${collectionSlug}`);
+  const canUpdateUnnamed = useCanRequest(
+    collectionSlug,
+    "updateInDefaultLanguage"
   );
+  const canSave = mode === "create" ? canCreate : canUpdateUnnamed;
 
   /*
    * The one gate every write passes through.
@@ -1140,6 +1146,7 @@ export function EntryForm({
                                   )}
                                   isRailCollapsed={railCollapsed}
                                   hasPublicAddress={hasPublicAddress}
+                                  documentId={entry?.id}
                                 />
 
                                 {/* The language panel, inline. Its rail mount is

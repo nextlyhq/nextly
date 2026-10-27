@@ -86,4 +86,28 @@ describe("RoleTable columns", () => {
     expect(screen.getAllByText("Editor").length).toBeGreaterThan(0);
     expect(within(table).queryByText("Description")).toBeNull();
   });
+
+  it("lists the Public role, which no picker offers", () => {
+    useRoles.mockReturnValue({
+      data: {
+        items: [
+          {
+            id: "role_public",
+            roleName: "Public",
+            name: "Public",
+            subtitle: "System role",
+            description: "What anyone may do without signing in",
+            type: "System" as const,
+            permissions: [],
+            assignable: false,
+          },
+        ],
+        meta: { page: 1, pageSize: 10, totalItems: 1, totalPages: 1 },
+      },
+      isLoading: false,
+    });
+    render(<RoleTable />);
+
+    expect(screen.getAllByText("Public").length).toBeGreaterThan(0);
+  });
 });

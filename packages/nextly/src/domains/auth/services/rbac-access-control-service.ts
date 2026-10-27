@@ -48,6 +48,7 @@ import {
   declareTarget,
 } from "../../../auth/access/declared-rules";
 import {
+  noteFilterNotApplied,
   reportRuleFilterMisuse,
   ruleAnswer,
   type RuleAnswer,
@@ -83,7 +84,8 @@ import type {
 async function askRuleFunction(
   ask: () => unknown,
   operation: AccessOperation,
-  target: AccessTarget
+  target: AccessTarget,
+  decisionAllows: boolean
 ): Promise<{ answer: unknown; meaning: RuleAnswer } | null> {
   let answer: unknown;
   try {
@@ -97,6 +99,8 @@ async function askRuleFunction(
   }
   const meaning = ruleAnswer(answer);
   reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  // Neither caller applies a read rule's filter, so each refuses it.
+  await noteFilterNotApplied(target.kind, operation, meaning, decisionAllows);
   return { answer, meaning };
 }
 
@@ -281,7 +285,14 @@ export class RBACAccessControlService {
     operation: AccessOperation,
     target: AccessTarget
   ): Promise<boolean> {
-    const asked = await askRuleFunction(() => rule(ctx), operation, target);
+    // Asked only of a user who holds the permission, whom the decision would
+    // let read the entries a filter matches.
+    const asked = await askRuleFunction(
+      () => rule(ctx),
+      operation,
+      target,
+      true
+    );
     if (asked === null) return false;
     // Only `true` allows every entry.
     if (asked.meaning.kind !== "allow" && Boolean(asked.answer)) {
@@ -387,7 +398,10 @@ export class RBACAccessControlService {
           )
         ),
       operation,
-      target
+      target,
+      // A plugin's person is judged by the rule alone; a visitor holds no
+      // permission, so the decision refuses it whatever the rule says.
+      principal !== null
     );
     if (asked === null) return false;
     // A rule allows only by answering `true`. A visitor was refused before
