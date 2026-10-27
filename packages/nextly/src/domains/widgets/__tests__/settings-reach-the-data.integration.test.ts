@@ -40,7 +40,8 @@ const ROWS = 9;
 interface Placement {
   id: string;
   widgetId: string;
-  width: string;
+  w: number;
+  h: number;
   removed: boolean;
   config?: Record<string, unknown>;
 }
@@ -59,7 +60,7 @@ function declare(defaultLimit: number): void {
       id: WIDGET,
       title: "Notes",
       archetype: "list",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       defaultOrder: 1000,
       query: { source: `collection:${NOTES}`, op: "list", limit: 5 },
       settings: [

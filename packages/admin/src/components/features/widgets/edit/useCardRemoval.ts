@@ -7,7 +7,7 @@
  * the DRAFT and nothing is written until Save. Outside customise mode a card
  * that declared `dismissible` carries its own control, which writes at once
  * (`useDismissPlacement`). Either way the card stays in the list marked
- * removed, so Undo puts back the same card in the same place, width and
+ * removed, so Undo puts back the same card in the same place, size and
  * settings included.
  *
  * @module components/features/widgets/edit/useCardRemoval

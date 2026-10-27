@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
@@ -274,10 +274,15 @@ export function DualSidebar({
   const [singleSearch, setSingleSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState("");
 
-  // Sync selectedMain when activeCategory changes (e.g. on navigation)
-  useEffect(() => {
+  // Follows the route: a navigation selects the section it lands in. Adjusted during render
+  // rather than in an effect, since an effect runs after the paint, so the page arrived at was
+  // first drawn beside the previous section's panel, and the whole content area moved as that
+  // panel closed a frame later.
+  const [routedCategory, setRoutedCategory] = useState(activeCategory);
+  if (routedCategory !== activeCategory) {
+    setRoutedCategory(activeCategory);
     setSelectedMain(activeCategory);
-  }, [activeCategory]);
+  }
 
   const { isActive } = useSidebarNavigation(SIDEBAR_NAVIGATION, pathname);
 
