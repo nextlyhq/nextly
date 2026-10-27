@@ -655,6 +655,16 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       );
     });
 
+    it("names a junction table by its two tables and field, the same name a drop removes", () => {
+      expect(
+        service().generateJunctionTableName("dc_posts", "dc_tags", "tags")
+      ).toBe(junction("tags"));
+      // Sorted, so either side derives the same name.
+      expect(
+        service().generateJunctionTableName("dc_tags", "dc_posts", "tags")
+      ).toBe(junction("tags"));
+    });
+
     it("names a drop file of many collections in a bounded name", () => {
       const many = Array.from({ length: 40 }, (_, index) => ({
         collectionName: `collection_with_a_long_name_${String(index)}`,

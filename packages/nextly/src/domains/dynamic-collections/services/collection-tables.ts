@@ -37,15 +37,38 @@ function junctionOptionsOf(field: JunctionField): {
  */
 export function junctionTableNameFor(
   sourceTableName: string,
-  field: JunctionField
+  field: JunctionField,
+  // How a generated name is derived: `junctionTableNameBetween`, unless the
+  // schema service derives it through its own published method of that name.
+  nameBetween: (
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ) => string = junctionTableNameBetween
 ): string {
   const options = junctionOptionsOf(field);
   if (typeof options.junctionTable === "string" && options.junctionTable) {
     return options.junctionTable;
   }
-  const targetTable = `dc_${typeof options.target === "string" ? options.target : ""}`;
-  const [first, second] = [sourceTableName, targetTable].sort();
-  return `${first}_${second}_${field.name ?? ""}`;
+  return nameBetween(
+    sourceTableName,
+    `dc_${typeof options.target === "string" ? options.target : ""}`,
+    field.name ?? ""
+  );
+}
+
+/**
+ * The generated name of the junction table between two tables for one
+ * field: both tables sorted, so either side derives the same name, then the
+ * field.
+ */
+export function junctionTableNameBetween(
+  sourceTable: string,
+  targetTable: string,
+  fieldName: string
+): string {
+  const [first, second] = [sourceTable, targetTable].sort();
+  return `${first}_${second}_${fieldName}`;
 }
 
 /** The junction tables of a collection's own many-to-many fields. */

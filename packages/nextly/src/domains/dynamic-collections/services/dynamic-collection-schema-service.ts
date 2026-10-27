@@ -67,7 +67,11 @@ import {
 import { backfillDefaultForType } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
-import { junctionTableNameFor, junctionTablesOf } from "./collection-tables";
+import {
+  junctionTableNameBetween,
+  junctionTableNameFor,
+  junctionTablesOf,
+} from "./collection-tables";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /**
@@ -3421,7 +3425,26 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     sourceTableName: string,
     field: FieldDefinition
   ): string {
-    return junctionTableNameFor(sourceTableName, field);
+    // Generated names through `generateJunctionTableName`, as this method
+    // always derived them.
+    return junctionTableNameFor(
+      sourceTableName,
+      field,
+      (source, target, name) =>
+        this.generateJunctionTableName(source, target, name)
+    );
+  }
+
+  /**
+   * The generated name of the junction table between two tables for one
+   * field, by the rule `junctionTableNameFor` applies (`collection-tables`).
+   */
+  generateJunctionTableName(
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ): string {
+    return junctionTableNameBetween(sourceTable, targetTable, fieldName);
   }
 
   // ==================== TYPE MAPPING METHODS ====================
