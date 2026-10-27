@@ -90,7 +90,10 @@ export function useSidebarSingleList() {
   // would immediately re-fire and hammer the endpoint forever.
   useEffect(() => {
     if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) {
-      void fetchNextPage();
+      // Joins a request already on its way rather than restarting it: the
+      // Content panel and the Singles list each read this list, and both
+      // effects can ask for the same next page in one commit.
+      void fetchNextPage({ cancelRefetch: false });
     }
   }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
@@ -113,8 +116,8 @@ export function useSidebarSingleList() {
     isLoading,
     // Whether every page has arrived. The list draws from the first page on,
     // but a search that matched nothing may only say so once this is true: the
-    // match may be on a page still on its way. A failed page ends the walk.
-    isComplete: !isLoading && !(hasNextPage && !isFetchNextPageError),
+    // match may be on a page still on its way, or on one that failed.
+    isComplete: !isLoading && !hasNextPage,
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
   };

@@ -61,4 +61,42 @@ describe("the sidebar's Singles list", () => {
     await waitFor(() => expect(result.current.isComplete).toBe(true));
     expect(result.current.items).toHaveLength(1);
   });
+
+  it("asks for each page once when two parts of the sidebar read it", async () => {
+    fetchSingles
+      .mockResolvedValueOnce({
+        items: [{ id: "s1", slug: "single-1", label: "Single 1" }],
+        meta: { hasNext: true },
+      })
+      .mockResolvedValueOnce({ items: [], meta: { hasNext: false } });
+
+    // The Content panel and the Singles list each read the list.
+    const { result } = renderHook(
+      () => [useSidebarSingleList(), useSidebarSingleList()] as const,
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current[0].isComplete).toBe(true));
+    const pagesAsked = fetchSingles.mock.calls.map(
+      ([q]) => (q as { pagination: { page: number } }).pagination.page
+    );
+    expect(pagesAsked).toEqual([0, 1]);
+  });
+
+  it("isn't complete when a later page fails", async () => {
+    fetchSingles
+      .mockResolvedValueOnce({
+        items: [{ id: "s1", slug: "single-1", label: "Single 1" }],
+        meta: { hasNext: true },
+      })
+      .mockRejectedValueOnce(new Error("offline"));
+
+    const { result } = renderHook(() => useSidebarSingleList(), { wrapper });
+
+    await waitFor(() => expect(fetchSingles).toHaveBeenCalledTimes(2));
+    // Settled on the failure: no further page is being asked for.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(fetchSingles).toHaveBeenCalledTimes(2);
+    expect(result.current.isComplete).toBe(false);
+  });
 });
