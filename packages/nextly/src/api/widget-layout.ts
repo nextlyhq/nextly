@@ -37,8 +37,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
-  declaredWidgets,
-  placedByDefault,
+  allWidgets,
   sizeFacts,
   type CanonicalWidget,
   type WidgetSizeFacts,
@@ -50,6 +49,7 @@ import {
 } from "../domains/widgets/collection-cards";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { defaultLayoutPlacements } from "../domains/widgets/default-layout";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -60,7 +60,6 @@ import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
-  defaultPlacements,
   dismissalsApplied,
   layoutIsArranged,
   resolvePlacementIds,
@@ -76,6 +75,7 @@ import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 import {
   NO_STORED_LAYOUT_VERSION,
   type WidgetLayoutService,
@@ -127,37 +127,21 @@ const OPAQUE_CONFIG_HEADERS = {
  */
 type LayoutSource = "own" | "default" | "unreadable";
 
-/** A declared widget as the default arrangement reads it. */
-function placeable(widget: CanonicalWidget) {
-  return {
-    id: widget.id,
-    ...(widget.defaultOrder === undefined
-      ? {}
-      : { defaultOrder: widget.defaultOrder }),
-    size: sizeFacts(widget).size.default,
-  };
-}
-
 /**
  * The whole arrangement a reader without an arranged row follows: the one
- * computed default, with their removals applied.
+ * default (`defaultLayoutPlacements`, from the site's `defaultLayout` or
+ * core's, and the plugins' suggestions), with their removals applied.
  *
- * ONE materialization over every declared widget, split afterwards, so the
- * cards a caller may see and the ones they may not keep one order between
- * them. Materialized from {@link declaredWidgets} rather than from every
- * widget that exists: a card core GENERATED for a collection is offered
- * through `available`, never placed.
+ * ONE materialization over every widget the install has, split afterwards, so
+ * the cards a caller may see and the ones they may not keep one order between
+ * them, and two people's defaults differ only by the cards each may not see.
  *
  * A row nobody arranged contributes its removals and nothing else, applied to
  * the WHOLE materialization, so a card this caller cannot see keeps the
  * removal it was given, and comes back removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
-  const placed = declaredWidgets().filter(placedByDefault);
-  return dismissalsApplied(
-    defaultPlacements(placed.map(placeable)),
-    unarranged
-  );
+  return dismissalsApplied(defaultLayoutPlacements(allWidgets()), unarranged);
 }
 
 /**
@@ -192,19 +176,63 @@ function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
-  view: {
-    visibleIds: ReadonlySet<string>;
-    withheld: (placement: WidgetPlacement) => boolean;
-  }
+  view: CardView,
+  notShown: ReadonlySet<string> = NOTHING_WITHHELD
 ): WidgetPlacement[] {
   const { visible } = partitionPlacements(
     wholeArrangement(stored),
     view.visibleIds,
-    view.withheld
+    withheldFrom(stored, view, notShown)
   );
   return stored && layoutIsArranged(stored)
     ? visible
     : visible.slice(0, MAX_PLACEMENTS);
+}
+
+/** What decides which cards of an arrangement a reader is handed. */
+interface CardView {
+  visibleIds: ReadonlySet<string>;
+  withheld: (placement: WidgetPlacement) => boolean;
+}
+
+const NOTHING_WITHHELD: ReadonlySet<string> = new Set();
+
+/**
+ * The cards withheld from what this reader is handed: those of their view,
+ * and, while they follow the default, the default's cards their declared
+ * widgets' own rules would not show them (`notShown`). An arranged row is
+ * theirs as they arranged it, and its cards answer for themselves.
+ */
+function withheldFrom(
+  stored: StoredLayout | undefined,
+  view: CardView,
+  notShown: ReadonlySet<string>
+): (placement: WidgetPlacement) => boolean {
+  if ((stored && layoutIsArranged(stored)) || notShown.size === 0) {
+    return view.withheld;
+  }
+  return placement => view.withheld(placement) || notShown.has(placement.id);
+}
+
+/**
+ * The cards of the default this reader would not be shown by their declared
+ * widgets' own rules, among those their view lets them see, judged with the
+ * default's own settings (`defaultCardsNotShown`).
+ *
+ * Loaded lazily: that judgement is the card endpoint's, which reads this
+ * module to know what a caller was handed.
+ */
+async function notShownInDefault(
+  auth: AuthContext,
+  view: CardView & { reader: ReadCaller },
+  signal: AbortSignal
+): Promise<ReadonlySet<string>> {
+  const { defaultCardsNotShown } = await import("./default-cards-shown");
+  const seen = followedDefault().filter(
+    placement =>
+      view.visibleIds.has(placement.widgetId) && !view.withheld(placement)
+  );
+  return defaultCardsNotShown(auth, view.reader, seen, signal);
 }
 
 /**
@@ -297,6 +325,7 @@ async function visibleWidgets(auth: AuthContext) {
   const readable = audience.readableCollections;
   return {
     caller,
+    reader,
     audience,
     probe,
     widgets,
@@ -382,7 +411,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     : stored.layout
       ? "own"
       : "default";
-  const arrangement = visibleArrangement(stored.layout, view);
+  // Judged for every read, since the default below is handed to a reader
+  // with an arrangement of their own too, as the dashboard a reset returns to.
+  const notShown = await notShownInDefault(auth, view, req.signal);
+  const arrangement = visibleArrangement(stored.layout, view, notShown);
   // The Get started card is drawn or left dormant from its step answer and its
   // own settings, which is why this is decided here, after the row is read,
   // and not by a condition before it. `?getStarted=1` asks for the answer of a
@@ -404,7 +436,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       ? null
       : await view.probe.getStarted();
   const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view),
+    visibleArrangement(undefined, view, notShown),
     card => steps !== null && getStartedDrawn(steps, card.config)
   );
   const sizes = sizesOf(view.widgets);
@@ -859,7 +891,14 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges,
     replaceUnreadable
   );
-  const shown = visibleArrangement(stored.layout, view);
+  // A reader still following the default was handed it less the cards it
+  // would not show them, and writes back what they were handed: those cards
+  // are carried into the row as cards they may not see are, never dropped.
+  const notShown =
+    stored.layout && layoutIsArranged(stored.layout)
+      ? NOTHING_WITHHELD
+      : await notShownInDefault(auth, view, req.signal);
+  const shown = visibleArrangement(stored.layout, view, notShown);
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);
 
@@ -878,7 +917,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       submitted,
       wholeArrangement(stored.layout),
       carriedUnlessSubmitted(submitted, view.visibleIds),
-      view.withheld
+      withheldFrom(stored.layout, view, notShown)
     ),
     expectedVersion,
     arranged

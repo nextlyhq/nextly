@@ -58,7 +58,6 @@ import {
   isGridSize,
   MAX_GRID_ROWS,
   MIN_GRID_ROWS,
-  type GridSize,
 } from "./grid-size";
 import { MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
@@ -135,20 +134,6 @@ export interface StoredLayout {
    * Read it through {@link layoutIsArranged}, never directly.
    */
   unarranged?: true;
-}
-
-/**
- * What placing a widget in the DEFAULT arrangement reads from its declaration.
- *
- * Three fields, and deliberately not `WidgetDefinition`: a widget reaches the
- * dashboard by channels whose shapes differ, and the default needs none of the
- * fields they disagree about.
- */
-export interface PlaceableWidget {
-  id: string;
-  defaultOrder?: number;
-  /** The size a new card starts at: the default of the widget's bounds. */
-  size: GridSize;
 }
 
 function isUsableText(value: unknown): value is string {
@@ -438,8 +423,8 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
  * cards all come from `defaults`, and the stored row contributes only what its
  * reader chose about each card -- that they removed it, and the settings they
  * gave it. A setting changed outside customise mode is written to such a row,
- * and reading only the removals back dropped it on every read. The default
- * carries no settings of its own, so a stored one is always the reader's.
+ * and reading only the removals back dropped it on every read. A setting the
+ * default's own entry starts a card with gives way to one stored for it.
  *
  * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
  * a removal or a setting on a card the reader has since lost access to is
@@ -469,48 +454,6 @@ export function dismissalsApplied(
       ...(choice.config === undefined ? {} : { config: choice.config }),
     };
   });
-}
-
-/**
- * The declared order: a widget with no `defaultOrder` sits after every widget
- * that states one.
- *
- * 🔴 Equal orders compare EQUAL, so the declaration order then stands (the
- * sort is stable). Any tie-break here would rearrange every default dashboard
- * holding widgets that state no order.
- */
-function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
-  const aOrder = a.defaultOrder ?? Number.POSITIVE_INFINITY;
-  const bOrder = b.defaultOrder ?? Number.POSITIVE_INFINITY;
-  if (aOrder === bOrder) return 0;
-  return aOrder < bOrder ? -1 : 1;
-}
-
-/**
- * The one default dashboard: what a reader who has never arranged anything
- * sees. Computed on every read and never stored, so a later change to it
- * reaches everyone still following it.
- *
- * The placement id is the widget id here, and only here, so repeated reads of
- * an unsaved dashboard return identical ids.
- *
- * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
- * and this materialization is caller-independent; capping it let widgets a
- * caller cannot see consume the allowance. The cap is applied to the visible
- * partition instead.
- */
-export function defaultPlacements(
-  widgets: readonly PlaceableWidget[]
-): WidgetPlacement[] {
-  return [...widgets].sort(byDeclaredOrder).map(widget => ({
-    id: widget.id,
-    widgetId: widget.id,
-    // The size travels WITH the placement: the first save stores it, so a
-    // later change to the widget's default does not resize a saved card.
-    w: widget.size.w,
-    h: widget.size.h,
-    removed: false,
-  }));
 }
 
 /**

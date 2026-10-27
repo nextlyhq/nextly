@@ -582,11 +582,10 @@ export function allWidgets(): CanonicalWidget[] {
  * cannot disagree about which widgets exist: this is the same set, less the
  * cards core generated for content the reader has not asked to see.
  *
- * The distinction is not cosmetic. `defaultPlacements` positions a card by its
- * index in the sorted set, and a generated card that appeared here would both
- * take a position and consume one of the placements a caller may submit --
- * so an install with many collections would open onto a dashboard nobody chose
- * and, past the cap, one they could not add to.
+ * The distinction is not cosmetic. A generated card suggested to the default
+ * would both take a position and consume one of the placements a caller may
+ * submit -- so an install with many collections would open onto a dashboard
+ * nobody chose and, past the cap, one they could not add to.
  */
 export function declaredWidgets(): CanonicalWidget[] {
   return allWidgets().filter(widget => widget.generated !== true);
@@ -601,13 +600,14 @@ export interface WidgetSizeFacts {
 }
 
 /**
- * Whether a widget enters the default arrangement: the ONE answer, for every
- * reader that follows the default.
+ * Whether a widget of the older shape is placed on the default by being
+ * declared, as a suggestion after the default's own cards
+ * (`default-layout.ts`): the ONE answer, for every reader that follows the
+ * default.
  *
- * A plugin's declared widget is offered, never placed by default: where a
- * plugin may put one is its suggestion, which the site may decline, and an
- * unsuggested one stays in the add panel. Until suggestions are placed, no
- * declared widget enters it at all.
+ * A plugin's declared widget is offered, never placed this way: where a plugin
+ * may put one is its suggestion (`contributes.dashboard.suggest`), which the
+ * site may decline, and an unsuggested one stays in the add panel.
  *
  * Nor does a widget that is offered (`offered`): one offered per collection
  * reads the collection a card is set to, and the default arrangement places a

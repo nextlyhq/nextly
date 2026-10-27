@@ -383,8 +383,10 @@ export interface WidgetDefinition {
    */
   sourceFilters?: readonly WidgetSourceFilter[];
   /**
-   * Where this widget sits by default, ascending. Omitted means "after
-   * everything that states one".
+   * Where this widget sits among the older-shape widgets suggested for the
+   * default dashboard, after its own cards (`default-layout.ts`), ascending.
+   * Omitted means "after everything that states one". Core's own widgets state
+   * none: their place is core's `defaultLayout`.
    *
    * The DECLARED default, not the reader's own arrangement -- a stored layout
    * carries its own order per placement and wins over this. It exists because
