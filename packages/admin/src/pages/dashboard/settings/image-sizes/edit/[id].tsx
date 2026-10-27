@@ -12,6 +12,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -69,6 +70,8 @@ export default function EditImageSizePage(): JSX.Element {
       imageSizeId ? fetchImageSize(imageSizeId) : Promise.resolve(null),
     enabled: !!imageSizeId,
   });
+  // The tab names the image size being edited once it has arrived.
+  useDocumentTitle(imageSize?.name);
 
   const handleSubmit = useCallback(
     async (data: Partial<ImageSize>) => {

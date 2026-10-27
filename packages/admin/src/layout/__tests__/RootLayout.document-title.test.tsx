@@ -1,0 +1,178 @@
+/**
+ * The browser tab's name, as the whole admin produces it.
+ *
+ * The router, the route table and the branding provider are the real ones, so
+ * a title asserted here is the one a visitor's tab would show: the screen named
+ * from what the route table declares, the site named from the deployment's
+ * branding answer. Only the network, the session and the heavy chrome around a
+ * screen are stubbed, and every page renders as nothing, because what a page
+ * draws has no part in the tab's name.
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AdminBranding } from "@admin/types/branding";
+
+const publicGet = vi.fn();
+const protectedGet = vi.fn();
+
+vi.mock("@admin/lib/api/publicApi", () => ({
+  publicApi: { get: (...args: unknown[]) => publicGet(...args) },
+}));
+
+vi.mock("@admin/lib/api/protectedApi", () => ({
+  protectedApi: { get: (...args: unknown[]) => protectedGet(...args) },
+}));
+
+vi.mock("@admin/hooks/queries/useAuthSession", () => ({
+  useAuthSession: () => ({
+    data: { isAuthenticated: true },
+    isPending: false,
+  }),
+  authSessionKey: ["auth", "session"],
+}));
+
+// Every page is a screen that draws nothing: the pages' own code is not what
+// names the tab, and loading it would fetch for data no assertion reads.
+vi.mock("@admin/pages/lazy-route", () => ({
+  lazyRoute: () => () => null,
+}));
+
+vi.mock("../DashboardLayout", () => ({
+  DashboardLayout: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+vi.mock("@admin/context/providers/GeneralSettingsSync", () => ({
+  GeneralSettingsSync: () => null,
+}));
+vi.mock("@admin/components/ui/toaster", () => ({ Toaster: () => null }));
+vi.mock("@admin/components/features/schema-builder/RestartOverlay", () => ({
+  RestartOverlay: () => null,
+}));
+vi.mock("@admin/components/guards/PublicRoute", () => ({
+  PublicRoute: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock("@admin/components/guards/PrivateRoute", () => ({
+  PrivateRoute: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+vi.mock("@admin/components/guards/PermissionGuard", () => ({
+  PermissionGuard: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
+import { RootLayout } from "../RootLayout";
+
+/** Answers the branding halves and a collection read the way the server does. */
+function answerWith(branding: AdminBranding) {
+  publicGet.mockImplementation((path: string) =>
+    path === "/admin-meta" ? Promise.resolve(branding) : Promise.reject()
+  );
+  protectedGet.mockImplementation((path: string) => {
+    if (path === "/admin-meta/workspace")
+      return Promise.resolve({ plugins: [] });
+    if (path === "/collections/posts") {
+      return Promise.resolve({
+        name: "posts",
+        label: "Post",
+        labels: { singular: "Post", plural: "Posts" },
+      });
+    }
+    return Promise.reject(new Error(`unexpected request ${path}`));
+  });
+}
+
+function renderAt(pathname: string) {
+  window.history.replaceState({}, "", pathname);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <RootLayout />
+    </QueryClientProvider>
+  );
+}
+
+/** Moves the way an in-app link does: a history push, no page load. */
+function navigate(pathname: string) {
+  act(() => {
+    window.history.pushState({}, "", pathname);
+  });
+}
+
+beforeEach(() => {
+  document.title = "Host title";
+});
+
+afterEach(() => {
+  publicGet.mockReset();
+  protectedGet.mockReset();
+});
+
+describe("the admin's tab title", () => {
+  it("names the dashboard, then the configured site", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin");
+
+    await waitFor(() => expect(document.title).toBe("Dashboard · Golden Shop"));
+  });
+
+  it("names a settings screen after its entry in the settings panel", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin/settings/webhooks");
+
+    await waitFor(() => expect(document.title).toBe("Webhooks · Golden Shop"));
+  });
+
+  it("names a collection's entries after the collection, as the sidebar does", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin/collections/posts");
+
+    await waitFor(() => expect(document.title).toBe("Posts · Golden Shop"));
+  });
+
+  it("names a signed-out screen too", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin/login");
+
+    await waitFor(() => expect(document.title).toBe("Sign In · Golden Shop"));
+  });
+
+  it("follows in-app navigation from one screen to the next", async () => {
+    answerWith({ logoText: "Golden Shop" });
+    renderAt("/admin");
+    await waitFor(() => expect(document.title).toBe("Dashboard · Golden Shop"));
+
+    navigate("/admin/settings/webhooks");
+    await waitFor(() => expect(document.title).toBe("Webhooks · Golden Shop"));
+
+    navigate("/admin/media");
+    await waitFor(() =>
+      expect(document.title).toBe("Media Library · Golden Shop")
+    );
+  });
+
+  it("falls back to the product's own name when the site has none", async () => {
+    answerWith({});
+    renderAt("/admin");
+
+    // The configured name is what the response would change, so the title is
+    // read once the response has been asked for and answered: before it, the
+    // fallback is also what shows, and a check that passed then would say
+    // nothing about the response.
+    await waitFor(() => expect(publicGet).toHaveBeenCalledWith("/admin-meta"));
+    await waitFor(() => expect(document.title).toBe("Dashboard · Nextly"));
+  });
+
+  it("carries a configured name that differs from the fallback", async () => {
+    answerWith({ logoText: "  Acme Docs  " });
+    renderAt("/admin");
+
+    await waitFor(() => expect(document.title).toBe("Dashboard · Acme Docs"));
+  });
+});

@@ -30,6 +30,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
@@ -144,6 +145,21 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
   );
 }
 
+/**
+ * What a plugin is called on its page: its sidebar label, else its name. One
+ * rule for the heading and the browser tab, so the two cannot name the plugin
+ * differently. Overloaded so a found plugin always yields a name.
+ */
+function pluginDisplayName(plugin: PluginMetadata): string;
+function pluginDisplayName(
+  plugin: PluginMetadata | undefined
+): string | undefined;
+function pluginDisplayName(
+  plugin: PluginMetadata | undefined
+): string | undefined {
+  return plugin && (plugin.appearance?.label ?? plugin.name);
+}
+
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -151,6 +167,9 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const plugin = activeSlug
     ? plugins.find(p => pluginSlug(p.name) === activeSlug)
     : undefined;
+  // The tab names the plugin as the heading below does. Called here, above
+  // the returns below, because the tab's hook cannot follow them.
+  useDocumentTitle(pluginDisplayName(plugin));
 
   // Installed metadata is observed; the catalogue is a claim, so the observed
   // one decides. Only when the project has no such plugin is the catalogue
@@ -173,7 +192,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
     );
   }
 
-  const title = plugin.appearance?.label ?? plugin.name;
+  const title = pluginDisplayName(plugin);
 
   return (
     <div>
