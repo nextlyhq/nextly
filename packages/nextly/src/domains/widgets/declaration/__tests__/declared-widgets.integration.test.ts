@@ -61,12 +61,12 @@ function recentOrders(startingItems: number) {
     description: "The newest orders",
     category: "Shop",
     size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
-    permission: `read-${ORDERS}`,
+    access: `read-${ORDERS}`,
     settings: {
       collection: settings.collection(),
       items: settings.items({ default: startingItems }),
     },
-    data: {
+    load: {
       query: ({ settings }) => ({
         collection: settings.collection,
         op: "list",
@@ -74,7 +74,7 @@ function recentOrders(startingItems: number) {
         limit: settings.items,
       }),
     },
-    display: "list",
+    view: "list",
   });
 }
 
@@ -244,7 +244,7 @@ function listingPlugin(name: string, collection: string, sort: string) {
                 defaultValue: collection,
               },
             },
-            data: {
+            load: {
               query: ({ settings }) => ({
                 collection: settings.collection,
                 op: "list",
@@ -252,7 +252,7 @@ function listingPlugin(name: string, collection: string, sort: string) {
                 sort,
               }),
             },
-            display: "list",
+            view: "list",
           }),
         ],
       },
