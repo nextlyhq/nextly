@@ -400,6 +400,9 @@ export async function runMigrate(
         // A run that finds the schema lock held waits about a minute for it, then stops naming
         // what holds it.
         lockMode: "wait",
+        // The command's interrupt ends the process, so the lock is released first rather than
+        // left for the next run to wait out.
+        lockReleaseOnInterrupt: true,
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
         // convention, and such a table is in no snapshot — so the drift check
@@ -637,8 +640,9 @@ export interface MigrateCoreDeps {
    */
   lockCommand?: string;
   /**
-   * Release the lock on an interrupt (the default, for the command). The boot step runs inside a
-   * server, whose shutdown may let the work run on, so it leaves the lock to lapse instead.
+   * Release the lock on an interrupt. Asked for by the command, whose interrupt ends the process.
+   * Off by default, for the boot migrate step, production or development: it runs inside a server
+   * whose shutdown may let the work run on, so it leaves the lock to lapse instead.
    */
   lockReleaseOnInterrupt?: boolean;
   isSettled?: () => Promise<boolean>;
@@ -1549,7 +1553,9 @@ export async function migrateCore(
       mode: deps.lockMode ?? "wait",
       ttlSeconds: deps.ttlSeconds,
       waitMs: deps.lockWaitMs,
-      releaseOnInterrupt: deps.lockReleaseOnInterrupt ?? true,
+      // Off unless the caller asks: a boot, production or development, runs inside a server whose
+      // shutdown may let the migration run on, and the lock must not be freed under it.
+      releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
       isSettled: deps.isSettled,
       logger: {
         warn: m => deps.logger.warn(m),

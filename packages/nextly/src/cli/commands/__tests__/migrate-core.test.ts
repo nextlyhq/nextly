@@ -461,3 +461,33 @@ describe("a plugin's migration history", () => {
     expect(order).toEqual(["ledger", "core"]);
   });
 });
+
+describe("how migrateCore asks for the schema lock", () => {
+  /** The options the lock was asked for, observed on the real call. */
+  async function lockOptions(over: Record<string, unknown> = {}) {
+    const withLock = vi.fn(
+      async (
+        _adapter: unknown,
+        _dialect: unknown,
+        fn: () => Promise<unknown>
+      ) => ({
+        ran: true as const,
+        value: await fn(),
+      })
+    );
+    await migrateCore(deps({ withLock, ...over }) as never);
+    return withLock.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
+  }
+
+  // A boot — production or development — runs inside a server, whose shutdown may let the
+  // migration run on after a signal; releasing the lock then would free it under running work.
+  it("leaves the lock to lapse on an interrupt unless its caller asks to release it", async () => {
+    expect((await lockOptions())?.releaseOnInterrupt).toBe(false);
+  });
+
+  it("releases it on an interrupt when the command asks, as `nextly migrate` does", async () => {
+    expect(
+      (await lockOptions({ lockReleaseOnInterrupt: true }))?.releaseOnInterrupt
+    ).toBe(true);
+  });
+});
