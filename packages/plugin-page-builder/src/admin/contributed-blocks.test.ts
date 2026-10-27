@@ -134,6 +134,60 @@ describe("registering contributed blocks in the editor", () => {
   });
 });
 
+describe("an entry holding malformed elements", () => {
+  // Each a value a plugin's own JavaScript could export in place of a
+  // definition: none may stop the editor mounting, and every well-formed
+  // element beside them still arrives.
+  const MALFORMED: unknown[] = [null, undefined, 7, "acme/hero", []];
+
+  it("skips each malformed block, naming the entry, and registers the rest", () => {
+    contributed.registerBlockEditorModules({
+      entries: { [ENTRY]: { blocks: [...MALFORMED, block("acme/hero")] } },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
+
+    expect(getBlock("acme/hero")).toBeDefined();
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.every(call => String(call[0]).includes(ENTRY))).toBe(
+      true
+    );
+  });
+
+  it("skips each malformed support, naming the entry, and registers the rest", () => {
+    contributed.registerBlockEditorModules({
+      entries: {
+        [ENTRY]: {
+          supports: [...MALFORMED, { key: 42 }, { key: "tone" }],
+          blocks: [block("acme/toned", { tone: true })],
+        },
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
+
+    expect(getSupport("tone")).toBeDefined();
+    expect(getBlock("acme/toned")).toBeDefined();
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.every(call => String(call[0]).includes(ENTRY))).toBe(
+      true
+    );
+  });
+
+  it("does not throw in the miniature's lookup, and still finds the good block", () => {
+    const hero = block("acme/hero");
+    contributed.registerBlockEditorModules({
+      entries: { [ENTRY]: { blocks: [...MALFORMED, hero] } },
+    });
+
+    expect(() => contributed.contributedBlock("acme/hero")).not.toThrow();
+    expect(contributed.contributedBlock("acme/hero")).toBe(hero);
+    expect(contributed.contributedBlock("acme/nothing")).toBeUndefined();
+  });
+});
+
 describe("a contributed block's own inspector", () => {
   it("resolves the component the map handed over, and nothing else", () => {
     const Inspector = () => null;

@@ -127,11 +127,51 @@ function readEntries(): ReadEntries {
       continue;
     }
     for (const support of value.supports ?? []) {
-      read.supports.push({ path, support });
+      if (isSupport(support)) read.supports.push({ path, support });
+      else malformed(path, "support", support);
     }
-    read.blocks.push({ path, blocks: value.blocks ?? [] });
+    const blocks = (value.blocks ?? []).filter(block => {
+      if (isRecord(block)) return true;
+      malformed(path, "block", block);
+      return false;
+    });
+    read.blocks.push({ path, blocks });
   }
   return read;
+}
+
+/**
+ * Name an element of an entry that is not a definition, once per entry and
+ * kind, and leave it out.
+ *
+ * The entry's arrays are read element by element because each element is the
+ * plugin's own JavaScript, typed by nothing at runtime: one `null` among the
+ * definitions would otherwise throw on its first property read, before any
+ * refusal could catch it, and take the editor down with it.
+ */
+function malformed(
+  path: string,
+  kind: "block" | "support",
+  value: unknown
+): void {
+  warnOnce(
+    `${kind}-shape:${path}`,
+    `[page-builder] The editor entry "${path}" lists ${describe(value)} among ` +
+      `its ${kind === "block" ? "blocks" : "supports"}, which is not a ` +
+      `${kind} definition. It is skipped.`
+  );
+}
+
+/** Whether a value is a plain object a definition could be. */
+function isRecord(value: unknown): value is AnyBlockDefinition {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether a value has a support's one required field. */
+function isSupport(value: unknown): value is SupportDefinition {
+  return (
+    isRecord(value) && typeof (value as { key?: unknown }).key === "string"
+  );
 }
 
 /**
@@ -233,7 +273,11 @@ function registerEntryBlocks(
 export function contributedBlock(name: string): AnyBlockDefinition | undefined {
   for (const value of entries.values()) {
     if (!isEntry(value)) continue;
-    const found = value.blocks?.find(block => block.name === name);
+    // Read defensively, as the registration above is: an element may be
+    // anything the plugin's JavaScript put there.
+    const found = value.blocks?.find(
+      block => isRecord(block) && block.name === name
+    );
     if (found !== undefined && !CORE_NAMES.has(name)) return found;
   }
   return undefined;

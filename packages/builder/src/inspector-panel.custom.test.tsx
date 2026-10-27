@@ -44,6 +44,7 @@ import {
 
 import type { EditorState } from "./editor-state";
 import { InspectorPanel, type BlockInspectorResolver } from "./inspector-panel";
+import { applyOp, type BuilderOp } from "./ops";
 
 const INSPECTOR = "acme-blocks/editor#HeroInspector";
 
@@ -193,6 +194,28 @@ describe("a block's own inspector", () => {
       id: "hero",
       patch: { props: { title: "Welcome", tone: "warm" } },
     });
+  });
+
+  it("keeps both of two commits made in one handler", () => {
+    /*
+     * An editor whose `apply` really applies, as `useEditorState` does: the
+     * document it holds moves at once, before the panel re-renders. A commit
+     * built from the render's own snapshot would carry the old title into the
+     * second patch and undo the first edit.
+     */
+    let live = documentOf([hero()]);
+    const editor = editorFor(live);
+    editor.apply.mockImplementation((op: BuilderOp) => {
+      live = applyOp(live, op).document;
+      return live;
+    });
+    render(<InspectorPanel editor={editor} inspectors={resolving} />);
+
+    given?.commit("title", "Welcome");
+    given?.commit("tone", "cool");
+
+    expect(editor.apply).toHaveBeenCalledTimes(2);
+    expect(live.nodes[0]?.props).toEqual({ title: "Welcome", tone: "cool" });
   });
 
   it("refuses every write while the block is locked, whatever the component does", () => {

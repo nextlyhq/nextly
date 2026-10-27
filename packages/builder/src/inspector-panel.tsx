@@ -25,6 +25,7 @@
 
 import {
   findNode,
+  type BlockDocument,
   type BlockInspectorProps,
   type BreakpointId,
   type BreakpointSet,
@@ -495,7 +496,9 @@ export function InspectorPanel({
     (name: string, value: unknown) => {
       const id = editor.selectedId;
       if (id === null) return;
-      commitProp(editor, id, name, value);
+      // Read at commit time rather than closed over: a field committing on
+      // blur can fire after another edit has already replaced the node.
+      commitProp(editor, editor.document, id, name, value);
     },
     [editor]
   );
@@ -638,19 +641,28 @@ export function InspectorPanel({
 /**
  * Set one prop of one node: the one write path every content control shares.
  *
- * The node is read at commit time rather than closed over. A field committing
- * on blur can fire after another edit has already replaced the node, and
- * patching from the older copy would resurrect its props.
+ * The patch is built from the node in `document`, which the caller passes as
+ * the document the edit applies to, and the result is returned so a caller
+ * making several edits in a row can build the next one on it. The props are
+ * copied whole (`propPatch`), so a patch built from an older copy would put
+ * back every value an edit since then changed.
+ *
+ * @returns the document after the edit, or `null` when it was not applied
  */
 function commitProp(
   editor: EditorState,
+  document: BlockDocument,
   id: string,
   name: string,
   value: unknown
-): void {
-  const node = findNode(editor.document.nodes, id);
-  if (node === undefined) return;
-  editor.apply({ kind: "update", id, patch: propPatch(node, name, value) });
+): BlockDocument | null {
+  const node = findNode(document.nodes, id);
+  if (node === undefined) return null;
+  return editor.apply({
+    kind: "update",
+    id,
+    patch: propPatch(node, name, value),
+  });
 }
 
 /**
@@ -711,13 +723,25 @@ function CustomInspector({
   nodeId: string;
   editor: EditorState;
 }): React.JSX.Element | null {
-  const commit = React.useCallback(
-    (name: string, value: unknown) => {
-      if (blockIsReadOnly(editor.document, nodeId)) return;
-      commitProp(editor, nodeId, name, value);
-    },
-    [editor, nodeId]
-  );
+  /*
+   * The document each commit builds on, carried from one commit to the next.
+   *
+   * A component may commit twice in one handler, before the panel re-renders,
+   * and `editor.document` is still the render's copy then. Building the second
+   * patch from it would carry the first prop's old value back in, undoing that
+   * edit. So each commit builds on the document the last one produced, and a
+   * new render starts again from the editor's.
+   */
+  const commit = React.useMemo(() => {
+    let live = editor.document;
+    return (name: string, value: unknown): void => {
+      if (blockIsReadOnly(live, nodeId)) return;
+      const next = commitProp(editor, live, nodeId, name, value);
+      if (next !== null) live = next;
+    };
+    // Keyed on the editor, which `useEditorState` replaces whenever its
+    // document changes, so each render starts from the current document.
+  }, [editor, nodeId]);
   const node = findNode(editor.document.nodes, nodeId);
   if (node === undefined) return null;
   return (
