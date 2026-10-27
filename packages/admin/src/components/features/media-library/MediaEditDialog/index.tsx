@@ -40,7 +40,11 @@ import {
   Trash2,
   Download,
 } from "@admin/components/icons";
-import { copyableMediaUrl, formatFileSize } from "@admin/lib/media-utils";
+import {
+  copyableMediaUrl,
+  formatFileSize,
+  parseMediaSizes,
+} from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
 
@@ -217,17 +221,11 @@ export function MediaEditDialog({
     [handleSubmit]
   );
 
-  // Parse sizes if they exist (might be a JSON string from some DB adapters)
-  const parsedSizes = React.useMemo(() => {
-    if (!media?.sizes) return null;
-    if (typeof media.sizes === "object") return media.sizes;
-    try {
-      return JSON.parse(media.sizes);
-    } catch (e) {
-      console.error("Failed to parse media sizes:", e);
-      return null;
-    }
-  }, [media?.sizes]);
+  // Sizes may arrive as a JSON string from some adapters; one parser for both.
+  const parsedSizes = React.useMemo(
+    () => parseMediaSizes(media?.sizes),
+    [media?.sizes]
+  );
 
   if (!media) return null;
 

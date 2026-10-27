@@ -1,4 +1,4 @@
-import type { Media, MediaType } from "@admin/types/media";
+import type { ImageSizeVariant, MediaType } from "@admin/types/media";
 
 /**
  * Determine media type from MIME type.
@@ -76,22 +76,83 @@ export function copyableMediaUrl(url: string): string {
 }
 
 /**
- * Where to draw an item's whole image from.
- *
- * The stored thumbnail is a square cut from the middle of the image, so it
- * shows the whole picture only when the picture is square. Anything else is
- * drawn from the file itself, which a tile then fits inside its frame. Unknown
- * dimensions count as not square: a crop shown as the whole image is the
- * mistake this exists to prevent, and a larger download is the safe side.
+ * An item's stored sizes as an object. Most adapters return the column as an
+ * object; one that stores it as text returns a JSON string, and a string that
+ * doesn't parse counts as no sizes.
  */
-export function wholeImageSrc(
-  media: Pick<Media, "url" | "thumbnailUrl" | "width" | "height">
-): string {
-  const square =
-    typeof media.width === "number" &&
-    media.width > 0 &&
-    media.width === media.height;
-  return square && media.thumbnailUrl ? media.thumbnailUrl : media.url;
+export function parseMediaSizes(
+  sizes: Record<string, ImageSizeVariant> | string | null | undefined
+): Record<string, ImageSizeVariant> | null {
+  if (!sizes) return null;
+  if (typeof sizes === "object") return sizes;
+  try {
+    const parsed: unknown = JSON.parse(sizes);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, ImageSizeVariant>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What `wholeImageSrc` reads from an item. */
+export interface WholeImageSource {
+  url: string;
+  thumbnailUrl?: string | null;
+  width?: number | null;
+  height?: number | null;
+  sizes?: Record<string, ImageSizeVariant> | string | null;
+}
+
+/**
+ * Whether a stored size shows the whole image: its sides keep the image's
+ * proportions, to within the pixel a resize rounds to. A size fitted inside
+ * a box does; one cropped to a box of other proportions doesn't. The variant
+ * records no fit setting, so its proportions are what tell the two apart.
+ */
+function showsWholeImage(
+  variant: ImageSizeVariant,
+  width: number,
+  height: number
+): boolean {
+  if (!variant.url || !(variant.width > 0) || !(variant.height > 0)) {
+    return false;
+  }
+  return (
+    Math.abs(variant.width * height - variant.height * width) <=
+    Math.max(width, height)
+  );
+}
+
+/**
+ * Where to draw an item's whole image from, for a tile: the smallest stored
+ * copy that still shows the whole picture, so a page of tiles doesn't
+ * download every original.
+ *
+ * 1. The smallest stored size whose proportions are the image's.
+ * 2. Otherwise the thumbnail, but only for a square image: the thumbnail is
+ *    a square cut from the middle, which is the whole picture only then.
+ * 3. Otherwise the file itself. Unknown dimensions land here too: a crop
+ *    shown as the whole image is the mistake this exists to prevent, and a
+ *    larger download is the safe side.
+ *
+ * The one place a tile's image is chosen, so fitted thumbnails, when they
+ * exist, change this function and nothing else.
+ */
+export function wholeImageSrc(media: WholeImageSource): string {
+  const { width, height } = media;
+  if (
+    !(typeof width === "number" && width > 0) ||
+    !(typeof height === "number" && height > 0)
+  ) {
+    return media.url;
+  }
+  const fitted = Object.values(parseMediaSizes(media.sizes) ?? {})
+    .filter(variant => showsWholeImage(variant, width, height))
+    .sort((a, b) => a.width * a.height - b.width * b.height)[0];
+  if (fitted) return fitted.url;
+  if (width === height && media.thumbnailUrl) return media.thumbnailUrl;
+  return media.url;
 }
 
 /**
