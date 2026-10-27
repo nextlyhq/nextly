@@ -343,6 +343,83 @@ describe("a publish a hook turns into an edit", () => {
   });
 });
 
+describe("an update rule's filter where the read rule hides the entry", () => {
+  // The read rule shows only entries titled "visible"; the author's own post
+  // is titled otherwise, so the update rule's filter matches it while the
+  // caller may not read it. A refusal of the write is then the missing
+  // entry's 404, whatever refused it.
+  const HIDDEN = "updfilter_hidden_posts";
+  const HIDDEN_DRAFTED = "updfilter_hidden_drafted";
+
+  async function bootHidden(): Promise<TestNextly> {
+    const access = {
+      read: () => ({ title: { equals: "visible" } }) as unknown as boolean,
+      update: ownEntries,
+      publish: ownEntries,
+    };
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: HIDDEN,
+          status: true,
+          access,
+          fields: [text({ name: "title" }), text({ name: "owner" })],
+        }),
+        defineCollection({
+          slug: HIDDEN_DRAFTED,
+          status: true,
+          versions: { drafts: true },
+          access,
+          fields: [text({ name: "title" }), text({ name: "owner" })],
+        }),
+      ],
+    });
+    await userWhoMay(current, AUTHOR, "read", [HIDDEN, HIDDEN_DRAFTED]);
+    await grantTo(current, AUTHOR, "update", [HIDDEN, HIDDEN_DRAFTED]);
+    await grantTo(current, AUTHOR, "publish", [HIDDEN, HIDDEN_DRAFTED]);
+    return current;
+  }
+
+  it("answers an update moving the entry out of the filter as missing", async () => {
+    const t = await bootHidden();
+    const { own } = await seed(t, HIDDEN);
+    const before = await stored(t, HIDDEN, own);
+
+    const refused = await errorOf(() =>
+      update(t, HIDDEN, own, { owner: OTHER })
+    );
+
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(await stored(t, HIDDEN, own)).toEqual(before);
+  });
+
+  it("answers a held edit to a field the filter names as missing", async () => {
+    const t = await bootHidden();
+    const { own } = await seed(t, HIDDEN_DRAFTED, "published");
+    const before = await stored(t, HIDDEN_DRAFTED, own);
+
+    const refused = await errorOf(() =>
+      update(t, HIDDEN_DRAFTED, own, { owner: OTHER })
+    );
+
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(await stored(t, HIDDEN_DRAFTED, own)).toEqual(before);
+  });
+
+  it("answers an update moving the entry out inside the caller's transaction as missing", async () => {
+    const t = await bootHidden();
+    const { own } = await seed(t, HIDDEN);
+    const before = await stored(t, HIDDEN, own);
+
+    const refused = await updateInTransaction(t, own, { owner: OTHER }, HIDDEN);
+
+    expect(statusOf(refused)).toBe(404);
+    expect(await stored(t, HIDDEN, own)).toEqual(before);
+  });
+});
+
 describe("an update rule's filter on a collection with languages", () => {
   const LOCALIZED = "updfilter_localized_posts";
 

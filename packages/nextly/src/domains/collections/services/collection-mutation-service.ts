@@ -876,6 +876,12 @@ interface FilteredWriteCheck {
   };
   /** The filter itself, which names the fields its match reads. */
   filter: RuleFilter;
+  /**
+   * Whether the caller may read the entry, as matched beside the filter on
+   * the row last judged: a refusal of the write once it is under way is in
+   * words where it may, and the missing entry's where it may not.
+   */
+  reads: boolean;
 }
 
 /** A filter a write in the caller's own transaction was judged by. */
@@ -10564,7 +10570,7 @@ export class CollectionMutationService extends BaseService {
                   transitionDeniedResult =
                     await this.accessService.refusalOutsideFilter(
                       draftWrite.refusedBy.params,
-                      true,
+                      draftWrite.refusedBy.reads,
                       true
                     );
                   throw new StatusTransitionDeniedError();
@@ -11465,17 +11471,22 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
     if (!prepared) return null;
-    const outside = await this.refusalOutsideWriteFilter(
+    const judged = await this.judgedAgainstWriteFilter(
       tx.getDrizzle<typeof this.db>(),
       prepared.schema,
       String(params.entryId),
       prepared.match,
       params
     );
-    if (!outside && access.filter) {
-      filteredWrites.push({ ...prepared, params, filter: access.filter });
+    if (!judged.refusal && access.filter) {
+      filteredWrites.push({
+        ...prepared,
+        params,
+        filter: access.filter,
+        reads: judged.reads,
+      });
     }
-    return outside;
+    return judged.refusal;
   }
 
   /**
@@ -11605,14 +11616,16 @@ export class CollectionMutationService extends BaseService {
     checks: readonly FilteredWriteCheck[]
   ): Promise<CollectionServiceResult | null> {
     for (const check of checks) {
-      const outside = await this.refusalOutsideWriteFilter(
+      const judged = await this.judgedAgainstWriteFilter(
         tx.getDrizzle<typeof this.db>(),
         schema,
         entryId,
         check.match,
         check.params
       );
-      if (outside) return outside;
+      if (judged.refusal) return judged.refusal;
+      // The row as it is locked decides how a later refusal is answered.
+      check.reads = judged.reads;
     }
     return null;
   }
@@ -11633,7 +11646,7 @@ export class CollectionMutationService extends BaseService {
       if (await this.movedOutOfWriteFilter(tx, schema, entryId, check.match)) {
         return this.accessService.refusalOutsideFilter(
           check.params,
-          true,
+          check.reads,
           true
         );
       }
@@ -11682,17 +11695,22 @@ export class CollectionMutationService extends BaseService {
       { locale: asked.locale }
     );
     if (!match) return null;
-    const refused = await this.refusalOutsideWriteFilter(
+    const judged = await this.judgedAgainstWriteFilter(
       this.db,
       asked.schema,
       String(asked.params.entryId),
       match,
       asked.params
     );
-    if (!refused && asked.access.filter) {
-      checks.push({ match, params: asked.params, filter: asked.access.filter });
+    if (!judged.refusal && asked.access.filter) {
+      checks.push({
+        match,
+        params: asked.params,
+        filter: asked.access.filter,
+        reads: judged.reads,
+      });
     }
-    return refused;
+    return judged.refusal;
   }
 
   /**
@@ -11709,9 +11727,35 @@ export class CollectionMutationService extends BaseService {
     match: FilteredWriteMatch,
     access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
   ): Promise<CollectionServiceResult<T> | null> {
+    return (
+      await this.judgedAgainstWriteFilter<T>(db, schema, entryId, match, access)
+    ).refusal;
+  }
+
+  /**
+   * How the stored row of `entryId`, read on `db`, stands against a write's
+   * filter: the refusal where it is outside it (`null` where it is inside, or
+   * gone), and whether the caller may read it, which answers a refusal later
+   * in the write.
+   */
+  private async judgedAgainstWriteFilter<T>(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryId: string,
+    match: FilteredWriteMatch,
+    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
+  ): Promise<{ refusal: CollectionServiceResult<T> | null; reads: boolean }> {
     const found = await this.storedWriteMatch(db, schema, entryId, match);
-    if (!found.exists || found.writes) return null;
-    return this.accessService.refusalOutsideFilter<T>(access, found.reads);
+    if (!found.exists || found.writes) {
+      return { refusal: null, reads: found.reads };
+    }
+    return {
+      refusal: await this.accessService.refusalOutsideFilter<T>(
+        access,
+        found.reads
+      ),
+      reads: found.reads,
+    };
   }
 
   /**
@@ -13654,7 +13698,7 @@ export class CollectionMutationService extends BaseService {
             errorFromServiceEnvelope(
               await this.accessService.refusalOutsideFilter(
                 draftWrite.refusedBy.params,
-                true,
+                draftWrite.refusedBy.reads,
                 true
               )
             )
