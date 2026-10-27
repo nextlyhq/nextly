@@ -43,15 +43,9 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import {
-  type LeavingFieldLike,
-  type LeavingSettingHeldBack,
-  leavingSettingsHeldBack,
-} from "../../domains/i18n/migration/field-leaves-translation-rules";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -1050,34 +1044,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const {
-        record: updated,
-        migrationStatus,
-        heldBack,
-      } = await svc.metadata.updateSingleSchema({
-        slug,
-        existing,
-        updateData,
-        fields: schemaFields,
-        isLocalized,
-        wasLocalized,
-        // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-        // the record inside its exclusion and needs to tell an explicit `localized: false` from
-        // this handler having filled in the value it read.
-        localizedRequested: b.localized !== undefined,
-        hasStatus,
-        wasStatus,
-        // Whether the request SET the toggle, which is not the same as changing it: saving it at
-        // its current value still reaches the companion, and that is what repairs a localized
-        // single whose companion `_status` was never provisioned.
-        statusRequested: b.status !== undefined,
-      });
-
-      // A leaving field's setting that did not land: the record already describes the table without
-      // it, and the admin is told which setting on which field, and that saving again applies it.
-      if (heldBack.length > 0) {
-        throw leavingSettingsNotApplied(slug, {}, heldBack);
-      }
+      const { record: updated, migrationStatus } =
+        await svc.metadata.updateSingleSchema({
+          slug,
+          existing,
+          updateData,
+          fields: schemaFields,
+          isLocalized,
+          wasLocalized,
+          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+          // the record inside its exclusion and needs to tell an explicit `localized: false` from
+          // this handler having filled in the value it read.
+          localizedRequested: b.localized !== undefined,
+          hasStatus,
+          wasStatus,
+          // Whether the request SET the toggle, which is not the same as changing it: saving it at
+          // its current value still reaches the companion, and that is what repairs a localized
+          // single whose companion `_status` was never provisioned.
+          statusRequested: b.status !== undefined,
+        });
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
@@ -1313,18 +1298,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // language's values. Whether those values can take them was asked before anything ran.
       // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
       // applied, by reference, to skip a push that changes nothing.
-      //
-      // Refused, the move has still committed: the table holds the shared columns without the
-      // settings. Recorded as it holds them, so the record, its hash and version, and the runtime
-      // shape all describe the table, and saving the same fields again applies the settings; the
-      // error raised once that is written names each one not applied.
-      let recordedFields = fields;
-      let settingsRefused:
-        | {
-            result: Pick<PipelineResult, "error">;
-            heldBack: LeavingSettingHeldBack[];
-          }
-        | undefined;
       if (settingsDeferred) {
         const settled = await push({
           ...desired,
@@ -1337,14 +1310,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
         });
         if (!settled.success) {
-          recordedFields = settingsDeferred;
-          settingsRefused = {
-            result: settled,
-            heldBack: leavingSettingsHeldBack(
-              fields as unknown as LeavingFieldLike[],
-              settingsDeferred
-            ),
-          };
+          throw leavingSettingsNotApplied(slug, settled);
         }
       }
 
@@ -1362,8 +1328,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         await adapter.update(
           "dynamic_singles",
           {
-            fields: JSON.stringify(recordedFields),
-            schema_hash: calculateSchemaHash(recordedFields as FieldConfig[]),
+            fields: JSON.stringify(fields),
+            schema_hash: calculateSchemaHash(fields as FieldConfig[]),
             migration_status: "applied",
             localized: isLocalized,
             schema_version: newSchemaVersion,
@@ -1386,7 +1352,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       try {
         const { table: freshTable } = generateRuntimeSchema(
           tableName,
-          recordedFields as FieldDefinition[],
+          fields as FieldDefinition[],
           dialect,
           { localized: isLocalized, status: single.status === true }
         );
@@ -1395,7 +1361,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const companion = buildCompanionRuntimeTable({
             slug,
             tableName,
-            fields: recordedFields as FieldDefinition[],
+            fields: fields as FieldDefinition[],
             dialect,
             localized: true,
             status: single.status === true,
@@ -1411,14 +1377,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const msg = err instanceof Error ? err.message : String(err);
         consoleLogger.warn(
           `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
-        );
-      }
-
-      if (settingsRefused) {
-        throw leavingSettingsNotApplied(
-          slug,
-          settingsRefused.result,
-          settingsRefused.heldBack
         );
       }
 

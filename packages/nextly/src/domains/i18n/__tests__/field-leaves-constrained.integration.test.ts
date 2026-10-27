@@ -13,33 +13,6 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// What runs before each statement of a schema change applied after its first push (a leaving
-// field's settings): nothing unless a test arms it, to model a write landing at that moment.
-const { beforeStatement } = vi.hoisted(() => ({
-  beforeStatement: {
-    run: undefined as ((sql: string) => Promise<void>) | undefined,
-  },
-}));
-
-vi.mock(
-  "../../schema/services/apply-migration-statements",
-  async importOriginal => {
-    const actual =
-      await importOriginal<
-        typeof import("../../schema/services/apply-migration-statements")
-      >();
-    return {
-      ...actual,
-      applyMigrationStatements: async (
-        ...args: Parameters<typeof actual.applyMigrationStatements>
-      ) => {
-        await beforeStatement.run?.(args[1]);
-        return actual.applyMigrationStatements(...args);
-      },
-    };
-  }
-);
-
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -63,11 +36,6 @@ interface Entries {
     },
     data: Record<string, unknown>
   ): Promise<{ success: boolean; data: unknown }>;
-  listEntries(params: {
-    collectionName: string;
-    overrideAccess?: boolean;
-    status?: "published" | "draft" | "all";
-  }): Promise<unknown>;
 }
 
 interface CollectionsHandler {
@@ -599,70 +567,33 @@ describeEachDialect(
 
     /** Whether the registry still describes `code` as translated. */
     async function registryTranslatesCode(entity: string): Promise<unknown> {
-      return (await registryCode(entity))?.localized;
-    }
-
-    /** The registry's record of `code` for `entity`. */
-    async function registryCode(
-      entity: string
-    ): Promise<{ localized?: boolean; unique?: boolean } | undefined> {
       const { table, slug } = REGISTRY[entity];
       const [row] = await query<{ fields: unknown }>(
         `SELECT ${q("fields")} AS fields FROM ${q(table)} WHERE ${q("slug")} = '${slug}'`
       );
       const fields = (
         typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
-      ) as { name: string; localized?: boolean; unique?: boolean }[];
-      return fields.find(f => f.name === "code");
+      ) as { name: string; localized?: boolean }[];
+      return fields.find(f => f.name === "code")?.localized;
     }
 
-    /** What a read of the entity's content returns, through the product's own read path. */
-    async function readContent(entity: string): Promise<string> {
-      if (entity === "collection") {
-        return JSON.stringify(
-          await handler().getEntryService().listEntries({
-            collectionName: "posts",
-            overrideAccess: true,
-            status: "all",
-          })
-        );
-      }
-      const singles: SingleEntryService =
-        current.getService("singleEntryService");
-      return JSON.stringify(
-        await singles.get("hero", { overrideAccess: true })
-      );
-    }
-
-    // A leaving field's setting is applied after its values are shared and its companion column is
-    // gone. When that step is refused (here a write landing in between gives a second entry an
-    // existing value), the move has committed, so the field is recorded as the table holds it:
-    // shared, without the setting. The record, its version and the runtime shape all say so, the
-    // admin is told which setting was not applied, and saving again applies it.
+    // A dialog's apply shares the values, drops the companion column and only then pushes the
+    // Unique setting. When that last push fails (here a write landing in between gives a second
+    // entry an existing value), the values already sit on the main table while the registry still
+    // names the field translated, so the same save, retried, has to finish from that state.
     it.each(
       PATHS.filter(
-        p =>
-          p.path.includes("schema dialog") ||
-          p.path === "a Single's schema is saved"
+        p => p.path.includes("schema dialog") && p.entity !== "single"
       )
     )(
-      "records a field without the Unique it did not get, reads it at once, and applies Unique on the next save, when $path",
+      "finishes on a retry after the push applying Unique fails once the values are shared, when $path",
       async path => {
-        const english =
-          path.entity === "single"
-            ? ["a1@example.com"]
-            : ["a1@example.com", "b2@example.com"];
+        const english = ["a1@example.com", "b2@example.com"];
         await seedConstrained(path, { unique: true }, english);
         const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
-        const { table: registry, slug } = REGISTRY[path.entity];
-        const versionBefore = await schemaVersionOf(registry, slug);
 
-        // The real statements, run as they are; just before the one applying Unique, a row sharing
-        // an entry's value is written to the main table. A dialog applies the setting in a second
-        // push; a Single's save, in a statement of its own after the companion reconcile.
-        const concurrent = () =>
-          query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
-        let injected = false;
+        // The real push, run as it is; before the second one in the save, a row sharing an
+        // entry's value is written to the main table, so that push is refused by the database.
         const realApply = PushSchemaPipeline.prototype.apply;
         let pushes = 0;
         const spy = vi
@@ -672,65 +603,31 @@ describeEachDialect(
             ...args: Parameters<PushSchemaPipeline["apply"]>
           ) {
             pushes += 1;
-            if (pushes === 2 && path.path.includes("schema dialog")) {
-              injected = true;
-              await concurrent();
+            if (pushes === 2) {
+              await query(
+                rowFor(path.table, "concurrent-1", "'a1@example.com'")
+              );
             }
             return realApply.apply(this, args);
           });
-        beforeStatement.run = async (sql: string) => {
-          if (injected || !/unique/i.test(sql) || !/code/.test(sql)) return;
-          injected = true;
-          await concurrent();
-        };
         const failure = await attempt(path.change(change));
         spy.mockRestore();
-        beforeStatement.run = undefined;
 
-        expect(injected).toBe(true);
-        // Told which setting, on which field, and what to do.
+        expect(pushes).toBe(2);
         expect(failure).toBeInstanceOf(NextlyError);
-        expect((failure as NextlyError).message).toMatch(
-          /Unique on code was not applied.*Save again to apply it/
+        expect((failure as NextlyError).logContext?.op).toBe(
+          "leavingFieldSettings"
         );
-        // Recorded as the table holds it, under a new version.
+        // The state the retry starts from: values shared, companion column gone, registry behind.
         expect(await columnsOf(`${path.table}_locales`)).not.toContain("code");
-        expect(await registryCode(path.entity)).toMatchObject({
-          localized: false,
-        });
-        expect((await registryCode(path.entity))?.unique).not.toBe(true);
-        const versionAfterFailure = await schemaVersionOf(registry, slug);
-        expect(versionAfterFailure).toBeGreaterThan(versionBefore);
-        // Read at once through the runtime shape registered for the table as it is. A field
-        // group's rows are read only through the entries that embed them.
-        if (path.entity !== "fieldGroup") {
-          expect(await readContent(path.entity)).toContain("a1@example.com");
-        }
-        if (path.entity === "single") {
-          const singles: SingleEntryService =
-            current.getService("singleEntryService");
-          const rewritten = await singles.update(
-            "hero",
-            { code: "a1@example.com", views: 2 },
-            { overrideAccess: true }
-          );
-          expect(rewritten.success, JSON.stringify(rewritten)).toBe(true);
-        }
+        expect(await registryTranslatesCode(path.entity)).not.toBe(false);
 
         await query(
           `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
         );
         await path.change(change);
 
-        expect(await registryCode(path.entity)).toMatchObject({
-          localized: false,
-          unique: true,
-        });
-        // The save that applies the setting changes what is recorded, so it moves the version on:
-        // a save planned before it is refused.
-        expect(await schemaVersionOf(registry, slug)).toBeGreaterThan(
-          versionAfterFailure
-        );
+        expect(await registryTranslatesCode(path.entity)).toBe(false);
         expect(await sharedCodes(path.table)).toEqual(english);
         // The row sharing an entry's value first, then one of the same shape that does not: the
         // second is taken, so the first was refused for its value, not for its shape.
