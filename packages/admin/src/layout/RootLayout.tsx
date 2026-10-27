@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
+import { AdminPending } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
@@ -72,6 +73,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         suppressHydrationWarning
       >
         <ThemePaintScript nonce={nonce} />
+        {/* Painted with the server's HTML, so the first thing a visitor sees
+            says the admin is loading, while its code downloads. */}
+        <AdminPending />
       </div>
     );
   }

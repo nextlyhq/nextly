@@ -9,10 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
-import EditEntryPage from "@admin/pages/dashboard/entries/[slug]/[id]/index";
-import EntryVersionsPage from "@admin/pages/dashboard/entries/[slug]/[id]/versions";
-import SingleEditPage from "@admin/pages/dashboard/singles/[slug]/index";
-import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
+import { routeConfig } from "@admin/pages/registry";
 
 import {
   clearDocumentViews,
@@ -23,6 +20,15 @@ import {
   registerDocumentViews,
   routedDocumentView,
 } from "./document-view-registry";
+
+// Pages load on demand through lazyRoute, so the resolver hands back the
+// route table's own wrapper for each page. Identity is asserted against
+// those entries rather than against the raw page modules.
+const EditEntryPage = routeConfig[ROUTES.COLLECTION_ENTRY_EDIT].component;
+const EntryVersionsPage =
+  routeConfig[ROUTES.COLLECTION_ENTRY_VERSIONS].component;
+const SingleEditPage = routeConfig[ROUTES.SINGLE_EDIT].component;
+const SingleVersionsPage = routeConfig[ROUTES.SINGLE_VERSIONS].component;
 
 afterEach(() => clearDocumentViews());
 

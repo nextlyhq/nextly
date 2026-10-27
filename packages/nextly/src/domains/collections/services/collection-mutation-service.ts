@@ -108,9 +108,11 @@ import {
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
+  carryStoredPasswords,
   type FieldGroupReach,
   hasPasswordField,
   hashPasswordFieldValues,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -2144,6 +2146,47 @@ export class CollectionMutationService extends BaseService {
    * instance held inline in a translated container. A trusted write runs no
    * rule, and an update with no such rule pays nothing more.
    */
+  /**
+   * Put back in an update's `data` the stored hash of each password it leaves
+   * out of a container written whole (`carryStoredPasswords`), and return
+   * those hashes for the hashing pass to keep. `row` is the row as stored,
+   * hashes included; a translated container's stored value is the write
+   * language's companion row, read on the write's connection.
+   */
+  private async storedPasswordsCarried(args: {
+    data: Record<string, unknown>;
+    row: Record<string, unknown>;
+    fields: FieldDefinition[];
+    reach: FieldGroupReach;
+    collectionName: string;
+    entryId: string;
+    locale?: string;
+    tx?: { getDrizzle<T = unknown>(): T };
+  }): Promise<Set<string>> {
+    if (!reachesPasswordField(args.fields, args.reach)) return new Set();
+    // Off a transaction, the companion's readiness is resolved first: its
+    // read is skipped where none is known, and a translated container's
+    // stored value is on the companion row alone. A transaction's caller
+    // resolved it before opening one.
+    if (this.localization && !args.tx) {
+      await this.warmCompanionReadiness(args.collectionName);
+    }
+    const translated = this.localization
+      ? await this.readCompanionLocalizedValues(
+          args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
+          args.collectionName,
+          args.entryId,
+          resolveRequestedLocale(this.localization, args.locale)
+        )
+      : {};
+    return carryStoredPasswords(
+      args.data,
+      { ...args.row, ...translated },
+      args.fields,
+      args.reach
+    );
+  }
+
   private async storedForCarryForward(args: {
     row: Record<string, unknown>;
     fields: FieldDefinition[];
@@ -8439,6 +8482,11 @@ export class CollectionMutationService extends BaseService {
       const toUpdate = await this.entryToUpdate(params);
       if (toUpdate.answer) return toUpdate.answer;
       const { accessUser, schema, existingEntry } = toUpdate;
+      // The row as stored, apart from `existingEntry`: the read shape built
+      // from it below withholds its passwords in place, and a container held
+      // as a JSON value shares its objects, so their stored hashes are read
+      // from this copy.
+      const storedRow = detachData(existingEntry as Record<string, unknown>);
 
       // Get collection metadata to identify relation fields and hooks
       const collection = await this.collectionService.getCollection(
@@ -8635,10 +8683,21 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
       });
 
+      // A password the update leaves out of a container keeps its stored hash.
+      const reach = await this.passwordReach(fields);
       await hashPasswordFieldValues(
         finalData,
         fields,
-        await this.passwordReach(fields)
+        reach,
+        await this.storedPasswordsCarried({
+          data: finalData,
+          row: storedRow,
+          fields,
+          reach,
+          collectionName: params.collectionName,
+          entryId: String(existingEntry.id),
+          locale: params.locale,
+        })
       );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
@@ -12034,6 +12093,9 @@ export class CollectionMutationService extends BaseService {
         tableName,
         { where: fetchWhere, forUpdate: true }
       );
+      // The row as stored, apart from `existingEntry`, whose read shape below
+      // withholds its passwords in place; the stored hashes are read from it.
+      const storedRow = existingEntry ? detachData(existingEntry) : undefined;
 
       if (!existingEntry) {
         return {
@@ -12246,10 +12308,22 @@ export class CollectionMutationService extends BaseService {
         (collection as { status?: boolean }).status === true &&
         finalData.status === "published";
 
+      // A password the update leaves out of a container keeps its stored hash.
+      const reach = await this.passwordReach(fields, tx.getDrizzle());
       await hashPasswordFieldValues(
         finalData,
         fields,
-        await this.passwordReach(fields, tx.getDrizzle())
+        reach,
+        await this.storedPasswordsCarried({
+          data: finalData,
+          row: storedRow ?? existingEntry,
+          fields,
+          reach,
+          collectionName: params.collectionName,
+          entryId,
+          // A transactional update writes the default language.
+          tx,
+        })
       );
 
       // Strip an explicit `status: undefined` AFTER every mutating hook has run.
