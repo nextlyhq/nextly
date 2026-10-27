@@ -39,6 +39,7 @@ import { TranslatedPages } from "./src/collections/translated-pages";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
@@ -176,6 +177,10 @@ export default defineConfig({
     // named as test fixtures. Moves to the dev-only widget preview page once
     // there is one.
     widgetKitFixturePlugin,
+    // Always on, for the same reason: the blocks it contributes reach the
+    // editor through the committed component map. Offered only in the Add
+    // panel, named as test fixtures, for plugin-blocks.spec.ts.
+    blockFixturePlugin,
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

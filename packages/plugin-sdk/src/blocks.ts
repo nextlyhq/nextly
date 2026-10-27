@@ -332,6 +332,16 @@ export type {
 export type BlockRenderResult = ReactNode | Promise<ReactNode>;
 
 /**
+ * What a block's own inspector (`editor.component`) is given: the selected
+ * node, its props, `commit(name, value)` through the editor's own write path,
+ * and whether the block is read-only. The editor refuses a commit while it is,
+ * whatever the component does.
+ *
+ * @experimental The contract will grow with the editor's controls registry.
+ */
+export type { BlockInspectorProps } from "@nextlyhq/blocks-engine";
+
+/**
  * The rest of the definition's own vocabulary. Every one of these names a field
  * a block author fills in, so leaving them off this surface meant writing a slot
  * template, an example, or an editor entry against a type that could only be
