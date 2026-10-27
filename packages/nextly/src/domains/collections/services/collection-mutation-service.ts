@@ -552,14 +552,25 @@ interface UpdateEntryWriteParams {
 }
 
 /** The only things that differ between the two update entry points. */
+/**
+ * A row's own gate and its answer ({@link CollectionMutationService.rowVerdict}),
+ * asked before a batch's transaction opened.
+ */
+export interface RowVerdict {
+  gate: "update" | "publish" | "unpublish";
+  denied: CollectionServiceResult | null;
+}
+
 interface UpdateEntryWriteOptions {
   /**
    * Which shape of the row gate to apply. `access-service` asks
    * `checkCollectionAccess` for the whole verdict; `batch-hoisted` asks
    * nothing here, because the batch caller ran that gate once before the
-   * transaction opened. See the comment at the use site.
+   * transaction opened; a {@link RowVerdict} is this row's own gate, asked
+   * by the batch before its transaction opened. See the comment at the use
+   * site.
    */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | RowVerdict;
   /**
    * Run user hooks. All-or-nothing on purpose. Validation, access and
    * recording are NOT hooks and always run.
@@ -12177,38 +12188,26 @@ export class CollectionMutationService extends BaseService {
       // A batch-hoisted row has nothing to re-check: the batch's caller asked
       // the collection-level update gate once, and no row-ownership rule is
       // left for a safety net to compare against.
-      if (options.rowGate === "access-service") {
-        // A write that changes only the status of an entry with a lifecycle
-        // is a publish or an unpublish alone, judged by the gate its status
-        // names in place of update, whether or not the status moves.
-        const gate = await writeGateFor(
-          body,
-          "collection",
-          () => (collection as { status?: boolean }).status === true
-        );
+      if (options.rowGate !== "batch-hoisted") {
+        // Asked here, on the caller's transaction, where its caller owns it;
+        // a batch that opened its own asked it before opening it, off its
+        // connection, since a rule is the app's own code and may read the
+        // database.
+        const { gate, denied } =
+          options.rowGate === "access-service"
+            ? await this.rowVerdict(
+                params,
+                entryId,
+                body,
+                () => (collection as { status?: boolean }).status === true,
+                tx.getDrizzle()
+              )
+            : options.rowGate;
         // Handed on as the status alone: the system columns a status-only body
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
         if (gate !== "update") body = { status: body.status };
-        // The transaction API asks the access service for the whole verdict,
-        // with the caller's overrideAccess / routeAuthorized forwarded.
-        const accessDenied = await this.accessService.checkCollectionAccess({
-          collectionName: params.collectionName,
-          operation: gate,
-          entryId: entryId,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          // The route attests only an update it ran itself.
-          routeAuthorized: gate === "update" && params.routeAuthorized,
-          // See the create path: without this a narrowed scope never reaches
-          // the gate, because the transaction methods sit outside the plugin
-          // facade's re-pinning wrapper.
-          authenticatedScope: params.authenticatedScope,
-          executor: tx.getDrizzle(),
-        });
-        if (accessDenied) {
-          return accessDenied;
-        }
+        if (denied) return denied;
         if (gate !== "update") rowAllowed = gate;
       }
 
@@ -13746,9 +13745,10 @@ export class CollectionMutationService extends BaseService {
     /**
      * `access-service` where the batch could not hoist its gate: a caller
      * refused update may still change only entries' status, so each row is
-     * judged on its own.
+     * judged on its own. A {@link RowVerdict} is that judgement, asked before
+     * the batch's transaction opened.
      */
-    rowGate: "access-service" | "batch-hoisted" = "batch-hoisted"
+    rowGate: UpdateEntryWriteOptions["rowGate"] = "batch-hoisted"
   ): Promise<CollectionServiceResult<unknown>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.updateEntryWrite(tx, params, entryId, body, {
@@ -13758,6 +13758,46 @@ export class CollectionMutationService extends BaseService {
         failureMessage: "Failed to update entry",
       })
     );
+  }
+
+  /**
+   * A row's own gate and its answer: a write that changes only the status of
+   * an entry with a lifecycle asks the publish or unpublish its status names,
+   * any other update. Asked on `executor` where the caller owns a
+   * transaction, else on the pool, before any transaction opens.
+   */
+  async rowVerdict(
+    params: Pick<
+      UpdateEntryWriteParams,
+      | "collectionName"
+      | "user"
+      | "overrideAccess"
+      | "routeAuthorized"
+      | "authenticatedScope"
+    >,
+    entryId: string,
+    body: Record<string, unknown>,
+    hasLifecycle: () => boolean | Promise<boolean>,
+    executor?: Parameters<
+      CollectionAccessService["checkCollectionAccess"]
+    >[0]["executor"]
+  ): Promise<RowVerdict> {
+    const gate = await writeGateFor(body, "collection", hasLifecycle);
+    const denied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: gate,
+      entryId,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // The route attests only an update it ran itself.
+      routeAuthorized: gate === "update" && params.routeAuthorized,
+      // Without this a narrowed scope never reaches the gate, because the
+      // transaction methods sit outside the plugin facade's re-pinning
+      // wrapper.
+      authenticatedScope: params.authenticatedScope,
+      ...(executor === undefined ? {} : { executor }),
+    });
+    return { gate, denied };
   }
 
   /**

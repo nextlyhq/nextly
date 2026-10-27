@@ -38,7 +38,10 @@ import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
 import type { CollectionAccessService } from "./collection-access-service";
-import type { CollectionMutationService } from "./collection-mutation-service";
+import type {
+  CollectionMutationService,
+  RowVerdict,
+} from "./collection-mutation-service";
 import { isWriteIntegrityFailure } from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
@@ -1580,6 +1583,26 @@ export class CollectionBulkService extends BaseService {
     // its outbound event would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
+    // Each row judged on its own is asked its gate here, before the shared
+    // transaction and off its connection: a rule is the app's own code and may
+    // read the database, which a transaction holding the pool's only
+    // connection would wait on. Keyed by the row itself, so two rows naming
+    // one entry keep their own answers.
+    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
+    if (rowGate === "access-service") {
+      for (const entry of entries) {
+        rowVerdicts.set(
+          entry,
+          await this.mutationService.rowVerdict(
+            { ...params, user: accessUser },
+            entry.id,
+            entry.data,
+            () => true
+          )
+        );
+      }
+    }
+
     // The shared batch loop accumulates into one mutable state so the rollback
     // rewrite below can read the partial accounting a mid-batch abort leaves
     // behind.
@@ -1592,7 +1615,7 @@ export class CollectionBulkService extends BaseService {
           params,
           transitionAuth,
           entries,
-          { batchSize, stopOnError, skipHooks, rowGate },
+          { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
           state
         );
       });
@@ -2156,6 +2179,8 @@ export class CollectionBulkService extends BaseService {
       skipHooks: boolean;
       /** How each row is gated; see {@link statusRowsGate}. */
       rowGate: "access-service" | "batch-hoisted";
+      /** Each row's own gate, asked before the transaction opened. */
+      rowVerdicts?: ReadonlyMap<BulkUpdateEntry, RowVerdict>;
     },
     state: LegacyBatchState
   ): Promise<void> {
@@ -2164,15 +2189,15 @@ export class CollectionBulkService extends BaseService {
       entries,
       options,
       state,
-      async ({ id, data }) => {
+      async entry => {
         const updateResult =
           await this.mutationService.updateSingleEntryInTransaction(
             tx,
             { ...params, transitionAuth },
-            id,
-            data,
+            entry.id,
+            entry.data,
             options.skipHooks,
-            options.rowGate
+            options.rowVerdicts?.get(entry) ?? options.rowGate
           );
         return updateResult.success && updateResult.data
           ? {
