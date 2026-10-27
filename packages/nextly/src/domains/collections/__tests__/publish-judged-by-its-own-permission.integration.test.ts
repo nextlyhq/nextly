@@ -12,7 +12,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
@@ -36,6 +36,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 
 type PluginServices = PluginContext["services"];
 
@@ -47,7 +48,7 @@ const HOME = "home";
 const FILTERED = "filtered";
 /** May read, publish and unpublish, and not update. */
 const PUBLISHER = "publisher-1";
-/** May read and update, and not publish. */
+/** May read and update posts and notes, and not publish. */
 const EDITOR = "editor-1";
 /** May read, and not update, publish or unpublish. */
 const READER = "reader-1";
@@ -61,13 +62,41 @@ let current: TestNextly | undefined;
 let services: PluginServices | undefined;
 /** The data each update's hooks were handed, in order. */
 let handedToHooks: unknown[] = [];
+/** How often each counted rule was asked. */
+let ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
+/** Whether the filtered collection's publish rule refuses the first ask. */
+let refuseFirstPublish = false;
+/** How many transactions a case's wrapped adapter has open. */
+let transactionDepth = 0;
+/** For each ask of the filtered publish rule, whether a transaction was open. */
+let publishAskedInside: boolean[] = [];
+/**
+ * How a `beforeChange` hook rewrites an update, if at all: it names a field,
+ * keeping the status or dropping it.
+ */
+let hookEdits: "keeps-status" | "drops-status" | undefined;
+/** The value the rewriting hook sets. */
+const SET_BY_A_HOOK = "set by a hook";
+
+/** Rewrites `data` as {@link hookEdits} says, naming `field`. */
+function editByHook(data: Record<string, unknown>, field: string): void {
+  if (hookEdits === undefined) return;
+  data[field] = SET_BY_A_HOOK;
+  if (hookEdits === "drops-status") delete data.status;
+}
 
 afterEach(async () => {
   resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
   services = undefined;
+  vi.restoreAllMocks();
   handedToHooks = [];
+  ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
+  refuseFirstPublish = false;
+  transactionDepth = 0;
+  publishAskedInside = [];
+  hookEdits = undefined;
   // Single hooks register into the global registry.
   resetHookRegistry();
 });
@@ -96,6 +125,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               return args;
             },
           ],
+          beforeChange: [
+            context => {
+              if (context.operation === "update") {
+                editByHook(context.data as Record<string, unknown>, "title");
+              }
+              return context.data;
+            },
+          ],
         },
         fields: [text({ name: "title" })],
       }),
@@ -109,7 +146,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         // An update rule answering a filter, which no write applies: an edit
         // is refused, whoever asks.
         access: {
-          update: (() => ({ title: { equals: "never" } })) as never,
+          update: (() => {
+            ruleAsks.filteredUpdate += 1;
+            return { title: { equals: "never" } };
+          }) as never,
+          publish: () => {
+            ruleAsks.filteredPublish += 1;
+            publishAskedInside.push(transactionDepth > 0);
+            return !(refuseFirstPublish && ruleAsks.filteredPublish === 1);
+          },
         },
         fields: [text({ name: "title" })],
       }),
@@ -118,10 +163,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineSingle({
         slug: HOME,
         status: true,
+        // Allows, and counts how often it is asked.
+        access: {
+          publish: () => {
+            ruleAsks.homePublish += 1;
+            return true;
+          },
+        },
         hooks: {
           beforeChange: [
             context => {
               handedToHooks.push(context.data);
+              editByHook(context.data as Record<string, unknown>, "headline");
               return context.data;
             },
           ],
@@ -136,8 +189,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   await userWhoMay(current, PUBLISHER, "read", [POSTS, NOTES, HOME]);
   await grantTo(current, PUBLISHER, "publish", [POSTS, NOTES, HOME]);
   await grantTo(current, PUBLISHER, "unpublish", [POSTS, NOTES, HOME]);
-  await userWhoMay(current, EDITOR, "read", [POSTS]);
-  await grantTo(current, EDITOR, "update", [POSTS]);
+  await userWhoMay(current, EDITOR, "read", [POSTS, NOTES]);
+  await grantTo(current, EDITOR, "update", [POSTS, NOTES]);
   await userWhoMay(current, MAINTAINER, "read", [FILTERED]);
   for (const action of ["update", "publish"]) {
     await grantTo(current, MAINTAINER, action, [FILTERED]);
@@ -724,5 +777,335 @@ describe.each(getConfiguredTestDialects())(
         await rest(MAINTAINER, "POST", [...entry(viaRoute), "publish-all"], {})
       ).toBe(403);
     });
+
+    it("admits publishing every language of a collection with no lifecycle over REST on update", async () => {
+      await boot(dialect);
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      const id = String((item as { id: unknown }).id);
+
+      // Nothing to publish, which a caller who may update is told, as before.
+      expect(
+        await rest(
+          EDITOR,
+          "POST",
+          ["collections", NOTES, "entries", id, "publish-all"],
+          {}
+        )
+      ).toBe(200);
+      expect((await stored(NOTES, id)).status).toBe("open");
+    });
+
+    it("tells only a caller who may update that a collection with no lifecycle has nothing to publish", async () => {
+      await boot(dialect);
+      const { item } = await trusted().create({
+        collection: NOTES,
+        data: { title: "n", status: "open" },
+      } as never);
+      const id = String((item as { id: unknown }).id);
+      const publishAll = (userId: string) =>
+        (
+          current!.getService("collectionsHandler") as CollectionsHandler
+        ).publishAllLocales({
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: false,
+          user: { id: userId } as never,
+        });
+
+      // A caller who may not update learns nothing, the publisher included.
+      expect((await publishAll(PUBLISHER)).success).toBe(false);
+      // The control: one who may update is told nothing moves.
+      expect((await publishAll(EDITOR)).success).toBe(true);
+      expect((await stored(NOTES, id)).status).toBe("open");
+    });
+
+    it("asks no update rule of a batch whose rows change only the status", async () => {
+      await boot(dialect);
+      const a = await draft(FILTERED, "a");
+      const b = await draft(FILTERED, "b");
+
+      // Each row is judged by the gate its status names; the update rule,
+      // which judges none of them, is not asked.
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [
+          { id: a, data: { status: "published" } },
+          { id: b, data: { status: "published" } },
+        ],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(2);
+      expect(ruleAsks.filteredUpdate).toBe(0);
+    });
+
+    it("asks an entry's publish rule once of a status-only write, its hooks run between", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+
+      await as(MAINTAINER).update({
+        collection: FILTERED,
+        id,
+        data: { status: "published" },
+      } as never);
+
+      expect((await stored(FILTERED, id)).status).toBe("published");
+      expect(ruleAsks.filteredPublish).toBe(1);
+    });
+
+    it("asks a Single's publish rule once of a status-only write, its hooks run between", async () => {
+      await boot(dialect);
+      await trusted().updateSingle({
+        slug: HOME,
+        data: { headline: "h", status: "draft" },
+      } as never);
+      ruleAsks.homePublish = 0;
+      const singles = current!.getService("singleEntryService") as unknown as {
+        update: (
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ) => Promise<{ success: boolean }>;
+      };
+
+      const published = await singles.update(
+        HOME,
+        { status: "published" },
+        { user: { id: PUBLISHER }, overrideAccess: false }
+      );
+
+      expect(published.success).toBe(true);
+      expect(ruleAsks.homePublish).toBe(1);
+    });
+
+    it("reads a status-only body once, so its gate and its write agree", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      // A body whose status is computed on each read: published twice, then
+      // a draft. Read more than once, the gate would judge one status and
+      // the write store another.
+      let reads = 0;
+      const body = {
+        get status() {
+          reads += 1;
+          return reads <= 2 ? "published" : "draft";
+        },
+      };
+
+      await as(PUBLISHER).update({
+        collection: POSTS,
+        id,
+        data: body,
+      } as never);
+
+      expect(reads).toBe(1);
+      expect((await stored(POSTS, id)).status).toBe("published");
+    });
+
+    it("locks no row of a batch the caller's gate refuses", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      // Every row read under a lock inside a transaction, by table.
+      const locked: string[] = [];
+      const adapter = current!.adapter as unknown as {
+        transaction: (
+          work: (tx: Record<string, unknown>) => Promise<unknown>,
+          ...rest: unknown[]
+        ) => Promise<unknown>;
+      };
+      const open = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) =>
+        open(
+          async tx => {
+            const select = (tx.selectOne as (...a: unknown[]) => unknown).bind(
+              tx
+            );
+            tx.selectOne = (
+              table: string,
+              options?: { forUpdate?: boolean }
+            ) => {
+              if (options?.forUpdate) locked.push(table);
+              return select(table, options);
+            };
+            return work(tx);
+          },
+          ...rest
+        )
+      );
+
+      // The editor may update and not publish: the status-only row is refused
+      // by the publish gate, before its row is locked.
+      const result = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: { status: "published" } }],
+        asPlugin(EDITOR)
+      );
+
+      expect(result.failed).toBe(1);
+      expect(locked).toEqual([]);
+      expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("reads each batch row's body once, so its strategy and its write agree", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      let reads = 0;
+      const body = {
+        get status() {
+          reads += 1;
+          return "published";
+        },
+      };
+
+      const result = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: body }],
+        asPlugin(PUBLISHER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect(reads).toBe(1);
+    });
+
+    it("lets a batch row's own lifecycle answer stand at its transition", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+      // A rule that refuses its first ask and allows after: asked once for the
+      // batch and again for the row, the row would pass its gate, run its
+      // hooks, and be refused at its transition by the first answer.
+      refuseFirstPublish = true;
+
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [{ id, data: { status: "published" } }],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect((await stored(FILTERED, id)).status).toBe("published");
+    });
+
+    it("asks a batch row's own lifecycle rule before the batch's transaction opens", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+      // A rule is the app's own code and may read the database: asked inside
+      // the batch's transaction, it would wait on the connection that
+      // transaction holds.
+      const adapter = current!.adapter as unknown as {
+        transaction: (...args: unknown[]) => Promise<unknown>;
+      };
+      const open = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementation(async (...args) => {
+        transactionDepth += 1;
+        try {
+          return await open(...args);
+        } finally {
+          transactionDepth -= 1;
+        }
+      });
+
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [{ id, data: { status: "published" } }],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect(publishAskedInside.length).toBeGreaterThan(0);
+      expect(publishAskedInside).not.toContain(true);
+    });
+
+    describe.each(["keeps-status", "drops-status"] as const)(
+      "a hook that names a field, and %s",
+      edits => {
+        it("asks update of an entry's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          const id = await draft(POSTS, "t");
+          hookEdits = edits;
+
+          await expect(
+            as(PUBLISHER).update({
+              collection: POSTS,
+              id,
+              data: { status: "published" },
+            } as never)
+          ).rejects.toThrow();
+          expect(await stored(POSTS, id)).toMatchObject({
+            title: "t",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: the hook does name the field on this write.
+          await trusted().update({
+            collection: POSTS,
+            id,
+            data: { status: "published" },
+          } as never);
+          expect((await stored(POSTS, id)).title).toBe(SET_BY_A_HOOK);
+        });
+
+        it("asks update of a batch row's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          const id = await draft(POSTS, "t");
+          hookEdits = edits;
+
+          const result = await pluginServices().collections.updateMany(
+            POSTS,
+            [{ id, data: { status: "published" } }],
+            asPlugin(PUBLISHER)
+          );
+
+          expect(result.failed).toBe(1);
+          expect(await stored(POSTS, id)).toMatchObject({
+            title: "t",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: without the hook's edit the row publishes.
+          hookEdits = undefined;
+          const plain = await pluginServices().collections.updateMany(
+            POSTS,
+            [{ id, data: { status: "published" } }],
+            asPlugin(PUBLISHER)
+          );
+          expect(plain.successful).toBe(1);
+        });
+
+        it("asks update of a Single's status-only write, and writes nothing", async () => {
+          await boot(dialect);
+          await trusted().updateSingle({
+            slug: HOME,
+            data: { headline: "h", status: "draft" },
+          } as never);
+          const home = async () =>
+            (await trusted().findSingle({ slug: HOME } as never)) as {
+              headline?: unknown;
+              status?: unknown;
+            };
+          hookEdits = edits;
+
+          expect(
+            await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+              status: "published",
+            })
+          ).toBe(403);
+          expect(await home()).toMatchObject({
+            headline: "h",
+            status: "draft",
+          });
+
+          // POPULATION CONTROL: without the hook's edit the Single publishes.
+          hookEdits = undefined;
+          expect(
+            await rest(PUBLISHER, "PATCH", ["singles", HOME], {
+              status: "published",
+            })
+          ).toBe(200);
+        });
+      }
+    );
   }
 );

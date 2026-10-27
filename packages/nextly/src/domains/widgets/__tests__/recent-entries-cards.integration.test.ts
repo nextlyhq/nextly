@@ -54,7 +54,8 @@ const recent = (
 ): WidgetPlacement => ({
   id,
   widgetId: "core/recent-entries",
-  width: "half",
+  w: 6,
+  h: 4,
   removed: false,
   config,
 });

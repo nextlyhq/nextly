@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { clearWidgets, getWidget } from "../../registry";
-import { isWidgetWidth } from "../../widths";
 import {
   cardQueryFor,
   clearDeclaredWidgets,
@@ -54,8 +53,11 @@ describe("registering declared widgets", () => {
       archetype: "bars",
       sketch: "bars",
       requiredPermission: "read-orders",
-      allowedWidths: ["third", "half", "twoThirds"],
-      defaultWidth: "half",
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 8, h: 6 },
+      },
       serverData: true,
     });
     // Data only: no query, no data function and no empty test reach what the admin is sent,
@@ -63,11 +65,12 @@ describe("registering declared widgets", () => {
     expect(published?.query).toBeUndefined();
     expect(JSON.parse(JSON.stringify(published))).toEqual(published);
     expect(Object.keys(published ?? {})).not.toContain("data");
-    // The widths as declared, a gap included: `recent-orders` takes half and full, not two thirds.
-    expect(getWidget("acme/recent-orders")?.allowedWidths).toEqual([
-      "half",
-      "full",
-    ]);
+    // Each widget's own size, in grid units, as it declares it.
+    expect(getWidget("acme/recent-orders")?.size).toEqual({
+      default: { w: 12, h: 5 },
+      min: { w: 6, h: 4 },
+      max: { w: 12, h: 8 },
+    });
     // A declared empty state: its words and action are published, its test is not, and the
     // action's permission is the gate's own name.
     registerWidgetDeclarations([
@@ -98,40 +101,29 @@ describe("registering declared widgets", () => {
     });
   });
 
-  it("keeps a widget drawn by its own component but offers it nowhere yet, saying so once", () => {
-    // 🔴 The admin does not yet hand a widget's own component the props its
-    // declaration types, so a published one would throw in its card. It is
-    // kept and checked like any other, and left out of what the admin reads.
+  it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-    expect(getWidget("acme/revenue")).toBeUndefined();
-    expect(declaredWidget("acme/revenue")).toMatchObject({
-      owner: SHOP,
-      declaration: revenue,
+    // The admin hands its component the props its declaration types, so it is
+    // offered like any declared widget: drawn by that component, its data
+    // built on the server.
+    expect(getWidget("acme/revenue")).toMatchObject({
+      archetype: "custom",
+      component: (revenue.display as { component: string }).component,
+      serverData: true,
     });
-    // Its author is told why the card never appears, once per process.
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toMatchObject({
-      kind: "widget-component-display-held",
-      widget: "acme/revenue",
-      plugin: SHOP,
-    });
-    // The control: a core display beside it is offered as declared.
-    registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState] },
-    ]);
-    expect(getWidget("acme/orders-by-state")).toBeDefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("holds a widget drawn by its own component in production too, without the warning", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    try {
-      registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-      expect(getWidget("acme/revenue")).toBeUndefined();
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+  it("publishes hidesWhenEmpty only for a widget that declares it", () => {
+    registerWidgetDeclarations([
+      {
+        owner: SHOP,
+        declarations: [{ ...revenue, hidesWhenEmpty: true }, ordersByState],
+      },
+    ]);
+    expect(getWidget("acme/revenue")?.hidesWhenEmpty).toBe(true);
+    // The control: a widget that says nothing is not published as hiding.
+    expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {
@@ -176,25 +168,32 @@ describe("registering declared widgets", () => {
     );
   });
 
-  it("keeps a declared set of widths with gaps, in core's own words", () => {
-    // Two widths that are not neighbours: no smallest-to-largest range could
-    // say this, and the set is read back exactly as declared, in the
-    // vocabulary a stored placement and the admin use.
-    const gapped = defineWidget({
-      id: "acme/gapped",
-      title: "Gapped",
-      description: "Allowed at a quarter or at two thirds, nothing between",
+  it("publishes a size stated by its default alone with every end filled in", () => {
+    // 🔴 Filled in once, here, by the grid's own rule: the smallest size is
+    // the default, the largest the full width at the default's height. A
+    // reader of the registry then has no missing end to fill its own way.
+    const small = defineWidget({
+      id: "acme/small",
+      title: "Small",
+      description: "Starts small and may grow only wider",
       category: "Test",
-      widths: ["quarter", "twoThirds"],
-      width: "quarter",
+      size: { default: { w: 3, h: 2 } },
       data: async () => ({ total: 3 }),
       display: "metric",
     });
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [gapped] }]);
-    const widths = declaredWidget("acme/gapped")?.declaration.widths;
-    expect(widths).toEqual(["quarter", "twoThirds"]);
-    // Every one is a width the arrangement itself stores.
-    expect(widths?.every(isWidgetWidth)).toBe(true);
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [small] }]);
+    const published = getWidget("acme/small")?.size;
+    expect(published).toEqual({
+      default: { w: 3, h: 2 },
+      min: { w: 3, h: 2 },
+      max: { w: 12, h: 2 },
+    });
+    // A copy: what is published shares no object with the declaration kept
+    // for the server.
+    expect(published?.default).not.toBe(small.size.default);
+    expect(declaredWidget("acme/small")?.declaration.size).toEqual({
+      default: { w: 3, h: 2 },
+    });
   });
 
   it("registers nothing when any declaration cannot work, and names every fault", () => {

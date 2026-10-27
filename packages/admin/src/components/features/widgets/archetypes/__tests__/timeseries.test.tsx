@@ -17,13 +17,14 @@ import type {
 
 import { timeseriesAccepts, timeseriesBody } from "../timeseries";
 import { CardEmpty } from "../../frame/states";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (): DashboardWidget =>
   ({
     id: "acme/over-time",
     title: "Entries over time",
     archetype: "timeseries",
-    size: "lg",
+    size: gridBounds(6),
     query: {
       source: "collection:posts",
       op: "timeseries",

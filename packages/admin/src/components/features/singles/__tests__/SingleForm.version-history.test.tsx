@@ -93,7 +93,7 @@ vi.mock(
 // The language panel is where the withheld-write decision lands for locale
 // actions: a stand-in records what the editor actually handed it.
 vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
-  LanguagePanel: (props: { actionsDisabled?: boolean }) => {
+  DocumentLanguagePanel: (props: { actionsDisabled?: boolean }) => {
     languagePanelProps.current = props;
     return null;
   },

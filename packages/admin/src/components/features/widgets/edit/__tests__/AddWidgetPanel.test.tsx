@@ -32,7 +32,7 @@ const ROWS: AddPanelRow[] = [
     name: "Entries",
     description: "How many entries there are.",
     category: "Content",
-    widths: "¼ to Full wide",
+    widths: "3 to 12 columns wide",
     placed: 0,
     action: { kind: "add", widgetId: "core/entries" },
   },
@@ -40,7 +40,7 @@ const ROWS: AddPanelRow[] = [
     key: "core/recent",
     section: "overview",
     name: "Recent activity",
-    widths: "½ to Full wide",
+    widths: "6 to 12 columns wide",
     placed: 2,
     action: { kind: "add-another", widgetId: "core/recent" },
   },
@@ -138,7 +138,7 @@ describe("each row's control", () => {
       screen.getByRole("button", { name: "Add back Old notes" })
     ).toBeInTheDocument();
     expect(screen.getByTestId("add-panel-row-core/recent")).toHaveTextContent(
-      "½ to Full wide · 2 on your dashboard"
+      "6 to 12 columns wide · 2 on your dashboard"
     );
     const team = screen.getByTestId("add-panel-row-core/team");
     expect(team).toHaveTextContent("On dashboard");

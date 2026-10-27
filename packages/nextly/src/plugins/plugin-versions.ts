@@ -55,6 +55,10 @@ import {
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
 
+import {
+  pluginVersionPins,
+  type PluginVersionPins,
+} from "./plugin-version-pins";
 import { resolveServiceOpts, type ServiceOpts } from "./service-opts";
 
 /** The history reads a plugin is handed as they are. */
@@ -106,6 +110,12 @@ export interface PluginVersionWrites {
     input: AutosaveInput,
     opts?: ServiceOpts
   ): Promise<AutosaveWriteResult>;
+  /**
+   * @experimental Version pins on the plugin's own transaction: register a
+   * holder, then pin, release and list its slots in `ctx.db.transaction` or
+   * `ctx.services.collections.withTransaction`.
+   */
+  pins: PluginVersionPins;
 }
 
 /** A plugin's options, as every plugin service resolves them. */
@@ -393,9 +403,12 @@ function refuseUnnamedKey(
 
 /** `ctx.services.versions`' writes, over the host's versions service. */
 export function pluginVersionWrites(
-  service: () => VersionsService
+  service: () => VersionsService,
+  /** The plugin whose namespace its pin holders are named in. */
+  pluginName?: string
 ): PluginVersionWrites {
   return {
+    pins: pluginVersionPins(pluginName),
     setLabel(ref, versionNo, label, by, opts) {
       return asCalled(opts, async resolved => {
         const writer = await checkedWriter(ref, resolved, "label", {

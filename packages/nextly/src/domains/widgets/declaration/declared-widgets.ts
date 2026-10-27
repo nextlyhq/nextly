@@ -25,6 +25,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
+import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import type { WidgetQuery } from "../query";
 import {
   deregisterWidget,
@@ -33,7 +34,6 @@ import {
   widgetSource,
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
-import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
 import { declaredQueryProblem } from "./displays";
@@ -65,20 +65,17 @@ export interface DeclaredWidget {
 /** The fields of a declaration this module reads, checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
-  /**
-   * The widths the widget allows, in core's own words, gaps included: what
-   * publishing it to the registry carries through as its allowed widths.
-   */
-  readonly widths: readonly WidgetWidth[];
+  /** The card's size and the bounds it may be resized within, in grid units. */
+  readonly size: WidgetSizeDeclaration;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
   readonly display?: unknown;
-  /** What publishing reads: the card's words, its starting width, and its gates. */
+  /** What publishing reads: the card's words and its gates. */
   readonly title: string;
   readonly description: string;
   readonly category: string;
-  readonly width: WidgetWidth;
   readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
   readonly permission?: string;
   readonly sketch?: WidgetDefinition["sketch"];
   readonly empty?: {
@@ -124,9 +121,8 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * data function, the query function and the empty test stay on the server,
  * and a field a declaration gains later reaches the browser only once it is
  * named here. `serverData` says core builds the card's data, so there is no
- * query. The widths are carried as declared, gaps included, in the
- * arrangement's own words; the size is only the span of the starting width,
- * for what still reads sizes.
+ * query. The size is published with every end filled in (`sizeBounds`), the
+ * one reading of a declared size, so no reader fills a missing end its own way.
  */
 function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
   const display = declaration.display;
@@ -147,12 +143,9 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
           component: (display as { component: string }).component,
         }),
     ...(settings.length > 0 ? { settings } : {}),
-    defaultSize: sizeFromWidth(declaration.width),
-    allowedWidths: WIDGET_WIDTHS.filter(width =>
-      declaration.widths.includes(width)
-    ),
-    defaultWidth: declaration.width,
+    size: sizeBounds(declaration.size),
     ...(declaration.several === true ? { allowsSeveral: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
     ...(declaration.permission === undefined
       ? {}
       : { requiredPermission: declaration.permission }),
@@ -240,10 +233,9 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
 
 const WARNED_LEGACY_IDS = new Set<string>();
 
-/** Forgets which shared old-shape ids, and which held widgets, were warned about, for tests. */
+/** Forgets which shared old-shape ids were warned about, for tests. */
 export function resetLegacyIdWarnings(): void {
   WARNED_LEGACY_IDS.clear();
-  WARNED_HELD_COMPONENT_WIDGETS.clear();
 }
 
 /**
@@ -277,17 +269,32 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
  * Checks every declaration, then keeps them all, or refuses startup naming
  * every fault and keeps none.
  *
- * `legacy` is the ids each plugin declares in today's shape.
+ * `legacy` is the ids each plugin declares in today's shape. `references`
+ * checks what names these widgets (the site config's dashboard, a plugin's
+ * suggestions), handed each well-formed declaration as the definition it
+ * becomes and the groups as they were snapshotted, so ownership is read from
+ * the same copy that is kept, and its faults are refused with the
+ * declarations' own, at once. `checkedOnly` are declarations checked with the
+ * rest, duplicates and references included, but not kept or published.
  */
 export function registerWidgetDeclarations(
   given: readonly DeclaredWidgetGroup[],
-  legacy: readonly LegacyWidgetIds[] = []
+  legacy: readonly LegacyWidgetIds[] = [],
+  references?: (
+    declared: ReadonlyMap<string, WidgetDefinition>,
+    groups: readonly DeclaredWidgetGroup[]
+  ) => readonly WidgetDeclarationFault[],
+  checkedOnly: readonly DeclaredWidgetGroup[] = []
 ): void {
   const groups = given.map(snapshot);
+  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
-    ...collectWidgetDeclarationFaults(groups),
-    ...sharedWithLegacy(groups, legacy),
+    ...collectWidgetDeclarationFaults(checked),
+    ...sharedWithLegacy(checked, legacy),
   ];
+  if (references !== undefined) {
+    faults.push(...references(wellFormedDefinitions(checked, faults), checked));
+  }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);
 
@@ -302,47 +309,33 @@ export function registerWidgetDeclarations(
       });
       // Published as it is kept, so every declared widget the admin is offered
       // has a declaration here to answer its cards from. One drawn by its own
-      // component is kept and checked but not published: the admin does not
-      // yet hand a widget's own component the props its declaration types
-      // (`WidgetProps`), and a component reading them would throw in the card.
-      if (drawnByOwnComponent(declaration)) {
-        warnComponentWidgetHeld(declaration, owner);
-        continue;
-      }
+      // component is published as a custom card core answers: the admin hands
+      // that component the props its declaration types (`WidgetProps`).
       registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
 }
 
-/** Whether a declaration is drawn by its own component rather than a core display. */
-function drawnByOwnComponent(declaration: DeclaredWidgetShape): boolean {
-  return typeof declaration.display !== "string";
-}
-
-const WARNED_HELD_COMPONENT_WIDGETS = new Set<string>();
-
 /**
- * Says, once per process for each widget and only in development, that a
- * widget drawn by its own component is not offered yet, so its author is not
- * left looking for a card that never appears.
+ * The definitions the declarations no fault names would become, by id, so a
+ * reference to a faulty one reads as unknown rather than as a second fault
+ * about the same mistake.
  */
-function warnComponentWidgetHeld(
-  declaration: DeclaredWidgetShape,
-  owner: string
-): void {
-  if (process.env.NODE_ENV === "production") return;
-  if (WARNED_HELD_COMPONENT_WIDGETS.has(declaration.id)) return;
-  WARNED_HELD_COMPONENT_WIDGETS.add(declaration.id);
-  getNextlyLogger().warn({
-    kind: "widget-component-display-held",
-    widget: declaration.id,
-    plugin: owner,
-    message:
-      `"${declaration.id}" (${owner}) declares display.component. Widgets ` +
-      `drawn by their own component are not offered on the dashboard yet, ` +
-      `so it is left out of the add panel until they are; widgets with a ` +
-      `core display are offered as declared.`,
-  });
+function wellFormedDefinitions(
+  groups: readonly DeclaredWidgetGroup[],
+  faults: readonly WidgetDeclarationFault[]
+): ReadonlyMap<string, WidgetDefinition> {
+  const faulty = new Set(faults.map(fault => fault.widget));
+  const definitions = new Map<string, WidgetDefinition>();
+  for (const { declarations } of groups) {
+    if (!Array.isArray(declarations)) continue;
+    for (const raw of declarations as readonly unknown[]) {
+      const id = (raw as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || faulty.has(id)) continue;
+      definitions.set(id, toDefinition(raw as DeclaredWidgetShape));
+    }
+  }
+  return definitions;
 }
 
 /** Every declared widget, in the order startup kept them. */

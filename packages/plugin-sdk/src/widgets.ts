@@ -32,3 +32,11 @@ export type {
   WidgetResultField,
   WidgetSlot,
 } from "nextly/widget-result";
+
+/**
+ * @experimental What a widget declared with `defineWidget` and drawn by its own
+ * component is handed (`WidgetProps<typeof widget>`), its card's size, and its
+ * data's type. Types only: re-exported from core, which declares them.
+ */
+export type { WidgetData, WidgetProps } from "nextly";
+export type { WidgetRenderSize } from "nextly/widget-result";
