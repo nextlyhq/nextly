@@ -476,8 +476,9 @@ function nullAdvice(operator: string): string {
  * Validating one read of a filter and translating another would let a getter
  * or a proxy answer the check with a restrictive value and the translator
  * with none. Each property is read exactly once here, and both steps then
- * work on the copy. Plain objects and lists are copied; every other value,
- * dates included, is kept as it is for the shape check to judge. A filter
+ * work on the copy. Plain objects, lists and dates are copied, a date as a
+ * new one at the same moment, since a date can be changed after it is read;
+ * every other value is kept as it is for the shape check to judge. A filter
  * nested past any real need is refused rather than copied without end.
  */
 export function snapshotFilter<T>(value: T): T {
@@ -503,6 +504,7 @@ function copyFilterValue(value: unknown, depth: number): unknown {
     }
     return list;
   }
+  if (value instanceof Date) return new Date(value.getTime());
   if (!isPlainObject(value)) return value;
   const copy: Record<string, unknown> = {};
   for (const key of Object.keys(value)) {

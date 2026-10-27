@@ -10,7 +10,6 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import {
   useMemo,
@@ -28,6 +27,8 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import { CardGrowContext, grownRows } from "../frame/grow";
+import type { AnswerSize } from "../frame/tier";
 import type { MoveDirection } from "../layout-editor";
 import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
 import {
@@ -93,8 +94,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
-    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
-    answerTier?: SizeTier;
+    /** The size the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerSize?: AnswerSize;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
@@ -477,6 +478,11 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
+  // The body height the card's content has asked for while its reader shows more of it
+  // (`frame/grow`), and the rows that holds. Its stored rows in customise mode, where the
+  // arrangement is what is being edited.
+  const [contentHeight, setContentHeight] = useState<number | undefined>();
+  const rows = isEditing ? size.h : grownRows(size.h, contentHeight);
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
@@ -518,7 +524,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(size, isEditing)}
-      style={cardRowStyle(size.h)}
+      style={cardRowStyle(rows)}
     >
       <CellEditActions actions={editActions} />
       {/* Mounted whenever the widget offers settings, not only while
@@ -532,11 +538,13 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           onOpenChange={setSettingsOpen}
         />
       ) : null}
-      <CardBody
-        {...{ widget, placement, headerAction, data, isEditing }}
-        subtitle={heading.subtitle}
-        quick={quick.inline}
-      />
+      <CardGrowContext.Provider value={setContentHeight}>
+        <CardBody
+          {...{ widget, placement, headerAction, data, isEditing }}
+          subtitle={heading.subtitle}
+          quick={quick.inline}
+        />
+      </CardGrowContext.Provider>
     </DraggableWidgetCell>
   );
 }

@@ -22,6 +22,11 @@ export interface Role {
   type: "System" | "Custom";
   permissions: string[];
   slug?: string;
+  /**
+   * Whether the role may be given to a person or a key, or built on by
+   * another role. False for the Public role. See `assignableRoles`.
+   */
+  assignable?: boolean;
 }
 
 // Simple API response interface
@@ -42,6 +47,8 @@ export interface ApiRole {
   level: number;
   isSystem: boolean;
   description?: string;
+  /** False for a role that can't be given to anyone or inherited. */
+  assignable?: boolean;
 }
 
 export interface ApiRoleCreatePayload {

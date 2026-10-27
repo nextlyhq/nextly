@@ -11,6 +11,7 @@
  * @module components/features/widgets/frame/list-slot
  */
 
+import type { ListDensity } from "nextly/config";
 import type {
   WidgetComponentProps,
   WidgetResult,
@@ -21,7 +22,8 @@ import type { JSX } from "react";
 import { useNowTick } from "@admin/hooks/useNowTick";
 
 import { FrameState, readSlot } from "./card-state";
-import { rowsDrawn, useCardTier, useRowsTier } from "./tier";
+import { useListDensity } from "./list-rows";
+import { useCardTier, useRowsDrawn } from "./tier";
 
 /** A list answer, the one shape these cards are drawn from. */
 export type ListAnswer = Extract<WidgetResult, { op: "list" }>;
@@ -77,13 +79,16 @@ export function useListCard({
 }: Pick<WidgetComponentProps, "slot" | "isFetching" | "query" | "onRetry">): {
   tier: NonNullable<ReturnType<typeof useCardTier>>;
   drawn: number;
+  /** The density the card's rows are drawn at. */
+  density: ListDensity;
   now: number;
   read: ListSlotReading;
 } {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
+  const density = useListDensity();
+  const drawn = useRowsDrawn(tier, query?.limit, density);
   const now = useNowTick();
   const read = readListSlot({ slot, isFetching, rows: drawn, onRetry });
-  return { tier, drawn, now, read };
+  return { tier, drawn, density, now, read };
 }

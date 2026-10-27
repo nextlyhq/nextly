@@ -28,6 +28,16 @@ export const PUBLIC_ROLE_SLUG = "public";
 export const PUBLIC_ROLE_META_KEY = "public-role-created";
 
 /**
+ * Whether a role may be given to a person or a key, or joined to another
+ * role's inheritance: every role but the Public role, which
+ * {@link refuseLinkingPublicRole} refuses for each. Sent with each role so a
+ * screen offering roles to pick from leaves out the one it would be refused.
+ */
+export function isAssignableRole(role: { slug: string }): boolean {
+  return role.slug !== PUBLIC_ROLE_SLUG;
+}
+
+/**
  * Refuses, as a built-in role's refusal, a change that would give the Public
  * role to someone (`assign`) or join it to inheritance (`inherit`), when any
  * of `roleIds` is the Public role. Read on `db`, by the dialect it reads.
@@ -246,4 +256,14 @@ async function moveAndSay(
   logger.warn(
     `A role of this site's own had the slug "${PUBLIC_ROLE_SLUG}", which the built-in Public role now holds, so it was moved to "${moved}". Its name, holders, permissions and inheritance are unchanged. Code access rules that check the role slug \`${PUBLIC_ROLE_SLUG}\` must now check \`${moved}\`.`
   );
+}
+
+/**
+ * Whether boot seeding has made the Public role and recorded it. Until then
+ * the role on the slug may still be a site's own, waiting to be moved off it.
+ */
+export async function publicRoleMade(meta: {
+  get<T>(key: string): Promise<T | null>;
+}): Promise<boolean> {
+  return (await meta.get<unknown>(PUBLIC_ROLE_META_KEY)) === MADE;
 }

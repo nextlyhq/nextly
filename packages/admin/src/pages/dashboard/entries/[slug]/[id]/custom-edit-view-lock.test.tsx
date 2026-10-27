@@ -89,6 +89,12 @@ let readOnlyForReader = false;
 vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
   useReadOnlyForReader: () => readOnlyForReader,
 }));
+// The requests judged in other languages: allowed, so these cases stay
+// about the claim.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: () => true,
+  useAsksTranslationStatus: () => false,
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));
@@ -315,9 +321,8 @@ describe("a custom collection edit view", () => {
 
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
-    expect(
-      screen.getByText(/Failed to load entry:\s*Not found\./)
-    ).toBeInTheDocument();
+    // The server's message as it is, with nothing put in front of it.
+    expect(screen.getByRole("alert")).toHaveTextContent(/^Not found\.$/);
     expect(screen.queryByTestId("document-lock-banner")).toBeNull();
     expect(claimRequest()).toMatchObject({ enabled: false });
   });
