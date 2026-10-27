@@ -628,8 +628,9 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * read judges it.
  *
  * Returns what the read rules removed: top-level keys, and dotted paths below
- * them (`banner.secret`), so a comparison can say a field is hidden from this
- * reader rather than leave it out unexplained. Password values are stripped
+ * them (`banner.secret`), with a list row named by its index in this version
+ * (`items.1.secret`), so a comparison can say a field is hidden from this
+ * reader, in the row it was hidden in, rather than leave it out unexplained. Password values are stripped
  * too, but are not reported: a comparison never shows a password field at all.
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
@@ -1444,7 +1445,10 @@ export async function diffDocumentVersions(args: {
     fields,
     {
       modifiedOnly: args.modifiedOnly,
-      withheld: new Set([...withheldFrom, ...withheldTo]),
+      // Each version's own: a list row is named by its index in that
+      // version, so merging the two would hide a field in the wrong row.
+      withheldFrom,
+      withheldTo,
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,

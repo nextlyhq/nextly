@@ -1,7 +1,7 @@
 /**
- * The module budget's arithmetic: what counts as heavy, which file is the 90th
- * percentile, when a pin is exceeded or should come down, and the import chain
- * a failure names. The reporter applies these to the run's records; that it
+ * The module budget's arithmetic: what counts as heavy, how the heaviest tenth
+ * is averaged, when a pin is exceeded or should come down, and the import
+ * chain a failure names. The reporter applies these to the run's records; that it
  * reads the right records is shown by the suite itself, which prints the
  * measurement on every whole run.
  */
@@ -24,34 +24,48 @@ describe("measure", () => {
     expect(m.heavyFiles).toBe(1);
   });
 
-  it("takes the 90th percentile as the file a tenth from the top", () => {
-    // Ten files of 1..10 modules: index 9 of the sorted ten, the file with 10,
-    // whatever order the files ran in.
-    expect(measure([3, 10, 1, 7, 2, 9, 4, 8, 6, 5]).p90Modules).toBe(10);
-    // Twenty files: index 18 of the sorted twenty.
-    const twenty = Array.from({ length: 20 }, (_, i) => i + 1);
-    expect(measure(twenty.reverse()).p90Modules).toBe(19);
+  it("averages the heaviest tenth of the files, whatever order they ran in", () => {
+    // Ten files of 1..10 modules: the tenth is the one file with 10.
+    expect(measure([3, 10, 1, 7, 2, 9, 4, 8, 6, 5]).tailMeanModules).toBe(10);
+    // Twenty-five: the heaviest three (a tenth, rounded up), 23 to 25.
+    const many = Array.from({ length: 25 }, (_, i) => i + 1);
+    expect(measure(many.reverse()).tailMeanModules).toBe(24);
+    // One file is its own tenth; none averages to 0.
+    expect(measure([7]).tailMeanModules).toBe(7);
+    expect(measure([]).tailMeanModules).toBe(0);
+  });
+
+  it("moves by a few modules when one file is added below a gap in the counts", () => {
+    // The suite's shape: most files well below the heavy line, a group of
+    // files that reach the registry above it, and nothing in between. A
+    // percentile here reads whichever side of the gap its position lands on,
+    // so one file added anywhere can move it by the whole gap.
+    const suite = [...Array(531).fill(986), ...Array(59).fill(1_124)];
+    const before = measure(suite).tailMeanModules;
+    const after = measure([...suite, 986]).tailMeanModules;
+    expect(before).toBe(1_124);
+    expect(Math.abs(after - before)).toBeLessThanOrEqual(3);
   });
 });
 
 describe("judge", () => {
-  const at = (heavyFiles: number, p90Modules: number) =>
-    judge({ files: 1_000, heavyFiles, p90Modules });
+  const at = (heavyFiles: number, tailMeanModules: number) =>
+    judge({ files: 1_000, heavyFiles, tailMeanModules });
 
   it("fails a suite one file past the heavy pin", () => {
-    expect(at(BUDGET.heavyFiles + 1, BUDGET.p90Modules).over).toEqual([
+    expect(at(BUDGET.heavyFiles + 1, BUDGET.tailMeanModules).over).toEqual([
       "heavyFiles",
     ]);
   });
 
   it("fails a suite one module past the percentile pin", () => {
-    expect(at(BUDGET.heavyFiles, BUDGET.p90Modules + 1).over).toEqual([
-      "p90Modules",
+    expect(at(BUDGET.heavyFiles, BUDGET.tailMeanModules + 1).over).toEqual([
+      "tailMeanModules",
     ]);
   });
 
   it("passes a suite exactly at its pins, and asks for nothing", () => {
-    expect(at(BUDGET.heavyFiles, BUDGET.p90Modules)).toEqual({
+    expect(at(BUDGET.heavyFiles, BUDGET.tailMeanModules)).toEqual({
       over: [],
       lower: [],
       pins: BUDGET,
@@ -60,20 +74,25 @@ describe("judge", () => {
 
   it("asks for nothing while a suite is lighter by no more than the margin", () => {
     // 3 heavy files and 35 modules are the margins.
-    expect(at(BUDGET.heavyFiles - 3, BUDGET.p90Modules - 35).lower).toEqual([]);
+    expect(
+      at(BUDGET.heavyFiles - 3, BUDGET.tailMeanModules - 35).lower
+    ).toEqual([]);
   });
 
   it("names the exact lower pins once a suite is lighter by more than the margin", () => {
     const light = at(50, 500);
     expect(light.over).toEqual([]);
-    expect(light.lower).toEqual(["heavyFiles", "p90Modules"]);
-    expect(light.pins).toEqual({ heavyFiles: 53, p90Modules: 535 });
+    expect(light.lower).toEqual(["heavyFiles", "tailMeanModules"]);
+    expect(light.pins).toEqual({ heavyFiles: 53, tailMeanModules: 535 });
   });
 
   it("lowers only the pin the suite moved below, and keeps the other", () => {
-    const { lower, pins } = at(50, BUDGET.p90Modules);
+    const { lower, pins } = at(50, BUDGET.tailMeanModules);
     expect(lower).toEqual(["heavyFiles"]);
-    expect(pins).toEqual({ heavyFiles: 53, p90Modules: BUDGET.p90Modules });
+    expect(pins).toEqual({
+      heavyFiles: 53,
+      tailMeanModules: BUDGET.tailMeanModules,
+    });
   });
 });
 

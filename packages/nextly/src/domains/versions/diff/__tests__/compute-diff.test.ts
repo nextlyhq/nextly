@@ -821,15 +821,58 @@ describe("computeVersionDiff — round-2 hardening", () => {
     expect(shown?.fields.find(n => n.name === "secret")?.status).toBe(
       "changed"
     );
-    // A reader it denied: named in its place, with neither value.
+    // A reader it denied: named in its place, with neither value. The
+    // redaction names a list row by its index.
     const hidden = itemOf(
       computeVersionDiff(before, after, [layout], {
         componentRulesApplied: true,
-        withheld: new Set(["layout.secret"]),
+        withheld: new Set(["layout.0.secret"]),
       })
     );
     expect(hidden?.fields.find(n => n.name === "secret")?.kind).toBe("hidden");
     expect(JSON.stringify(hidden)).not.toMatch(/"A"|"B"/);
+  });
+
+  it("hides a field only in the row each version withheld it in, by that version's index", () => {
+    const list = field({
+      name: "items",
+      type: "repeater",
+      fields: [
+        field({ name: "title", type: "text" }),
+        field({ name: "secret", type: "text" }),
+      ],
+    });
+    // Row "b" moved from index 1 to 0; each version withheld its secret at
+    // that version's own index, and kept row "a"'s.
+    const before = {
+      items: [
+        { id: "a", title: "A", secret: "P-1" },
+        { id: "b", title: "B" },
+      ],
+    };
+    const after = {
+      items: [
+        { id: "b", title: "B" },
+        { id: "a", title: "A", secret: "P-2" },
+      ],
+    };
+
+    const diff = computeVersionDiff(before, after, [list], {
+      withheldFrom: new Set(["items.1.secret"]),
+      withheldTo: new Set(["items.0.secret"]),
+    });
+
+    const items = (
+      diff.fields[0] as {
+        items: { id?: string; fields: { name: string; kind: string }[] }[];
+      }
+    ).items;
+    const secretOf = (id: string) =>
+      items.find(item => item.id === id)?.fields.find(n => n.name === "secret");
+    expect(secretOf("b")?.kind).toBe("hidden");
+    // Row "a" sits at index 1 in the later version: read with one set for
+    // both, `items.1.secret` would hide it there too.
+    expect(secretOf("a")?.kind).toBe("text");
   });
 
   it("marks the comparison incomplete for a field withheld below the top level", () => {

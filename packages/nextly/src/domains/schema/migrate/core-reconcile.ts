@@ -18,7 +18,7 @@ import { getTableName, isTable } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
-import { getCoreSchema, getCoreTableNames } from "../../../schemas";
+import { getCoreSchema, getCoreTableNames } from "../../../schemas/core-schema";
 import {
   bindIssuedTokens,
   type BindIssuedTokensResult,

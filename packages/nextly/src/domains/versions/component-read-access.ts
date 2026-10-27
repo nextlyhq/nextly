@@ -19,13 +19,13 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   applyFieldReadAccess,
   getFieldFunctions,
-  openNestedContainer,
   type CallerGrants,
   type FieldFunctions,
   type ReadAccessRedactions,
 } from "../../shared/lib/field-level-registry";
 import {
   forEachFieldGroupInstance,
+  isRecord,
   nameOf,
   subFieldsOf,
   type ComponentFieldMap,
@@ -35,6 +35,8 @@ import {
   fieldGroupSlugList,
 } from "../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
+
+import { isListField } from "./diff/compute-diff";
 
 /** Who is reading, and their grants, shared with the entity's own pass. */
 export interface ComponentReadCaller {
@@ -100,18 +102,75 @@ export async function applyComponentReadAccess(
 }
 
 /**
- * The rows a container value holds, through the same parse the redaction
- * used, so a container held as JSON text reports what was withheld inside it.
+ * The rows a container value holds, each with its place in it: its index in
+ * a list, so an entry that is not a row still keeps its place in the count,
+ * or 0 for a value that is one row. A container held as JSON text is parsed
+ * first, as the redaction parses it, so what was withheld inside it is
+ * reported too.
  */
-function containerRows(value: unknown): Record<string, unknown>[] {
-  return openNestedContainer(value)?.rows ?? [];
+function containerRows(
+  value: unknown
+): { index: number; row: Record<string, unknown> }[] {
+  let opened: unknown = value;
+  if (typeof value === "string") {
+    // Text that is not JSON holds no rows, as the redaction reads it.
+    try {
+      opened = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(opened)) {
+    return opened.flatMap((row: unknown, index) =>
+      isRecord(row) ? [{ index, row }] : []
+    );
+  }
+  return isRecord(opened) ? [{ index: 0, row: opened }] : [];
+}
+
+/**
+ * Each row of a container before redaction, paired with its redacted copy by
+ * its place, which the redaction leaves alone: it removes fields, not rows.
+ */
+function pairedRows(
+  beforeValue: unknown,
+  afterValue: unknown
+): {
+  index: number;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}[] {
+  const afterRows = new Map(
+    containerRows(afterValue).map(({ index, row }) => [index, row])
+  );
+  return containerRows(beforeValue).flatMap(({ index, row }) => {
+    const after = afterRows.get(index);
+    return after ? [{ index, before: row, after }] : [];
+  });
+}
+
+/**
+ * The fields one row of a container declares: a component instance's own
+ * type's, or its field's single one; a group's or repeater's own fields.
+ */
+function rowFields(
+  field: FieldConfig,
+  row: Record<string, unknown>,
+  componentFields: ComponentFieldMap
+): readonly FieldConfig[] | undefined {
+  if (!isFieldGroupField(field)) return subFieldsOf(field);
+  return componentFields.get(
+    readFieldGroupType(row) ?? extractFieldGroupReferences(field).single ?? ""
+  );
 }
 
 /**
  * The dotted paths of the fields a redaction removed below the top level
  * (`banner.secret`, `meta.secret`), by comparing a copy taken before it with
- * the redacted entry. A field removed from any row or block of a list counts.
- * The top level is the caller's to compare: it holds keys no field declares.
+ * the redacted entry. A field removed from a row of a list is named by that
+ * row's index (`items.1.secret`), so a rule that allows a field in one row
+ * and denies it in another withholds it only where it denied it. The top
+ * level is the caller's to compare: it holds keys no field declares.
  */
 export function nestedWithheldPaths(
   before: Record<string, unknown>,
@@ -131,36 +190,38 @@ export function nestedWithheldPaths(
     at: string,
     open: WeakSet<object> = new WeakSet()
   ): void => {
-    for (const field of level) {
-      const name = nameOf(field);
+    for (const field of level) visit(field, beforeObj, afterObj, at, open);
+  };
+  // One field at this level: a nameless layout container lays its fields out
+  // on this same value; a named field is either gone, or holds rows to walk.
+  const visit = (
+    field: FieldConfig,
+    beforeObj: Record<string, unknown>,
+    afterObj: Record<string, unknown>,
+    at: string,
+    open: WeakSet<object>
+  ): void => {
+    const name = nameOf(field);
+    if (name === undefined) {
       const sub = subFieldsOf(field);
-      if (name === undefined) {
-        if (sub && !open.has(field)) {
-          open.add(field);
-          walk(beforeObj, afterObj, sub, at, open);
-          open.delete(field);
-        }
-        continue;
-      }
-      const path = at === "" ? name : `${at}.${name}`;
-      if (at !== "" && name in beforeObj && !(name in afterObj)) {
-        paths.add(path);
-        continue;
-      }
-      const beforeRows = containerRows(beforeObj[name]);
-      const afterRows = containerRows(afterObj[name]);
-      beforeRows.forEach((row, index) => {
-        const afterRow = afterRows[index];
-        if (!afterRow) return;
-        const inner = isFieldGroupField(field)
-          ? componentFields.get(
-              readFieldGroupType(row) ??
-                extractFieldGroupReferences(field).single ??
-                ""
-            )
-          : sub;
-        if (inner) walk(row, afterRow, inner, path);
-      });
+      if (!sub || open.has(field)) return;
+      open.add(field);
+      walk(beforeObj, afterObj, sub, at, open);
+      open.delete(field);
+      return;
+    }
+    const path = at === "" ? name : `${at}.${name}`;
+    if (at !== "" && name in beforeObj && !(name in afterObj)) {
+      paths.add(path);
+      return;
+    }
+    for (const row of pairedRows(beforeObj[name], afterObj[name])) {
+      const inner = rowFields(field, row.before, componentFields);
+      // A row of a list is named by its index, decided by the field's
+      // cardinality as the comparison reads rows: a single group or instance
+      // is named by none, even arriving as a one-element array.
+      const rowPath = isListField(field) ? `${path}.${row.index}` : path;
+      if (inner) walk(row.before, row.after, inner, rowPath);
     }
   };
   walk(before, after, fields, prefix);
