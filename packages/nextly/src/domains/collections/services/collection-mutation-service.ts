@@ -12169,6 +12169,8 @@ export class CollectionMutationService extends BaseService {
       // read, and the gate a write asks and the write itself must read the same
       // body.
       body = { ...body };
+      // The lifecycle action this row's own gate asked and allowed, if any.
+      let rowAllowed: "publish" | "unpublish" | undefined;
 
       // Asked before the row is locked, so a caller the gate refuses holds no
       // lock on an entry it may not change, however many rows a batch names.
@@ -12207,6 +12209,7 @@ export class CollectionMutationService extends BaseService {
         if (accessDenied) {
           return accessDenied;
         }
+        if (gate !== "update") rowAllowed = gate;
       }
 
       // No owner predicate: write access is decided for the collection rather
@@ -12489,7 +12492,7 @@ export class CollectionMutationService extends BaseService {
       // before this shared transaction, so a concurrent writer cannot slip a
       // transition past the gate and no permission read runs inside the batch's
       // transaction.
-      const transitionAuth =
+      const resolvedAuth =
         params.transitionAuth ??
         (await this.resolveTransitionAuthorization({
           collectionName: params.collectionName,
@@ -12501,6 +12504,15 @@ export class CollectionMutationService extends BaseService {
           // to this transaction's connection rather than re-entering the pool.
           executor: tx.getDrizzle(),
         }));
+      // The action this row's own gate already allowed stands as that answer:
+      // its rule is not asked again with a chance to answer otherwise after
+      // the row's hooks have run.
+      const transitionAuth: TransitionAuthorization =
+        rowAllowed === "publish"
+          ? { ...resolvedAuth, publishDenied: null }
+          : rowAllowed === "unpublish"
+            ? { ...resolvedAuth, unpublishDenied: null }
+            : resolvedAuth;
       const transitionDenied = await this.enforceTransitionUnderLock(tx, {
         tableName,
         entryId,

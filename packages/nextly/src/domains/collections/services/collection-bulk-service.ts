@@ -1523,6 +1523,10 @@ export class CollectionBulkService extends BaseService {
     }
 
     const { batchSize, stopOnError, skipHooks } = batchOptions(options);
+    // Each row's body read once, as plain data: a caller's object may compute
+    // a key on each read, and the strategy chosen here and each row's write
+    // must read the same body.
+    entries = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
@@ -1691,6 +1695,10 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
+    // Each row's body read once, as plain data: a caller's object may compute
+    // a key on each read, and the strategy chosen here and each row's write
+    // must read the same body.
+    entries = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
     // As above: where a row changes only an entry's status, each row is
     // judged on its own, and the one update gate is asked only otherwise.
     const rowGate =
