@@ -18,6 +18,7 @@ const hoursAgo = hours => new Date(NOW - hours * 3_600_000).toISOString();
 
 const runsOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&head_sha=${SHA}&per_page=20`;
 const recentOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&per_page=50`;
+const catchUpsOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=20`;
 const jobsOf = id => `GET repos/${REPO}/actions/runs/${id}/jobs?per_page=100`;
 const dispatchOf = workflow => `POST repos/${REPO}/actions/workflows/${workflow}/dispatches`;
 
@@ -56,6 +57,7 @@ function routesWith(runFor, jobsFor, { lastVerdict = 1, extra = () => [] } = {})
     const earlier = { id: 100 + at, event: "push", status: "completed", updated_at: hoursAgo(lastVerdict) };
     routes[jobsOf(earlier.id)] = testedJobs(workflow);
     routes[recentOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...onHead, earlier] };
+    routes[catchUpsOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...onHead].filter(run => run.event === "workflow_dispatch") };
   }
   return routes;
 }
@@ -122,6 +124,19 @@ describe("the catch-up on main's newest commit", () => {
     const { fetchImpl, dispatched } = api(
       routesWith((_, id) => ({ id, event: "push", status: "completed" }), skippedJobs, { extra: pending })
     );
+    expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it("starts nothing while a catch-up is on its way, though fifty newer push runs push it off main's recent runs", async () => {
+    // Under starvation a queued catch-up can sit behind more push runs than
+    // one page of main's recent runs holds; it still counts.
+    const pending = (_, at) => [{ id: 200 + at, event: "workflow_dispatch", status: "queued" }];
+    const routes = routesWith((_, id) => ({ id, event: "push", status: "queued" }), skippedJobs, { lastVerdict: 10, extra: pending });
+    for (const workflow of Object.keys(WORKFLOWS)) {
+      routes[recentOf(workflow)].workflow_runs = routes[recentOf(workflow)].workflow_runs.filter(run => run.event === "push");
+    }
+    const { fetchImpl, dispatched } = api(routes);
     expect(await main(env, { fetchImpl, now: NOW })).toBe(0);
     expect(dispatched()).toEqual([]);
   });

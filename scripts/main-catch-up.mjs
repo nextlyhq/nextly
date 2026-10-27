@@ -92,8 +92,7 @@ export async function decision(workflow, sha, { repository, context, now = Date.
   const caughtUp = runs.find(run => run.event === "workflow_dispatch");
   if (caughtUp) return { action: "none", reason: `catch-up run ${caughtUp.id} of ${sha.slice(0, 9)} is ${caughtUp.status}; its result stands` };
   // One catch-up at a time across main, whatever this commit's own runs did.
-  const recent = await recentRuns(workflow, { repository, context });
-  const pending = recent.find(run => run.event === "workflow_dispatch" && run.status !== "completed");
+  const pending = await pendingCatchUp(workflow, { repository, context });
   if (pending) return { action: "none", reason: `catch-up run ${pending.id} is ${pending.status}; one at a time` };
   // A run that has started is testing the commit, or will finish superseded
   // within seconds; only one still waiting for a runner may wait for ever.
@@ -101,7 +100,7 @@ export async function decision(workflow, sha, { repository, context, now = Date.
   if (started) return { action: "none", reason: `run ${started.id} of ${sha.slice(0, 9)} is in progress and may still test it` };
   const waiting = runs.find(run => run.status !== "completed");
   if (waiting) {
-    const verdict = await lastVerdict(workflow, recent, { repository, context });
+    const verdict = await lastVerdict(workflow, await recentRuns(workflow, { repository, context }), { repository, context });
     const age = verdict ? now - Date.parse(verdict.updated_at) : Infinity;
     if (age <= MAX_VERDICT_AGE_MS) {
       return { action: "none", reason: `run ${waiting.id} of ${sha.slice(0, 9)} is ${waiting.status} and may still test it` };
@@ -114,6 +113,20 @@ export async function decision(workflow, sha, { repository, context, now = Date.
     if (tested(jobs, WORKFLOWS[workflow])) return { action: "none", reason: `run ${run.id} tested ${sha.slice(0, 9)}` };
   }
   return { action: "dispatch", reason: `no run tested ${sha.slice(0, 9)}` };
+}
+
+/**
+ * A catch-up run of the workflow on main still on its way, or none. Asked for
+ * by its event rather than found among main's recent runs: under starvation a
+ * queued catch-up can sit behind more push runs than one page holds. Catch-ups
+ * run one at a time, so the newest few hold any still going.
+ */
+async function pendingCatchUp(workflow, { repository, context }) {
+  const { workflow_runs: listed } = await githubJson(
+    `repos/${repository}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=20`,
+    context
+  );
+  return listed.find(run => run.status !== "completed");
 }
 
 /** Main's recent runs of a workflow that can test a commit of it, newest first. */
