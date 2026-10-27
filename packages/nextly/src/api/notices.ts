@@ -46,7 +46,8 @@ async function signedInPerson(req: Request): Promise<AuthContext> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
   if (auth.authMethod === "api-key") {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "have notices",
       logContext: { reason: "an api key has no notices" },
     });
   }

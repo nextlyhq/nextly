@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { isServicesRegistered } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 
@@ -12,7 +12,7 @@ vi.mock("../database/health", () => ({
 }));
 
 // Whether services are registered in this process. Registered unless a case says not.
-vi.mock("../di/register", () => ({
+vi.mock("../di/service-access", () => ({
   isServicesRegistered: vi.fn(() => true),
 }));
 
@@ -32,7 +32,7 @@ const neverStarted = () =>
 
 /** Puts the mocks in the state of a process nothing has started Nextly in. */
 async function notStarted(how: "once" | "always"): Promise<void> {
-  const { isServicesRegistered } = await import("../di/register");
+  const { isServicesRegistered } = await import("../di/service-access");
   const { getCachedNextly } = await import("../init");
   if (how === "once") {
     (isServicesRegistered as any).mockReturnValueOnce(false);
@@ -179,7 +179,7 @@ describe("Health Check Route Handlers", () => {
       // the earlier report.
       vi.resetModules();
       const { setNextlyLogger } = await import("../observability/logger");
-      const { isServicesRegistered } = await import("../di/register");
+      const { isServicesRegistered } = await import("../di/service-access");
       const { getCachedNextly } = await import("../init");
       const { NextlyError: RouteNextlyError } = await import(
         "../errors/nextly-error"

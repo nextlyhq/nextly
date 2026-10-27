@@ -18,6 +18,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
@@ -139,6 +143,27 @@ function openCollection(slug: string) {
   });
 }
 
+/**
+ * The editor of one case. Named after its collection, so cases on this shared
+ * database never insert the same user twice; `drop` removes it.
+ */
+function editorOf(slug: string): string {
+  return `editor-${slug}`;
+}
+
+/**
+ * Stores the case's editor. A code rule only narrows the permission, so the
+ * editor holds every action `openCollection` allows on `slug`.
+ */
+async function seatEditor(t: TestNextly, slug: string): Promise<string> {
+  const editor = editorOf(slug);
+  await userWhoMay(t, editor, "create", [slug]);
+  for (const action of ["read", "update", "delete", "publish"]) {
+    await grantTo(t, editor, action, [slug]);
+  }
+  return editor;
+}
+
 const describePg = describe.skipIf(!POSTGRES_URL);
 
 describePg(
@@ -166,6 +191,9 @@ describePg(
           `DROP TABLE IF EXISTS dc_${slug}_locales`,
           `DROP TABLE IF EXISTS dc_${slug}`,
           `DELETE FROM dynamic_collections WHERE slug = '${slug}'`,
+          // The case's editor and its roles; their grants go with them.
+          `DELETE FROM roles WHERE id IN (SELECT role_id FROM user_roles WHERE user_id = '${editorOf(slug)}')`,
+          `DELETE FROM users WHERE id = '${editorOf(slug)}'`,
         ]) {
           try {
             await boot.executeQuery(stmt);
@@ -184,6 +212,7 @@ describePg(
           adapter,
           collections: [openCollection(GATE_SLUG)],
         });
+        const editor = await seatEditor(handle, GATE_SLUG);
         // Turn the harness's audit default off so the recording gate consults
         // endpoint presence. It reads a synchronous, out-of-band-refreshed flag —
         // NOT the database — so the write never checks out a second connection.
@@ -208,7 +237,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: GATE_SLUG, user: { id: "editor" } },
+              { collectionName: GATE_SLUG, user: { id: editor } },
               [{ title: "t" }]
             )
           ),
@@ -279,6 +308,7 @@ describePg(
           adapter,
           collections: [openCollection(BULK_CREATE_SLUG)],
         });
+        const editor = await seatEditor(handle, BULK_CREATE_SLUG);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
@@ -287,7 +317,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: BULK_CREATE_SLUG, user: { id: "editor" } },
+              { collectionName: BULK_CREATE_SLUG, user: { id: editor } },
               [{ title: "t", status: "published" }]
             )
           ),
@@ -314,6 +344,7 @@ describePg(
           adapter,
           collections: [openCollection(BULK_UPDATE_SLUG)],
         });
+        const editor = await seatEditor(handle, BULK_UPDATE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -326,7 +357,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.updateEntriesInTransaction(
               tx,
-              { collectionName: BULK_UPDATE_SLUG, user: { id: "editor" } },
+              { collectionName: BULK_UPDATE_SLUG, user: { id: editor } },
               [{ id, data: { title: "changed", status: "published" } }]
             )
           ),
@@ -353,6 +384,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_CREATE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_CREATE_SLUG);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
@@ -361,7 +393,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntryInTransaction(
               tx,
-              { collectionName: DIRECT_CREATE_SLUG, user: { id: "editor" } },
+              { collectionName: DIRECT_CREATE_SLUG, user: { id: editor } },
               { title: "t", status: "published" }
             )
           ),
@@ -387,6 +419,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_UPDATE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_UPDATE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -402,7 +435,7 @@ describePg(
               {
                 collectionName: DIRECT_UPDATE_SLUG,
                 entryId: id,
-                user: { id: "editor" },
+                user: { id: editor },
               },
               { title: "changed", status: "published" }
             )
@@ -429,6 +462,7 @@ describePg(
           adapter,
           collections: [openCollection(HOOK_SLUG)],
         });
+        const editor = await seatEditor(handle, HOOK_SLUG);
         // Configure the built-in `unique-validation` stored hook on `title`. It
         // runs on `beforeChange` and calls `context.queryDatabase`, which reads
         // the collection to check for a duplicate — the read that must run on
@@ -463,7 +497,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: HOOK_SLUG, user: { id: "editor" } },
+              { collectionName: HOOK_SLUG, user: { id: editor } },
               [{ title: "fresh", status: "draft" }]
             )
           ),
@@ -499,6 +533,7 @@ describePg(
           adapter,
           collections: [openCollection(AFTER_HOOK_SLUG)],
         });
+        const editor = await seatEditor(handle, AFTER_HOOK_SLUG);
         // Registered AFTER boot: createTestNextly resets the hook registry on
         // startup, and the running services share that same singleton registry.
         registerHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
@@ -510,7 +545,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: AFTER_HOOK_SLUG, user: { id: "editor" } },
+              { collectionName: AFTER_HOOK_SLUG, user: { id: editor } },
               [{ title: "t", status: "draft" }]
             )
           ),
@@ -545,6 +580,7 @@ describePg(
           adapter,
           collections: [openCollection(DELETE_SLUG)],
         });
+        const editor = await seatEditor(handle, DELETE_SLUG);
         registerHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
@@ -558,7 +594,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.deleteEntriesInTransaction(
               tx,
-              { collectionName: DELETE_SLUG, user: { id: "editor" } },
+              { collectionName: DELETE_SLUG, user: { id: editor } },
               [id]
             )
           ),
@@ -581,6 +617,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_DELETE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_DELETE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -596,7 +633,7 @@ describePg(
             entries.deleteEntryInTransaction(tx, {
               collectionName: DIRECT_DELETE_SLUG,
               entryId: id,
-              user: { id: "editor" },
+              user: { id: editor },
             })
           ),
           15_000
@@ -628,6 +665,7 @@ describePg(
           adapter,
           collections: [openCollection(BEFOREOP_SLUG)],
         });
+        const editor = await seatEditor(handle, BEFOREOP_SLUG);
         registerBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
@@ -637,7 +675,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: BEFOREOP_SLUG, user: { id: "editor" } },
+              { collectionName: BEFOREOP_SLUG, user: { id: editor } },
               [{ title: "t", status: "draft" }]
             )
           ),
@@ -680,6 +718,7 @@ describePg(
           ],
           localization: { locales: ["en", "de"], defaultLocale: "en" },
         });
+        const editor = await seatEditor(handle, LOCALIZED_DELETE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -696,7 +735,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.deleteEntriesInTransaction(
               tx,
-              { collectionName: LOCALIZED_DELETE_SLUG, user: { id: "editor" } },
+              { collectionName: LOCALIZED_DELETE_SLUG, user: { id: editor } },
               [id]
             )
           ),

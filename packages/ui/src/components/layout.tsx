@@ -7,7 +7,14 @@
  * mapped to literal class names (not template strings) so Tailwind's scanner
  * detects and emits them.
  */
-import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type ReactNode,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 
@@ -61,7 +68,9 @@ export interface StackProps extends HTMLAttributes<HTMLDivElement> {
 /** Flex stack: vertical by default, horizontal with `direction="row"`.
  * @experimental
  */
-export const Stack = forwardRef<HTMLDivElement, StackProps>(
+export const Stack: ForwardRefExoticComponent<
+  PropsWithoutRef<StackProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, StackProps>(
   ({ direction = "col", gap = 4, className, ...props }, ref) => (
     <div
       ref={ref}
@@ -93,7 +102,9 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
 /** Simple fixed-column grid, or a container-responsive one via `responsive`.
  * @experimental
  */
-export const Grid = forwardRef<HTMLDivElement, GridProps>(
+export const Grid: ForwardRefExoticComponent<
+  PropsWithoutRef<GridProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, GridProps>(
   (
     { cols = 2, gap = 4, responsive = false, className, children, ...rest },
     ref
@@ -146,7 +157,9 @@ export interface StatProps extends HTMLAttributes<HTMLDivElement> {
 /** Labelled metric block for dashboard-style plugin widgets.
  * @experimental
  */
-export const Stat = forwardRef<HTMLDivElement, StatProps>(
+export const Stat: ForwardRefExoticComponent<
+  PropsWithoutRef<StatProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, StatProps>(
   ({ label, value, className, ...props }, ref) => (
     <div ref={ref} className={cn("flex flex-col gap-1", className)} {...props}>
       <span className="text-sm text-muted-foreground">{label}</span>

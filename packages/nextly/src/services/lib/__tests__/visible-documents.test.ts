@@ -26,9 +26,11 @@ vi.mock("../readable-documents", () => ({
   readableDocumentIds: (...args: unknown[]) =>
     readableDocumentIds(...args) as unknown,
 }));
+// A container holding the config alone: the languages are then the config's, as on a boot that
+// registered no language registry.
 vi.mock("../../../di/container", () => ({
   container: {
-    has: () => true,
+    has: (name: string) => name === "config",
     get: () => configValue() as unknown,
   },
 }));

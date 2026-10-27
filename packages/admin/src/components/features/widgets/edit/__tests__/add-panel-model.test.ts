@@ -1,6 +1,7 @@
 /**
  * What the add panel lists: its rows, what each one's button does, and what a search keeps.
  */
+import type { PublishedContentSource } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -160,7 +161,7 @@ describe("the add panel's rows", () => {
     ]);
   });
 
-  it("leaves out a widget this admin cannot draw, and the Content group", () => {
+  it("leaves out a widget this admin cannot draw, and the Content group while it is hidden", () => {
     const rows = addPanelRows({
       placements: [],
       offered: ["ghost/widget", "content/posts"],
@@ -173,6 +174,7 @@ describe("the add panel's rows", () => {
         }),
       },
       byId: new Map([["content/posts", declared("content/posts", "Posts")]]),
+      showContent: false,
     });
     expect(rows).toEqual([]);
   });
@@ -267,6 +269,163 @@ describe("the add panel's groups", () => {
     expect(plugins?.rows).toEqual([]);
     expect(plugins?.subgroups.map(sub => [sub.name, sub.rows.length])).toEqual([
       ["@acme/forms", 1],
+    ]);
+  });
+});
+
+/** A collection as the server publishes it to the reader: nothing to group by unless given. */
+function source(
+  collection: string,
+  label: string,
+  patch: Partial<PublishedContentSource> = {}
+): PublishedContentSource {
+  return { collection, label, lifecycle: false, fields: [], ...patch };
+}
+
+describe("a widget offered per collection", () => {
+  const count = {
+    id: "core/count",
+    title: "Count",
+    archetype: "metric",
+    settings: [{ name: "collection", type: "collection" }],
+  } as unknown as DashboardWidget;
+  const rowsFor = (placements: WidgetPlacement[]) =>
+    addPanelRows({
+      placements,
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          allowsSeveral: true,
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      // No showContent: these rows are what the panel lists as it ships.
+      collections: [source("posts", "Posts"), source("pages", "Pages")],
+    });
+
+  it("is one row per collection the reader may read, each adding a card set to it", () => {
+    const rows = rowsFor([]);
+    expect(rows.map(row => [row.key, row.subgroup, row.action])).toEqual([
+      [
+        "core/count:posts",
+        "Posts",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "posts" },
+        },
+      ],
+      [
+        "core/count:pages",
+        "Pages",
+        {
+          kind: "add",
+          widgetId: "core/count",
+          settings: { collection: "pages" },
+        },
+      ],
+    ]);
+  });
+
+  it("counts only that collection's cards, offering another beside them", () => {
+    const rows = rowsFor([
+      { ...placement("a", "core/count"), config: { collection: "posts" } },
+    ]);
+    expect(rows.map(row => [row.key, row.placed, row.action.kind])).toEqual([
+      ["core/count:posts", 1, "add-another"],
+      ["core/count:pages", 0, "add"],
+    ]);
+  });
+
+  it("carries the widget's category, so a search by it finds each collection's row", () => {
+    const rows = addPanelRows({
+      placements: [],
+      offered: ["core/count"],
+      widgets: {
+        "core/count": facts({
+          group: "content",
+          perCollection: true,
+          category: "Totals",
+        }),
+      },
+      byId: new Map([["core/count", count]]),
+      collections: [source("posts", "Posts")],
+    });
+    expect(rows[0]?.category).toBe("Totals");
+    expect(searchAddPanel(rows, "totals").map(row => row.key)).toEqual([
+      "core/count:posts",
+    ]);
+  });
+
+  it("stays out of the panel while the Content group is not shown", () => {
+    expect(
+      addPanelRows({
+        placements: [],
+        offered: ["core/count"],
+        widgets: {
+          "core/count": facts({ group: "content", perCollection: true }),
+        },
+        byId: new Map([["core/count", count]]),
+        collections: [source("posts", "Posts")],
+        showContent: false,
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("a widget offered only where its card can be asked", () => {
+  // Grouped by a setting that takes its default from the collection: a
+  // collection with nothing to divide its entries by gives it no group key.
+  const breakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "bars",
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+    query: { op: "groupBy", status: "all" },
+  } as unknown as DashboardWidget;
+  const choices = [{ value: "a", label: "A" }];
+
+  it("is listed for a collection it can divide, and not for one it cannot", () => {
+    const rows = addPanelRows({
+      placements: [],
+      offered: ["core/breakdown"],
+      widgets: {
+        "core/breakdown": facts({
+          group: "content",
+          perCollection: true,
+          allowsSeveral: true,
+        }),
+      },
+      byId: new Map([["core/breakdown", breakdown]]),
+      collections: [
+        // A lifecycle collection publishes its status column, with choices.
+        source("posts", "Posts", {
+          lifecycle: true,
+          fields: [{ name: "status", type: "string", choices }],
+        }),
+        source("notes", "Notes", {
+          fields: [{ name: "title", type: "string" }],
+        }),
+        source("products", "Products", {
+          fields: [{ name: "kind", type: "string", choices }],
+        }),
+      ],
+    });
+    // 🔴 Listed for every collection, the Notes row would add a card that
+    // asks nothing and is drawn as not available.
+    expect(rows.map(row => row.key)).toEqual([
+      "core/breakdown:posts",
+      "core/breakdown:products",
     ]);
   });
 });

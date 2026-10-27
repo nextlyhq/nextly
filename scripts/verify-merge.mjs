@@ -566,7 +566,7 @@ export function statusAsRun(status) {
  *
  * A non-empty list of check-runs is not evidence that CI ran. The workflows
  * here are independent, so a run where `ci.yml` never created its jobs while
- * `secret-scan.yml` succeeded produces a green-looking set containing no build
+ * `small-checks.yml` succeeded produces a green-looking set containing no build
  * and no tests. Absence of the expected name is the only thing that separates
  * them, and absence is invisible to any filter over what IS present.
  */
@@ -578,10 +578,12 @@ export function missingRequired(checkRuns, changedPaths, required) {
     throw new TypeError("missingRequired needs an array of check-runs");
   }
   const present = new Set(checkRuns.map(run => run?.name));
+  // A check with an `or` list is also covered when every name on it reported.
+  const covered = check => present.has(check.name) || (Array.isArray(check.or) && check.or.length > 0 && check.or.every(name => present.has(name)));
   return required
     .filter(check => workflowApplies(check.pathsIgnore, changedPaths))
-    .map(check => check.name)
-    .filter(name => !present.has(name));
+    .filter(check => !covered(check))
+    .map(check => check.name);
 }
 
 /**
@@ -723,8 +725,18 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     // not run either, however many unrelated workflows went green. `ci.yml`
     // filters in a job rather than at the trigger, so it always reports.
     { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
-    // Its own workflow, unfiltered, on every pull request.
-    { name: "gitleaks", pathsIgnore: [] },
+    // Its own workflow, unfiltered, on every pull request, in the queue and on
+    // every push to the base branch: the title, AI-credit, secret-scan and
+    // review steps in one job, so its absence leaves all four unjudged.
+    // A revision whose runs started from a base without that workflow reports
+    // the checks it replaced instead: `gitleaks` everywhere, and the title
+    // before a merge, since a push to the base branch had no title to check.
+    // All of those together cover it; any one alone does not.
+    {
+      name: "Small checks (title, AI credit, secret scan, review)",
+      pathsIgnore: [],
+      or: merged ? ["gitleaks"] : ["gitleaks", "Validate PR title follows Conventional Commits"],
+    },
     // Listed for the reason this whole list exists: it is an INDEPENDENT job in
     // `ci.yml`, hanging off nothing, so removing or renaming it produces no
     // check-run for a failure check to reject - the control would disappear in
@@ -742,14 +754,6 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
-    // Reported by its own workflow, on a pull request and in the merge queue,
-    // and never on a push to the base branch, which has no title to validate,
-    // so requiring it post-merge would demand a result that is never written.
-    // Judged only when present, a run that never started left the title
-    // unvalidated and the gate green.
-    ...(merged
-      ? []
-      : [{ name: "Validate PR title follows Conventional Commits", pathsIgnore: [] }]),
   ];
 }
 

@@ -4,7 +4,8 @@
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
@@ -38,7 +39,7 @@ interface TestCollection {
   name: string;
   label?: string;
   labels?: { singular: string; plural: string };
-  admin?: { hidden?: boolean };
+  admin?: { hidden?: boolean; disableCreate?: boolean };
 }
 
 function collection(
@@ -58,14 +59,31 @@ function listing(
   } as unknown as ReturnType<typeof useCollections>;
 }
 
+/**
+ * The reader's slugs, and the server's answer about each collection, which
+ * agrees with them unless `allows` says otherwise.
+ */
 function granting(
   slugs: string[],
-  extra: { isLoading?: boolean; error?: Error } = {}
+  extra: {
+    isLoading?: boolean;
+    error?: Error;
+    allows?: string[];
+    content?: { isLoading?: boolean; hasAnswer?: boolean };
+  } = {}
 ) {
+  const allows = extra.allows ?? slugs;
   return {
     hasPermission: (slug: string) => slugs.includes(slug),
+    canAccessCollection: (slug: string, action: string) =>
+      allows.includes(`${action}-${slug}`),
     isLoading: extra.isLoading ?? false,
     error: extra.error ?? null,
+    content: {
+      isLoading: extra.content?.isLoading ?? false,
+      hasAnswer: extra.content?.hasAnswer ?? true,
+      error: null,
+    },
   } as unknown as ReturnType<typeof useCurrentUserPermissions>;
 }
 
@@ -85,12 +103,42 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     // The control: `pages` IS in the list the server returned, so its absence
     // is this filter acting rather than the fixture never offering it.
     expect(screen.queryByTestId("quick-create-pages")).toBeNull();
+  });
+
+  it("follows the server where a code rule refuses a create the role's permission allows", () => {
+    mockCollections.mockReturnValue(
+      listing([collection({ name: "posts" }), collection({ name: "pages" })])
+    );
+    // Both slugs are held; the server allows the create in `pages` only.
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-pages"], { allows: ["create-pages"] })
+    );
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(screen.getByTestId("quick-create-pages")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-posts")).toBeNull();
+  });
+
+  it("makes no claim while the server's answer about collections is missing, and says it could not be read", () => {
+    // The permission list has arrived and holds the slug; the answer that
+    // decides the shortcut has not, so "nothing to create" would be a guess.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(
+      granting(["create-posts"], { allows: [], content: { hasAnswer: false } })
+    );
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
+    expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
   });
 
   it("offers no shortcut for a collection kept off the dashboard, even one the reader may create in", () => {
@@ -106,10 +154,32 @@ describe("the quick-create card", () => {
       granting(["create-posts", "create-nx_pb_class_usage"])
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-create-nx_pb_class_usage")).toBeNull();
+  });
+
+  it("offers no shortcut for a collection only a machine creates in, even one the reader may", () => {
+    // Form submissions declare `admin.disableCreate`: their list offers no "New", so neither
+    // does this card. The reader holds the create grant, so only that flag removes it.
+    mockCollections.mockReturnValue(
+      listing([
+        collection({ name: "posts" }),
+        collection({
+          name: "form-submissions",
+          admin: { disableCreate: true },
+        }),
+      ])
+    );
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-form-submissions"])
+    );
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-form-submissions")).toBeNull();
   });
 
   it("names the entity the way its form does", () => {
@@ -127,7 +197,7 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByText("New Article")).toBeInTheDocument();
   });
@@ -144,13 +214,13 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-pages", "create-notes"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByText("New Page")).toBeInTheDocument();
     expect(screen.getByText("New notes")).toBeInTheDocument();
   });
 
-  it("says nothing at all while the list is still loading", () => {
+  it("makes no claim while the list is still loading, holding its place instead", () => {
     // 🔴 A card that drew its empty state first and filled in afterwards tells
     // the reader they may create nothing, which is a claim rather than a
     // delay — and it is wrong for most readers for the whole of every page
@@ -158,10 +228,11 @@ describe("the quick-create card", () => {
     mockCollections.mockReturnValue(listing([], { isLoading: true }));
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
   });
 
   it("says so when the reader may create nothing", () => {
@@ -171,26 +242,64 @@ describe("the quick-create card", () => {
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing here for you to create."
+    );
   });
 
-  it("says nothing while the PERMISSIONS are still in flight", () => {
-    // 🔴 The two requests resolve independently. `hasPermission` answers from
-    // an empty set until `/me/permissions` lands, so a collection list that
-    // arrives first filters every row out — and the card tells the reader they
-    // may create nothing, for the whole of that interval, on every page load.
+  it("makes no claim while the answer about collections is still in flight", () => {
+    // 🔴 The two requests resolve independently. `canAccessCollection`
+    // answers no until the server's answer about collections lands, so a
+    // collection list that arrives first filters every row out — and the card
+    // tells the reader they may create nothing, for the whole of that
+    // interval, on every page load.
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
-    mockPermissions.mockReturnValue(granting([], { isLoading: true }));
+    mockPermissions.mockReturnValue(
+      granting([], { content: { isLoading: true, hasAnswer: false } })
+    );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
   });
 
-  it("says nothing when either request FAILED", () => {
+  it("offers what the answer about collections allows, though the permission list failed", () => {
+    // The permission list decides nothing here, so its failure takes nothing
+    // the answer about collections allows away.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(
+      granting([], { error: new Error("boom"), allows: ["create-posts"] })
+    );
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+  });
+
+  it("offers Retry when a read failed, asking both reads again", () => {
+    const refetch = vi.fn();
+    const retry = vi.fn();
+    mockCollections.mockReturnValue({
+      ...listing([collection({ name: "posts" })], { error: new Error("boom") }),
+      refetch,
+    } as unknown as ReturnType<typeof useCollections>);
+    mockPermissions.mockReturnValue({
+      ...granting(["create-posts"]),
+      retry,
+    } as unknown as ReturnType<typeof useCurrentUserPermissions>);
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes no claim when either request FAILED, and says it could not be read", () => {
     // A failure is not an answer. Drawing the empty state from one turns a
     // transport error into a claim about this reader's permissions, and it
     // never clears.
@@ -199,10 +308,11 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
   });
 
   it("does not claim an empty set when the page was TRUNCATED", () => {
@@ -215,9 +325,13 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
+    // The frame's own neutral empty state, which claims nothing about permissions.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing to show yet"
+    );
   });
 
   it("STILL says so on a complete page with nothing creatable", () => {
@@ -229,9 +343,11 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing here for you to create."
+    );
   });
 
   it("counts the surplus rather than drawing it", () => {

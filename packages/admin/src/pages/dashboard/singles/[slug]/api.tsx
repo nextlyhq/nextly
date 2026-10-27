@@ -11,6 +11,8 @@
  * @since 1.0.0
  */
 
+import type { JSX } from "react";
+
 import { ApiPlaygroundPage } from "@admin/components/features/entries/APIPlayground";
 
 interface SingleAPIPlaygroundPageProps {
@@ -21,6 +23,6 @@ interface SingleAPIPlaygroundPageProps {
 
 export default function SingleAPIPlaygroundPage({
   params,
-}: SingleAPIPlaygroundPageProps) {
+}: SingleAPIPlaygroundPageProps): JSX.Element {
   return <ApiPlaygroundPage kind="single" slug={params?.slug} />;
 }

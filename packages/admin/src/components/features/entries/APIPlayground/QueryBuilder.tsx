@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback } from "react";
 
 import { ArrowDown, ArrowUp, Plus, X } from "@admin/components/icons";
@@ -165,7 +166,7 @@ export function QueryBuilder({
   fields = [],
   hasStatus = false,
   isSingle = false,
-}: QueryBuilderProps) {
+}: QueryBuilderProps): JSX.Element {
   const sort = parseSort(params.sort);
   const selected = parseSelect(params.select);
   // The same value the playground puts on the wire, so the preview cannot

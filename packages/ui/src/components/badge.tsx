@@ -1,7 +1,34 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { HTMLAttributes } from "react";
+import type { HTMLAttributes, JSX } from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
+
+/** The arms `badgeVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const BADGE_VARIANT_MAP = {
+  variant: {
+    // Clear, legible chip in both modes (was bg-primary/5 at ~5% opacity,
+    // which was nearly invisible on dark backgrounds).
+    default: "bg-muted text-foreground",
+    primary: "bg-primary/10 text-primary dark:bg-primary/20",
+    success:
+      "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
+    warning:
+      "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
+    destructive:
+      "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
+    /*
+     * The border colour is NOT important-marked. The base sets no border
+     * colour, so nothing inside this component competes for it — the only
+     * thing a mark could win against is the caller's own class. Seven
+     * outline badges pass one, including a status pill whose comment gives
+     * a 3:1 contrast reason for the colour it asks for, and every one of
+     * them was being overridden without any sign that it had been.
+     */
+    outline:
+      "border border-border bg-transparent text-foreground dark:text-muted-foreground dark:border-border",
+  },
+};
 
 /**
  * Badge Component - Design System Specification
@@ -32,33 +59,10 @@ import { cn } from "../lib/utils";
  * - outline: Transparent background with  border border-border
  * @experimental
  */
-const badgeVariants = cva(
+const badgeVariants: VariantsFn<typeof BADGE_VARIANT_MAP> = cva(
   "inline-flex items-center rounded-sm px-2.5 py-0.5 h-[22px] text-xs font-medium transition-colors",
   {
-    variants: {
-      variant: {
-        // Clear, legible chip in both modes (was bg-primary/5 at ~5% opacity,
-        // which was nearly invisible on dark backgrounds).
-        default: "bg-muted text-foreground",
-        primary: "bg-primary/10 text-primary dark:bg-primary/20",
-        success:
-          "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100",
-        warning:
-          "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
-        destructive:
-          "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
-        /*
-         * The border colour is NOT important-marked. The base sets no border
-         * colour, so nothing inside this component competes for it — the only
-         * thing a mark could win against is the caller's own class. Seven
-         * outline badges pass one, including a status pill whose comment gives
-         * a 3:1 contrast reason for the colour it asks for, and every one of
-         * them was being overridden without any sign that it had been.
-         */
-        outline:
-          "border border-border bg-transparent text-foreground dark:text-muted-foreground dark:border-border",
-      },
-    },
+    variants: BADGE_VARIANT_MAP,
     defaultVariants: {
       variant: "default",
     },
@@ -71,7 +75,11 @@ export interface BadgeProps
     VariantProps<typeof badgeVariants> {}
 
 /** @public */
-function Badge({ className, variant = "default", ...props }: BadgeProps) {
+function Badge({
+  className,
+  variant = "default",
+  ...props
+}: BadgeProps): JSX.Element {
   return (
     <div
       data-slot={`badge.${variant}`}

@@ -116,11 +116,12 @@ export function formatRetiredAccessRulesWarning(
         `  ${entry.table}: ${entry.rows} ${entry.rows === 1 ? "row carries" : "rows carry"} a value in \`${RETIRED_ACCESS_RULES_COLUMN}\``
     ),
     "",
-    "  Access is now decided by the RBAC gate alone: a super-admin session bypasses it; otherwise the",
-    "  code-defined `access` on the collection's or Single's config decides an operation it names,",
-    "  and an operation it does not name falls through to the roles and permissions granted in the",
-    "  database. Existing role grants still apply; only the rules in this column are ignored.",
-    "  Review those rules, express any you still need as code-defined `access`, then remove the column:",
+    "  Access is now decided by the RBAC gate alone: a super-admin session bypasses it; otherwise a",
+    "  caller needs the role permission for the operation, granted in the database, and the",
+    "  code-defined `access` on the collection's or Single's config, where it names the operation,",
+    "  only narrows that permission. Existing role grants still apply; only the rules in this column",
+    "  are ignored. Review those rules, express any you still need as code-defined `access` beside",
+    "  the role permission it narrows, then remove the column:",
     "  `nextly migrate` will name it and refuse, and NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 drops it.",
   ];
   return lines.join("\n");

@@ -10,7 +10,12 @@
  */
 
 import { formatGlobalDateTime } from "@admin/lib/dates/format";
-import type { WidgetResultField } from "@admin/types/dashboard/widgets";
+import type {
+  WidgetResult,
+  WidgetResultField,
+} from "@admin/types/dashboard/widgets";
+
+import type { ArchetypeOutcome } from "./types";
 
 /** What a cell needs to know about its column to present a value: its kind and its value labels. */
 export type CellColumn = Pick<WidgetResultField, "type" | "choices">;
@@ -137,4 +142,58 @@ export function asPresentedText(
     },
     text
   );
+}
+
+/**
+ * The fields a declared widget's answer is drawn by, for a card core answered
+ * on the server, which has no query to select them: the answer's own `fields`
+ * when it describes them, else the first row's own keys, in their order.
+ *
+ * 🔴 The first row's keys only: a key a later row carries and the first does
+ * not is not drawn. The rows are what the widget's own data function answered,
+ * through reads already bound to this reader, so its first row is its own
+ * description of them, not a guess at fields the reader may not see.
+ */
+export function declaredAnswerFields(result: {
+  items: readonly Record<string, unknown>[];
+  fields?: readonly WidgetResultField[];
+}): WidgetResultField[] {
+  if (result.fields !== undefined && result.fields.length > 0) {
+    return [...result.fields];
+  }
+  return Object.keys(result.items[0] ?? {}).map(name => ({ name }));
+}
+
+/**
+ * A row display's answer as its list of rows, or what it draws instead: a
+ * refusal when the answer is not a list, and its one empty state, worded for
+ * what it lists, when there are no rows. Asked before any field is read, since
+ * a card core answered on the server names its fields by its first row: with
+ * no rows it is empty, not undrawable. One reading for every row display, so
+ * a list and a table cannot come to disagree about either.
+ */
+export function rowsOrInstead(
+  result: WidgetResult,
+  title: string,
+  words: { expected: string; rows: string }
+): Extract<WidgetResult, { op: "list" }> | ArchetypeOutcome {
+  if (result.op !== "list") {
+    return {
+      ok: false,
+      message: `"${title}" expected ${words.expected}, but the query returned a ${result.op}.`,
+    };
+  }
+  if (result.items.length === 0) {
+    // The frame's one empty state, worded for what the display lists. Source-neutral: the card
+    // may read any collection's, system's or plugin's data, so it names no kind of row it
+    // cannot know.
+    return {
+      ok: true,
+      empty: {
+        title: "Nothing here yet",
+        detail: `${words.rows} appear here once something matches this card.`,
+      },
+    };
+  }
+  return result;
 }

@@ -7,10 +7,12 @@
  * reported at once. Each declaration is then kept here whole, its server code
  * included, for the server's own use.
  *
- * 🔴 None is published to the widget registry the admin reads yet. A declared
- * widget's data is built on the server, and nothing runs it for a card until
- * the dashboard's data path does; offered before then, it would be placed on
- * dashboards and draw only an error. It is published when it can be drawn.
+ * 🔴 Each is published to the widget registry the admin reads as DATA ONLY,
+ * through core's own door: its data function, query function and empty test
+ * stay here, and the published definition says only that core builds its
+ * card's data (`serverData`). The dashboard asks for such a card by its id and
+ * core answers it from the declaration kept here, so a declared widget is
+ * published in the same change that answers its cards, never before.
  *
  * Widgets declared in today's shape (`contributes.admin.widgets`) are drawn as
  * today, through their own path. They take part here only in the id rules: two
@@ -22,8 +24,16 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
+import type { WidgetDefinition } from "../definition";
 import type { WidgetQuery } from "../query";
-import type { WidgetWidth } from "../widths";
+import {
+  deregisterWidget,
+  getWidget,
+  registerDeclaredDefinition,
+  widgetSource,
+} from "../registry";
+import type { AnyWidgetSetting } from "../settings";
+import { sizeFromWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
 import { declaredQueryProblem } from "./displays";
@@ -63,6 +73,95 @@ interface DeclaredWidgetShape {
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
   readonly display?: unknown;
+  /** What publishing reads: the card's words, its starting width, and its gates. */
+  readonly title: string;
+  readonly description: string;
+  readonly category: string;
+  readonly width: WidgetWidth;
+  readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
+  readonly permission?: string;
+  readonly sketch?: WidgetDefinition["sketch"];
+  readonly empty?: {
+    readonly message?: string;
+    readonly action?: { label: string; link: string; permission?: string };
+  };
+}
+
+/**
+ * A declaration's empty state as published: its words and its action, never
+ * its test, which runs on the server. `permission` becomes the gate's own name.
+ */
+function publishedEmpty(
+  empty: DeclaredWidgetShape["empty"]
+): WidgetDefinition["empty"] | undefined {
+  if (empty === undefined) return undefined;
+  const { message, action } = empty;
+  const published: NonNullable<WidgetDefinition["empty"]> = {
+    ...(message === undefined ? {} : { message }),
+    ...(action === undefined
+      ? {}
+      : {
+          action: {
+            label: action.label,
+            link: action.link,
+            ...(action.permission === undefined
+              ? {}
+              : { requiredPermission: action.permission }),
+          },
+        }),
+  };
+  return Object.keys(published).length === 0 ? undefined : published;
+}
+
+/** `{ empty }` when there is one to publish, and nothing otherwise. */
+const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
+  empty === undefined ? {} : { empty };
+
+/**
+ * A declaration as the registry publishes it: data only.
+ *
+ * 🔴 A fresh object of named fields, never a spread of the declaration: the
+ * data function, the query function and the empty test stay on the server,
+ * and a field a declaration gains later reaches the browser only once it is
+ * named here. `serverData` says core builds the card's data, so there is no
+ * query. The widths are carried as declared, gaps included, in the
+ * arrangement's own words; the size is only the span of the starting width,
+ * for what still reads sizes.
+ */
+function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
+  const display = declaration.display;
+  const settings = Object.entries(declaration.settings ?? {}).map(
+    // Each was checked at startup by the rules a definition's settings are
+    // held to (`widgetSettingsProblems`), so it is one, named.
+    ([name, setting]) => ({ ...setting, name }) as AnyWidgetSetting
+  );
+  return {
+    id: declaration.id,
+    title: declaration.title,
+    description: declaration.description,
+    category: declaration.category,
+    ...(typeof display === "string"
+      ? { archetype: display as WidgetDefinition["archetype"] }
+      : {
+          archetype: "custom" as const,
+          component: (display as { component: string }).component,
+        }),
+    ...(settings.length > 0 ? { settings } : {}),
+    defaultSize: sizeFromWidth(declaration.width),
+    allowedWidths: WIDGET_WIDTHS.filter(width =>
+      declaration.widths.includes(width)
+    ),
+    defaultWidth: declaration.width,
+    ...(declaration.several === true ? { allowsSeveral: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
+    ...(declaration.permission === undefined
+      ? {}
+      : { requiredPermission: declaration.permission }),
+    ...(declaration.sketch === undefined ? {} : { sketch: declaration.sketch }),
+    ...withEmpty(publishedEmpty(declaration.empty)),
+    serverData: true,
+  };
 }
 
 /** The ids one owner declares in today's shape. */
@@ -179,17 +278,32 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
  * Checks every declaration, then keeps them all, or refuses startup naming
  * every fault and keeps none.
  *
- * `legacy` is the ids each plugin declares in today's shape.
+ * `legacy` is the ids each plugin declares in today's shape. `references`
+ * checks what names these widgets (the site config's dashboard, a plugin's
+ * suggestions), handed each well-formed declaration as the definition it
+ * becomes and the groups as they were snapshotted, so ownership is read from
+ * the same copy that is kept, and its faults are refused with the
+ * declarations' own, at once. `checkedOnly` are declarations checked with the
+ * rest, duplicates and references included, but not kept or published.
  */
 export function registerWidgetDeclarations(
   given: readonly DeclaredWidgetGroup[],
-  legacy: readonly LegacyWidgetIds[] = []
+  legacy: readonly LegacyWidgetIds[] = [],
+  references?: (
+    declared: ReadonlyMap<string, WidgetDefinition>,
+    groups: readonly DeclaredWidgetGroup[]
+  ) => readonly WidgetDeclarationFault[],
+  checkedOnly: readonly DeclaredWidgetGroup[] = []
 ): void {
   const groups = given.map(snapshot);
+  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
-    ...collectWidgetDeclarationFaults(groups),
-    ...sharedWithLegacy(groups, legacy),
+    ...collectWidgetDeclarationFaults(checked),
+    ...sharedWithLegacy(checked, legacy),
   ];
+  if (references !== undefined) {
+    faults.push(...references(wellFormedDefinitions(checked, faults), checked));
+  }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);
 
@@ -202,8 +316,35 @@ export function registerWidgetDeclarations(
         declaration,
         ...(collections === undefined ? {} : { collections }),
       });
+      // Published as it is kept, so every declared widget the admin is offered
+      // has a declaration here to answer its cards from. One drawn by its own
+      // component is published as a custom card core answers: the admin hands
+      // that component the props its declaration types (`WidgetProps`).
+      registerDeclaredDefinition(toDefinition(declaration), owner);
     }
   }
+}
+
+/**
+ * The definitions the declarations no fault names would become, by id, so a
+ * reference to a faulty one reads as unknown rather than as a second fault
+ * about the same mistake.
+ */
+function wellFormedDefinitions(
+  groups: readonly DeclaredWidgetGroup[],
+  faults: readonly WidgetDeclarationFault[]
+): ReadonlyMap<string, WidgetDefinition> {
+  const faulty = new Set(faults.map(fault => fault.widget));
+  const definitions = new Map<string, WidgetDefinition>();
+  for (const { declarations } of groups) {
+    if (!Array.isArray(declarations)) continue;
+    for (const raw of declarations as readonly unknown[]) {
+      const id = (raw as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || faulty.has(id)) continue;
+      definitions.set(id, toDefinition(raw as DeclaredWidgetShape));
+    }
+  }
+  return definitions;
 }
 
 /** Every declared widget, in the order startup kept them. */
@@ -226,31 +367,58 @@ export function cardQueryFor(
   stored: Record<string, unknown> | undefined
 ): WidgetQuery | undefined {
   const declared = store().get(widgetId);
-  if (declared === undefined) return undefined;
+  return declared === undefined
+    ? undefined
+    : checkedCardQuery(declared, stored);
+}
+
+/**
+ * The query core runs for a card of this declared widget, from the card's
+ * stored settings, held to what the widget's display draws; `undefined` when
+ * its data is not a query or a setting it needs has no value.
+ *
+ * 🔴 The ONE builder of a card's query, so the card that runs it and anything
+ * that asks for it judge the same query. Judged here as well as at startup.
+ * Startup builds the query from the starting settings, and a Collection setting
+ * with no default leaves it unbuilt there, so a plain JavaScript list with no
+ * fields passed startup and was first built here, for a card, with no check in
+ * between; and a query function that changes its op for a setting other than
+ * the starting one is only ever built here.
+ */
+export function checkedCardQuery(
+  declared: DeclaredWidget,
+  stored: Record<string, unknown> | undefined
+): WidgetQuery | undefined {
   const query = buildCardQuery(
     declared.declaration,
     stored,
     declared.collections
   );
   if (query === undefined) return undefined;
-  /*
-   * 🔴 Judged here as well as at startup. Startup builds the query from the
-   * starting settings, and a Collection setting with no default leaves it
-   * unbuilt there, so a plain JavaScript list with no fields passed startup
-   * and was first built here, for a card, with no check in between.
-   */
   const problem = declaredQueryProblem(declared.declaration.display, query);
   if (problem !== undefined) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage: "An unexpected error occurred.",
-      logMessage: `Declared widget "${widgetId}" cannot draw its query: ${problem}.`,
+      logMessage: `Declared widget "${declared.declaration.id}" cannot draw its query: ${problem}.`,
     });
   }
   return query;
 }
 
-/** Forgets every declared widget. Called at boot before declaring again. */
+/**
+ * Forgets every declared widget, and withdraws the definitions they published.
+ * The registry's declared widgets are derived from this store, so clearing one
+ * without the other would offer the admin widgets with no declaration left to
+ * answer their cards from, and refuse the same declaration made again. Only
+ * what a declaration published goes: its id, under its owner, with
+ * `serverData`. Called at boot before declaring again.
+ */
 export function clearDeclaredWidgets(): void {
+  for (const [id, { owner }] of store()) {
+    if (widgetSource(id) === owner && getWidget(id)?.serverData === true) {
+      deregisterWidget(id);
+    }
+  }
   store().clear();
 }

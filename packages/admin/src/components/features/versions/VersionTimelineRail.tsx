@@ -10,6 +10,8 @@
  * @module components/features/versions/VersionTimelineRail
  */
 
+import type { JSX } from "react";
+
 import { Badge, Button, Skeleton } from "@admin/components/ui";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { formatDateTime } from "@admin/lib/dates/format";
@@ -227,7 +229,7 @@ export function VersionTimelineRail({
   isFetchingNextPage = false,
   onLoadMore,
   nextPageError = null,
-}: VersionTimelineRailProps) {
+}: VersionTimelineRailProps): JSX.Element | null {
   if (isLoading) return <RailSkeleton />;
 
   // A failed read leaves the list empty exactly as an empty history does, and

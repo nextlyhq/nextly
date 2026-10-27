@@ -142,7 +142,9 @@ function groupComponentsByCategory(
  * <DynamicFieldGroupNav isActive={isActive} />
  * ```
  */
-export function DynamicFieldGroupNav({ isActive }: DynamicFieldGroupNavProps) {
+export function DynamicFieldGroupNav({
+  isActive,
+}: DynamicFieldGroupNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
 

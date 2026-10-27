@@ -35,7 +35,11 @@ export default defineConfig({
   // verbatim copy ships the custom properties without the rules that use them.
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
-  dts: { sourcemap: false, compilerOptions: { noCheck: true } },
+  // oxc writes the declarations from the source's own annotations
+  // (`isolatedDeclarations` in tsconfig.json). Named rather than left to the
+  // plugin's choice, which picks `tsc` (or `tsgo` under TypeScript 7) without
+  // saying so when the flag is off.
+  dts: { generator: "oxc", sourcemap: false },
   // NOT `clean`. This config is one of three producers writing into the same
   // `dist`, and under `--watch` a clean here deletes the other two's output on
   // every rebuild — the root entry, the server-safe subpaths and the compiled

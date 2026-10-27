@@ -34,6 +34,7 @@ import {
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
@@ -88,12 +89,12 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -587,11 +588,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
@@ -679,11 +676,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const {
         fields,
         confirmed,
@@ -871,8 +864,7 @@ const COLLECTIONS_METHODS: Record<
             uiTargetKind: "collection" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -913,7 +905,7 @@ const COLLECTIONS_METHODS: Record<
         // or no single candidate), the preflight finds it from the fields and refuses what it must.
         renamed: companionRename,
         tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
         kind: "collection",
@@ -949,8 +941,7 @@ const COLLECTIONS_METHODS: Record<
           const oldFields = (collection.fields ??
             []) as unknown as FieldDefinition[];
           const newFields = fields as unknown as FieldDefinition[];
-          const defaultLocale =
-            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const defaultLocale = appLocalization()?.defaultLocale ?? "en";
           const companionExists = await adapter.tableExists(
             `${tableName}_locales`
           );

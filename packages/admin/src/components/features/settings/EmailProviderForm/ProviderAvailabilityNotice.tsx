@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { ProviderAvailability } from "../../../../services/emailProviderApi";
 
@@ -32,7 +33,7 @@ interface ProviderAvailabilityNoticeProps {
 export function ProviderAvailabilityNotice({
   providerLabel,
   availability,
-}: ProviderAvailabilityNoticeProps) {
+}: ProviderAvailabilityNoticeProps): JSX.Element | null {
   if (availability?.status !== "needs-dependency") return null;
 
   return (

@@ -33,6 +33,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+
 /**
  * The Builder's many-to-many shape: the target lives on `options.target`, not
  * on `relationTo`, and the typed helper cannot express it.
@@ -117,7 +119,8 @@ describe("related-row collection access (integration)", () => {
       user: { id: "claim-aware" },
     });
     expect(direct.success).toBe(false);
-    expect(direct.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(direct.statusCode).toBe(404);
 
     const result = await handler.getEntry({
       collectionName: "refs",
@@ -140,6 +143,8 @@ describe("related-row collection access (integration)", () => {
 
   it("still populates the target for a caller the rule admits", async () => {
     const { handler, refId } = await boot();
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current!, "permitted", "read", ["pages"]);
 
     const result = await handler.getEntry({
       collectionName: "refs",
@@ -255,6 +260,8 @@ describe("related-row collection access — many-to-many (integration)", () => {
 
   it("still populates them for a caller the rule admits", async () => {
     const { rel, postId } = await seedM2M();
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current!, "permitted", "read", ["tags"]);
 
     const expanded = await rel.expandRelationships(
       { id: postId, title: "Hello", slug: "hello" },
@@ -281,7 +288,7 @@ describe("related-row collection access — rule context (integration)", () => {
     permissions,
   }: {
     permissions: string[];
-  }): boolean => permissions.includes("pages:read");
+  }): boolean => permissions.includes("read-pages");
 
   async function bootWithRole(): Promise<{
     handler: CollectionsHandler;
@@ -468,6 +475,8 @@ describe("related-row collection access — one verdict per target (integration)
       );
     }
 
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current, "anyone", "read", ["pages"]);
     evaluations = 0;
     const result = await handler.listEntries({
       collectionName: "refs",
@@ -567,6 +576,8 @@ describe("related-row collection access — anonymous readers (integration)", ()
     // signed-in reader, whose expansion must reach the loader for `pages`.
     // Without this, a spy on the wrong object satisfies the assertion above
     // by seeing nothing at all.
+    // A signed-in reader who holds the read permission the rule narrows.
+    await userWhoMay(current!, "reader", "read", ["pages"]);
     const admitted = await handler.getEntry({
       collectionName: "refs",
       entryId: refId,
@@ -598,17 +609,17 @@ describe("related-row collection access — anonymous readers (integration)", ()
 
 describe("related-row collection access — API-key rule spelling (integration)", () => {
   it("shows a key's rule the same permission spelling a direct read shows it", async () => {
-    // A rule reads `resource:action`; the key's scope stores `action-resource`.
-    // The direct api-key gate converts before handing the rule its context, and
-    // the relationship path must convert the same way — a copy of the stored
-    // list makes the same row readable by name and absent by reference.
+    // A rule reads the key's own permissions, as stored (`read-pages`). The
+    // direct api-key gate hands the rule the key's scope, and the relationship
+    // path must hand the same one — a different list makes the same row
+    // readable by name and absent by reference.
     current = await createTestNextly({
       collections: [
         defineCollection({
           slug: "pages",
           access: {
             read: ({ permissions }: { permissions: string[] }) =>
-              permissions.includes("pages:read"),
+              permissions.includes("read-pages"),
           },
           fields: [text({ name: "title" })],
         }),
@@ -705,6 +716,8 @@ describe("related-row collection access — one verdict per expansion (integrati
       { name: "r", many: pageIds }
     );
 
+    // The rule narrows the read permission, so the caller holds it.
+    await userWhoMay(current, "anyone", "read", ["pages"]);
     evaluations = 0;
     const result = await handler.getEntry({
       collectionName: "refs",

@@ -1,4 +1,5 @@
 import { AlertCircle, Loader2, FileQuestion } from "lucide-react";
+import type { JSX } from "react";
 
 /**
  * Props for TableError component
@@ -15,7 +16,7 @@ export interface TableErrorProps {
  */
 export function TableError({
   message = "An error occurred. Please try again.",
-}: TableErrorProps) {
+}: TableErrorProps): JSX.Element {
   return (
     <div className="flex items-center gap-2">
       <AlertCircle className="w-4 h-4 shrink-0" />
@@ -28,7 +29,7 @@ export function TableError({
  * Loading state component for tables
  * @experimental
  */
-export function TableLoading() {
+export function TableLoading(): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center gap-4 p-12 text-muted-foreground">
       <Loader2 className="w-8 h-8 animate-spin text-primary/80" />
@@ -50,7 +51,9 @@ export interface TableEmptyProps {
  * Empty state component for tables
  * @experimental
  */
-export function TableEmpty({ message = "No records found" }: TableEmptyProps) {
+export function TableEmpty({
+  message = "No records found",
+}: TableEmptyProps): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center gap-4 p-16 text-center text-muted-foreground">
       <div className="flex h-12 w-12 items-center justify-center rounded-md bg-primary/5">

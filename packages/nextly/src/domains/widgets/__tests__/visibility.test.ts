@@ -170,6 +170,41 @@ describe("visibleWidgets", () => {
 });
 
 describe("widgetAudience", () => {
+  it("holds the readable collections from the reader's verdict on each sourced collection", async () => {
+    registerSource(source("posts"));
+    registerSource(source("pages"));
+    reader([], ["posts", "orphan"]);
+    const audience = await widgetAudience(CALLER);
+    // 🔴 Asked of the collections themselves: only those with a source, and
+    // only those the reader may read.
+    expect([...audience.readableCollections]).toEqual(["posts"]);
+    expect(readableEntities).toHaveBeenCalledWith(
+      expect.arrayContaining(["posts", "pages"]),
+      CALLER
+    );
+  });
+
+  it("moves its token when only a Collection setting changes", async () => {
+    // 🔴 The workspace payload ships the setting, so a payload held from
+    // before must read as stale when the setting is renamed, though every id
+    // and gate stays as it was.
+    const pinned = (name: string) =>
+      register("acme/pinned", {
+        archetype: "metric",
+        content: undefined,
+        query: { source: "collection:posts", op: "count" },
+        settings: [{ name, type: "collection", label: "Collection" }],
+      });
+    registerSource(source("posts"));
+    reader([], ["posts"]);
+    pinned("collection");
+    const before = (await widgetAudience(CALLER)).token;
+    expect((await widgetAudience(CALLER)).token).toBe(before);
+    clearWidgets();
+    pinned("source");
+    expect((await widgetAudience(CALLER)).token).not.toBe(before);
+  });
+
   it("splits the visible set by the channel each half ships through", async () => {
     setContributedWidgets([{ id: "acme/welcome" }]);
     register("app/notes");
@@ -232,7 +267,9 @@ describe("widgetAudience", () => {
     readableEntities.mockImplementation(async (slugs: string[]) => {
       setGeneratedWidgets(
         generatedWidgets().map(widget =>
-          widget.id === "collection/posts-count" && widget.query
+          // Narrowed to the count it is, so the copy with another source is
+          // still a query a source can answer.
+          widget.id === "collection/posts-count" && widget.query?.op === "count"
             ? {
                 ...widget,
                 title: "Secret",

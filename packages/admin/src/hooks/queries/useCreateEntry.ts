@@ -37,7 +37,11 @@
  * @see lib/errors/error-mapping.ts - Server error mapping utilities
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
@@ -181,7 +185,12 @@ export function useCreateEntry<
   onError,
   showToast = true,
   setError,
-}: UseCreateEntryOptions<T, TFieldValues>) {
+}: UseCreateEntryOptions<T, TFieldValues>): UseMutationResult<
+  MutationResult<T>,
+  Error,
+  CreateEntryPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   // The mutation resolves to the whole envelope so the success path can report

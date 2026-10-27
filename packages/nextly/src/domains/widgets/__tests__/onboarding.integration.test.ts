@@ -12,6 +12,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -102,6 +106,10 @@ async function boot(): Promise<TestNextly> {
     ],
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on both collections and the rules decide which they may use.
+  await userWhoMay(t, admin.user.id, "read", [SECRETS, NOTES]);
+  await grantTo(t, admin.user.id, "create", [SECRETS, NOTES]);
   // The same call `POST /api/dashboard/query` makes before resolving anything:
   // publish the collection sources from the LIVE registry. Boot does not, and
   // the steps read that registry to know which collections exist.
@@ -131,6 +139,10 @@ async function bootReadOnly(mayCreate: boolean): Promise<TestNextly> {
     ],
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on the archive and its create rule alone decides the create.
+  await userWhoMay(t, admin.user.id, "read", [ARCHIVE]);
+  await grantTo(t, admin.user.id, "create", [ARCHIVE]);
   await refreshCollectionSources();
   return t;
 }

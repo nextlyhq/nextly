@@ -473,6 +473,13 @@ export interface EmailProviderAdapter {
      * `acceptsIdempotencyKey`, and only for a send that carried a key.
      */
     idempotencyKey?: string;
+    /**
+     * @experimental Fires at the call deadline. An adapter should stop
+     * sending when it does: the send has already been reported to the caller
+     * as without an answer, and its claim is held until the call settles or
+     * the lease limit passes.
+     */
+    signal?: AbortSignal;
   }): Promise<{
     success: boolean;
     messageId?: string;

@@ -25,6 +25,7 @@ permissions apply:
 | `opts` | Behaviour |
 |---|---|
 | `{ as: "user", user }` | Runs as that caller — **RBAC enforced**. In a plugin route the caller's API-key scope is carried automatically, so a key is judged on its own grants rather than its owner's; pass `authenticatedScope` explicitly only to narrow it. |
+| `{ as: "public" }` | Runs as an anonymous visitor — the collection's `access` rules apply with no user. A read with no rule for it is allowed (the public default); a create, update or delete is **refused unless the collection's rule for it answers `true`**, such as `access: { create: () => true }` on a form's submissions. |
 | `{ as: "system" }` | Elevates — **bypasses the access check** for trusted, non-user work (jobs, derived data, lookups). Visible and greppable by design. |
 | `{}` / omitted | No user → defaults to **system** (jobs, CLI, migrations). |
 

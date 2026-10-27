@@ -6,6 +6,7 @@
 import { Label, Switch } from "@nextlyhq/ui";
 import { defaultLocalizedForType } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
+import type { JSX } from "react";
 
 import type { BuilderField } from "../types";
 
@@ -35,7 +36,7 @@ export function AdvancedTab({
   readOnly = false,
   isInsideRepeatingAncestor = false,
   onChange,
-}: Props) {
+}: Props): JSX.Element {
   const adv = field.advanced ?? {};
   const setAdv = (next: Partial<NonNullable<BuilderField["advanced"]>>) =>
     onChange({ ...field, advanced: { ...adv, ...next } });

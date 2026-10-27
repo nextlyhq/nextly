@@ -16,6 +16,8 @@
  * @module components/features/widgets/charts/groups-chart
  */
 
+import type { JSX } from "react";
+
 import { ChartFrame, type ChartRow } from "../archetypes/chart-frame";
 import { barFractions } from "../archetypes/chart-scale";
 import { CardFigure } from "../frame/figure";
@@ -51,7 +53,7 @@ export function GroupsChart({
   groups,
   truncated = false,
   floors = false,
-}: GroupsChartProps) {
+}: GroupsChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const ordered = orderGroups(groups, cardLocale());

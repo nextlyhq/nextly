@@ -18,7 +18,7 @@
  * @module components/features/releases/ReleaseListCells
  */
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import {
   AlertCircle,
@@ -72,7 +72,11 @@ const STATUS_ICON: Record<ReleaseRowStatus, typeof Clock> = {
 /**
  * Where a release stands: an icon and a word, never a colour alone.
  */
-export function ReleaseStatusBadge({ status }: { status: ReleaseRowStatus }) {
+export function ReleaseStatusBadge({
+  status,
+}: {
+  status: ReleaseRowStatus;
+}): JSX.Element {
   const { label, variant } = RELEASE_ROW_STATUS[status];
   const Icon = STATUS_ICON[status];
   return (
@@ -121,7 +125,7 @@ export function ReleaseStatusMark({
   className?: string;
   /** Drawn between the icon and the word, such as the time. */
   children?: ReactNode;
-}) {
+}): JSX.Element {
   const Icon = STATUS_ICON[status];
   return (
     <span
@@ -147,7 +151,11 @@ export function ReleaseStatusMark({
  * holds on hover. The description and the mark are inline-blocks so the
  * underline stays on the title, which is the part that names the link.
  */
-export function ReleaseTitleCell({ release }: { release: Release }) {
+export function ReleaseTitleCell({
+  release,
+}: {
+  release: Release;
+}): JSX.Element {
   return (
     <span className="inline-block max-w-[26rem] align-top">
       <span className="text-sm font-medium text-foreground">
@@ -185,7 +193,7 @@ export function ReleaseWhenCell({
   tab: ReleaseListTab;
   readerZone: string;
   now: number;
-}) {
+}): JSX.Element {
   const instant = releaseWhenInstant(release, tab);
   // The scheduled zone belongs to the scheduled instant only. A draft's
   // creation time or a run's finish was never "scheduled" anywhere.
@@ -246,7 +254,7 @@ export function ReleaseDocumentsCell({
   release: Release;
   tab: ReleaseListTab;
   readiness: ReleaseRowReadiness;
-}) {
+}): JSX.Element {
   const counts = release.memberCounts;
   if (counts === undefined) {
     return (
@@ -339,7 +347,11 @@ function initialsOf(name: string): string {
 
 const OWNER_ROW = "flex items-center justify-end gap-2 @md/table:justify-start";
 
-export function ReleaseOwnerCell({ release }: { release: Release }) {
+export function ReleaseOwnerCell({
+  release,
+}: {
+  release: Release;
+}): JSX.Element {
   // The session the admin already holds: no request of its own.
   const { user: me } = useDashboardUser();
   const owner = releaseOwnerView({

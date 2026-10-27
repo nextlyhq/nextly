@@ -53,6 +53,14 @@ import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
+import { emailQueueMysql } from "./email-queue/mysql";
+import { emailQueuePg } from "./email-queue/postgres";
+import { emailQueueSqlite } from "./email-queue/sqlite";
+import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
+import { emailQueueRecipientsMysql } from "./email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "./email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "./email-queue-recipients/sqlite";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { emailSendClaimsMysql } from "./email-send-claims/mysql";
 import { emailSendClaimsPg } from "./email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "./email-send-claims/sqlite";
@@ -62,6 +70,7 @@ import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { fieldGroupLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
+import { languagesTables } from "./languages";
 import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
@@ -264,6 +273,9 @@ export function getCoreSchema(
     // mint finding it missing refuses with the migrate remedy, so
     // core-reconcile creating it is sufficient, as for `nextly_versions`.
     ...Object.values(previewLinksTables(dialect)),
+    // The site's content languages when Settings manages them. Created empty and read as "no
+    // stored languages" when missing, so a site that never adds a language is unchanged.
+    ...Object.values(languagesTables(dialect)),
     // The release tables are first-class managed system tables, declared here
     // for the same reason `nextly_versions` is: nothing records into them
     // before they exist, so core-reconcile creating them on fresh and existing
@@ -305,7 +317,9 @@ export function getCoreSchema(
         emailProvidersPg,
         emailTemplatesPg,
         emailDeliveriesPg,
-        emailSendClaimsPg
+        emailSendClaimsPg,
+        emailQueuePg,
+        emailQueueRecipientsPg
       );
       break;
     case "mysql":
@@ -318,7 +332,9 @@ export function getCoreSchema(
         emailProvidersMysql,
         emailTemplatesMysql,
         emailDeliveriesMysql,
-        emailSendClaimsMysql
+        emailSendClaimsMysql,
+        emailQueueMysql,
+        emailQueueRecipientsMysql
       );
       break;
     case "sqlite":
@@ -331,7 +347,9 @@ export function getCoreSchema(
         emailProvidersSqlite,
         emailTemplatesSqlite,
         emailDeliveriesSqlite,
-        emailSendClaimsSqlite
+        emailSendClaimsSqlite,
+        emailQueueSqlite,
+        emailQueueRecipientsSqlite
       );
       break;
     default: {
@@ -366,7 +384,6 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "role_permissions",
   "user_roles",
   "role_inherits",
-  "user_permission_cache",
   "api_keys",
   "audit_log",
   "activity_log",
@@ -396,6 +413,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_deliveries",
   "email_brand",
   EMAIL_SEND_CLAIMS_TABLE,
+  EMAIL_QUEUE_TABLE,
+  EMAIL_QUEUE_RECIPIENTS_TABLE,
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
@@ -403,6 +422,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_preview_links",
+  "nextly_languages",
   "nextly_releases",
   "nextly_release_members",
   "nextly_version_pins",
@@ -451,7 +471,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "./rbac/postgres";
 
 // Plan A Task 8 — media tables. PG re-exports for direct-query callers.

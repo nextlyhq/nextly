@@ -235,7 +235,8 @@ async function assertHandlerGates(
   if (write === "autosave") {
     const policy = await resolveVersionsPolicy(ref.scopeKind, ref.scopeSlug);
     if (!policy?.drafts?.autosave?.enabled) {
-      throw NextlyError.forbidden({
+      throw NextlyError.autosaveOff({
+        scopeKind: ref.scopeKind,
         logContext: { ...logContext, reason: "autosave-not-enabled" },
       });
     }

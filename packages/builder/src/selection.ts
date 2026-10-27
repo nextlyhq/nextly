@@ -44,7 +44,7 @@
  * @module selection
  */
 
-import { type BlockDocument, type BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 /** How a gesture changes the selection. */
 export type SelectionMode = "replace" | "toggle" | "extend";

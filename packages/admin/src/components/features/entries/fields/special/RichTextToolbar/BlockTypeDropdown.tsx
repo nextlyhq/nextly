@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   CheckSquare,
@@ -85,7 +86,7 @@ export function BlockTypeDropdown({
   formatQuote,
   formatCodeBlock,
   formatParagraph,
-}: BlockTypeDropdownProps) {
+}: BlockTypeDropdownProps): JSX.Element {
   const currentConfig =
     BLOCK_TYPE_CONFIG[blockType] || BLOCK_TYPE_CONFIG.paragraph;
   const CurrentIcon = currentConfig.icon;

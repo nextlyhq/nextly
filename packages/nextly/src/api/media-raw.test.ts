@@ -99,6 +99,21 @@ beforeEach(() => {
   mocks.adapter.read.mockResolvedValue(WOFF2_BYTES);
 });
 
+/**
+ * What the route says about a file it will not serve: the one not-found body
+ * every refusal is answered with, and nothing more. Its request id differs
+ * from request to request, so it is left out of the comparison.
+ */
+const NOT_FOUND = { error: { code: "NOT_FOUND", message: "Not found." } };
+
+async function saysNotFound(response: Response): Promise<unknown> {
+  const body = (await response.json()) as {
+    error: { requestId?: unknown } & Record<string, unknown>;
+  };
+  const { requestId: _requestId, ...rest } = body.error;
+  return { error: rest };
+}
+
 describe("the public byte route", () => {
   it("serves a woff2 with its own content type", async () => {
     storedAs("font/woff2");
@@ -135,7 +150,7 @@ describe("the public byte route", () => {
     const response = await getRaw("m1");
 
     expect(response.status).toBe(404);
-    expect(await response.text()).toBe("");
+    expect(await saysNotFound(response)).toEqual(NOT_FOUND);
   });
 
   it("reads up to the size the row records, above the floor", async () => {
@@ -291,7 +306,7 @@ describe("the public byte route", () => {
     expect(response.status).toBe(404);
     expect(response.status).not.toBe(403);
     expect(mocks.adapter.read).not.toHaveBeenCalled();
-    expect(await response.text()).toBe("");
+    expect(await saysNotFound(response)).toEqual(NOT_FOUND);
   });
 
   it("serves the font on a GATED mount, with no session", async () => {
@@ -377,7 +392,7 @@ describe("the public byte route", () => {
 
     const response = await getRaw("m1");
     expect(response.status).toBe(404);
-    expect(await response.text()).toBe("");
+    expect(await saysNotFound(response)).toEqual(NOT_FOUND);
   });
 
   it("serves a row stored under a LEGACY font type", async () => {

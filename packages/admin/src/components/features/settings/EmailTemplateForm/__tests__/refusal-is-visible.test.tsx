@@ -19,6 +19,8 @@ import { WorkbenchHeader } from "../WorkbenchHeader";
 
 afterEach(cleanup);
 
+const NO_COMPLETION = { declared: [], sample: {} };
+
 /** Mounts a region with one field already rejected, as a refused save leaves it. */
 function WithError({
   field,
@@ -75,8 +77,9 @@ describe("a refusal is visible where the field is", () => {
             editorTab="html"
             onEditorTabChange={() => {}}
             isPending={false}
-            editorWrapRef={{ current: null }}
-            htmlEditorViewRef={{ current: null }}
+            bodyViewRef={{ current: null }}
+            completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}
@@ -98,8 +101,9 @@ describe("a refusal is visible where the field is", () => {
             editorTab="text"
             onEditorTabChange={() => {}}
             isPending={false}
-            editorWrapRef={{ current: null }}
-            htmlEditorViewRef={{ current: null }}
+            bodyViewRef={{ current: null }}
+            completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}
@@ -128,8 +132,9 @@ describe("a refusal is visible where the field is", () => {
             editorTab="html"
             onEditorTabChange={() => {}}
             isPending={false}
-            editorWrapRef={{ current: null }}
-            htmlEditorViewRef={{ current: null }}
+            bodyViewRef={{ current: null }}
+            completion={NO_COMPLETION}
+            liquid
             readOnly={false}
             chips={<span>{"{{appName}}"}</span>}
           />
@@ -155,8 +160,9 @@ describe("a refusal is visible where the field is", () => {
             editorTab="html"
             onEditorTabChange={() => {}}
             isPending={false}
-            editorWrapRef={{ current: null }}
-            htmlEditorViewRef={{ current: null }}
+            bodyViewRef={{ current: null }}
+            completion={NO_COMPLETION}
+            liquid
             readOnly={false}
           />
         )}

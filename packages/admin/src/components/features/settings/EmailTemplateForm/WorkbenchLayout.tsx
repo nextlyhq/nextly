@@ -25,7 +25,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@nextlyhq/ui";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type JSX } from "react";
 
 import { X } from "@admin/components/icons";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
@@ -309,7 +309,7 @@ export function WorkbenchLayout({
   phoneBar,
   revealRequest,
   ...body
-}: WorkbenchLayoutProps) {
+}: WorkbenchLayoutProps): JSX.Element {
   // The settings navigation and the page's padding: a full-width workbench
   // reads them as a mistake rather than as a margin. The header draws the way
   // back, which is what lets a surface take them.

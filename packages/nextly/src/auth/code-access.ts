@@ -19,6 +19,7 @@ import type {
 } from "../shared/types/access";
 
 import type { AccessTarget } from "./access/decide";
+import { reportRuleFilterMisuse, ruleAnswer } from "./access/rule-answer";
 import { buildRuleContext } from "./access/rule-context";
 import type { GrantedPermission } from "./authenticated-scope";
 
@@ -41,9 +42,7 @@ export interface ReadAccessCaller {
   permissions: string[];
   /**
    * The rows behind `permissions`, when the caller's scope carried them. A
-   * rule is handed the stored slugs either way; the rows also give it, for
-   * one release, each permission's earlier `posts:read` spelling, which a
-   * slug alone cannot be split into.
+   * rule is handed each one's stored slug either way.
    */
   grants?: readonly GrantedPermission[];
   /** Role slugs, already normalized (session roles arrive as ids). */
@@ -94,13 +93,11 @@ export async function codeAccessAllows(
   // those are the key's own scoped values, not its owner's — which is the
   // whole point of evaluating the rule against the key.
   const ctx = buildRuleContext(
-    operationAccess,
     {
       user: { id: caller.userId },
       roles: caller.roles,
-      // The rows where the scope carried them, so the rule also gets the
-      // earlier spelling for its deprecation release; the stored slugs alone
-      // otherwise.
+      // The rows where the scope carried them, the stored slugs otherwise;
+      // the rule is handed each one's stored slug either way.
       permissions: caller.grants ?? caller.permissions,
       // A staff user or an API key, never a plugin-defined person.
       principal: null,
@@ -108,9 +105,15 @@ export async function codeAccessAllows(
     { operation, target: { kind: target.kind, slug: target.slug } }
   );
 
+  let answer: unknown;
   try {
-    return (await operationAccess(ctx)) === true;
+    answer = await operationAccess(ctx);
   } catch {
     return false;
   }
+  // Only `true` allows every entry; a filter, which this check does not
+  // apply, refuses, and one that is misused is reported as such.
+  const meaning = ruleAnswer(answer);
+  reportRuleFilterMisuse(target.slug, operation, target.kind, meaning);
+  return meaning.kind === "allow";
 }

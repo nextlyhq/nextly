@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import {
@@ -13,7 +14,11 @@ import { roleFactory } from "../../../__tests__/fixtures/roles";
 import { userFactory } from "../../../__tests__/fixtures/users";
 import { expectArrayLength } from "../../../__tests__/utils/assertions";
 import { container } from "../../../di/container";
-import { PermissionCacheService } from "../services/permission-cache-service";
+import {
+  clearInMemoryPermissionTiersForTests,
+  hasPermission,
+} from "../../../services/lib/permissions";
+import { resetEpochForTests } from "../../../services/lib/rbac-epoch";
 import { RolePermissionService } from "../services/role-permission-service";
 
 describe("RolePermissionService", () => {
@@ -27,9 +32,9 @@ describe("RolePermissionService", () => {
     // the adapter handed to the constructor -- it resolves its own from the DI
     // container, and wraps the whole tier in a catch that only logs. With
     // nothing registered, `container.get("adapter")` threw on every call, the
-    // catch swallowed it, and the database cache was never invalidated while
-    // every assignment assertion below still passed. Registering it is what
-    // makes the eviction control at the bottom of this file able to fail.
+    // catch swallowed it, and nothing was retired while every assignment
+    // assertion below still passed. Registering it is what makes the
+    // retirement control at the bottom of this file able to fail.
     container.register("adapter", () => testDb.adapter);
     container.register("logger", () => testLogger);
   });
@@ -872,16 +877,18 @@ describe("RolePermissionService", () => {
 
   describe("permission-cache invalidation", () => {
     // The control this file lacked. Every mutation above fires
-    // `invalidatePermissionCache`, whose database tier is wrapped in a catch
-    // that only logs -- so if it fails, nothing here notices and a user keeps
-    // grants that were just revoked until the TTL expires. That is the
+    // `invalidatePermissionCache`, and if it retires nothing, nothing here
+    // notices and a user keeps grants that were just revoked. That is the
     // permissive direction, which is the one worth a test.
     //
-    // It is a POSITIVE control: it seeds a real cache row and asserts the
-    // mutation evicts it. Asserting only that the role_permissions row changed
-    // passes just as well when the cache is never touched, which is exactly
-    // what was happening before the adapter was registered above.
-    it("evicts a cached grant when a permission is removed from the role", async () => {
+    // It is a POSITIVE control: it first shows the user's access is kept, by
+    // removing the grant's row without telling anyone and still being allowed,
+    // and then asserts the service's removal is what refuses. Asserting only
+    // that the role_permissions row changed passes just as well when nothing
+    // kept is ever retired.
+    it("retires a kept grant when a permission is removed from the role", async () => {
+      resetEpochForTests();
+      clearInMemoryPermissionTiersForTests();
       const role = roleFactory({ name: "Editor" });
       const permission = permissionFactory({
         action: "read",
@@ -892,18 +899,29 @@ describe("RolePermissionService", () => {
       await testDb.db
         .insert(testDb.schema.users)
         .values(userFactory({ id: "user-1" }));
+      await testDb.db.insert(testDb.schema.userRoles).values({
+        id: "user-1-editor",
+        userId: "user-1",
+        roleId: role.id,
+      });
       await service.addPermissionToRole(role.id, {
         action: permission.action,
         resource: permission.resource,
       });
+      expect(await hasPermission("user-1", "read", "users")).toBe(true);
 
-      const cache = new PermissionCacheService(testDb.adapter, testLogger);
-      await cache.setCachedPermission("user-1", "read", "users", true, [
-        role.id,
-      ]);
-      expect(await cache.getCachedPermission("user-1", "read", "users")).toBe(
-        true
-      );
+      // POPULATION CONTROL: removed without a word, the grant is still
+      // answered, so what follows is the service retiring it and not a
+      // re-read that would have refused anyway.
+      const [row] = await testDb.db
+        .select()
+        .from(testDb.schema.rolePermissions)
+        .where(eq(testDb.schema.rolePermissions.roleId, role.id));
+      await testDb.db
+        .delete(testDb.schema.rolePermissions)
+        .where(eq(testDb.schema.rolePermissions.roleId, role.id));
+      expect(await hasPermission("user-1", "read", "users")).toBe(true);
+      await testDb.db.insert(testDb.schema.rolePermissions).values(row);
 
       await service.removePermissionFromRole(role.id, {
         action: permission.action,
@@ -913,9 +931,7 @@ describe("RolePermissionService", () => {
       // returns. Waiting is the honest way to observe it; asserting
       // immediately would be a race that passes on a fast machine.
       await vi.waitFor(async () => {
-        expect(
-          await cache.getCachedPermission("user-1", "read", "users")
-        ).toBeNull();
+        expect(await hasPermission("user-1", "read", "users")).toBe(false);
       });
     });
   });

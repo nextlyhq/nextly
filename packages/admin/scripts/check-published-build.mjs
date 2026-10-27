@@ -52,7 +52,11 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { minify } from "terser";
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -146,58 +150,38 @@ export async function foldForProduction(code) {
   return folded.code ?? "";
 }
 
+/**
+ * A module's syntax tree, with the code its offsets point into.
+ *
+ * Where a node sits decides what it means below — whether a stream is opened
+ * inside a function or as the module loads — so the readers walk it with the
+ * chain of nodes above each one. The shared walk is iterative: minified code
+ * chains thousands of expressions into one, and a tree that deep overflows the
+ * call stack of anything that recurses into it.
+ */
 function parse(file, code) {
-  return ts.createSourceFile(
-    file,
-    code,
-    ts.ScriptTarget.Latest,
-    // Parents are set because where a node sits decides what it means below:
-    // whether a stream is opened inside a function or as the module loads.
-    true,
-    ts.ScriptKind.JS
-  );
+  return { code, program: parseSource(code, file).program };
 }
 
 function staticSpecifier(node) {
-  const from = ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
-  return from && node.moduleSpecifier ? node.moduleSpecifier.text : null;
+  const from =
+    node.type === "ImportDeclaration" ||
+    node.type === "ExportNamedDeclaration" ||
+    node.type === "ExportAllDeclaration";
+  return from ? literalText(node.source) : null;
 }
 
 function dynamicSpecifier(node) {
-  const isImport =
-    ts.isCallExpression(node) &&
-    node.expression.kind === ts.SyntaxKind.ImportKeyword;
-  const [argument] = isImport ? node.arguments : [];
-  return argument && ts.isStringLiteralLike(argument) ? argument.text : null;
-}
-
-/**
- * Every node of a tree.
- *
- * With a stack of its own rather than by recursion: minified code chains
- * thousands of expressions into one, and a tree that deep overflows the call
- * stack of anything that recurses into it.
- */
-function nodesOf(tree) {
-  const nodes = [];
-  const pending = [tree];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    nodes.push(node);
-    ts.forEachChild(node, child => {
-      pending.push(child);
-    });
-  }
-  return nodes;
+  return node.type === "ImportExpression" ? literalText(node.source) : null;
 }
 
 /** The files inside the package a module imports, statically or on demand. */
 export function importsOf(tree) {
   const specifiers = [];
-  for (const node of nodesOf(tree)) {
+  walk(tree.program, node => {
     const specifier = staticSpecifier(node) ?? dynamicSpecifier(node);
     if (specifier?.startsWith(".")) specifiers.push(specifier);
-  }
+  });
   return specifiers;
 }
 
@@ -242,41 +226,43 @@ function textFindings(file, code, kind, texts, what) {
     .map(text => ({ kind, message: `${file} ${what}: it holds "${text}"` }));
 }
 
+/** Functions in every spelling: methods, constructors and accessors are function expressions under their key. */
 const FUNCTIONS = new Set([
-  ts.SyntaxKind.FunctionDeclaration,
-  ts.SyntaxKind.FunctionExpression,
-  ts.SyntaxKind.ArrowFunction,
-  ts.SyntaxKind.MethodDeclaration,
-  ts.SyntaxKind.Constructor,
-  ts.SyntaxKind.GetAccessor,
-  ts.SyntaxKind.SetAccessor,
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
 ]);
 
-function withoutParentheses(node) {
-  return ts.isParenthesizedExpression(node.parent) ? node.parent : node;
-}
-
-/** Whether a function is called where it is written, as `(() => { … })()` is. */
-function calledOnTheSpot(fn) {
-  const callee = withoutParentheses(fn);
-  return (
-    ts.isCallExpression(callee.parent) && callee.parent.expression === callee
-  );
+/**
+ * Whether the function at `ancestors[at]` is called where it is written, as
+ * `(() => { … })()` is: its parent, seen through one pair of parentheses, is a
+ * call with it as the callee.
+ */
+function calledOnTheSpot(ancestors, at) {
+  let callee = ancestors[at];
+  let parent = ancestors[at - 1];
+  if (parent?.type === "ParenthesizedExpression") {
+    callee = parent;
+    parent = ancestors[at - 2];
+  }
+  return parent?.type === "CallExpression" && parent.callee === callee;
 }
 
 /** Whether a node runs only when some function is called, not as its module loads. */
-function runsOnlyWhenCalled(node) {
-  for (let above = node.parent; above; above = above.parent) {
-    if (FUNCTIONS.has(above.kind) && !calledOnTheSpot(above)) return true;
+function runsOnlyWhenCalled(ancestors) {
+  for (let at = ancestors.length - 1; at >= 0; at--) {
+    if (FUNCTIONS.has(ancestors[at].type) && !calledOnTheSpot(ancestors, at)) {
+      return true;
+    }
   }
   return false;
 }
 
 function opensStream(node) {
   return (
-    ts.isNewExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === "EventSource"
+    node.type === "NewExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "EventSource"
   );
 }
 
@@ -288,59 +274,76 @@ function opensStream(node) {
  * opened at load is opened in every application, on every host.
  */
 export function eagerStreams(file, tree) {
-  return nodesOf(tree)
-    .filter(node => opensStream(node) && !runsOnlyWhenCalled(node))
-    .map(node => ({
-      kind: "eager-reload-stream",
-      message: `${file} opens a stream as it loads: ${node.getText().slice(0, 80)}`,
-    }));
+  const found = [];
+  walk(tree.program, (node, ancestors) => {
+    if (opensStream(node) && !runsOnlyWhenCalled(ancestors)) {
+      found.push({
+        kind: "eager-reload-stream",
+        message: `${file} opens a stream as it loads: ${tree.code.slice(node.start, node.end).slice(0, 80)}`,
+      });
+    }
+  });
+  return found;
 }
 
+/** The name a non-computed member read spells, when it is a builder address. */
 function builderName(expression) {
   const named =
-    expression &&
-    ts.isPropertyAccessExpression(expression) &&
-    BUILDER_NAME.test(expression.name.text);
-  return named ? expression.name.text : null;
+    expression?.type === "MemberExpression" &&
+    !expression.computed &&
+    expression.property.type === "Identifier" &&
+    BUILDER_NAME.test(expression.property.name);
+  return named ? expression.property.name : null;
+}
+
+/** A plain `key: value` property, as opposed to a shorthand, a method or an accessor. */
+function isAssignment(node) {
+  return (
+    node.type === "Property" &&
+    node.kind === "init" &&
+    !node.method &&
+    !node.shorthand
+  );
 }
 
 function addressOf(node) {
-  const isAddress =
-    ts.isPropertyAssignment(node) &&
-    ts.isIdentifier(node.name) &&
-    BUILDER_NAME.test(node.name.text) &&
-    ts.isStringLiteralLike(node.initializer);
-  return isAddress ? [node.name.text, node.initializer.text] : null;
+  if (!isAssignment(node) || node.computed || node.key.type !== "Identifier") {
+    return null;
+  }
+  const address = literalText(node.value);
+  return BUILDER_NAME.test(node.key.name) && address !== null
+    ? [node.key.name, address]
+    : null;
 }
 
 function isNamed(property, name) {
   return (
-    property.name !== undefined &&
-    ts.isIdentifier(property.name) &&
-    property.name.text === name
+    property.type === "Property" &&
+    !property.computed &&
+    property.key.type === "Identifier" &&
+    property.key.name === name
   );
 }
 
 function hasComponent(value) {
   return (
-    ts.isObjectLiteralExpression(value) &&
+    value.type === "ObjectExpression" &&
     value.properties.some(property => isNamed(property, "component"))
   );
 }
 
 function routeOf(node) {
-  const isRoute =
-    ts.isPropertyAssignment(node) &&
-    ts.isComputedPropertyName(node.name) &&
-    hasComponent(node.initializer);
-  return isRoute ? builderName(node.name.expression) : null;
+  const isRoute = isAssignment(node) && node.computed && hasComponent(node.value);
+  return isRoute ? builderName(node.key) : null;
 }
 
 function removalOf(node) {
   const removes =
-    ts.isDeleteExpression(node) &&
-    ts.isElementAccessExpression(node.expression);
-  return removes ? builderName(node.expression.argumentExpression) : null;
+    node.type === "UnaryExpression" &&
+    node.operator === "delete" &&
+    node.argument.type === "MemberExpression" &&
+    node.argument.computed;
+  return removes ? builderName(node.argument.property) : null;
 }
 
 /**
@@ -357,13 +360,15 @@ export function builderRoutes(trees) {
     served: new Set(),
     removed: new Set(),
   };
-  for (const node of trees.flatMap(tree => nodesOf(tree))) {
-    const address = addressOf(node);
-    if (address) routes.addresses.set(...address);
-    const served = routeOf(node);
-    if (served) routes.served.add(served);
-    const removed = removalOf(node);
-    if (removed) routes.removed.add(removed);
+  for (const tree of trees) {
+    walk(tree.program, node => {
+      const address = addressOf(node);
+      if (address) routes.addresses.set(...address);
+      const served = routeOf(node);
+      if (served) routes.served.add(served);
+      const removed = removalOf(node);
+      if (removed) routes.removed.add(removed);
+    });
   }
   return routes;
 }

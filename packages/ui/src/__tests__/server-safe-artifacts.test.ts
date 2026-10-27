@@ -98,6 +98,13 @@ describe("reading an artifact's specifiers", () => {
         `function f(k) { switch (k) { case 0: const require = (n) => n; } return require("react"); }`
       )
     ).toEqual(ambient);
+    // The discriminant is read OUTSIDE the case block, so a binding inside the cases cannot reach
+    // it.
+    expect(
+      read(
+        `function f() { switch (require("react")) { case 0: const require = (n) => n; } }`
+      )
+    ).toEqual(ambient);
     // A named class binds its own name throughout its body.
     expect(
       read(
@@ -117,6 +124,19 @@ describe("reading an artifact's specifiers", () => {
         `const { require } = loaders;\nexport const label = require("react");`
       )
     ).toEqual(shadowed);
+    // An exported declaration binds its name exactly as the unexported one does.
+    expect(
+      read(
+        `export const require = (n) => n;\nexport const label = require("react");`
+      )
+    ).toEqual(shadowed);
+    // A `let`/`const` loop head binds inside the loop, and only there.
+    expect(
+      read(`for (const require of loaders) { require("react"); }`)
+    ).toEqual(shadowed);
+    expect(
+      read(`for (const require of loaders) {}\nconst react = require("react");`)
+    ).toEqual(ambient);
     // And an unrelated nested binding cannot reach a top-level call.
     expect(
       read(

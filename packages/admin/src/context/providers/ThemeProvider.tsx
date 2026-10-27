@@ -10,6 +10,7 @@ import {
   type Dispatch,
   type ReactNode,
   type SetStateAction,
+  type JSX,
 } from "react";
 
 /**
@@ -234,7 +235,11 @@ export function useTheme(): UseThemeProps {
  * </ThemeProvider>
  * ```
  */
-export function ThemePaintScript({ nonce }: { nonce?: string }) {
+export function ThemePaintScript({
+  nonce,
+}: {
+  nonce?: string;
+}): JSX.Element | null {
   const { config, nonce: providerNonce } = useContext(ThemeContext);
   const serverOrHydrating = useSyncExternalStore(
     neverChanges,
@@ -405,7 +410,7 @@ export interface ThemeProviderProps {
  * </ThemeProvider>
  * ```
  */
-export function ThemeProvider(props: ThemeProviderProps) {
+export function ThemeProvider(props: ThemeProviderProps): JSX.Element {
   // Inside another ThemeProvider, as when a host wraps the admin's root
   // layout in its own, the outer one's settings and state hold: a second
   // store would compete with it for the same containers.

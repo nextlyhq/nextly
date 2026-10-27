@@ -133,6 +133,14 @@ describe("a widget declaration as startup receives it", () => {
     expect(problemsOf(valid({ several: "yes" }))[0]).toContain("several");
   });
 
+  it("accepts hidesWhenEmpty as a boolean, and refuses anything else", () => {
+    expect(problemsOf(valid({ hidesWhenEmpty: true }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: false }))).toEqual([]);
+    expect(problemsOf(valid({ hidesWhenEmpty: "yes" }))).toEqual([
+      "hidesWhenEmpty must be true or false",
+    ]);
+  });
+
   it("refuses a sketch that names no core display", () => {
     expect(problemsOf(valid({ sketch: "pie" }))[0]).toContain("sketch");
     expect(problemsOf(valid({ sketch: "bars" }))).toEqual([]);
@@ -367,6 +375,22 @@ describe("a widget declaration as startup receives it", () => {
       ["without a label", { link: "collections/products/create" }],
       ["with an absolute link", { label: "Add", link: "https://x.test/a" }],
       ["with a link from the root", { label: "Add", link: "/admin/a" }],
+      // A browser resolves these before it navigates, so each would leave the
+      // admin from under its prefix.
+      ["with a parent segment", { label: "Add", link: "../logout" }],
+      [
+        "with a parent segment further in",
+        { label: "Add", link: "collections/../../account" },
+      ],
+      ["with an encoded parent segment", { label: "Add", link: "%2E%2e/x" }],
+      [
+        "with an encoded slash",
+        { label: "Add", link: "collections%2f..%2f..%2fx" },
+      ],
+      [
+        "with a segment that cannot be decoded",
+        { label: "Add", link: "collections/%e0%a4" },
+      ],
       [
         "with a permission that is not a permission name",
         { label: "Add", link: "collections/a", permission: "Add things" },

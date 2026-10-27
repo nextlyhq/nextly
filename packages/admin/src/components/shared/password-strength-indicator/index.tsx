@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 import {
@@ -18,7 +18,7 @@ export function PasswordStrengthIndicator({
   password,
   className,
   helpText = "Use 8+ characters with uppercase, lowercase, numbers, and symbols",
-}: PasswordStrengthIndicatorProps) {
+}: PasswordStrengthIndicatorProps): JSX.Element | null {
   const strength: PasswordStrength = useMemo(
     () => calculatePasswordStrength(password),
     [password]

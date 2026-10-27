@@ -16,6 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
@@ -52,7 +53,7 @@ export function BuilderFieldList({
   onDuplicateField,
   onAddInsideParent,
   readOnly = false,
-}: Props) {
+}: Props): JSX.Element {
   const systemFields = fields.filter(f => f.isSystem);
   // Packed by the ONE derivation the reorder and the drag announcements read
   // too, so the row a reader sees is the row they move.

@@ -51,10 +51,9 @@ export default defineCollection({
     description: "Blog posts and articles",
   },
   access: {
+    // Visitors can read, and signed-in callers holding read-posts. Create,
+    // update and delete declare no rule, so the role's permission decides.
     read: true,
-    create: ({ permissions }) => permissions.includes("create-posts"),
-    update: ({ permissions }) => permissions.includes("update-posts"),
-    delete: ({ permissions }) => permissions.includes("delete-posts"),
   },
   hooks: {
     beforeChange: [
@@ -345,14 +344,14 @@ Available view overrides: `Edit`, `List`. Available injection points: `BeforeLis
 
 Each CRUD operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to the database role/permission system.
 
-A declared rule is the whole answer for a signed-in user: the role's permission is not checked beside it. So for staff and API keys a rule should check the permission for its operation itself, then narrow from there; a plugin-defined person, who holds no permissions, is admitted by a branch of its own. Don't decide by a role's name: a custom role holding the permission, and an API key whose roles carry none of the names, would be refused. See [Roles and Permissions](/docs/permissions#collection-access).
+A declared rule only narrows the role's permission. A signed-in user or an API key needs the permission for the operation first (`update-posts`), and the rule then lets them through only by returning `true`, so a rule adds your own condition and never admits someone whose role lacks the permission. A plugin-defined person, who holds no permissions, is judged by the rule alone. Don't decide by a role's name: a custom role holding the permission, and an API key whose roles carry none of the names, would be refused. See [Roles and Permissions](/docs/permissions#collection-access).
 
 ```typescript
 access: {
-  create: ({ permissions }) => permissions.includes("create-posts"),
   read: true,
-  update: ({ permissions }) => permissions.includes("update-posts"),
-  delete: ({ permissions }) => permissions.includes("delete-posts"),
+  // On top of the role's update-posts: not while a content freeze is on.
+  update: () => process.env.CONTENT_FREEZE !== "on",
+  delete: false,
 }
 ```
 
@@ -372,11 +371,11 @@ Every access rule — a collection's, a Single's and a field's — is handed one
 | `locale` | `string \| undefined` | The one language the operation is in, where it is in one. See [Localization](/docs/localization#access-rules-and-languages). |
 | `locales` | `string[]` | Every language the operation involves; every configured language for an operation on the whole entry, such as a delete. |
 
-Rules were once handed permissions as `posts:update`. For one release that spelling is still in the list, after the Roles screen's, so an existing rule keeps working; Nextly warns once per rule that checks it. It stops being accepted in a later release.
+Rules were once handed permissions as `posts:update`. That spelling is no longer in the list, so a rule checking it does not allow; check `update-posts`, as the Roles screen spells it.
 
 **Rules:**
 
-- Code-defined access is what a signed-in user is judged by when it is declared, so it includes the permission check itself.
+- Code-defined access only narrows the permission: a signed-in user or an API key needs the permission first, and a declared rule lets them through only by returning `true`.
 - Omitting an operation falls back to the database role/permission system.
 - Super-admin always bypasses all access checks.
 

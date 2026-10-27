@@ -7,6 +7,12 @@ import { readFileSync } from "node:fs";
 
 import { defineConfig } from "oxlint";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "./lint/import-cycles.mjs";
+
 /** Prefixes each path of a package-relative allowlist with the package. */
 const inPackage = (pkg, paths) => paths.map(path => `packages/${pkg}/${path}`);
 
@@ -67,6 +73,42 @@ const REQUEST_PATH_RESTRICTED = [
       "F11: deployed runtime must not import migrate-* CLI modules. Migrations are a CLI-only concern. See docs/guides/production-migrations.mdx.",
   },
 ];
+
+/**
+ * The React Compiler rules of eslint-plugin-react-hooks 7's recommended
+ * preset that oxlint implements, under its `react` plugin. The preset's
+ * `config` and `gating` rules check the compiler's own configuration and have
+ * no port; `rules-of-hooks` and `exhaustive-deps` are on for every React
+ * package already.
+ */
+const REACT_COMPILER_RULES = [
+  "error-boundaries",
+  "globals",
+  "immutability",
+  "incompatible-library",
+  "preserve-manual-memoization",
+  "purity",
+  "refs",
+  "set-state-in-effect",
+  "set-state-in-render",
+  "static-components",
+  "unsupported-syntax",
+  "use-memo",
+];
+
+/**
+ * The accessibility rules of Next.js's core-web-vitals preset, which is what
+ * the playground was linted with: `alt-text` for `<img>` and next/image's
+ * `Image`, and the ARIA attribute and role checks.
+ */
+const NEXT_A11Y_RULES = {
+  "jsx-a11y/alt-text": ["error", { elements: ["img"], img: ["Image"] }],
+  "jsx-a11y/aria-props": "error",
+  "jsx-a11y/aria-proptypes": "error",
+  "jsx-a11y/aria-unsupported-elements": "error",
+  "jsx-a11y/role-has-required-aria-props": "error",
+  "jsx-a11y/role-supports-aria-props": "error",
+};
 
 /** Every rule oxlint implements from Next.js's own lint preset. */
 const NEXT_RULES = [
@@ -154,6 +196,7 @@ export default defineConfig({
     // project. Every other configuration file is linted.
     "oxlint.config.mjs",
     "oxlint.scripts.config.mjs",
+    "oxlint.templates.config.mjs",
     "**/vitest.config.{ts,mjs}",
     "**/vitest.*.config.ts",
     "**/vitest.global-setup.{js,ts,mjs,cjs}",
@@ -254,6 +297,11 @@ export default defineConfig({
     "typescript/no-floating-promises": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "error",
+    // Under `verbatimModuleSyntax` an import whose names are all marked `type`
+    // inline (`import { type A } from "./x"`) is kept as `import "./x"`, so the
+    // bundler keeps a module the code never uses. `import type { A }` is
+    // dropped whole.
+    "typescript/no-import-type-side-effects": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-namespace": "error",
@@ -389,6 +437,27 @@ export default defineConfig({
       rules: { "nextly/api-key-scope": "error" },
     },
     {
+      // No file newly on an import cycle in nextly's source. The files already
+      // on one are exempt, and scripts/lint-config.test.mjs holds those cycles
+      // to the groups lint/import-cycles.mjs lists, so the exemption only
+      // shrinks. A new import between two files already in one group is not
+      // caught: see lint/import-cycles.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: IMPORT_CYCLES.flat().map(
+        file => `${NEXTLY_SOURCE}/${file}`
+      ),
+      rules: { "import/no-cycle": NO_CYCLE },
+    },
+    {
+      // No top-level await in nextly's source: the deadlock a cycle through a
+      // dynamic import could cause, which import/no-cycle cannot see. Every
+      // file, the cycle-exempt ones included; tests load modules at their top
+      // level on purpose. What it covers and what it does not: lint/guards.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: TESTS,
+      rules: { "nextly/no-top-level-await": "error" },
+    },
+    {
       // nextly writes through a masked logger, not the console.
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...CONSOLE_ALLOWED, ...TESTS],
@@ -445,14 +514,21 @@ export default defineConfig({
     },
     {
       // The playground is a Next.js app, linted with every rule of Next's
-      // preset at error, as its lint ran with no warning allowed. It reads
-      // runtime harness flags no turbo task builds against, and Next's async
-      // page components need no `await`.
+      // preset at error, as its lint ran with no warning allowed: Next's own
+      // rules, the React Compiler rules and the accessibility rules its
+      // core-web-vitals preset turns on. It reads runtime harness flags no
+      // turbo task builds against, and Next's async page components need no
+      // `await`.
       files: ["apps/playground/**/*.{ts,tsx,js,jsx}"],
+      plugins: ["jsx-a11y"],
       rules: {
         ...Object.fromEntries(
           NEXT_RULES.map(rule => [`nextjs/${rule}`, "error"])
         ),
+        ...Object.fromEntries(
+          REACT_COMPILER_RULES.map(rule => [`react/${rule}`, "error"])
+        ),
+        ...NEXT_A11Y_RULES,
         "turbo/no-undeclared-env-vars": "off",
         "typescript/require-await": "off",
         "import-order/order": "off",
@@ -462,6 +538,13 @@ export default defineConfig({
       // One owner for keyboard shortcuts: the admin's shortcut manager.
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },
+    },
+    {
+      // The Tabs primitive owns its indicator: a call site passes layout, and a
+      // different indicator is a change to the primitive. Every extension JSX
+      // is legal in, since a JavaScript app writes JSX in `.js` too.
+      files: ["packages/**/*.{tsx,jsx,js}", "apps/**/*.{tsx,jsx,js}"],
+      rules: { "nextly/tab-indicator": "error" },
     },
   ],
 });

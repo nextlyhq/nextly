@@ -346,7 +346,9 @@ export type DraftPreviewResult = RenderedTemplate;
  */
 export async function previewDraft(
   template: DraftPreviewTemplate,
-  data: DraftPreviewData
+  data: DraftPreviewData,
+  /** Brand settings to render with instead of the saved ones, unsaved. */
+  brand?: DraftPreviewRequest["brand"]
 ): Promise<DraftPreviewResult> {
   /*
    * The WHOLE body is annotated, not just the template inside it. Typing only
@@ -354,7 +356,9 @@ export async function previewDraft(
    * another required top-level property still compiles here and fails as a 400
    * at runtime — which is the failure this derivation exists to prevent.
    */
-  const body: DraftPreviewRequest = { template, data };
+  const body: DraftPreviewRequest = brand
+    ? { template, data, brand }
+    : { template, data };
   return fetcher<DraftPreviewResult>(
     "/email-templates/preview",
     { method: "POST", body: JSON.stringify(body) },
@@ -462,7 +466,24 @@ export async function undoOwnerUpdate(
   return normalizeTemplate(result.item);
 }
 
-export const emailTemplateApi = {
+/** The type of {@link emailTemplateApi}. */
+type EmailTemplateApiType = {
+  readonly listTemplates: typeof listTemplates;
+  readonly getTemplate: typeof getTemplate;
+  readonly createTemplate: typeof createTemplate;
+  readonly updateTemplate: typeof updateTemplate;
+  readonly deleteTemplate: typeof deleteTemplate;
+  readonly previewTemplate: typeof previewTemplate;
+  readonly previewDraft: typeof previewDraft;
+  readonly sendTestEmail: typeof sendTestEmail;
+  readonly overrideTemplate: typeof overrideTemplate;
+  readonly resetTemplate: typeof resetTemplate;
+  readonly compareTemplate: typeof compareTemplate;
+  readonly applyOwnerUpdate: typeof applyOwnerUpdate;
+  readonly undoOwnerUpdate: typeof undoOwnerUpdate;
+};
+
+export const emailTemplateApi: EmailTemplateApiType = {
   listTemplates,
   getTemplate,
   createTemplate,

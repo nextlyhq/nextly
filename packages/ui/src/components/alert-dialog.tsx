@@ -45,6 +45,9 @@ import {
   type ElementRef,
   type ComponentPropsWithoutRef,
   type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
 } from "react";
 
 import { cn } from "../lib/utils";
@@ -53,13 +56,15 @@ import { usePortalContainer } from "../providers/portal-provider";
 import { buttonVariants } from "./button";
 
 /** @experimental */
-const AlertDialog = AlertDialogPrimitive.Root;
+const AlertDialog: typeof AlertDialogPrimitive.Root = AlertDialogPrimitive.Root;
 
 /** @experimental */
-const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
+const AlertDialogTrigger: typeof AlertDialogPrimitive.Trigger =
+  AlertDialogPrimitive.Trigger;
 
 /** @experimental */
-const AlertDialogPortal = AlertDialogPrimitive.Portal;
+const AlertDialogPortal: typeof AlertDialogPrimitive.Portal =
+  AlertDialogPrimitive.Portal;
 
 /** @experimental */
 export type AlertDialogOverlayProps = ComponentPropsWithoutRef<
@@ -70,7 +75,10 @@ export type AlertDialogOverlayProps = ComponentPropsWithoutRef<
  * AlertDialogOverlay - The backdrop overlay behind the dialog content.
  * @experimental
  */
-const AlertDialogOverlay = forwardRef<
+const AlertDialogOverlay: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogOverlayProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Overlay>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Overlay>,
   AlertDialogOverlayProps
 >(({ className, ...props }, ref) => (
@@ -99,7 +107,10 @@ export type AlertDialogContentProps = ComponentPropsWithoutRef<
  * AlertDialogContent - The main dialog content container.
  * @experimental
  */
-const AlertDialogContent = forwardRef<
+const AlertDialogContent: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogContentProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Content>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Content>,
   AlertDialogContentProps
 >(({ className, ...props }, ref) => {
@@ -128,7 +139,9 @@ export type AlertDialogHeaderProps = HTMLAttributes<HTMLDivElement>;
  * AlertDialogHeader - Container for dialog title and description.
  * @experimental
  */
-const AlertDialogHeader = forwardRef<HTMLDivElement, AlertDialogHeaderProps>(
+const AlertDialogHeader: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogHeaderProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertDialogHeaderProps>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
@@ -149,7 +162,9 @@ export type AlertDialogFooterProps = HTMLAttributes<HTMLDivElement>;
  * AlertDialogFooter - Container for dialog action buttons.
  * @experimental
  */
-const AlertDialogFooter = forwardRef<HTMLDivElement, AlertDialogFooterProps>(
+const AlertDialogFooter: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogFooterProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertDialogFooterProps>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
@@ -172,7 +187,10 @@ export type AlertDialogTitleProps = ComponentPropsWithoutRef<
  * AlertDialogTitle - The title of the alert dialog.
  * @experimental
  */
-const AlertDialogTitle = forwardRef<
+const AlertDialogTitle: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogTitleProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Title>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Title>,
   AlertDialogTitleProps
 >(({ className, ...props }, ref) => (
@@ -196,7 +214,10 @@ export type AlertDialogDescriptionProps = ComponentPropsWithoutRef<
  * AlertDialogDescription - The description text of the alert dialog.
  * @experimental
  */
-const AlertDialogDescription = forwardRef<
+const AlertDialogDescription: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogDescriptionProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Description>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Description>,
   AlertDialogDescriptionProps
 >(({ className, ...props }, ref) => (
@@ -219,7 +240,10 @@ export type AlertDialogActionProps = ComponentPropsWithoutRef<
  * Styled as destructive by default.
  * @experimental
  */
-const AlertDialogAction = forwardRef<
+const AlertDialogAction: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogActionProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Action>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Action>,
   AlertDialogActionProps
 >(({ className, children, ...props }, ref) => (
@@ -243,7 +267,10 @@ export type AlertDialogCancelProps = ComponentPropsWithoutRef<
  * Styled as outline variant.
  * @experimental
  */
-const AlertDialogCancel = forwardRef<
+const AlertDialogCancel: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDialogCancelProps> &
+    RefAttributes<ElementRef<typeof AlertDialogPrimitive.Cancel>>
+> = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Cancel>,
   AlertDialogCancelProps
 >(({ className, children, ...props }, ref) => (

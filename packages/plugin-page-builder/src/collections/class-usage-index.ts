@@ -34,7 +34,7 @@
  *
  * @module collections/class-usage-index
  */
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, text, type CollectionConfig } from "nextly/config";
 
 import type { UsageScope, UsageSubject, UsageVariant } from "../usage-index";
 
@@ -95,7 +95,7 @@ export type ClassUsageRow = UsageSubject & {
  * wrong twice over: the index spans every collection that mounts a blocks
  * field, not one, and a single has no row to relate to.
  */
-export function classUsageIndexCollection() {
+export function classUsageIndexCollection(): CollectionConfig {
   return defineCollection({
     slug: CLASS_USAGE_INDEX_SLUG,
     labels: { singular: "Class usage", plural: "Class usage" },

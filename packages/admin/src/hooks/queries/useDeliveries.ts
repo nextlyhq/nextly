@@ -17,6 +17,8 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import type { ListResponse } from "@admin/lib/api/response-types";
@@ -30,10 +32,17 @@ import type {
 
 export const deliveryKeys = {
   all: () => ["webhook-deliveries"] as const,
-  endpoint: (webhookId: string) => [...deliveryKeys.all(), webhookId] as const,
-  list: (webhookId: string, params: ListDeliveriesParams) =>
+  endpoint: (webhookId: string): readonly ["webhook-deliveries", string] =>
+    [...deliveryKeys.all(), webhookId] as const,
+  list: (
+    webhookId: string,
+    params: ListDeliveriesParams
+  ): readonly ["webhook-deliveries", string, "list", ListDeliveriesParams] =>
     [...deliveryKeys.endpoint(webhookId), "list", params] as const,
-  detail: (webhookId: string, deliveryId: string) =>
+  detail: (
+    webhookId: string,
+    deliveryId: string
+  ): readonly ["webhook-deliveries", string, "detail", string] =>
     [...deliveryKeys.endpoint(webhookId), "detail", deliveryId] as const,
 };
 
@@ -46,7 +55,7 @@ export function useDeliveries(
   webhookId: string,
   params: ListDeliveriesParams,
   options?: { enabled?: boolean }
-) {
+): UseQueryResult<ListResponse<WebhookDeliverySummary>, Error> {
   return useQuery<ListResponse<WebhookDeliverySummary>, Error>({
     queryKey: deliveryKeys.list(webhookId, params),
     queryFn: () => deliveryApi.listDeliveries(webhookId, params),
@@ -57,7 +66,10 @@ export function useDeliveries(
 }
 
 /** One delivery with its attempt history, for the detail page. */
-export function useDelivery(webhookId: string, deliveryId: string) {
+export function useDelivery(
+  webhookId: string,
+  deliveryId: string
+): UseQueryResult<WebhookDeliveryDetail, Error> {
   return useQuery<WebhookDeliveryDetail, Error>({
     queryKey: deliveryKeys.detail(webhookId, deliveryId),
     queryFn: () => deliveryApi.getDelivery(webhookId, deliveryId),
@@ -70,7 +82,15 @@ export function useDelivery(webhookId: string, deliveryId: string) {
  * and the open detail both refetch the reset state (status pending, attempt
  * count 0).
  */
-export function useRedeliver() {
+export function useRedeliver(): UseMutationResult<
+  WebhookDeliveryDetail,
+  Error,
+  {
+    webhookId: string;
+    deliveryId: string;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<
     WebhookDeliveryDetail,
@@ -91,7 +111,12 @@ export function useRedeliver() {
  * Run a manual drain pass. A drain can advance deliveries for any endpoint, so
  * it invalidates every endpoint's delivery keys.
  */
-export function useRunDrain() {
+export function useRunDrain(): UseMutationResult<
+  RunDrainResult,
+  Error,
+  void,
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<RunDrainResult, Error, void>({
     mutationFn: () => deliveryApi.runDrain(),

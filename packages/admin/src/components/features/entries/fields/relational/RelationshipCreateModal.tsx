@@ -27,6 +27,7 @@ import {
   Skeleton,
 } from "@nextlyhq/ui";
 import { useState, useCallback } from "react";
+import type { JSX } from "react";
 
 import { AlertCircle, Loader2 } from "@admin/components/icons";
 import { useCollection } from "@admin/hooks/queries/useCollections";
@@ -252,7 +253,7 @@ export function RelationshipCreateModal({
   relationTo,
   onCreated,
   fieldLabel,
-}: RelationshipCreateModalProps) {
+}: RelationshipCreateModalProps): JSX.Element {
   const collections = getCollections(relationTo);
   const isPolymorphicRelation = isPolymorphic(relationTo);
 

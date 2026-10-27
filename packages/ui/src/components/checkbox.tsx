@@ -1,42 +1,52 @@
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox";
 import { Check, Minus } from "lucide-react";
-import type { ComponentPropsWithoutRef, ElementRef } from "react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 
+type CheckboxProps = ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {
+  indeterminate?: boolean;
+};
+
 /** @public */
-const Checkbox = forwardRef<
-  ElementRef<typeof CheckboxPrimitive.Root>,
-  ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {
-    indeterminate?: boolean;
-  }
->(({ className, indeterminate, ...props }, ref) => (
-  <CheckboxPrimitive.Root
-    ref={ref}
-    data-slot="checkbox"
-    className={cn(
-      // Resting border uses border-control-border, NOT border-input. An
-      // unchecked box has no label, value or focus ring to identify it -- the
-      // border is the whole control -- so it is held to 1.4.11's 3:1, which
-      // border-input deliberately no longer meets. The checked state switches
-      // to border-primary below, keeping the two states distinct.
-      "peer relative h-4 w-4 shrink-0 rounded-sm border border-control-border ring-offset-background before:absolute before:left-1/2 before:top-1/2 before:h-6 before:w-6 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:border-primary transition-all duration-200",
-      className
-    )}
-    {...props}
-  >
-    <CheckboxPrimitive.Indicator
-      className={cn("flex items-center justify-center text-current")}
-    >
-      {indeterminate ? (
-        <Minus className="h-3 w-3" />
-      ) : (
-        <Check className="h-3 w-3" />
+const Checkbox: ForwardRefExoticComponent<
+  PropsWithoutRef<CheckboxProps> &
+    RefAttributes<ElementRef<typeof CheckboxPrimitive.Root>>
+> = forwardRef<ElementRef<typeof CheckboxPrimitive.Root>, CheckboxProps>(
+  ({ className, indeterminate, ...props }, ref) => (
+    <CheckboxPrimitive.Root
+      ref={ref}
+      data-slot="checkbox"
+      className={cn(
+        // Resting border uses border-control-border, NOT border-input. An
+        // unchecked box has no label, value or focus ring to identify it -- the
+        // border is the whole control -- so it is held to 1.4.11's 3:1, which
+        // border-input deliberately no longer meets. The checked state switches
+        // to border-primary below, keeping the two states distinct.
+        "peer relative h-4 w-4 shrink-0 rounded-sm border border-control-border ring-offset-background before:absolute before:left-1/2 before:top-1/2 before:h-6 before:w-6 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] focus:border-primary! focus-visible:border-primary! focus:outline-none focus-visible:outline-none aria-invalid:border-destructive aria-invalid:focus:border-destructive! aria-invalid:focus-visible:border-destructive! disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground data-[state=indeterminate]:border-primary transition-all duration-200",
+        className
       )}
-    </CheckboxPrimitive.Indicator>
-  </CheckboxPrimitive.Root>
-));
+      {...props}
+    >
+      <CheckboxPrimitive.Indicator
+        className={cn("flex items-center justify-center text-current")}
+      >
+        {indeterminate ? (
+          <Minus className="h-3 w-3" />
+        ) : (
+          <Check className="h-3 w-3" />
+        )}
+      </CheckboxPrimitive.Indicator>
+    </CheckboxPrimitive.Root>
+  )
+);
 
 Checkbox.displayName = "Checkbox";
 

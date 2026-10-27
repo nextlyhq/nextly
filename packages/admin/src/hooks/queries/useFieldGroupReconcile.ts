@@ -10,7 +10,13 @@
  * @module hooks/queries/useFieldGroupReconcile
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type {
   ReconcileFieldGroupPreview,
   ReconcileFieldGroupResult,
@@ -38,7 +44,7 @@ const reconcilePreviewKey = (fieldGroupSlug: string) =>
 export function useFieldGroupReconcilePreview(
   fieldGroupSlug: string,
   enabled: boolean
-) {
+): UseQueryResult<ReconcileFieldGroupPreview, Error> {
   return useQuery<ReconcileFieldGroupPreview, Error>({
     queryKey: reconcilePreviewKey(fieldGroupSlug),
     queryFn: () => fieldGroupApi.previewReconcile(fieldGroupSlug),
@@ -60,7 +66,15 @@ export function useFieldGroupReconcilePreview(
  * an approval, and an approval that does not name the plan it approves is the failure the pin
  * exists to prevent. A caller with no plan in hand should not be using this hook.
  */
-export function useFieldGroupReconcile() {
+export function useFieldGroupReconcile(): UseMutationResult<
+  ReconcileFieldGroupResult,
+  Error,
+  {
+    fieldGroupSlug: string;
+    expectedSchemaVersion: number;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<

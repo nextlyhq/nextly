@@ -507,69 +507,6 @@ export function collectionWidgets(
 }
 
 /**
- * The status card for a single: the one document, as its lifecycle state and
- * when it last changed.
- *
- * A single has one document, so the only card worth deriving is the one that
- * says what state it is in: a `list` of one row, its label the publish state
- * where the single has a lifecycle and the last change otherwise, and the
- * last change as the detail line. A count of one row is a constant and a
- * timeline over one row is a point, so neither is offered.
- *
- * The footer link opens the single itself, which is where a reader who sees
- * "draft" goes next.
- */
-function singleStatusWidget(
-  source: WidgetSource
-): WidgetDefinition | undefined {
-  if (!source.supports.includes("list")) return undefined;
-  const id = widgetId(source, "status");
-  if (id === undefined) return undefined;
-  const slug = sourceTarget(source.id);
-  return {
-    id,
-    title: source.label,
-    description:
-      source.lifecycleStatus === true
-        ? `Whether ${source.label} is published, and when it last changed`
-        : `When ${source.label} last changed`,
-    archetype: "list",
-    defaultSize: "sm",
-    query: {
-      source: source.id,
-      op: "list",
-      status: "all",
-      select:
-        source.lifecycleStatus === true
-          ? ["status", "updatedAt"]
-          : ["updatedAt"],
-    },
-    link: { label: `Open ${source.label}`, href: `/admin/singles/${slug}` },
-  };
-}
-
-/**
- * Every generated card the given single sources support, in source order.
- *
- * Pure, like {@link collectionWidgets}, and with the same collision rule: two
- * singles reducing to one id cost both their card.
- */
-export function singleWidgets(
-  sources: readonly WidgetSource[]
-): WidgetDefinition[] {
-  const claimed = new Map<string, number>();
-  const candidates: WidgetDefinition[] = [];
-  for (const source of sources) {
-    if (source.kind !== "single") continue;
-    const widget = singleStatusWidget(source);
-    if (!widget) continue;
-    claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
-    candidates.push(widget);
-  }
-  return candidates.filter(widget => claimed.get(widget.id) === 1);
-}
-
-/**
  * The generated set, pinned where every other boot-time widget store is.
  *
  * On `globalThis` so it survives the module re-evaluation Next.js and Turbopack
@@ -620,16 +557,12 @@ export async function refreshContentSources(): Promise<boolean> {
  * without this produces a set one request out of date.
  */
 export async function refreshCollectionWidgets(): Promise<void> {
-  // Both kinds of content source, then both kinds of card from the one
-  // source list: a single's card is derived the way a collection's is, and a
-  // refresh that rebuilt one kind and not the other would offer cards for a
-  // single deleted since beside none for one created since.
+  // Both kinds of content source, since a single's source is still read by the
+  // Content card and by queries naming it. Cards are derived for collections
+  // only: a single is listed on the Content card, and its own card is retired
+  // (its saved cards become Content, `RETIRED_WIDGETS`).
   await refreshContentSources();
-  const sources = listSources();
-  setGeneratedWidgets([
-    ...collectionWidgets(sources),
-    ...singleWidgets(sources),
-  ]);
+  setGeneratedWidgets(collectionWidgets(listSources()));
 }
 
 /**

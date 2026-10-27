@@ -13,6 +13,7 @@
  */
 
 import { Skeleton } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 
@@ -79,7 +80,7 @@ export interface MediaLibrarySkeletonProps {
 export function MediaLibrarySkeleton({
   count = 12,
   className = "",
-}: MediaLibrarySkeletonProps) {
+}: MediaLibrarySkeletonProps): JSX.Element {
   return (
     <div
       className={`${MEDIA_GRID_CLASSES} ${className}`}

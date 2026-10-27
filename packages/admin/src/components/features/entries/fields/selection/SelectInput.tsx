@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import type { SelectFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -128,7 +129,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: SelectInputProps<TFieldValues>) {
+}: SelectInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const getDefaultValue = () => {
     if (typeof field.defaultValue === "function") {

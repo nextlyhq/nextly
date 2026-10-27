@@ -1,11 +1,23 @@
 /**
- * The error shape the auth middleware answers with, and its Response.
+ * The refusal the auth middleware decides, and the Response it is answered
+ * with: the one error body every other error uses.
  *
  * Its own module so the REST limit can answer a spent key budget in the same
  * shape without importing the middleware that imports the limit.
  *
  * @module auth/middleware/error-response
  */
+import { buildErrorResponse } from "../../api/error-response";
+import {
+  generateRequestId,
+  readOrGenerateRequestId,
+} from "../../api/request-id";
+import {
+  NEXTLY_ERROR_STATUS,
+  statusToErrorCode,
+} from "../../errors/error-codes";
+import { NextlyError } from "../../errors/nextly-error";
+import { recordRefusalReason } from "../access/refusal-message";
 
 /**
  * Standardized error response structure.
@@ -29,6 +41,11 @@ export interface ErrorResponse {
   code?: string;
   /** Optional HTTP response headers (e.g. Retry-After, X-RateLimit-*). Excluded from JSON body. */
   headers?: Record<string, string>;
+  /**
+   * Which check refused, and why: logged on the server when the refusal is
+   * answered, and never part of the answer.
+   */
+  reason?: string;
 }
 
 /**
@@ -53,20 +70,66 @@ export function createErrorResponse(
 }
 
 /**
- * Create JSON error response.
- *
- * Any `headers` on the `ErrorResponse` are forwarded as HTTP response headers
- * and excluded from the JSON body (so clients never see an unexpected
- * `headers` field in the payload).
+ * The refusal as a `NextlyError`: its own status and message, the code it
+ * names where that is a known one (such as `TOKEN_EXPIRED`, which the admin
+ * refreshes a session on), else the canonical code for its status, and a
+ * limit's retry hint as the data every rate-limited answer carries.
  */
-export function createJsonErrorResponse(error: ErrorResponse): Response {
-  const { headers: extraHeaders, ...bodyPayload } = error;
-  const responseHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...extraHeaders,
-  };
-  return new Response(JSON.stringify({ data: bodyPayload }), {
-    status: error.statusCode,
-    headers: responseHeaders,
+export function refusalError(refusal: ErrorResponse): NextlyError {
+  const named = refusal.code;
+  const retryAfter = Number(
+    new Headers(refusal.headers ?? {}).get("retry-after") ?? Number.NaN
+  );
+  return new NextlyError({
+    code:
+      named !== undefined && Object.hasOwn(NEXTLY_ERROR_STATUS, named)
+        ? named
+        : statusToErrorCode(refusal.statusCode),
+    statusCode: refusal.statusCode,
+    publicMessage: refusal.error || refusal.message,
+    ...(Number.isFinite(retryAfter)
+      ? { publicData: { retryAfterSeconds: retryAfter } }
+      : {}),
+    logContext: { refusal: refusal.message, reason: refusal.reason },
+  });
+}
+
+/**
+ * Records which check refused, and why, on the server alone. Called where a
+ * refusal is answered: by {@link createJsonErrorResponse} for a request, and
+ * by `toNextlyAuthError` for a refusal thrown to its caller, which a standalone
+ * route and a Direct API check do with no boundary of their own to log it.
+ */
+export function recordRefusal(
+  refusal: ErrorResponse,
+  requestId?: string
+): void {
+  recordRefusalReason({
+    status: refusal.statusCode,
+    code: refusal.code,
+    reason: refusal.reason ?? refusal.message,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
+}
+
+/**
+ * The Response a refusal is answered with: `{ error: { code, message,
+ * requestId } }` as `application/problem+json`, as every other error is.
+ * Its `headers`, such as `Retry-After`, are sent as headers and never appear
+ * in the body. The request id is the request's own where one is passed.
+ */
+export function createJsonErrorResponse(
+  error: ErrorResponse,
+  request?: Request
+): Response {
+  // One id for the answer and the log line, so a caller's report of the
+  // answer finds the reason it was refused for.
+  const requestId = request
+    ? readOrGenerateRequestId(request)
+    : generateRequestId();
+  recordRefusal(error, requestId);
+  return buildErrorResponse(refusalError(error), {
+    requestId,
+    headers: error.headers,
   });
 }

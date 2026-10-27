@@ -290,6 +290,64 @@ export async function approve(
   open transaction of the plugin's. `list` returns the holder's own slots.
 - A plugin's pins take the same document lock and refusals as the ones above.
 
+## Renaming a collection or Single
+
+History is kept by the slug of the collection or Single it belongs to. When a Schema Builder
+collection or Single is renamed, its history moves to the new slug in the same transaction as
+the rename, so the two commit together or not at all. The Builder's settings don't offer a slug
+change after creation, so today that means a rename made through Nextly's collection service
+(`DynamicCollectionService.updateCollectionMetadata` with a new `slug`).
+
+What moves to the new slug:
+
+- versions, autosaves and working drafts;
+- version pins, and each person's "last looked at" marker;
+- content events and the languages each one involved;
+- the releases that hold its documents, and each release's history of them, so a release's
+  history keeps showing the document under its new name;
+- its schema events, its activity feed rows, and translations archived when localization was
+  turned off.
+
+A renamed collection or Single also keeps who may use it and where its webhooks go:
+
+- its permissions (`read-posts` becomes `read-articles`, and so on for each action) move to the
+  new slug, and every role that held one holds it under the new name. No other role's access
+  changes. A permission your application created for it moves too, and keeps the slug, name and
+  description you gave it, as does a name an administrator changed. A plugin's own permissions
+  stay as the plugin declares them;
+- a live webhook endpoint whose filter lists the collection now lists the new slug, and events
+  for the renamed collection reach it. Deleted endpoints are left as they are;
+- an event recorded before the rename and not yet sent to endpoints goes out under the new slug,
+  to the endpoints that listed the old one. An event already sent keeps the slug it was sent
+  under;
+- its choice to record webhook events or not carries over to the new slug.
+
+A renamed Single's document reads its new slug too, unless the document's own `slug` was set to
+something else. Pages cached under either slug are refreshed when the rename commits.
+
+What ends with the old slug: its document locks, its preview links and any kept answers about
+who may use it. A preview link names the slug it was made for, so a link made before the rename
+no longer opens; make a new one. Locks, preview links and kept answers that an earlier entity
+left under the new slug end too, so none of them applies to the renamed entity.
+
+So a collection or Single created later under the old slug starts clean: it gets the
+permissions any new entity gets, none of the renamed one's grants, history or webhook filters.
+The renamed entity keeps its database table, so a Schema Builder collection or Single can't be
+created under the old slug while that table carries the old name.
+
+A rename onto a slug that still holds an earlier collection or Single's records (its history, its
+permissions, or a webhook filter that lists it, for example after it was deleted) is refused,
+and nothing changes. Moving one entity's records in beside another's would merge the two.
+
+A new slug longer than 50 characters is refused too, on every database, with a validation error
+that names the limit: a permission's resource holds 50 characters.
+
+<Callout type="info">
+  Changing the `slug` of a code-first collection or Single in your config is not
+  a rename. Nextly cannot tell it from removing one entity and adding another,
+  so nothing is moved: the entity under the new slug starts with no history.
+</Callout>
+
 ## Related
 
 - [Draft and published status](/docs/guides/draft-published-status)

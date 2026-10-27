@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-react",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.72",
   "description": "The React Server Component renderer for Nextly block documents, usable with or without the CMS.",
   "license": "MIT",
   "repository": {
@@ -39,7 +39,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit && node ../../scripts/tsc.mjs --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rimraf dist"
@@ -64,6 +64,7 @@
     }
   },
   "devDependencies": {
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.20.5",
@@ -74,7 +75,7 @@
     "react-dom": "19.3.1",
     "rimraf": "^6.1.3",
     "tsdown": "^0.23.1",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   },
   "publishConfig": {

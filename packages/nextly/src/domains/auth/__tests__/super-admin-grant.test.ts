@@ -36,11 +36,11 @@ const tablesFor = vi.hoisted(() =>
 vi.mock("../../../database", () => ({ getDialectTables: tablesFor }));
 
 import {
-  refuseGrantingSuperAdmin,
   roleChangeCallerFor,
   runAsRoleChangeCaller,
   type RoleChangeCaller,
-} from "../services/super-admin-grant";
+} from "../services/role-change-caller";
+import { refuseGrantingSuperAdmin } from "../services/super-admin-grant";
 
 /** A transaction whose roles query answers `rows`, or fails with `error`. */
 function txAnswering(rows: Array<{ id: string }> | Error) {
