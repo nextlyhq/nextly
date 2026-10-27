@@ -634,8 +634,9 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
-   * Whether this caller may EDIT the Single, which is what a pending change is
-   * shown to.
+   * Whether this caller may EDIT the Single, or PUT IT LIVE, which is who a
+   * pending change is shown to: one who may publish it sees nothing they could
+   * not already make public.
    *
    * `routeAuthorized` is deliberately not consulted: on the read path it attests
    * that a READ was authorized, so trusting it would hand one author's
@@ -649,17 +650,19 @@ export class SingleQueryService extends BaseService {
     if (options.overrideAccess === true) return true;
     if (options.user === undefined) return false;
 
-    const updateDenied = await checkSingleAccess({
-      slug,
-      operation: "update",
-      user: options.user,
-      overrideAccess: false,
-      routeAuthorized: false,
-      rbacAccessControlService: this.rbacAccessControlService,
-      authenticatedScope: options.authenticatedScope,
-      logger: this.logger,
-    });
-    return !updateDenied;
+    const { user } = options;
+    const denied = (operation: "update" | "publish") =>
+      checkSingleAccess({
+        slug,
+        operation,
+        user,
+        overrideAccess: false,
+        routeAuthorized: false,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: options.authenticatedScope,
+        logger: this.logger,
+      });
+    return !(await denied("update")) || !(await denied("publish"));
   }
 
   /**

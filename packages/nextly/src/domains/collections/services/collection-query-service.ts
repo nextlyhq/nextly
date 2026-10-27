@@ -4874,13 +4874,16 @@ export class CollectionQueryService extends BaseService {
         defaultLocale: this.localization?.defaultLocale ?? null,
       }).overlay;
       // Even with the opt-in, a pending draft is surfaced only to a caller
-      // trusted to EDIT the document. `overrideAccess` attests that directly.
+      // trusted to EDIT the document, or to PUT IT LIVE: one who may publish it
+      // sees nothing they could not already make public. `overrideAccess`
+      // attests that directly.
       // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
       // sets it from `!!user` after authorizing the READ, so it attests read, not
       // update — trusting it would leak drafts to a read-only authenticated
       // caller. Every non-override authenticated caller is instead judged by an
-      // actual update-capability check, so a reader the collection's update
-      // rule refuses is not treated as an editor.
+      // actual update-capability check, then a publish-capability one, so a
+      // reader the collection's update and publish rules refuse is shown the
+      // live document.
       let draftView = false;
       // Set once a working draft is actually surfaced. When the draft predicate
       // was suppressed but nothing is overlaid, the loaded row is the published
@@ -4890,17 +4893,19 @@ export class CollectionQueryService extends BaseService {
         if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
-          const updateDenied = await this.accessService.checkCollectionAccess({
-            collectionName: params.collectionName,
-            operation: "update",
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // The route attested a read, never an update, so the update grant is
-            // checked rather than assumed from `routeAuthorized`.
-            routeAuthorized: false,
-            authenticatedScope: params.authenticatedScope,
-          });
-          draftView = !updateDenied;
+          const { user } = params;
+          // The route attested a read, never a write, so each grant is checked
+          // rather than assumed from `routeAuthorized`.
+          const denied = (operation: "update" | "publish") =>
+            this.accessService.checkCollectionAccess({
+              collectionName: params.collectionName,
+              operation,
+              user,
+              overrideAccess: params.overrideAccess,
+              routeAuthorized: false,
+              authenticatedScope: params.authenticatedScope,
+            });
+          draftView = !(await denied("update")) || !(await denied("publish"));
         }
       }
       if (draftView) {
