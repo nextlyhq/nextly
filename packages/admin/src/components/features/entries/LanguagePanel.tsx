@@ -676,6 +676,42 @@ export function DocumentLanguagePanel({
   );
 }
 
+/**
+ * The publish-all confirmation, open only while publishing is offered: one
+ * already open when the panel's actions are held (a language switch's answer
+ * on its way, a past version on screen) closes rather than publish on their
+ * word.
+ */
+function PublishAllConfirm({
+  open,
+  held,
+  onOpenChange,
+  languageCount,
+  pendingCount,
+  publish,
+}: {
+  open: boolean;
+  held: boolean;
+  onOpenChange: (open: boolean) => void;
+  languageCount: number;
+  pendingCount: number;
+  publish: ReturnType<typeof usePublishAllLanguages>;
+}) {
+  return (
+    <PublishAllConfirmDialog
+      open={open && !held}
+      onOpenChange={onOpenChange}
+      languageCount={languageCount}
+      pendingCount={pendingCount}
+      isLoading={publish.pending}
+      onConfirm={() => {
+        publish.publishAll();
+        onOpenChange(false);
+      }}
+    />
+  );
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
@@ -729,19 +765,13 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
-      {/* Open only while publishing is offered: a confirmation already open
-          when the actions are held (a language switch's answer on its way, a
-          past version on screen) closes rather than publish on their word. */}
-      <PublishAllConfirmDialog
-        open={confirmPublishAll && !actionsDisabled}
+      <PublishAllConfirm
+        open={confirmPublishAll}
+        held={actionsDisabled}
         onOpenChange={setConfirmPublishAll}
         languageCount={locales.length}
         pendingCount={pendingCount}
-        isLoading={publish.pending}
-        onConfirm={() => {
-          publish.publishAll();
-          setConfirmPublishAll(false);
-        }}
+        publish={publish}
       />
 
       {offersFilter && (
