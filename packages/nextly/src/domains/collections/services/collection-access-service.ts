@@ -224,13 +224,23 @@ async function refusedInWords<T>(refusal: {
   executor: unknown;
 }): Promise<CollectionServiceResult<T>> {
   const { collectionName, operation } = refusal;
+  // A caller with no identity that signing in could let through is asked to
+  // sign in, as REST asks it, rather than told what it may not do.
+  if (refusal.unauthenticated) {
+    return {
+      success: false,
+      statusCode: NEXTLY_ERROR_STATUS.AUTH_REQUIRED,
+      code: "AUTH_REQUIRED",
+      refusalReason: `${operation} on ${collectionName} requires an authenticated user`,
+      message: genericPublicMessage("AUTH_REQUIRED"),
+      data: null as unknown as T,
+    };
+  }
   return {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    refusalReason: refusal.unauthenticated
-      ? `${operation} on ${collectionName} requires an authenticated user`
-      : `the caller may not ${operation} ${collectionName}`,
+    refusalReason: `the caller may not ${operation} ${collectionName}`,
     message: await refusalMessageFor(
       operation,
       collectionName,

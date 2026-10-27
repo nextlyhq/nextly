@@ -36,7 +36,10 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
-import { NEXTLY_ERROR_STATUS } from "../../../errors/error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+} from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -363,6 +366,17 @@ export async function checkSingleAccess(params: {
       refusalReason: `the caller may not read single "${slug}", so its ${operation} is answered as missing`,
     };
   }
+  // A caller with no identity that signing in could let through is asked to
+  // sign in, as REST asks it, rather than told what it may not do.
+  if (verdict.refusal === "unauthenticated") {
+    return {
+      success: false,
+      statusCode: NEXTLY_ERROR_STATUS.AUTH_REQUIRED,
+      code: "AUTH_REQUIRED",
+      refusalReason: `${operation} on single "${slug}" requires an authenticated user`,
+      message: genericPublicMessage("AUTH_REQUIRED"),
+    };
+  }
   // The caller is told what was refused in the site's words. Which check
   // refused rides along for the server's log, written where the refusal
   // reaches its caller: a caller asking only whether it may is not refused.
@@ -370,10 +384,7 @@ export async function checkSingleAccess(params: {
     success: false,
     statusCode: NEXTLY_ERROR_STATUS.FORBIDDEN,
     code: "FORBIDDEN",
-    refusalReason:
-      verdict.refusal === "unauthenticated"
-        ? `${operation} on single "${slug}" requires an authenticated user`
-        : `the caller may not ${operation} single "${slug}"`,
+    refusalReason: `the caller may not ${operation} single "${slug}"`,
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };

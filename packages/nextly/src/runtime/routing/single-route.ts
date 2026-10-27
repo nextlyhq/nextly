@@ -284,9 +284,10 @@ export interface SingleRoute<TNode> {
  * Whether a failed read means "this page is not here" rather than "the read
  * broke".
  *
- * Both a genuine miss and an access denial become a 404, deliberately: a Single
- * the visitor may not see must not be distinguishable from one that does not
- * exist, or the route answers a question the access rule refused.
+ * A genuine miss, an access denial and a visitor asked to sign in all become a
+ * 404, deliberately: a Single the visitor may not see must not be
+ * distinguishable from one that does not exist, or the route answers a
+ * question the access rule refused.
  *
  * Everything else RETHROWS. A database blip degraded to `null` would be
  * rendered as a 404 and — on a public route — cached as one, so a transient
@@ -300,7 +301,9 @@ export interface SingleRoute<TNode> {
 function isMissOrDenied(error: unknown): boolean {
   return (
     NextlyError.is(error) &&
-    (error.statusCode === 404 || error.statusCode === 403)
+    (error.statusCode === 404 ||
+      error.statusCode === 403 ||
+      error.statusCode === 401)
   );
 }
 
