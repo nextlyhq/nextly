@@ -7,7 +7,7 @@ import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
-import { LanguagePanel } from "../../LanguagePanel";
+import { DocumentLanguagePanel } from "../../LanguagePanel";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -29,6 +29,8 @@ export interface DocumentPanelProps {
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
   actionsDisabled?: boolean;
+  /** Withholds opening another language; the same as `actionsDisabled` unless given. */
+  navigationDisabled?: boolean;
   /** Whether the form has unsaved local changes. When the entry is
    *  published and the form is dirty, the status pill renders as
    *  "Modified" (Strapi pattern) so the user sees both "what's live"
@@ -103,6 +105,7 @@ export function DocumentPanel({
   locale,
   onLocaleChange,
   actionsDisabled = false,
+  navigationDisabled = actionsDisabled,
   isDirty = false,
 }: DocumentPanelProps): React.ReactElement | null {
   const isCreate = mode === "create";
@@ -144,6 +147,7 @@ export function DocumentPanel({
         {...(locale === undefined ? {} : { locale })}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
       />
     </div>
   );
@@ -159,12 +163,14 @@ function TranslationsRow({
   locale,
   onLocaleChange,
   actionsDisabled = false,
+  navigationDisabled = actionsDisabled,
 }: {
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   actionsDisabled?: boolean;
+  navigationDisabled?: boolean;
 }) {
   // The panel self-hides when localization is off, so an absent map is not a
   // reason to withhold it: a localized entry fetched without
@@ -177,12 +183,13 @@ function TranslationsRow({
           The panel carries both, and the same component renders inline where
           this rail is hidden — so neither the state nor the actions can be the
           surface that disappears. */}
-      <LanguagePanel
-        {...(translations === undefined ? {} : { translations })}
-        {...(locale === undefined ? {} : { activeLocale: locale })}
-        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+      <DocumentLanguagePanel
+        translations={translations}
+        locale={locale}
+        onLocaleChange={onLocaleChange}
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
       />
     </div>
   );

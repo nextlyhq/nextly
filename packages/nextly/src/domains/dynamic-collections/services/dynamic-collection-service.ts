@@ -27,6 +27,7 @@ import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
 } from "../../i18n/migration/archive-preflight";
+import { companionUniqueIndexStatements } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
   buildFieldsJoiningTranslationStatements,
@@ -36,8 +37,10 @@ import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-tra
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
+  companionIndexFacts,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -50,6 +53,7 @@ import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexColumns,
+  readIndexUniqueness,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
@@ -823,10 +827,30 @@ export class DynamicCollectionService extends BaseService {
       status: opts.status,
     });
     if (!spec) return migrationSQL;
-    // Separate the companion CREATE from the main migration with the breakpoint marker so the
-    // runner executes it as its own statement (a multi-statement chunk is rejected by drivers
-    // with multi-statements disabled, e.g. MySQL).
-    return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
+    // A translated field marked unique is unique within each language: its index is created with
+    // the companion, which is new, so none exists yet. Refused first on a server that cannot key it.
+    const unique = refuseUnindexableTranslatedUnique(this.adapter, {
+      entity: slug,
+      builtBy: "collection",
+      oldFields: [],
+      newFields: opts.fields,
+      wasLocalized: false,
+      isLocalized: true,
+    });
+    // Separate each statement with the breakpoint marker so the runner executes it as its own
+    // statement (a multi-statement chunk is rejected by drivers with multi-statements disabled,
+    // e.g. MySQL).
+    return [
+      migrationSQL,
+      buildCompanionCreateOnlySql(spec),
+      ...companionUniqueIndexStatements({
+        dialect: this.adapter.dialect,
+        companionTable: `${tableName}_locales`,
+        wanted: unique,
+        translatedColumns: [],
+        liveIndexNames: new Set(),
+      }),
+    ].join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -1204,6 +1228,17 @@ export class DynamicCollectionService extends BaseService {
       liveCompanionColumns: companionExists
         ? await companionColumnNames(this.adapter, args.tableName)
         : undefined,
+      // Its indexes too, so a per-language unique index is created only where it is missing, and
+      // one under its name that is not unique is replaced.
+      ...(companionExists
+        ? companionIndexFacts(
+            await readIndexUniqueness(
+              this.adapter.getDrizzle(),
+              this.adapter.dialect,
+              companionTable
+            )
+          )
+        : {}),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
@@ -1760,6 +1795,23 @@ export class DynamicCollectionService extends BaseService {
       // the main columns and a disable restores + archives them, even without a field edit. A
       // simultaneous status flip still emits its main ADD/DROP `status` column.
       const oldUserFields = existingUserFieldsForTransition;
+      // The same preconditions a field-changing save is asked, because this save builds the same
+      // companion DDL: an enable creates, seeds, drops main's columns and then creates each
+      // per-language unique index. Skipped here, a field already marked unique reached the index
+      // on a server that cannot key it, or over values a language already holds twice, with the
+      // statements before it committed on MySQL.
+      await archiveFieldsLeavingTranslation({
+        builtBy: "collection",
+        tableName: collection.tableName,
+        defaultLocale: this.defaultLocale,
+        adapter: this.adapter,
+        entity: collectionName,
+        kind: "collection",
+        oldFields: oldUserFields,
+        newFields: oldUserFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+      });
       const hasStatus =
         updates.status !== undefined
           ? updates.status === true

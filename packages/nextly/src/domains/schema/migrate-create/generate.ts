@@ -31,6 +31,7 @@ import {
   companionHistoryKey,
   readCompanionHistory,
 } from "../../i18n/migration/companion-history";
+import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
@@ -48,6 +49,10 @@ import {
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
 } from "../../i18n/migration/plan-field-leaves-migration";
+import {
+  planTranslatedUniqueMigration,
+  type TranslatedUniquePlan,
+} from "../../i18n/migration/plan-translated-unique-migration";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
@@ -316,10 +321,24 @@ export async function generateMigration(
     companionHistory.present
   );
 
+  // 3d. Translated fields that become or stop being unique within each language. Their companion
+  //     indexes are dropped before the main file and created after every other file.
+  const uniquePlans = planTranslatedUniqueMigrations(
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
+    previousSnapshot,
+    args.dialect,
+    args.defaultLocale ?? "en"
+  );
+
   const hasCompanions =
     companionPlans.length > 0 ||
     fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0;
+    fieldJoinsPlans.length > 0 ||
+    uniquePlans.length > 0;
   if (operations.length === 0 && !hasCompanions) {
     return null;
   }
@@ -499,7 +518,14 @@ export async function generateMigration(
   //    - A field leaving translation: its ARCHIVE file runs before the main file, so an archive that
   //      refuses the values stops the run before the main table changes; its SHARED file runs after
   //      it, once the main table has the column to copy into.
+  //    - A translated field's per-language unique index that goes: first of all, before any
+  //      file drops or renames a column it keys on.
   const beforeMain = [
+    ...uniquePlans.flatMap(({ spec, plan, entity }) =>
+      plan.drops === null
+        ? []
+        : [{ spec, kind: "unique" as const, entity, ...plan.drops }]
+    ),
     ...disablePlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "disable" as const,
@@ -549,6 +575,30 @@ export async function generateMigration(
       now: new Date(now.getTime() + forwardPlans.length + i + 1),
     });
   });
+  //    - A translated field's per-language unique index that is new: last, once every column it
+  //      keys on exists.
+  const createsAfter = forwardPlans.length + fieldLeavesPlans.length;
+  uniquePlans
+    .flatMap(({ spec, plan, entity }) =>
+      plan.creates === null
+        ? []
+        : [
+            {
+              // Its header names the fields it indexes, for `nextly migrate`'s pre-check.
+              spec: { ...spec, unique: plan.creates.unique },
+              entity,
+              upSql: plan.creates.upSql,
+              downSql: plan.creates.downSql,
+            },
+          ]
+    )
+    .forEach(({ spec, ...file }, i) => {
+      writeCompanionMigrationFile(args.migrationsDir, spec, {
+        ...file,
+        kind: "unique",
+        now: new Date(now.getTime() + createsAfter + i + 1),
+      });
+    });
 
   return {
     sqlPath,
@@ -624,6 +674,44 @@ interface CompanionPlanEntry {
  *   - previous main table HELD the columns → enabling now  → create + seed + drop.
  *   - previous main table lacked them      → already localized → none (companion exists).
  */
+/**
+ * Each translated entity's `unique` files (`planTranslatedUniqueMigration`): its per-language
+ * unique indexes as the previous snapshot recorded them, brought to the ones its config now asks
+ * for. An entity that is not translated now has no companion left to index.
+ */
+function planTranslatedUniqueMigrations(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): {
+  entity: I18nTransitionKind;
+  spec: CompanionMigrationSpec;
+  plan: TranslatedUniquePlan;
+}[] {
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (c.localized !== true) return [];
+    const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
+      slug: c.slug,
+      kind,
+      dbName: c.tableName,
+      fields: c.fields,
+      dialect,
+      defaultLocale,
+      collectionLocalized: true,
+      status: c.status === true,
+    });
+    if (!spec) return [];
+    const plan = planTranslatedUniqueMigration({
+      spec,
+      fields: c.fields,
+      previous: previousSnapshot.tables.find(t => t.name === spec.mainTable),
+    });
+    return plan === null ? [] : [{ entity: kind, spec, plan }];
+  });
+}
+
 /** Pair an entity with the kind of list it came from, which its companion's marker is keyed by. */
 function tagged(
   entity: MinimalConfigEntity,
@@ -1335,10 +1423,21 @@ function withLocalizedMarker(
     collectionLocalized: true,
     status: entity.status === true,
   });
+  // Each column is recorded with what it stores, so the migration that later removes or renames
+  // one can still key the index its DOWN recreates the way this one keyed it.
+  const unique = uniqueTranslatedColumns({
+    fields: entity.fields,
+    entityLocalized: true,
+    dialect,
+    builtBy: "codeFirst",
+  }).map(c =>
+    c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
+  );
   return {
     ...table,
     localized: true,
     ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
+    ...(unique.length > 0 ? { uniqueLocalizedColumns: unique } : {}),
   };
 }
 

@@ -9,6 +9,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -37,7 +38,7 @@ async function putNote(page: Page, text: string) {
         {
           id: "e2e-note",
           widgetId: CARD,
-          width: "half",
+          ...(await defaultSizeOf(page, CARD)),
           removed: false,
           config: { text },
         },

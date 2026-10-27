@@ -17,7 +17,7 @@
 import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import {
   getMigrationLockDdl,
@@ -28,6 +28,13 @@ import { nextlyFieldGroupLock as pgLock } from "../postgres";
 import { nextlyFieldGroupLock as slLock } from "../sqlite";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Each dialect's declared columns, read through the dialect's own config reader. */
 const DECLARED_COLUMNS: Record<

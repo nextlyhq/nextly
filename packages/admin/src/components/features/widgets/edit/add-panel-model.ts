@@ -5,7 +5,8 @@
  * keeps are all worked out here, from three inputs: the reader's draft (what is
  * placed, and what was removed), the server's offer (which widgets may be
  * added now) and each widget's facts (its group, sub-group, description,
- * category, widths and rank, all core's). Nothing here decides a group or an
+ * category and rank, all core's, and its sizes, from its declaration). Nothing
+ * here decides a group or an
  * order of its own: the panel lists what core assigns, in the order core ranks.
  *
  * @module components/features/widgets/edit/add-panel-model
@@ -16,11 +17,11 @@ import type { PublishedContentSource } from "nextly/config";
 import type {
   AddPanelGroup,
   DashboardWidget,
+  WidgetLayoutFacts,
   WidgetPlacement,
-  WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
 
-import { WIDTH_NAMES } from "../sizes";
+import { columnsName } from "../sizes";
 import { askableWith } from "../widget-as-asked";
 
 /** A group the panel shows: core's four, and the reader's own removed cards first. */
@@ -74,7 +75,7 @@ export interface AddPanelRow {
   category?: string;
   /** Which sketch draws the row. */
   sketch?: string;
-  /** "⅓ to Full wide", or the one width's name. Absent for a removed card. */
+  /** "4 to 12 columns wide", or the one width's. Absent for a removed card. */
   widths?: string;
   /** How many of this widget's cards are on the dashboard now. */
   placed: number;
@@ -87,19 +88,17 @@ export interface AddPanelRow {
   searchAlso?: readonly string[];
 }
 
-/** What the widths a widget allows read as: its one width's name, or the range. */
-function widthsLabel(facts: WidgetWidthFacts | undefined): string | undefined {
-  const allowed = facts?.allowedWidths ?? [];
-  if (allowed.length === 0) return undefined;
-  if (allowed.length === 1) return WIDTH_NAMES[allowed[0]].name;
-  const first = WIDTH_NAMES[allowed[0]].fraction;
-  const last = WIDTH_NAMES[allowed[allowed.length - 1]].fraction;
-  return `${first} to ${last} wide`;
+/** What the widths a widget allows read as: its one width, or the range, in columns. */
+function widthsLabel(widget: DashboardWidget | undefined): string | undefined {
+  if (widget === undefined) return undefined;
+  const { min, max } = widget.size;
+  if (min.w === max.w) return `${columnsName(min.w)} wide`;
+  return `${min.w} to ${columnsName(max.w)} wide`;
 }
 
 /** The line a removed card's row says. Search reads it too, beside the widget's own facts. */
 export const REMOVED_ROW_DESCRIPTION =
-  "Comes back where it was, with its width and settings.";
+  "Comes back where it was, with its size and settings.";
 
 /**
  * A widget row's button, or none.
@@ -113,7 +112,7 @@ export const REMOVED_ROW_DESCRIPTION =
  */
 function widgetAction(
   widgetId: string,
-  facts: WidgetWidthFacts,
+  facts: WidgetLayoutFacts,
   placed: number,
   removedPlacement: WidgetPlacement | undefined,
   offered: ReadonlySet<string>
@@ -130,7 +129,7 @@ function widgetAction(
  * What a widget's own row is found by, beyond its name: the facts core states for it, and its
  * group's heading. Empty for a widget core says nothing about.
  */
-function searchableFacts(facts: WidgetWidthFacts | undefined): string[] {
+function searchableFacts(facts: WidgetLayoutFacts | undefined): string[] {
   if (facts === undefined) return [];
   return [
     facts.description,
@@ -150,7 +149,7 @@ function searchableFacts(facts: WidgetWidthFacts | undefined): string[] {
 export function addPanelRows(input: {
   placements: readonly WidgetPlacement[];
   offered: readonly string[];
-  widgets: Readonly<Record<string, WidgetWidthFacts>>;
+  widgets: Readonly<Record<string, WidgetLayoutFacts>>;
   byId: ReadonlyMap<string, DashboardWidget>;
   /**
    * The collections the reader may read, as the server published them: a widget offered per
@@ -217,18 +216,19 @@ export function addPanelRows(input: {
 }
 
 /**
- * What a widget's row says about the widget, whichever row it is: its name, and the description,
- * category, sketch and widths core states for it, each shown and searched alike on every row.
+ * What a widget's row says about the widget, whichever row it is: its name, the description,
+ * category and sketch core states for it, and the widths its declaration allows, each shown and
+ * searched alike on every row.
  */
 function rowFacts(
   widgetId: string,
-  facts: WidgetWidthFacts,
+  facts: WidgetLayoutFacts,
   widget: DashboardWidget | undefined
 ): Pick<
   AddPanelRow,
   "name" | "description" | "category" | "sketch" | "widths"
 > {
-  const widths = widthsLabel(facts);
+  const widths = widthsLabel(widget);
   return {
     name: widget?.title ?? widgetId,
     ...(facts.description === undefined
@@ -243,7 +243,7 @@ function rowFacts(
 /** One widget's row in its add-panel group, carrying only the facts it states. */
 function widgetRowOf(
   widgetId: string,
-  facts: WidgetWidthFacts,
+  facts: WidgetLayoutFacts,
   widget: DashboardWidget | undefined,
   placed: number,
   action: AddPanelAction
@@ -266,7 +266,7 @@ function widgetRowOf(
  */
 function perCollectionRows(
   widgetId: string,
-  facts: WidgetWidthFacts,
+  facts: WidgetLayoutFacts,
   widget: DashboardWidget | undefined,
   placements: readonly WidgetPlacement[],
   collections: readonly PublishedContentSource[],

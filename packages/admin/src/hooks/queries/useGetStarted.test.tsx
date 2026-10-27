@@ -32,7 +32,8 @@ function layoutWith(getStarted: unknown, config?: Record<string, unknown>) {
       {
         id: "started",
         widgetId: "core/get-started",
-        width: "full",
+        w: 12,
+        h: 3,
         removed: false,
         ...(config ? { config } : {}),
       },

@@ -9,13 +9,8 @@ import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors/nextly-error";
-
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
 
 /** A column the lock table is made of. */
 export type FieldGroupLockColumn = "id" | "owner" | "expires_at";
@@ -71,36 +66,25 @@ export function fieldGroupLockColumnTypes(
  * agree. A second selection does not need to be wrong to be dangerous: written as a ternary chain
  * ending in a bare `else`, it silently ASSIGNS every future dialect to whichever branch is last, so
  * adding one to `SupportedDialect` would compile and emit another dialect's column types. Here the
- * `never` assignment below makes the compiler demand a case instead.
+ * switch is over the loaded dialect, so the compiler demands a case for each one it can be, and
+ * `loadedDialect` refuses a dialect it does not know before any case is reached.
+ *
+ * The table is the loaded dialect's own, so only that dialect's files are imported.
  */
 function lockForDialect(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return {
-        table: pg.nextlyFieldGroupLock,
-        columns: pgTableConfig(pg.nextlyFieldGroupLock).columns,
-      };
-    case "mysql":
-      return {
-        table: my.nextlyFieldGroupLock,
-        columns: mysqlTableConfig(my.nextlyFieldGroupLock).columns,
-      };
-    case "sqlite":
-      return {
-        table: sl.nextlyFieldGroupLock,
-        columns: sqliteTableConfig(sl.nextlyFieldGroupLock).columns,
-      };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time, so reaching
-      // here at runtime means a dialect was added without a table for it. `internal` because that
-      // is a programming mistake rather than a state an operator can be in or fix.
-      const _exhaustive: never = dialect;
-      throw NextlyError.internal({
-        logContext: {
-          reason: "no field-group lock table for this dialect",
-          dialect: String(_exhaustive),
-        },
-      });
+  const loaded = loadedDialect(dialect);
+  switch (loaded.dialect) {
+    case "postgresql": {
+      const table = loaded.tables.nextlyFieldGroupLock;
+      return { table, columns: pgTableConfig(table).columns };
+    }
+    case "mysql": {
+      const table = loaded.tables.nextlyFieldGroupLock;
+      return { table, columns: mysqlTableConfig(table).columns };
+    }
+    case "sqlite": {
+      const table = loaded.tables.nextlyFieldGroupLock;
+      return { table, columns: sqliteTableConfig(table).columns };
     }
   }
 }
