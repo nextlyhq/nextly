@@ -11,6 +11,7 @@ import { fieldLabel } from "@admin/lib/field-label";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
 import { asPresentedText } from "../widgets/archetypes/cell-text";
+import { presentedCell } from "../widgets/archetypes/presented-cell";
 import type { ListField, ListModel } from "../widgets/frame/list-card";
 import { collectionSlugOf } from "../widgets/frame/list-view-href";
 import { LeadingChip, StatusPill } from "../widgets/frame/row-parts";
@@ -53,16 +54,21 @@ function entryHref(
  * When it was updated reads as a relative time against `now`; a column of choices, such as the
  * status, sits at the row's end, labelled as the column labels its values; any other column joins
  * the meta line. By default that is when each row was updated and its status; a reader who
- * chose the card's Fields sees those instead. The status is drawn as a pill: a published entry's
- * in the tone of done, any other's plain. Each row leads with the initial of its collection's
- * label, as `labelOf` names it, the chip every list of entries leads with.
+ * chose the card's Fields sees those instead, in the order they chose: the table's columns
+ * follow it, and the stacked row places each by its role. On a collection with a lifecycle, the
+ * status is drawn as a pill: a published entry's in the tone of done, any other's plain. On one
+ * without, a field named `status` is the author's own and reads as any other. Each row leads
+ * with the initial of its collection's label, as `labelOf` names it, the chip every list of
+ * entries leads with.
  */
 export function recentEntriesModel(
   query: RecentEntriesQuery | undefined,
   label: string,
   columns: readonly WidgetResultField[],
   now: number,
-  labelOf: (slug: string) => string
+  labelOf: (slug: string) => string,
+  /** Whether the collection has a draft and published lifecycle, as its source says. */
+  lifecycle: boolean
 ): ListModel<Record<string, unknown>> {
   const title = columns.find(column => column.name === label);
   const slug = collectionSlugOf(query?.source);
@@ -93,8 +99,11 @@ export function recentEntriesModel(
                 ? formatRelativeTime(item.updatedAt, now)
                 : undefined;
             }
-            const text = asPresentedText(item[column.name], column);
-            if (column.name !== "status" || text === undefined) return text;
+            if (!lifecycle || column.name !== "status") {
+              return presentedCell(item[column.name], column, now);
+            }
+            const text = asPresentedText(item.status, column);
+            if (text === undefined) return undefined;
             return (
               <StatusPill
                 tone={item.status === "published" ? "good" : "neutral"}
@@ -104,11 +113,6 @@ export function recentEntriesModel(
             );
           },
         })
-      )
-      // The meta line's fields before those at the row's end, in the order asked, so the table
-      // form's columns read as the stacked row does.
-      .sort(
-        (a, b) => Number(a.role === "trailing") - Number(b.role === "trailing")
       ),
   };
 }

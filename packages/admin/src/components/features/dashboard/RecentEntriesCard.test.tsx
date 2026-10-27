@@ -5,24 +5,32 @@
  * under the card's Filter and Sort.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { MAX_CHOSEN_FIELDS } from "nextly/config";
 import type { WidgetSlot } from "nextly/widget-result";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { MAX_META_FIELDS } from "../widgets/frame/entity-row";
 import { CardTierContext } from "../widgets/frame/tier";
 
 import { RecentEntriesCard } from "./RecentEntriesCard";
 
+/** Posts as the workspace payload publishes them: a collection with a lifecycle. */
+const PUBLISHED = {
+  widgetSources: [
+    { collection: "posts", label: "Posts", lifecycle: true, fields: [] },
+  ],
+};
 /** The collections the workspace payload publishes to the reader, as a test sets them. */
-let mockBranding: { widgetSources?: unknown[] } = {};
+let mockBranding: { widgetSources?: unknown[] } = PUBLISHED;
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   ...(await importOriginal<object>()),
   useBranding: () => mockBranding,
 }));
 afterEach(() => {
-  mockBranding = {};
+  mockBranding = PUBLISHED;
 });
 
 const FILTER = { headline: { contains: "news" } };
@@ -171,7 +179,8 @@ describe("the Recent entries card", () => {
     const headings = screen
       .getAllByRole("columnheader")
       .map(heading => heading.textContent);
-    expect(headings).toEqual(["Headline", "Updated", "Status"]);
+    // In the order the server answered the columns, as the card asked them.
+    expect(headings).toEqual(["Headline", "Status", "Updated"]);
   });
 
   it("leads each row with the initial of its collection's label, not its slug", () => {
@@ -246,5 +255,65 @@ describe("the Recent entries card", () => {
       "Plans"
     );
     expect(within(row!).queryByTestId("entity-row-trailing")).toBeNull();
+  });
+
+  it("keeps the order the reader chose in the table, a field of choices included", () => {
+    // 🔴 Sorted by role, the stage (a field of choices) moved behind the topic.
+    drawAt("large", {
+      ok: true,
+      result: {
+        op: "list",
+        items: [
+          { id: "e1", headline: "Story 1", stage: "open", topic: "Plans" },
+        ],
+        fields: [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "stage",
+            label: "Stage",
+            type: "string",
+            choices: [{ value: "open", label: "Open" }],
+          },
+          { name: "topic", label: "Topic", type: "string" },
+        ],
+      },
+    });
+    expect(
+      screen.getAllByRole("columnheader").map(heading => heading.textContent)
+    ).toEqual(["Headline", "Stage", "Topic"]);
+  });
+
+  it("reads a field named status as any other on a collection without a lifecycle", () => {
+    // 🔴 Judged by the field's name, an author's own `status` choice field was
+    // drawn as the lifecycle's pill, "published" in the tone of done.
+    mockBranding = {
+      widgetSources: [
+        { collection: "posts", label: "Posts", lifecycle: false, fields: [] },
+      ],
+    };
+    drawAt("medium", {
+      ok: true,
+      result: {
+        op: "list",
+        items: [{ id: "e1", headline: "Story 1", status: "published" }],
+        fields: [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [{ value: "published", label: "Published" }],
+          },
+        ],
+      },
+    });
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByText("Published")).toBeInTheDocument();
+    expect(within(row!).queryByTestId("status-pill")).toBeNull();
+  });
+
+  it("never lets a reader choose more fields than a row's meta line shows", () => {
+    // Every chosen field shows at every size only while the cap fits the meta line.
+    expect(MAX_CHOSEN_FIELDS).toBeLessThanOrEqual(MAX_META_FIELDS);
   });
 });

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   dependentsOf,
+  fieldFits,
   fieldsNamedBy,
   staleContentValues,
 } from "../content-settings";
@@ -77,6 +78,32 @@ describe("the settings that follow a collection", () => {
       "title",
     ]);
     expect(fieldsNamedBy(shown, undefined)).toEqual([]);
+  });
+});
+
+describe("the fields a Fields setting may choose", () => {
+  const shown = {
+    name: "shown",
+    type: "fields" as const,
+    of: "collection",
+  };
+
+  it("are those a row can print, and never the collection's title", () => {
+    // 🔴 The title is every row's first column already, and a field a row
+    // cannot print would be drawn as an empty place.
+    expect(
+      fieldFits(shown, { name: "category", type: "string" }, "title")
+    ).toBe(true);
+    expect(fieldFits(shown, { name: "title", type: "string" }, "title")).toBe(
+      false
+    );
+    expect(
+      fieldFits(
+        shown,
+        { name: "tags", type: "string", presentable: false },
+        "title"
+      )
+    ).toBe(false);
   });
 });
 

@@ -156,6 +156,70 @@ describe("the settings sheet with content settings", () => {
     expect(screen.queryByText("publishedAt")).toBeNull();
   });
 
+  it("offers Fields a row can print, never the title, and stops at the most a row shows", async () => {
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          titleField: "title",
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "category", type: "string", label: "Category" },
+            { name: "summary", type: "string", label: "Summary" },
+            { name: "author", type: "string", label: "Author" },
+            { name: "rank", type: "number", label: "Rank" },
+            { name: "tags", type: "string", label: "Tags", presentable: false },
+          ],
+        },
+      ],
+    };
+    const withFields: AnyWidgetSetting[] = [
+      {
+        name: "collection",
+        type: "collection",
+        label: "Collection",
+        rows: "titled",
+      },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const { unmount } = render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{ collection: "posts", shown: ["category"] }}
+        onDone={vi.fn()}
+      />
+    );
+    // 🔴 The sheet says how many it takes, and offers neither the title nor
+    // a field a row cannot print.
+    expect(screen.getByText(/Up to 3 fields/)).toBeTruthy();
+    await userEvent.click(screen.getAllByRole("combobox").at(-1)!);
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Summary", "Author", "Rank"]);
+    unmount();
+    // At the most a row shows, nothing more is offered.
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{
+          collection: "posts",
+          shown: ["category", "summary", "author"],
+        }}
+        onDone={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Author")).toBeTruthy();
+    expect(screen.queryByText("Select...")).toBeNull();
+  });
+
   it("says nothing while the sources have not arrived", () => {
     mockBranding.value = {};
     open({ collection: "posts", by: "secret" });

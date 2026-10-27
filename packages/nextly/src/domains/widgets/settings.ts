@@ -598,13 +598,62 @@ function dependencyProblems(
       )
       .map(setting => setting.name)
   );
-  return dependents
-    .filter(isDependent)
-    .filter(setting => !collections.has(setting.of))
-    .map(
-      setting =>
-        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`
-    );
+  const titled = new Set(
+    all
+      .filter(
+        (setting): setting is { name: string } =>
+          typeof setting === "object" &&
+          setting !== null &&
+          (setting as { type?: unknown }).type === "collection" &&
+          (setting as { rows?: unknown }).rows === "titled" &&
+          typeof (setting as { name?: unknown }).name === "string"
+      )
+      .map(setting => setting.name)
+  );
+  return dependents.filter(isDependent).flatMap(setting => {
+    if (!collections.has(setting.of)) {
+      return [
+        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`,
+      ];
+    }
+    // A Fields setting keeps the list's title first and replaces the rest,
+    // which only a titled list has: on any other, its first field is not a
+    // title, and keeping it would ask a field the reader never chose.
+    if (setting.type === "fields" && !titled.has(setting.of)) {
+      return [
+        `setting "${setting.name}" is a Fields setting over ${describeValue(setting.of)}, which must be a Collection setting with rows "titled"`,
+      ];
+    }
+    return [];
+  });
+}
+
+/**
+ * Why a widget's Fields setting cannot work on what it asks, or `undefined`:
+ * only a list returns rows for its fields to fill. On a grouped or timeseries
+ * query a chosen field would be refused by the query's own check, and on a
+ * count it would be ignored, so a control that breaks the card or changes
+ * nothing is never offered.
+ */
+export function fieldsSettingQueryProblem(widget: {
+  settings?: unknown;
+  query?: unknown;
+}): string | undefined {
+  if (!Array.isArray(widget.settings)) return undefined;
+  const fields = (widget.settings as unknown[]).find(
+    (setting): setting is { name: unknown } =>
+      typeof setting === "object" &&
+      setting !== null &&
+      (setting as { type?: unknown }).type === "fields"
+  );
+  if (fields === undefined) return undefined;
+  const op =
+    typeof widget.query === "object" && widget.query !== null
+      ? (widget.query as { op?: unknown }).op
+      : undefined;
+  return op === "list"
+    ? undefined
+    : `setting ${describeValue(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${describeValue(op)}`;
 }
 
 /**
@@ -978,6 +1027,8 @@ export interface KnobField {
   offered?: boolean;
   /** False when the field cannot be grouped by. */
   groupable?: boolean;
+  /** False when a row cannot print the field's value. */
+  presentable?: boolean;
 }
 
 /**
@@ -1300,10 +1351,13 @@ function isRelativeSpan(value: unknown): value is RelativeSpan {
 const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
 
 /**
- * The most fields a list's rows may be set to show after their title: the
- * places a row has for them, its meta line and its end, as the admin draws it.
+ * The most fields a list's rows may be set to show after their title: as many
+ * as a row's meta line holds, so every field chosen shows at every size, the
+ * stacked row as well as the table. The settings sheet stops at it and says so.
+ *
+ * @experimental
  */
-const MAX_CHOSEN_FIELDS = 8;
+export const MAX_CHOSEN_FIELDS = 3;
 
 /**
  * `query` asking `chosen` after its title. A titled list keeps the title it
@@ -1437,13 +1491,25 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     // own fields.
     drives: (setting, source) =>
       setting.type === "fields" && readsACollection(source),
-    fits: (value, fields) =>
-      Array.isArray(value) &&
-      allOffered(
-        value.filter((name): name is string => typeof name === "string"),
-        fields
-      ),
-    apply: (query, value) => withChosenFields(query, value as string[]),
+    // And each one a row can print: a structured or multi-value field would
+    // be asked for and drawn as an empty place.
+    fits: (value, fields) => {
+      if (!Array.isArray(value)) return false;
+      const names = value.filter(
+        (name): name is string => typeof name === "string"
+      );
+      return (
+        allOffered(names, fields) &&
+        names.every(name =>
+          fields.some(
+            field => field.name === name && field.presentable !== false
+          )
+        )
+      );
+    },
+    // Only a list asks rows; any other op is left as it was asked.
+    apply: (query, value) =>
+      query.op === "list" ? withChosenFields(query, value as string[]) : query,
   },
   {
     drives: (setting, source) =>
@@ -1618,7 +1684,15 @@ export function applyWidgetSettings<T extends KnobQuery>(
   });
   let next = query;
 
-  for (const setting of settings) {
+  // Every Collection setting first, whatever order the widget declared them
+  // in, as dependency resolution reads them: a titled Collection setting sets
+  // the list's whole `select`, and applied after Fields it would replace the
+  // fields the reader chose with its own.
+  const ordered = [
+    ...settings.filter(setting => setting.type === "collection"),
+    ...settings.filter(setting => setting.type !== "collection"),
+  ];
+  for (const setting of ordered) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
     const value = effective[setting.name];

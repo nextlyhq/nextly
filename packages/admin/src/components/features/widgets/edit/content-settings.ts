@@ -108,13 +108,19 @@ type SourceField = PublishedContentSource["fields"][number];
 
 /**
  * Whether a source field may be what this dependent setting names: offered at
- * all, and for Group by, one the read will group by.
+ * all; for Group by, one the read will group by; and for Fields, one a row can
+ * print that is not the collection's title, which every row already leads with.
  */
 export function fieldFits(
   setting: DependentSetting,
-  field: SourceField
+  field: SourceField,
+  titleField?: string
 ): boolean {
-  return setting.type !== "groupBy" || field.groupable !== false;
+  if (setting.type === "groupBy") return field.groupable !== false;
+  if (setting.type === "fields") {
+    return field.presentable !== false && field.name !== titleField;
+  }
+  return true;
 }
 
 /** The first field a dependent setting's value names that it may not use here. */
@@ -125,7 +131,7 @@ function unfitField(
 ): string | undefined {
   return fieldsNamedBy(setting, value).find(name => {
     const field = source.fields.find(candidate => candidate.name === name);
-    return field === undefined || !fieldFits(setting, field);
+    return field === undefined || !fieldFits(setting, field, source.titleField);
   });
 }
 
