@@ -90,6 +90,13 @@ export interface DocumentActionState {
   hasWorkingDraft: boolean;
   /** Whether a past version is on screen, which forbids every mutation. */
   readingHistory: boolean;
+  /**
+   * Whether the user may change the document: create it in create mode,
+   * update it in edit mode. Without it nothing that writes the document's
+   * content is offered — saving, discarding, duplicating — while publishing,
+   * unpublishing and deleting each still follow their own permission.
+   */
+  canEdit: boolean;
   canPublish: boolean;
   canUnpublish: boolean;
   canDelete: boolean;
@@ -190,7 +197,10 @@ const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
  *
  * FIRST MATCH WINS, so the rows read as "the most specific situation first".
  */
-function primaryAction(state: DocumentActionState): DocumentAction {
+function primaryAction(state: DocumentActionState): DocumentAction | undefined {
+  // Every leading action stores the form, which a user who may not change
+  // the document cannot do, so a page they may only read leads with nothing.
+  if (!state.canEdit) return undefined;
   const matched = PRIMARY_RULES.find(rule => rule.applies(state));
   const { id, label } = matched?.build(state) ?? PRIMARY_FALLBACK;
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
@@ -247,6 +257,12 @@ interface ActionRule {
    * "mutates" would make the exception invisible at the entry that needs it.
    */
   mutates: boolean;
+  /**
+   * Whether the action changes the document's content, and so exists only
+   * for a user who may change it (`canEdit`). Publishing, unpublishing and
+   * deleting are not: each follows its own permission.
+   */
+  edits: boolean;
 }
 
 /**
@@ -289,6 +305,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     label: s => (s.draftsEnabled ? "Save" : "Save changes"),
     placement: "toolbar",
     mutates: true,
+    edits: true,
   },
   /*
    * A DRAFT — or a document being created where a lifecycle exists — keeps its
@@ -307,6 +324,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     label: () => "Save draft",
     placement: "toolbar",
     mutates: true,
+    edits: true,
   },
   {
     id: "duplicate",
@@ -315,6 +333,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     placement: "menu",
     group: "document",
     mutates: true,
+    edits: true,
   },
   /*
    * The one action that survives a historical view, and deliberately so.
@@ -336,6 +355,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     placement: "menu",
     group: "document",
     mutates: false,
+    edits: false,
   },
   /*
    * The two kinds of discard are different acts on different things: a pending
@@ -351,6 +371,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     group: "danger",
     destructive: true,
     mutates: true,
+    edits: true,
   },
   {
     id: "discard-changes",
@@ -360,6 +381,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     group: "danger",
     destructive: true,
     mutates: true,
+    edits: true,
   },
   {
     id: "unpublish",
@@ -370,6 +392,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     destructive: true,
     reason: s => (s.canUnpublish ? undefined : permissionReason("unpublish")),
     mutates: true,
+    edits: false,
   },
   {
     id: "delete",
@@ -380,6 +403,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     destructive: true,
     reason: s => (s.canDelete ? undefined : permissionReason("delete")),
     mutates: true,
+    edits: false,
   },
 ];
 
@@ -398,7 +422,9 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
  */
 export function documentActions(state: DocumentActionState): DocumentAction[] {
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
-  const built = BUILT_IN_ACTIONS.filter(rule => rule.applies(state)).map(rule =>
+  const built = BUILT_IN_ACTIONS.filter(
+    rule => rule.applies(state) && (state.canEdit || !rule.edits)
+  ).map(rule =>
     withReason(
       {
         id: rule.id,
@@ -412,7 +438,8 @@ export function documentActions(state: DocumentActionState): DocumentAction[] {
       (rule.mutates ? blocked : undefined) ?? rule.reason?.(state)
     )
   );
-  return [primaryAction(state), ...built];
+  const primary = primaryAction(state);
+  return primary === undefined ? built : [primary, ...built];
 }
 
 /**

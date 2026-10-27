@@ -352,11 +352,11 @@ describe("defaultOrder decides position, and only where it is stated", () => {
 describe("a widget declared through BOTH channels keeps its new fields", () => {
   const ids = (widgets: { id: string }[]) => widgets.map(w => w.id);
 
-  it("carries defaultOrder and chrome through the collision merge", () => {
+  it("carries defaultOrder and hidesWhenEmpty through the collision merge", () => {
     // `mergeCollision` rebuilds the widget field by field, so a field added to
     // the contract and not to it is silently dropped -- the dual-channel widget
-    // loses its declared position and an unframed custom widget is wrapped in a
-    // card it asked not to have. Same shape as the result parser that dropped
+    // loses its declared position, and a card that should leave the dashboard
+    // while empty says so instead. Same shape as the result parser that dropped
     // `fields` when the result contract grew.
     const contribution = {
       id: "shared",
@@ -365,7 +365,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       defaultSize: "sm",
       component: "@acme/p/admin#X",
       defaultOrder: 5,
-      chrome: "none",
+      hidesWhenEmpty: true,
     } as unknown as RegisteredWidgetMeta;
 
     const registration = {
@@ -375,7 +375,7 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       defaultSize: "sm",
       component: "@acme/p/admin#X",
       defaultOrder: 1,
-      chrome: "none",
+      hidesWhenEmpty: true,
     } as unknown as RegisteredWidgetMeta;
 
     const [widget] = resolveDashboardWidgets(
@@ -387,11 +387,11 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
     // The registry is authoritative over a field it can state, which is the
     // rule `defaultSize` already follows here.
     expect(widget.defaultOrder).toBe(1);
-    expect(widget.chrome).toBe("none");
+    expect(widget.hidesWhenEmpty).toBe(true);
   });
 
   it("carries dismissible through the collision merge", () => {
-    // The same field-by-field rebuild `defaultOrder` and `chrome` guard above,
+    // The same field-by-field rebuild `defaultOrder` and `hidesWhenEmpty` guard above,
     // one field along. Dropped here, a merged card loses the only control its
     // reader has for sending it away outside edit mode -- and nothing about the
     // card looks wrong, because every other field survived.

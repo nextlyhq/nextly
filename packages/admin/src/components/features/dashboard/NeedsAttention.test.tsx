@@ -7,6 +7,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -37,13 +38,15 @@ const WAITING: WidgetSlot = {
 function drawAt(tier: SizeTier, slot: WidgetSlot | undefined) {
   render(
     <CardTierContext.Provider value={tier}>
-      <NeedsAttention
-        widgetId="core/needs-attention"
-        placementId="core/needs-attention"
-        settings={{}}
-        slot={slot}
-        isFetching={false}
-      />
+      {inFrame(
+        <NeedsAttention
+          widgetId="core/needs-attention"
+          placementId="core/needs-attention"
+          settings={{}}
+          slot={slot}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }

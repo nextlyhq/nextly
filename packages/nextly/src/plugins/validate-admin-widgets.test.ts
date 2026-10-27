@@ -473,59 +473,42 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
-  it("refuses a chrome this channel cannot honour", () => {
-    // The registry refuses `chrome: "none"` on an archetype core draws, and on
-    // a value outside the vocabulary. This channel accepted both, so the
-    // documented refusal was true of one channel only -- and the admin then
-    // ignored the value rather than reporting it, which is the shape where an
-    // author sees no card frame, no error, and nothing to search for.
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/revenue",
-          archetype: "metric",
-          query: { source: "collection:posts", op: "count" },
-          chrome: "none",
-        }),
-      ])
-    ).toThrow(NextlyError);
-
-    // NOT the vocabulary case. A chrome value this core does not know belongs
-    // to a newer one, and refusing it here would abort the install of a plugin
-    // whose card this admin frames anyway -- the same version boundary the
-    // sizes obey. That check is the registry's.
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/thing",
-          component: "@acme/p/admin#Thing",
-          chrome: "borderless",
-        }),
-      ])
-    ).not.toThrow();
+  it("refuses a widget that names chrome, whatever its value", () => {
+    // Every card is drawn in the dashboard's one frame, so no widget may
+    // decline it. Refused rather than ignored, so a plain-JavaScript author
+    // learns at startup that their card will be framed.
+    // Asserted on `logMessage`, where the detail goes: `.message` is the
+    // generic public one, which any refusal would match.
+    for (const chrome of ["none", "card"]) {
+      let thrown: NextlyError | undefined;
+      try {
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/thing",
+            archetype: "custom",
+            component: "@acme/p/admin#Thing",
+            chrome,
+          }),
+        ]);
+      } catch (error) {
+        thrown = error as NextlyError;
+      }
+      expect(thrown, chrome).toBeInstanceOf(NextlyError);
+      expect(thrown?.logMessage, chrome).toContain(
+        "chrome is not a widget field"
+      );
+    }
   });
 
-  it("accepts chrome where it IS valid", () => {
-    // The control, both arms. A gate refusing every chrome would satisfy the
-    // assertions above while making the field undeclarable.
+  it("accepts the same widget with no chrome", () => {
+    // The control: a gate refusing every custom widget would satisfy the
+    // assertion above.
     expect(() =>
       assertAdminWidgets([
         withWidget({
           id: "acme/thing",
           archetype: "custom",
           component: "@acme/p/admin#Thing",
-          chrome: "none",
-        }),
-      ])
-    ).not.toThrow();
-
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/revenue",
-          archetype: "metric",
-          query: { source: "collection:posts", op: "count" },
-          chrome: "card",
         }),
       ])
     ).not.toThrow();

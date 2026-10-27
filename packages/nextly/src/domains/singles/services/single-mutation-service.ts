@@ -33,6 +33,7 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
+  isStatusOnlyWrite,
   stripImmutableSystemFields,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -1655,6 +1656,25 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+
+      // A status-only write was judged by its publish or unpublish gate in
+      // place of update. A hook that made it an edit, naming a field or
+      // dropping the status, asks update now, before anything is written, as
+      // the same edit sent by the caller would have been.
+      if (gate !== "update" && !isStatusOnlyWrite(currentData, "single")) {
+        const editDenied = await checkSingleAccess({
+          slug,
+          operation: "update",
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          // The route admitted a status change, not this edit.
+          routeAuthorized: false,
+          rbacAccessControlService: this.rbacAccessControlService,
+          authenticatedScope: options.authenticatedScope,
+          logger: this.logger,
+        });
+        if (editDenied) return editDenied;
+      }
       const finalStatus = (currentData as { status?: unknown }).status;
 
       // A wildcard that no longer carries a status after hooks has nothing to

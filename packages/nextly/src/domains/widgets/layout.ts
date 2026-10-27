@@ -1172,7 +1172,11 @@ export function visibilityToken(
   readableCollections: Iterable<string> = [],
   // Each Collection setting, as `id=declaration`: a plugin changing one, its
   // name or its default, moves a stored card between withheld and shown.
-  collectionSettings: Iterable<string> = []
+  collectionSettings: Iterable<string> = [],
+  // The facts a saved generated card's conversion is exact on, as
+  // `id=query`: a timeline's date field changing turns a converted card back
+  // into a stored one with no widget id changing.
+  conversionFacts: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -1184,6 +1188,7 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
+          ...[...conversionFacts].sort().map(entry => `converts:${entry}`),
         ].join("\n")
       )
       .digest("base64url")

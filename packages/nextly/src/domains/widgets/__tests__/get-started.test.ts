@@ -43,6 +43,7 @@ vi.mock("../reader-content", async importOriginal => {
 import type { ConditionProbe } from "../condition-probe";
 import {
   answeredWithin,
+  getStartedDetail,
   getStartedSteps,
   skippedSteps,
   withSkips,
@@ -74,6 +75,9 @@ function probeOf(world: World): ConditionProbe {
     mayReadReleases: async () => false,
     releasesExist: async () => false,
     getStarted: () => {
+      throw new Error("not under test");
+    },
+    getStartedDetail: () => {
       throw new Error("not under test");
     },
   };
@@ -167,6 +171,18 @@ describe("adding a first entry", () => {
     const answer = await getStartedSteps(probe);
     expect(answer.unknown).toBe(true);
     expect(answer.steps.map(step => step.kind)).not.toContain("entry");
+  });
+
+  it("names the step that fell back, apart from an unlisted registry, for the deprecated onboarding read", async () => {
+    // The card withholds the step; the deprecated read still draws its row,
+    // and only an unlisted registry makes that read "not known".
+    const detail = await getStartedDetail({
+      ...probeOf({ content: "unknown" }),
+      mayCreateEntry: () => Promise.reject(new Error("permission read failed")),
+    });
+    expect([...detail.fellBack]).toEqual(["entry"]);
+    expect(detail.unlisted).toBe(false);
+    expect(detail.answer.unknown).toBe(true);
   });
 
   it("is not offered as not known to a reader who could not add an entry", async () => {

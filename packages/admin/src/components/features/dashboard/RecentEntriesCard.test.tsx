@@ -7,6 +7,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -51,14 +52,16 @@ const SLOT: WidgetSlot = {
 function drawAt(tier: SizeTier) {
   render(
     <CardTierContext.Provider value={tier}>
-      <RecentEntriesCard
-        widgetId="core/recent-entries"
-        placementId="p1"
-        settings={{ collection: "posts", filter: FILTER }}
-        slot={SLOT}
-        query={QUERY}
-        isFetching={false}
-      />
+      {inFrame(
+        <RecentEntriesCard
+          widgetId="core/recent-entries"
+          placementId="p1"
+          settings={{ collection: "posts", filter: FILTER }}
+          slot={SLOT}
+          query={QUERY}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }

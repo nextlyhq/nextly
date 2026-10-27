@@ -8,20 +8,20 @@
  * callers that endpoint admits, and LEFT OUT for anyone else -- a zero would
  * still be an answer, and one that changes when the rows behind it do.
  *
- * The decision is taken by the same middleware checks the endpoints use, for
- * a session and for an API key alike, so a key is judged on its own grant and
- * never on its owner's.
+ * Each count is decided by its list's own gate (`auth/list-read-gates`),
+ * checked the way the list checks it, for a session and for an API key alike,
+ * so a key is judged on its own grant and never on its owner's.
  *
  * @module services/dashboard/admin-counts
  */
 
 import {
-  authorizeCaller,
-  authorizeCallerForAny,
-  isErrorResponse,
-  type AuthContext,
-} from "../../auth/middleware";
-import { apiKeyPermissionsFor } from "../../domains/auth/api-key-policy";
+  API_KEY_LIST_COVERS_EVERY_USER,
+  authorizeListRead,
+  LIST_READ_GATES,
+  type GatedList,
+} from "../../auth/list-read-gates";
+import { isErrorResponse, type AuthContext } from "../../auth/middleware";
 
 /** The counts, by the name the decision uses. */
 export const ADMIN_COUNTS = [
@@ -35,64 +35,28 @@ export const ADMIN_COUNTS = [
 
 export type AdminCount = (typeof ADMIN_COUNTS)[number];
 
-type Grant = { action: string; resource: string };
-
-/**
- * What each count asks of a caller: any one of these, as its list endpoint
- * asks.
- *
- * - `permissions` asks `read-roles`, because that is what the permissions
- *   list admits (the role form's permission matrix reads it); `read-permissions`
- *   alone does not open the list, so it does not open the count.
- * - `fieldGroups` asks a settings grant, as every field-group read does.
- * - `apiKeys` takes the API-key read policy from where the API-key endpoints
- *   take it, so the two cannot disagree.
- */
-const GRANTS: Readonly<Record<AdminCount, readonly Grant[]>> = {
-  users: [{ action: "read", resource: "users" }],
-  roles: [{ action: "read", resource: "roles" }],
-  permissions: [{ action: "read", resource: "roles" }],
-  media: [{ action: "read", resource: "media" }],
-  fieldGroups: [
-    { action: "read", resource: "settings" },
-    { action: "manage", resource: "settings" },
-  ],
-  apiKeys: apiKeyPermissionsFor("read"),
+/** The list each count describes, whose gate gives it. */
+const LIST_OF: Readonly<Record<AdminCount, GatedList>> = {
+  apiKeys: "apiKeys",
+  fieldGroups: "fieldGroups",
+  media: "media",
+  permissions: "permissions",
+  roles: "roles",
+  users: "users",
 };
 
 /**
- * Whether `auth` holds any of `grants`.
- *
- * One grant goes through `authorizeCaller`, as `requirePermission` does, and
- * several through `authorizeCallerForAny`, as `requireAnyPermission` does: the
- * two differ for an API key (the single check also asks the entity's own
- * rule), and each count must be judged as its endpoint judges.
- */
-async function holds(
-  auth: AuthContext,
-  grants: readonly Grant[]
-): Promise<boolean> {
-  const [only, ...rest] = grants;
-  const result =
-    only && rest.length === 0
-      ? await authorizeCaller(auth, only.action, only.resource)
-      : await authorizeCallerForAny(auth, [...grants]);
-  return !isErrorResponse(result);
-}
-
-/**
- * Whose keys the API-key count covers for `auth`: every user's.
- *
- * The API-key list answers the same question the same way: anyone who may read
- * keys sees every key, and the count is given only to a caller who may. The
- * count must not describe keys the caller's list would never show, so the two
- * move together; `api-key-count-scope.test.ts` holds them to it.
+ * Whose keys the API-key count covers for `auth`: those the caller's key list
+ * shows, every user's or their own, as `API_KEY_LIST_COVERS_EVERY_USER` says
+ * for both. The count must not describe keys the caller's list would never
+ * show; `api-key-count-scope.test.ts` holds them to it.
  */
 export function apiKeyCountScope(auth: AuthContext): Promise<ApiKeyCountScope> {
-  // The caller is already one who may read keys; who they are no longer
-  // narrows the count.
-  void auth;
-  return Promise.resolve({ kind: "all" });
+  return Promise.resolve(
+    API_KEY_LIST_COVERS_EVERY_USER
+      ? { kind: "all" }
+      : { kind: "owner", userId: auth.userId }
+  );
 }
 
 /**
@@ -108,9 +72,13 @@ export async function readableAdminCounts(
   auth: AuthContext
 ): Promise<ReadonlySet<AdminCount>> {
   const verdicts = await Promise.all(
-    ADMIN_COUNTS.map(
-      async count => [count, await holds(auth, GRANTS[count])] as const
-    )
+    ADMIN_COUNTS.map(async count => {
+      const verdict = await authorizeListRead(
+        auth,
+        LIST_READ_GATES[LIST_OF[count]]
+      );
+      return [count, !isErrorResponse(verdict)] as const;
+    })
   );
   return new Set(verdicts.filter(([, may]) => may).map(([count]) => count));
 }
