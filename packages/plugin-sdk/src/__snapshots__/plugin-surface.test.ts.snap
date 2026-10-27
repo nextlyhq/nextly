@@ -136,7 +136,6 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "Widget (value)",
   "WidgetBarChartGroup (type)",
   "WidgetBarChartProps (type)",
-  "WidgetChartSlot (type)",
   "WidgetChartUnit (type)",
   "WidgetFigureProps (type)",
   "WidgetListProps (type)",
@@ -151,8 +150,6 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "WidgetTableProps (type)",
   "apiErrorMessage (value)",
   "drawsAnyValidationRule (value)",
-  "formatWidgetChange (value)",
-  "formatWidgetNumber (value)",
   "isApiError (value)",
   "loadInlineRichTextEditor (value)",
   "loadRichTextEditorKit (value)",
@@ -187,7 +184,6 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useUpdateSingleDocument (value)",
   "useUploadMedia (value)",
   "validationIssues (value)",
-  "widgetChartColour (value)",
   "withOptionIds (value)",
 ]
 `;
@@ -550,6 +546,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "WidgetAccess (type)",
   "WidgetAction (type)",
   "WidgetArchetype (type)",
+  "WidgetChartSlot (type)",
   "WidgetCondition (type)",
   "WidgetData (type)",
   "WidgetDefinition (type)",
@@ -579,6 +576,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "defineJob (value)",
   "definePlugin (value)",
   "defineWidget (value)",
+  "formatWidgetChange (value)",
+  "formatWidgetNumber (value)",
   "getCachedNextly (value)",
   "group (value)",
   "isLocaleSelector (value)",
@@ -606,5 +605,6 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "trustedClientIp (value)",
   "upload (value)",
   "validateFieldValues (value)",
+  "widgetChartColour (value)",
 ]
 `;

@@ -1,25 +1,20 @@
 /**
  * The widget kit a widget's own view is drawn with: each part of `Widget` is the component core's
  * own cards use, a list or table draws the rows its card holds with one action each and no menu,
- * a list stays rows on a wide card while a table becomes a table, and the formatters and the
- * colour accessor answer as core's cards do.
+ * a list stays rows on a wide card while a table becomes a table, a table holds at most three
+ * columns beside its title, an unlinked row is heard by its spoken form, and the rows drawn stop
+ * at the query's limit.
  */
 import { render, screen, within } from "@testing-library/react";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { GroupsChart } from "../../charts/groups-chart";
 import { OverTimeChart } from "../../charts/over-time-chart";
 import { CardFigure } from "../../frame/figure";
-import { cardChange, cardNumber } from "../../frame/format";
 import { CardTierContext, rowsDrawn } from "../../frame/tier";
-import {
-  formatWidgetChange,
-  formatWidgetNumber,
-  Widget,
-  widgetChartColour,
-} from "..";
+import { Widget } from "..";
 
 interface Order {
   id: string;
@@ -149,15 +144,80 @@ describe("Widget.Table", () => {
   });
 });
 
-describe("the formatters and the colour accessor", () => {
-  it("are core's own formatters", () => {
-    expect(formatWidgetNumber).toBe(cardNumber);
-    expect(formatWidgetChange).toBe(cardChange);
-    expect(formatWidgetNumber(2000, { floor: true }).text).toBe("2,000+");
+describe("Widget.Table's columns", () => {
+  it("are at most three beside the title: a fourth from an unchecked caller is not drawn at any size, and the console says so once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const four = [
+      { key: "a", label: "A", value: (row: Order) => row.customer },
+      { key: "b", label: "B", value: (row: Order) => row.state },
+      { key: "c", label: "C", value: (row: Order) => row.id },
+      { key: "d", label: "D", value: (row: Order) => row.title },
+    ] as unknown as readonly [];
+    const wide = atTier(
+      "large",
+      <Widget.Table
+        rows={orders}
+        titleLabel="Order"
+        title={row => row.title}
+        columns={four}
+      />
+    );
+    const headings = within(wide.container.querySelector("table")!)
+      .getAllByRole("columnheader")
+      .map(heading => heading.textContent);
+    expect(headings).toEqual(["Order", "A", "B", "C"]);
+    wide.unmount();
+    atTier(
+      "large",
+      <Widget.Table
+        rows={orders}
+        titleLabel="Order"
+        title={row => row.title}
+        columns={four}
+      />
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("at most 3 columns");
+    warn.mockRestore();
   });
+});
 
-  it("names a slot's colour as its theme token", () => {
-    expect(widgetChartColour(1)).toBe("var(--nx-chart-1)");
-    expect(widgetChartColour(5)).toBe("var(--nx-chart-5)");
+describe("a row with nowhere to go", () => {
+  it("is heard by its spoken form in the table, as it is in a row", () => {
+    const { container } = atTier(
+      "large",
+      <Widget.Table
+        rows={orders.slice(0, 1)}
+        titleLabel="Order"
+        title={row => row.title}
+        spoken={row => `Order ${row.id}, ${row.state}`}
+        columns={[{ key: "state", label: "State", value: row => row.state }]}
+      />
+    );
+    const cell = within(container.querySelector("table")!).getAllByRole(
+      "cell"
+    )[0]!;
+    expect(within(cell).getByText("Order 1, Paid")).toHaveClass("sr-only");
+    expect(
+      within(cell).getByText("Order #1001").closest("[aria-hidden='true']")
+    ).not.toBeNull();
+  });
+});
+
+describe("the rows drawn", () => {
+  it("stop at the query's limit, so a sized query's extra row only says more exist", () => {
+    atTier(
+      "large",
+      <Widget.List
+        rows={orders.slice(0, 3)}
+        title={row => row.title}
+        limit={2}
+        viewAllHref="/admin/collections/orders"
+      />
+    );
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: /View all/ })).toHaveTextContent(
+      "View all (3+)"
+    );
   });
 });

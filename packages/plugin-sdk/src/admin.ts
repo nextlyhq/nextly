@@ -376,31 +376,22 @@ export type {
  *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
  *   that take plain data, drawn in the shared chart colours, with an optional
  *   `unit` for their tooltips).
- * - `formatWidgetNumber`, `formatWidgetChange`: the number and change
- *   formatters behind them, in the site's locale. Named exports, not on
- *   `Widget`, so a view carries only what it uses and they run on the server
- *   too.
- * - `widgetChartColour`: a chart slot's colour token, for a mark of the
- *   widget's own.
+ *
+ * The number and change formatters and the chart colour accessor are exported
+ * from this package's root, not here: every module of the admin is a client
+ * module, and the root is server-safe, so a Server Component can call them.
  *
  * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
  * host's single copy, and a plugin that bundled its own would draw its parts
  * outside the card it sits in.
  */
-export {
-  FrameState,
-  Widget,
-  formatWidgetChange,
-  formatWidgetNumber,
-  widgetChartColour,
-} from "@nextlyhq/admin";
+export { FrameState, Widget } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,
   SkeletonShape,
   WidgetBarChartGroup,
   WidgetBarChartProps,
-  WidgetChartSlot,
   WidgetChartUnit,
   WidgetFigureProps,
   WidgetListProps,
@@ -432,9 +423,10 @@ export type {
  * a smaller event than a name withdrawn.
  *
  * Routed through `@nextlyhq/admin` rather than `@nextlyhq/ui`, as every block
- * in this file is. That is not a formality — `plugin-sdk` peers on `admin` and
- * does not depend on `ui` at all, and `ui`'s root barrel carries a
- * `"use client"` banner that the layering guard admits only by subpath.
+ * in this file is. That is not a formality — `plugin-sdk` peers on `admin`, and
+ * takes from `ui` only its server-safe subpaths, for its root; `ui`'s root
+ * barrel carries a `"use client"` banner that the layering guard admits only
+ * by subpath.
  */
 export {
   Button,

@@ -7,9 +7,10 @@
  *   the body-level parts of a card, each reading the card's size tier and the admin's theme
  *   tokens, so a plugin's card matches core's beside it in light and dark. The frame and every
  *   state around the body are the host's.
- * - `formatWidgetNumber`, `formatWidgetChange` and `widgetChartColour`: named exports beside the
- *   namespace rather than on it, so a view that needs only one carries only that one, and the
- *   formatters run where no component does, on the server included.
+ *
+ * The number and change formatters and the chart colour accessor are not here: they are
+ * published from `@nextlyhq/plugin-sdk`'s server-safe root, since every module of the admin is
+ * a client module and a Server Component could not call one.
  *
  * Each part IS core's own, under the name a plugin uses: a second implementation would drift
  * from the cards core draws.
@@ -17,7 +18,6 @@
  * @module components/features/widgets/kit
  */
 
-import { chartColour, type ChartSlot } from "../charts/chart-colour";
 import type { ChartUnit } from "../charts/chart-unit";
 import {
   GroupsChart,
@@ -32,7 +32,6 @@ import {
   type OverTimeSeries,
 } from "../charts/over-time-chart";
 import { CardFigure } from "../frame/figure";
-import { cardChange, cardNumber } from "../frame/format";
 
 import { WidgetList, WidgetTable } from "./list";
 
@@ -60,8 +59,6 @@ export type WidgetSeriesPoint = OverTimePoint;
 export type WidgetSeriesInterval = OverTimeInterval;
 /** What a chart's numbers count, written after each in its tooltip: "12 new posts". */
 export type WidgetChartUnit = ChartUnit;
-/** A chart colour's slot, 1 to 5. */
-export type WidgetChartSlot = ChartSlot;
 
 /** The shape of `Widget`: each part, typed as the component core's cards use. */
 export interface WidgetKit {
@@ -89,20 +86,3 @@ export const Widget: WidgetKit = Object.freeze({
   BarChart: GroupsChart,
   SeriesChart: OverTimeChart,
 });
-
-/**
- * A count, total or chart value, in the admin's locale: `text` as drawn ("1.2k" at a small
- * tier, "2,000+" for a floor), `label` as heard ("2,000 or more").
- */
-export const formatWidgetNumber: typeof cardNumber = cardNumber;
-
-/** A change against an earlier period, with its arrow and sign, in the admin's locale. */
-export const formatWidgetChange: typeof cardChange = cardChange;
-
-/**
- * The colour of chart slot `slot`, as the token a mark is drawn in (`var(--nx-chart-N)`): the
- * same five colours core's charts use, in light and dark.
- */
-export function widgetChartColour(slot: WidgetChartSlot): string {
-  return chartColour(slot);
-}

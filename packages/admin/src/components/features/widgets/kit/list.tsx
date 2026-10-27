@@ -13,6 +13,7 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { MAX_META_FIELDS } from "../frame/entity-row";
 import { ListCard, type ListField, type ListModel } from "../frame/list-card";
 import { useListDensity } from "../frame/list-rows";
 import { useCardTier, useRowsDrawn } from "../frame/tier";
@@ -46,8 +47,17 @@ interface WidgetRowsProps<Row> {
   action?: (row: Row) => WidgetRowAction | undefined;
   /** How many rows there are in all, for the footer. */
   total?: WidgetListTotal;
-  /** The full list the rows come from, for the footer's "View all". */
+  /**
+   * The full list the rows come from, for the footer's "View all". It takes the place of the
+   * widget's own `link` in the card's footer, which holds one link.
+   */
   viewAllHref?: string;
+  /**
+   * The most rows the widget's query asks for, its reader's "Number of items": `query?.limit`
+   * from the props a view is handed. A widget declaring `sizedQuery` is answered one row more
+   * than the card draws, a row that only says more exist; given the limit, it is never drawn.
+   */
+  limit?: number;
 }
 
 export interface WidgetListProps<Row> extends WidgetRowsProps<Row> {
@@ -73,11 +83,45 @@ export interface WidgetTableColumn<Row> {
 export interface WidgetTableProps<Row> extends WidgetRowsProps<Row> {
   /** The title column's heading. */
   titleLabel: string;
-  columns: readonly WidgetTableColumn<Row>[];
+  /**
+   * At most three columns beside the title: as many as a row on a narrow card holds under its
+   * title and at its end, so a value the wide table shows is never lost at a smaller size.
+   */
+  columns:
+    | readonly []
+    | readonly [WidgetTableColumn<Row>]
+    | readonly [WidgetTableColumn<Row>, WidgetTableColumn<Row>]
+    | readonly [
+        WidgetTableColumn<Row>,
+        WidgetTableColumn<Row>,
+        WidgetTableColumn<Row>,
+      ];
 }
 
 /** The most fields a row's meta line draws, as `EntityRow` draws them. */
-const META_FIELDS = 3;
+const META_FIELDS = MAX_META_FIELDS;
+
+/** Whether a table given too many columns has been named on the console yet: once a page. */
+let warnedTooManyColumns = false;
+
+/**
+ * The columns a table draws: every one it was given, up to `MAX_META_FIELDS`. A caller the type
+ * did not hold to that, plain JavaScript, has the rest dropped at every size alike, and the
+ * console is told once. In every environment: the admin is built as a library with `NODE_ENV`
+ * set to production, so a development-only warning would never reach a plugin's author.
+ */
+function drawnColumns<Row>(
+  columns: readonly WidgetTableColumn<Row>[]
+): readonly WidgetTableColumn<Row>[] {
+  if (columns.length <= MAX_META_FIELDS) return columns;
+  if (!warnedTooManyColumns) {
+    warnedTooManyColumns = true;
+    console.warn(
+      `Widget.Table draws at most ${MAX_META_FIELDS} columns beside the title, and was given ${columns.length}: the rest are not drawn.`
+    );
+  }
+  return columns.slice(0, MAX_META_FIELDS);
+}
 
 /** The model both share, from the props both share, with the fields each draws. */
 function modelOf<Row>(
@@ -97,19 +141,22 @@ function modelOf<Row>(
   };
 }
 
-/** The card's tier, density and the rows it holds, as core's list cards read them. */
-function useRowsLayout() {
+/**
+ * The card's tier, density and the rows it holds, as core's list cards read them: at most the
+ * query's `limit`, by the same rule.
+ */
+function useRowsLayout(limit: number | undefined) {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  const drawn = useRowsDrawn(tier, undefined, density);
+  const drawn = useRowsDrawn(tier, limit, density);
   return { tier, density, drawn };
 }
 
 /** A widget's rows: titles, up to three fields under each, its end, and one action. */
 function List<Row>(props: WidgetListProps<Row>): JSX.Element {
   const { meta, trailing, rows, total, viewAllHref } = props;
-  const { tier, density, drawn } = useRowsLayout();
+  const { tier, density, drawn } = useRowsLayout(props.limit);
   const fields: ListField<Row>[] = [
     ...(meta === undefined
       ? []
@@ -147,9 +194,9 @@ function List<Row>(props: WidgetListProps<Row>): JSX.Element {
 
 /** A widget's rows across named columns: a table on a wide card, rows on a narrow one. */
 function Table<Row>(props: WidgetTableProps<Row>): JSX.Element {
-  const { columns, titleLabel, rows, total, viewAllHref } = props;
-  const { tier, density, drawn } = useRowsLayout();
-  const fields = columns.map(
+  const { titleLabel, rows, total, viewAllHref } = props;
+  const { tier, density, drawn } = useRowsLayout(props.limit);
+  const fields = drawnColumns<Row>(props.columns).map(
     (column): ListField<Row> => ({
       key: column.key,
       label: column.label,

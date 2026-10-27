@@ -743,16 +743,12 @@ export {
   type CardState,
   type SkeletonHint,
 } from "./components/features/widgets/frame/card-state";
-// The parts of a card's body, under the names a plugin uses: `Widget.*`, and beside it the
-// formatters and the colour accessor as named exports, so each is carried only where used.
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
 export {
   Widget,
-  formatWidgetChange,
-  formatWidgetNumber,
-  widgetChartColour,
   type WidgetBarChartGroup,
   type WidgetBarChartProps,
-  type WidgetChartSlot,
   type WidgetChartUnit,
   type WidgetFigureProps,
   type WidgetKit,

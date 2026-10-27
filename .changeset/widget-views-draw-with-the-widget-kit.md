@@ -34,12 +34,15 @@ A widget's own view now draws with the kit core's own cards are built from, publ
 
 - `Widget.Figure`: one number, written for the card's size tier and heard in full.
 - `Widget.List`: rows of a title, up to three fields and an end, with at most one visible action
-  each and no menu, as many as the card's size holds, with the shared "View all" footer.
-- `Widget.Table`: rows across named columns, drawn as a table on a wide card.
+  each and no menu, as many as the card's size and the query's `limit` hold, with the shared
+  "View all" footer, which takes the place of the widget's own footer link.
+- `Widget.Table`: rows across at most three named columns, drawn as a table on a wide card.
 - `Widget.BarChart` and `Widget.SeriesChart`: the dashboard's charts, with an optional `unit`
   their tooltips write after each number ("12 orders").
-- `formatWidgetNumber`, `formatWidgetChange` and `widgetChartColour`: named exports beside
-  `Widget`, so a view carries only what it uses.
+- `formatWidgetNumber`, `formatWidgetChange` and `widgetChartColour`, from the server-safe
+  root `@nextlyhq/plugin-sdk`, so server code can call them too. They are `@nextlyhq/ui`'s
+  own formatters and chart colour, and `@nextlyhq/plugin-sdk` now depends on `@nextlyhq/ui`
+  for them. `@nextlyhq/ui/format` gains `chartColour` and `ChartSlot`.
 
 Every part draws with the theme's tokens only, in light and dark.
 
