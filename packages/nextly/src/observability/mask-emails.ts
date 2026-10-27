@@ -76,7 +76,63 @@ function walk(
   if (value instanceof Error) return copyError(value, rules, seen);
   if (Array.isArray(value)) return copyList(value, rules, seen);
   if (isPlainObject(value)) return copyRecord(value, rules, seen);
+  if (value instanceof Map) return copyMap(value, rules, seen);
+  if (value instanceof Set) return copySet(value, rules, seen);
+  // Each prints as its text, a query or an address with whatever it carries,
+  // so it is logged as that text, rewritten.
+  if (value instanceof URLSearchParams || value instanceof URL) {
+    return rules.text(value.toString());
+  }
   return rules.other?.(value) ?? value;
+}
+
+/** A map copied entry by entry, a string key judged as a field name is. */
+function copyMap(
+  value: ReadonlyMap<unknown, unknown>,
+  rules: LogCopyRules,
+  seen: WeakMap<object, unknown>
+): Map<unknown, unknown> {
+  const copy = new Map<unknown, unknown>();
+  seen.set(value, copy);
+  for (const [key, entry] of value) {
+    const hide = typeof key === "string" && rules.hideField?.(key, entry);
+    copy.set(
+      walk(key, rules, seen),
+      hide ? rules.hidden : walk(entry, rules, seen)
+    );
+  }
+  return copy;
+}
+
+/** A set copied member by member. */
+function copySet(
+  value: ReadonlySet<unknown>,
+  rules: LogCopyRules,
+  seen: WeakMap<object, unknown>
+): Set<unknown> {
+  const copy = new Set<unknown>();
+  seen.set(value, copy);
+  for (const member of value) copy.add(walk(member, rules, seen));
+  return copy;
+}
+
+/** What a field that throws when read is logged as. */
+const UNREADABLE = "[unreadable]";
+
+/**
+ * An object's own enumerable fields with their values, read one at a time so a
+ * getter that throws gives that field the unreadable marker rather than
+ * throwing out of the log call, where it could replace the failure being
+ * logged.
+ */
+function readableEntries(value: object): [string, unknown][] {
+  return Object.keys(value).map(key => {
+    try {
+      return [key, (value as Record<string, unknown>)[key]];
+    } catch {
+      return [key, UNREADABLE];
+    }
+  });
 }
 
 /** Whether a value is plain data: an object literal or a null-prototype one. */
@@ -107,7 +163,7 @@ function copyRecord(
   const copy: Record<string, unknown> = {};
   // Recorded before the fields, so an object that contains itself ends.
   seen.set(value, copy);
-  for (const [key, field] of Object.entries(value)) {
+  for (const [key, field] of readableEntries(value)) {
     copyField(copy, key, field, rules, seen, true);
   }
   return copy;
@@ -194,7 +250,7 @@ function copyErrorFields(
     // so the loop below would leave the copy without its failures.
     defineOwn(copy, "errors", walk(error.errors, rules, seen), false);
   }
-  for (const [key, field] of Object.entries(error)) {
+  for (const [key, field] of readableEntries(error)) {
     copyField(copy, key, field, rules, seen, true);
   }
   return copy;
@@ -324,12 +380,27 @@ function isCredentialField(key: string, value: unknown): boolean {
  */
 const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 
-/** Every `Bearer` or `Basic` credential in a piece of text redacted. */
+/** Credentials before a host in an address: `https://user:password@host`. */
+const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
+
+/**
+ * A parameter named like a credential, with its value, wherever it appears:
+ * in a signed or tokenized URL's query (`X-Amz-Signature=…`, `token=…`) or in
+ * running text. The one definition every log sanitiser uses.
+ */
+export const CREDENTIAL_PARAMETER =
+  /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig))=[^\s&"'<>]*/gi;
+
+/**
+ * Every credential in a piece of text redacted: a `Bearer` or `Basic`
+ * credential, the user and password before a host, and the value of a
+ * parameter named like a credential.
+ */
 function redactCredentialsInText(text: string): string {
-  return text.replace(
-    CREDENTIAL_IN_TEXT,
-    (_, scheme: string) => `${scheme} ${REDACTED}`
-  );
+  return text
+    .replace(CREDENTIAL_IN_TEXT, (_, scheme: string) => `${scheme} ${REDACTED}`)
+    .replace(URL_USERINFO, `$1${REDACTED}@`)
+    .replace(CREDENTIAL_PARAMETER, `$1=${REDACTED}`);
 }
 
 /**
@@ -466,7 +537,13 @@ function maskEmailsWhenActive<T>(value: T): T {
  * masker keeps a `Request` as it is, headers and all.
  */
 export function safeToLog<T>(value: T): T {
-  return maskEmailsWhenActive(redactCredentials(value));
+  try {
+    return maskEmailsWhenActive(redactCredentials(value));
+  } catch {
+    // A value the walk can't read at all (a revoked proxy, say) is logged as a
+    // marker: a log call never throws, and never writes what it couldn't check.
+    return UNREADABLE as T;
+  }
 }
 
 /**

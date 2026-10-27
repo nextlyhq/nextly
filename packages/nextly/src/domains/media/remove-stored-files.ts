@@ -1,5 +1,6 @@
 import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
+import { CREDENTIAL_PARAMETER } from "../../observability/mask-emails";
 import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
@@ -53,10 +54,7 @@ export function errorForLog(error: unknown): string {
       // A query outside a URL: every parameter after a `?` or `&`, and a
       // credential's own name anywhere (`X-Amz-Credential=...`, `token=...`).
       .replace(/[?&][^\s=&?#]+=[^\s&#]*/g, "")
-      .replace(
-        /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig))=[^\s&"'<>]*/gi,
-        "$1=[redacted]"
-      )
+      .replace(CREDENTIAL_PARAMETER, "$1=[redacted]")
   );
 }
 

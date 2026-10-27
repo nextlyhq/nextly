@@ -225,4 +225,65 @@ describe("credentials anywhere in a log value", () => {
     const out = receivedBy({ [`Authorization: Bearer ${KEY}`]: KEY });
     expect(out).not.toContain(KEY);
   });
+
+  it("takes them out of URLs in text: userinfo and credential parameters", () => {
+    const error = new Error(
+      "GET https://store-user:store-pass-123@bucket.example.com/a.png?X-Amz-Signature=sig-value-456&size=2 failed with token=tok-value-789"
+    );
+
+    const out = receivedBy({ error });
+
+    // POPULATION CONTROL: the host, path and harmless parameter remain.
+    expect(out).toContain("bucket.example.com/a.png");
+    expect(out).toContain("size=2");
+    expect(out).not.toContain("store-pass-123");
+    expect(out).not.toContain("sig-value-456");
+    expect(out).not.toContain("tok-value-789");
+  });
+
+  it("takes them out of a Map, URLSearchParams and a URL", () => {
+    const out = receivedBy({
+      headers: new Map([["authorization", `Bearer ${KEY}`]]),
+      seen: new Set([`Bearer ${KEY}`]),
+      query: new URLSearchParams("token=query-secret-1&page=3"),
+      link: new URL("https://u:url-secret-2@example.com/p?sig=url-secret-3"),
+    });
+
+    expect(out).toContain("page=3");
+    expect(out).toContain("example.com/p");
+    expect(out).not.toContain(KEY);
+    expect(out).not.toContain("query-secret-1");
+    expect(out).not.toContain("url-secret-2");
+    expect(out).not.toContain("url-secret-3");
+  });
+
+  it("summarises a response, a headers object and any other request", () => {
+    class IncomingRequest {
+      headers = { authorization: `Bearer ${KEY}` };
+    }
+    const out = receivedBy({
+      response: new Response("body", {
+        status: 418,
+        headers: { "set-cookie": SESSION },
+      }),
+      sent: new Headers({ authorization: `Bearer ${KEY}` }),
+      incoming: new IncomingRequest(),
+    });
+
+    expect(out).toContain("418");
+    expect(out).toContain("IncomingRequest");
+    expect(out).not.toContain(KEY);
+    expect(out).not.toContain(SESSION_VALUE);
+  });
+
+  it("logs the line even when a field can't be read", () => {
+    const out = receivedBy({
+      slug: "home",
+      get detail(): string {
+        throw new Error("unreadable on purpose");
+      },
+    });
+
+    expect(out).toContain("home");
+  });
 });
