@@ -584,6 +584,35 @@ export function isTextStorageKind(kind: ColumnKind): boolean {
 }
 
 /**
+ * Whether a number field's values may carry a fraction — the storage the
+ * field opted into, read the one way every consumer asks. Code-first fields
+ * opt into exact fractional storage via `dbType: "decimal"`
+ * (DECIMAL/NUMERIC), the right choice for money; UI-created fields carry
+ * `options.format === "float"` for float storage; without an opt-in a number
+ * is a whole-number field.
+ *
+ * Exported so the entry validator refuses a fraction against the same
+ * declaration the column is built from, rather than keeping a second answer
+ * to the same question beside it — a mapping that gains or renames a
+ * fractional representation would otherwise disagree with the values
+ * validation admits, silently and per dialect.
+ */
+export function numberFieldStoresFractions(field: {
+  /** The storage the field declared; `decimal` stores fractions exactly. */
+  dbType?: unknown;
+  /** Storage options; the UI's float format opts into fractional storage. */
+  options?: unknown;
+}): boolean {
+  if (field.dbType === "decimal") return true;
+  const options = field.options;
+  return (
+    typeof options === "object" &&
+    options !== null &&
+    (options as { format?: unknown }).format === "float"
+  );
+}
+
+/**
  * Maps a field config to a logical column kind. Centralises the
  * field-type to column-kind matrix that used to live in two
  * dialect-specific switches per file. The hasMany / relationTo[]
@@ -624,15 +653,15 @@ export function classifyFieldKind(
     case "number": {
       // A hasMany number is written as a JSON array (the mutation path
       // stringifies it), so it must be stored as JSON, not a scalar numeric
-      // column, regardless of dbType.
+      // column, regardless of dbType. Its whole-number semantics are judged
+      // on the elements by the entry validator, not here.
       if (field.hasMany) return "json";
-      // Code-first fields opt into exact fractional storage via
-      // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
-      if (field.dbType === "decimal") return "decimal";
-      // UI-created fields carry options.format === "float" for float storage;
-      // code-first without dbType defaults to integer, matching the DDL emitted
-      // by dynamic-collection-schema-service.ts.
-      return field.options?.format === "float" ? "double" : "integer";
+      if (numberFieldStoresFractions(field)) {
+        // The two opt-ins name different columns: the exact decimal stores
+        // DECIMAL/NUMERIC, the float format stores a double.
+        return field.dbType === "decimal" ? "decimal" : "double";
+      }
+      return "integer";
     }
 
     case "checkbox":

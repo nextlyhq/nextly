@@ -64,6 +64,7 @@ function legacyEnvelopeToFailureFields(result: {
   statusCode?: number;
   code?: string;
   message?: string;
+  publicData?: unknown;
 }): { code: string; message: string } {
   // Rebuilt through the shared converter so a per-item failure reports the same
   // code the single-item endpoint reports for the identical failure. This kept
@@ -71,7 +72,12 @@ function legacyEnvelopeToFailureFields(result: {
   // INTERNAL_ERROR -- so an item whose hook threw `rateLimited()` was a rate
   // limit on the single endpoint and an internal error in bulk.
   const rebuilt = errorFromServiceEnvelope(result);
-  return { code: String(rebuilt.code), message: rebuilt.publicMessage };
+  return {
+    code: String(rebuilt.code),
+    // The rebuilt error's public data is the canonical `{path}` shape, so
+    // the suffix reads it rather than the envelope's raw one.
+    message: rebuilt.publicMessage + validationIssuesSuffix(rebuilt.publicData),
+  };
 }
 
 /**
@@ -128,7 +134,7 @@ function failureFromThrown(
     return {
       id,
       code: String(error.code),
-      message: error.publicMessage,
+      message: error.publicMessage + validationIssuesSuffix(error.publicData),
     };
   }
   return {
@@ -160,28 +166,33 @@ function detailedErrorMessage(error: unknown): string {
 }
 
 /**
+ * The per-field issues a validation refusal carries, as one message suffix
+ * — " count must be a whole number." — or "" when the error has none.
+ *
+ * Every bulk accounting path appends these to the failure message: a batch
+ * result has no `publicData` of its own to carry them, and an accounting
+ * that says only "Validation failed." leaves the caller no field to fix —
+ * the one thing a validation error exists to name.
+ */
+function validationIssuesSuffix(publicData: unknown): string {
+  const issues = (
+    publicData as { errors?: Array<{ message: string }> } | undefined
+  )?.errors;
+  if (!issues?.length) return "";
+  return ` ${issues.map(issue => issue.message).join(" ")}`;
+}
+
+/**
  * The message returned accounting may carry. A typed NextlyError
  * contributes its public envelope message; anything untyped gets the
  * generic message, because a bare error carries no public contract — its
  * message or cause may be raw driver text with hostnames or credentials,
- * which belongs in the operator log alone.
- *
- * A validation refusal appends its per-field issues: the batch result has no
- * `publicData` to carry them, and an accounting that says only "Validation
- * failed." would leave the caller no field to fix — the one thing a
- * validation error exists to name.
+ * which belongs in the operator log alone. A validation refusal appends its
+ * per-field issues.
  */
 function batchErrorMessage(error: unknown): string {
   if (NextlyError.is(error)) {
-    const issues = (
-      error.publicData as { errors?: Array<{ message: string }> } | undefined
-    )?.errors;
-    if (issues?.length) {
-      return [error.publicMessage, ...issues.map(issue => issue.message)].join(
-        " "
-      );
-    }
-    return error.publicMessage;
+    return error.publicMessage + validationIssuesSuffix(error.publicData);
   }
   return "An unexpected error occurred.";
 }
@@ -189,21 +200,14 @@ function batchErrorMessage(error: unknown): string {
 /**
  * The same accounting for a RETURNED failure: the workers hand back the
  * mutation service's envelope, whose `message` alone says only "Validation
- * failed." — the per-field issues ride the envelope's public data, and the
- * batch result has nowhere else to put them, so they are appended here. A
- * caller left without the field has nothing to fix.
+ * failed." — the per-field issues ride the envelope's public data, so they
+ * are appended here.
  */
 function batchVerdictMessage(result: {
   message: string;
   publicData?: unknown;
 }): string {
-  const issues = (
-    result.publicData as { errors?: Array<{ message: string }> } | undefined
-  )?.errors;
-  if (issues?.length) {
-    return [result.message, ...issues.map(issue => issue.message)].join(" ");
-  }
-  return result.message;
+  return result.message + validationIssuesSuffix(result.publicData);
 }
 
 /**

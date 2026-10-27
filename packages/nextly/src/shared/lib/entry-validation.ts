@@ -33,6 +33,7 @@ import {
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
+import { numberFieldStoresFractions } from "../../domains/schema/services/field-column-descriptor";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type {
   PluginFieldType,
@@ -205,27 +206,19 @@ function numberRule(field: ValidatableField, key: string): number | undefined {
 }
 
 /**
- * Whether the field's number values may carry a fraction.
- *
- * A `number` field stores an integer column unless it opts into decimals —
- * `dbType: "decimal"` (code-first) or the UI's float format — the same
- * opt-ins the storage descriptor reads, so validation and the column answer
- * the field the same way. A hasMany number stores a JSON list, but the rule
- * follows the field's whole-number semantics, not the physical column. A
- * plugin-contributed type rerouted here by its storage primitive is not one
- * of these cases: its primitive stores numbers as integers unconditionally,
- * so it is never exempt.
+ * Whether the field's number values may carry a fraction. The opt-in answer
+ * is the descriptor's own — `numberFieldStoresFractions` there owns the
+ * question, so validation and the column cannot drift. This wrapper adds
+ * what the descriptor's column question does not cover: a hasMany number
+ * stores a JSON list, but the rule follows the field's whole-number
+ * semantics, not the physical column; and a plugin-contributed type
+ * rerouted here by its storage primitive is not a `number` field at all —
+ * its primitive stores numbers as integers unconditionally, so it is never
+ * exempt.
  */
-function numberFieldStoresFractions(field: ValidatableField): boolean {
+function fieldJudgesFractions(field: ValidatableField): boolean {
   if (field.type !== "number") return false;
-  const record = field as unknown as Record<string, unknown>;
-  if (record.dbType === "decimal") return true;
-  const options = field.options;
-  return (
-    typeof options === "object" &&
-    options !== null &&
-    (options as { format?: unknown }).format === "float"
-  );
+  return numberFieldStoresFractions(field);
 }
 
 /**
@@ -551,7 +544,7 @@ async function validateFieldValue(
         // own values were already judged at their patch gate, and the stored
         // ones were carried by nobody, so they ride unchanged.
         if (
-          !numberFieldStoresFractions(field) &&
+          !fieldJudgesFractions(field) &&
           !options.assembledFromStorage &&
           !Number.isInteger(v)
         ) {
