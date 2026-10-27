@@ -282,11 +282,19 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # These three read different surfaces and answer independently, so each runs even after
       # an earlier one has found something. On the default success() condition the first
@@ -416,8 +424,10 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -473,6 +483,12 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # Vitest's dependency records (what each test file loaded on its last run)
       # and the commit they describe, which a pull request's unit selection reads.
@@ -938,7 +954,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB like every other `.turbo` cache in these workflows:
       # this one builds only nextly's dependency subgraph, and an entry keyed on
@@ -954,6 +972,12 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The unit selection's records and how this run tests its units, as in
       # the `ci` job above, which says why.
@@ -1065,7 +1089,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1078,6 +1104,12 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The unit selection's records and how this run tests its units, as in
       # the `ci` job above, which says why.
@@ -1199,7 +1231,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1212,6 +1246,12 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits on concurrent package tasks and test workers, so
       # a suite that only times out under unbounded contention does not fail
@@ -1308,7 +1348,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1320,6 +1362,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits, as in the job above.
       - name: Size the gates as the hook does
@@ -1376,7 +1424,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1388,6 +1438,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits, as in the first of these jobs.
       - name: Size the gates as the hook does
@@ -1456,7 +1512,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1468,6 +1526,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # A release builds with `NODE_ENV` unset, and the admin's build reads it,
       # so it is unset here whatever the runner carries.
@@ -1678,7 +1742,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -1712,6 +1778,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # Cache, Chromium, and apt only if Chromium cannot start without it; the
       # action says why each step is as it is.
@@ -1822,7 +1894,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to this job for the reason the job above documents at length: six
       # jobs cache `.turbo` on one commit and build different filter sets, so a
@@ -1837,6 +1911,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # Cache, Chromium, and apt only if Chromium cannot start without it; the
       # action says why each step is as it is.
@@ -1928,11 +2008,19 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         if: steps.decide.outputs.inert != 'true'
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       - name: Build packages
         if: steps.decide.outputs.inert != 'true'
@@ -1980,10 +2068,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       - name: Build CLI + nextly core
         run: pnpm build --filter create-nextly-app --filter nextly
@@ -2088,10 +2184,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # No step builds @nextlyhq/ui's workspace dependencies, deliberately.
       # There is nothing to build: all three of them — admin-css,
@@ -2343,10 +2447,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       - name: Entry guard suite (the guard's answers)
         run: >
