@@ -1342,6 +1342,6 @@ describe("the tier an answer was fetched at", () => {
 
     answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
     await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
-    expect(back.result.current.fetchedTierFor("p1")).toBe("small");
+    expect(back.result.current.fetchedSizeFor("p1")).toEqual({ tier: "small" });
   });
 });

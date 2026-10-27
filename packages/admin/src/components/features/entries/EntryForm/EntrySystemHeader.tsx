@@ -19,6 +19,7 @@ import {
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -305,12 +306,16 @@ export function EntrySystemHeader({
   // A document only has history once it has been saved, and rendering a
   // snapshot needs the schema, so both are required to offer it. Read before
   // anything returns early, and the address opens history only then, so a
-  // link naming it on a document without it opens nothing.
+  // link naming it on a document without it opens nothing. The history is
+  // read in every language, as the server judges it, so a user who may read
+  // only some is not offered it.
+  const mayReadHistory = useCanRequest(collectionSlug, "readHistory");
   const historyOffered =
     mode === "edit" &&
     Boolean(entry?.id) &&
     historyFields !== undefined &&
-    historyEnabled !== false;
+    historyEnabled !== false &&
+    mayReadHistory;
   const { open: historyOpen, setOpen: setHistoryOpen } =
     useHistoryAddress(historyOffered);
 

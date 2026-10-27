@@ -177,20 +177,6 @@ function cardEntryFor(
   };
 }
 
-/** The empty test a declaration states, when it states one. */
-function emptyTestOf(
-  declaration: DeclaredWidget["declaration"]
-): ((data: unknown) => boolean) | undefined {
-  const empty = (declaration as { empty?: unknown }).empty;
-  const when =
-    typeof empty === "object" && empty !== null
-      ? (empty as { when?: unknown }).when
-      : undefined;
-  return typeof when === "function"
-    ? (when as (data: unknown) => boolean)
-    : undefined;
-}
-
 /**
  * One card's answer, as the person asking: its data function run with its
  * settings and person-bound services, or the query its settings write, checked
@@ -205,9 +191,9 @@ async function answerCard(
 ): Promise<{ result: WidgetResult; empty: boolean }> {
   const { signal, scope, now } = asked;
   const { declaration, collections } = declared;
-  const isEmpty = emptyTestOf(declaration);
-  if (typeof declaration.data === "function") {
-    const run = declaration.data as (input: unknown) => Promise<unknown>;
+  const { isEmpty } = declaration;
+  if (typeof declaration.load === "function") {
+    const run = declaration.load as (input: unknown) => Promise<unknown>;
     const value = await run({
       settings: resolveCardSettings(declaration.settings, placement.config),
       user: batch.caller.user,
@@ -222,7 +208,7 @@ async function answerCard(
         ...(collections === undefined ? {} : { collections }),
       }),
     });
-    const result = cardAnswerResult(declaration.display, value, declaration.id);
+    const result = cardAnswerResult(declared.display, value, declaration.id);
     return { result, empty: isEmpty?.(value) === true };
   }
   // Through the one checked builder: a query its display cannot draw fails

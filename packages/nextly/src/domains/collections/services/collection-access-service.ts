@@ -15,9 +15,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
   answerForRefusal,
   collectionGateVerdict,
+  type GateVerdict,
 } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import { actorForVisitor } from "../../../auth/access/resolve-actor";
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -34,6 +36,35 @@ import { BaseService } from "../../../shared/base-service";
 import { MetaService } from "../../meta/services/meta-service";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
+
+/** What the collection gate is asked about a caller and an operation. */
+interface CollectionAccessParams {
+  collectionName: string;
+  operation: AccessOperation;
+  user?: UserContext;
+  overrideAccess?: boolean;
+  routeAuthorized?: boolean;
+  /**
+   * The caller's authenticated scope. For a scoped API key the RBAC gate
+   * judges the key's OWN stamped grants rather than the owner's permissions
+   * (see auth/authenticated-scope). Undefined for session/system callers.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * Optional transaction-bound Drizzle executor. Supplied when the caller is
+   * already inside a write transaction (the caller-owned-tx bulk paths) so
+   * the RBAC role/permission reads run on that transaction's own connection
+   * instead of taking a second pooled one, which can stall against a small
+   * pool. Defaults to the pooled connection.
+   */
+  executor?: unknown;
+  /**
+   * The one entry the operation acts on, where it acts on one, so a
+   * refusal names "this post" rather than the collection. It decides
+   * nothing.
+   */
+  entryId?: string;
+}
 
 export class CollectionAccessService extends BaseService {
   constructor(
@@ -62,59 +93,67 @@ export class CollectionAccessService extends BaseService {
    * `overrideAccess` — type-compatible, invisible to the compiler, and on a
    * security gate.
    */
-  async checkCollectionAccess<T>(params: {
-    collectionName: string;
-    operation: AccessOperation;
-    user?: UserContext;
-    overrideAccess?: boolean;
-    routeAuthorized?: boolean;
-    /**
-     * The caller's authenticated scope. For a scoped API key the RBAC gate
-     * judges the key's OWN stamped grants rather than the owner's permissions
-     * (see auth/authenticated-scope). Undefined for session/system callers.
-     */
-    authenticatedScope?: AuthenticatedScope;
-    /**
-     * Optional transaction-bound Drizzle executor. Supplied when the caller is
-     * already inside a write transaction (the caller-owned-tx bulk paths) so
-     * the RBAC role/permission reads run on that transaction's own connection
-     * instead of taking a second pooled one, which can stall against a small
-     * pool. Defaults to the pooled connection.
-     */
-    executor?: unknown;
-    /**
-     * The one entry the operation acts on, where it acts on one, so a
-     * refusal names "this post" rather than the collection. It decides
-     * nothing.
-     */
-    entryId?: string;
-  }): Promise<CollectionServiceResult<T> | null> {
-    const {
-      collectionName,
-      operation,
-      user,
-      overrideAccess,
-      routeAuthorized,
-      authenticatedScope,
-      executor,
-    } = params;
+  async checkCollectionAccess<T>(
+    params: CollectionAccessParams
+  ): Promise<CollectionServiceResult<T> | null> {
     // Trusted-server / system write: bypass all access control checks.
-    if (overrideAccess) {
+    if (params.overrideAccess) {
       return null;
     }
+    const ask = this.gateFor(params, false);
+    const verdict = await ask(params.operation);
+    return verdict.allowed ? null : this.refusalOf<T>(verdict, params, ask);
+  }
 
-    // Asked of the one access decision, through the adapter that keeps this
-    // gate's answers as they were (`auth/access/gate-adapters`).
-    //
-    // The key scope is the caller's own, or the request's when this caller did
-    // not name one. Two of this method's callers cannot name one: the
-    // transaction entry points (`createEntryInTransaction` and its siblings)
-    // take write params that declare no `authenticatedScope`, and the plugin
-    // service facade exposes them, so an API-key request reaching a write
-    // through a transaction would otherwise be judged on the key OWNER's roles
-    // while the identical write through `createEntry` was held to the key's own
-    // grants. An explicit argument still wins, so a caller may narrow.
-    const ask = (action: AccessOperation) =>
+  /**
+   * Check collection-level read access for a read that applies a read rule's
+   * filter to the entries it reads: a list, a count and the aggregates built
+   * on them. Allowed with no filter, allowed only for the entries `filter`
+   * matches, or refused with the envelope to hand back.
+   *
+   * A read that cannot limit what it reads to the matching entries, such as a
+   * read by id, asks {@link checkCollectionAccess}, which refuses a filter.
+   */
+  async checkCollectionRead<T>(
+    params: Omit<CollectionAccessParams, "operation">
+  ): Promise<
+    | { readonly denied: CollectionServiceResult<T> }
+    | { readonly denied: null; readonly filter?: RuleFilter }
+  > {
+    if (params.overrideAccess) return { denied: null };
+    const asked = { ...params, operation: "read" as const };
+    const ask = this.gateFor(asked, true);
+    const verdict = await ask("read");
+    if (verdict.allowed) return { denied: null };
+    if (verdict.refusal === "only-matching-entries") {
+      return { denied: null, filter: verdict.filter };
+    }
+    return { denied: await this.refusalOf<T>(verdict, asked, ask) };
+  }
+
+  /**
+   * How the gate is asked about the caller, for any action: of the one access
+   * decision, through the adapter that keeps this gate's answers as they were
+   * (`auth/access/gate-adapters`). `appliesFilter` says whether the asker
+   * limits what it reads to the entries a read rule's filter matches.
+   *
+   * The key scope is the caller's own, or the request's when this caller did
+   * not name one. Two of this service's callers cannot name one: the
+   * transaction entry points (`createEntryInTransaction` and its siblings)
+   * take write params that declare no `authenticatedScope`, and the plugin
+   * service facade exposes them, so an API-key request reaching a write
+   * through a transaction would otherwise be judged on the key OWNER's roles
+   * while the identical write through `createEntry` was held to the key's own
+   * grants. An explicit argument still wins, so a caller may narrow.
+   */
+  private gateFor(
+    params: CollectionAccessParams,
+    appliesFilter: boolean
+  ): (action: AccessOperation) => Promise<GateVerdict> {
+    const { collectionName, user, routeAuthorized, authenticatedScope } =
+      params;
+    const { executor } = params;
+    return action =>
       collectionGateVerdict({
         slug: collectionName,
         action,
@@ -123,6 +162,7 @@ export class CollectionAccessService extends BaseService {
         scope: effectiveCallerScope(authenticatedScope),
         principal: currentPrincipal(),
         executor,
+        appliesFilter,
         rules: this.rbacAccessControlService,
         // On this service's own database, with its dialect's tables. Without
         // them the check reads through the global container and the process's
@@ -147,8 +187,15 @@ export class CollectionAccessService extends BaseService {
             },
           }),
       });
-    const verdict = await ask(operation);
-    if (verdict.allowed) return null;
+  }
+
+  /** The envelope a refused verdict is handed back as. */
+  private async refusalOf<T>(
+    verdict: Exclude<GateVerdict, { allowed: true }>,
+    params: CollectionAccessParams,
+    ask: (action: AccessOperation) => Promise<GateVerdict>
+  ): Promise<CollectionServiceResult<T>> {
+    const { collectionName, operation, user, executor } = params;
     // A caller naming one entry it may not read is answered as if the entry
     // were missing. A caller with no identity, neither a user nor a plugin's
     // own principal, is left to the sign-in answer, which comes before this.
