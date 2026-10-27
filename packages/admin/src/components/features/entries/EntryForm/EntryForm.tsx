@@ -509,10 +509,9 @@ export function EntryForm({
   } = viewedVersionHost;
 
   // Whether this collection has Draft/Published status enabled at the meta
-  // level. When true, the system header splits into Save Draft + Publish/Update
-  // and the Document panel + meta strip surface the status pill. When false,
-  // the system header collapses to a single Save/Create button and the pill
-  // is hidden.
+  // level. When true, the document bar splits into Save Draft + Publish/Update
+  // and shows the status pill. When false, the bar collapses to a single
+  // Save/Create button and the pill is hidden.
   const hasStatus = collection.status === true;
 
   // Auto-fill slug from title while the slug looks auto-generated. Why a
@@ -1292,7 +1291,6 @@ export function EntryForm({
                                       actionsDisabled={editsHeld}
                                       // A reader may still open the other languages.
                                       navigationDisabled={writesHeld}
-                                      isDirty={isDirty}
                                     />
                                   </div>
                                 </div>

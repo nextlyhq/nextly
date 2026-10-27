@@ -157,4 +157,13 @@ describe("the Single editor's layout", () => {
     expect(pills).toHaveLength(1);
     expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(true);
   });
+
+  it("shows the status once with the document panel open beside it", () => {
+    renderEditor();
+    // The control: the panel is open, so its own sections are on screen.
+    expect(screen.getByText("Created")).toBeInTheDocument();
+    const pills = screen.getAllByText("Published");
+    expect(pills).toHaveLength(1);
+    expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(true);
+  });
 });

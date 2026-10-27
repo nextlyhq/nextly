@@ -142,8 +142,8 @@ export interface SingleSchema {
   admin?: SingleAdminOptions;
   /**
    * Whether this Single has the Draft/Published lifecycle enabled. When
-   * true, the system header splits into Save Draft + Update buttons and the
-   * Document panel + meta strip surface a status pill. Backed by the
+   * true, the document bar splits into Save Draft + Update buttons and shows
+   * the status pill. Backed by the
    * `dynamic_singles.status` boolean column.
    */
   status?: boolean;
@@ -388,7 +388,6 @@ function SingleFormRail({
   navigationDisabled,
   entry,
   hasStatus,
-  isDirty,
   locale,
   onLocaleChange,
   railCollapsed,
@@ -397,7 +396,6 @@ function SingleFormRail({
   navigationDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
-  isDirty: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   railCollapsed: boolean;
@@ -416,7 +414,6 @@ function SingleFormRail({
           mode="edit"
           entry={entry}
           hasStatus={hasStatus}
-          isDirty={isDirty}
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
           {...(locale === undefined ? {} : { locale })}
@@ -800,7 +797,7 @@ export function SingleForm({
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, the document bar shows Save Draft / Update split and the
-  // status pill, and the DocumentPanel its status row.
+  // status pill.
   const hasStatus = schema.status === true;
 
   // Auto-fill slug from title — same form-level pattern as EntryForm. The
@@ -1295,7 +1292,6 @@ export function SingleForm({
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
-                                isDirty={isDirty}
                                 railCollapsed={railCollapsed}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(onLocaleChange === undefined
