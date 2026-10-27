@@ -15,6 +15,7 @@ import {
   isPluginPageAddress,
   matchPluginPage,
 } from "./plugins/plugin-route-registry";
+import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
 /**
@@ -239,6 +240,18 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
 }
 
 // Main route resolution function
+// Fetches the page an admin address leads to, so a link hovered or focused
+// before its click starts the download early. An address outside the admin,
+// or one leading to a page that isn't fetched lazily, does nothing.
+setRoutePreloader(href => {
+  if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return;
+  const [pathname] = href.split(/[?#]/, 1);
+  const { Component } = resolveRoute(pathname, "");
+  if ("preload" in Component && typeof Component.preload === "function") {
+    Component.preload();
+  }
+});
+
 export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Exact match
   if (registry[pathname]) {
