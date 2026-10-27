@@ -20,6 +20,7 @@
 import {
   actionGatesOf,
   collectionSettingField,
+  knobQueriesField,
   textBoundsField,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
@@ -673,6 +674,9 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // Its Collection setting, so a card is judged by the collection it reads
     // whichever channel declared the widget.
     ...collectionSettingField(widget.settings),
+    // What its settings may drive, so a Collection setting no knob reaches
+    // on its query decides nothing about which of its cards are withheld.
+    ...knobQueriesField(widget),
   };
 }
 

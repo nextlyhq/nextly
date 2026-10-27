@@ -37,6 +37,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
+  allWidgets,
   declaredWidgets,
   placedByDefault,
   widthFacts,
@@ -53,6 +54,7 @@ import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
   conversionFacts,
   generatedCardConversion,
+  registeredWidths,
 } from "../domains/widgets/generated-card-conversion";
 import {
   getStartedDrawn,
@@ -78,7 +80,6 @@ import {
   type WidgetPlacement,
   type WidgetRetirements,
 } from "../domains/widgets/layout";
-import { readableCollectionsOf } from "../domains/widgets/publish";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -312,7 +313,7 @@ async function visibleWidgets(auth: AuthContext) {
   // collection the install holds, both from the refresh the audience pass
   // just ran: the one answer the conversion, the withheld cards and the scope
   // are all taken from.
-  const readable = readableCollectionsOf(audience.visible);
+  const readable = audience.readableCollections;
   const registered = audience.registeredCollections;
   // The generated cards from the audience's own snapshot, taken in the same
   // span as the visible widgets and the registered collections: a re-read of
@@ -330,13 +331,9 @@ async function visibleWidgets(auth: AuthContext) {
       readable,
       registered,
       new Set(declaredWidgets().map(widget => widget.id)),
-      // Each successor's widths as registered, where this reader is shown it.
-      successor => {
-        const widget = audience.visible.find(entry => entry.id === successor);
-        return widget === undefined
-          ? undefined
-          : widthFacts(widget).allowedWidths;
-      },
+      // Each successor's widths as registered for the install, whether or not
+      // this reader may see the successor.
+      registeredWidths(allWidgets()),
       // The cards core generates today, by id: only one of them is a retired
       // core card, and a timeline converts only while it counts as Over time.
       widgetId => generatedById.get(widgetId)

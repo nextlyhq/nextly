@@ -156,6 +156,14 @@ export interface CanonicalWidget {
    */
   collectionSetting?: AnyWidgetSetting;
   /**
+   * The queries a setting of the declaration may drive: its query, or each of
+   * its cells' queries. A Collection setting no knob drives on any of them
+   * names no collection the card reads, so it decides nothing about which
+   * cards are withheld. Absent on a summary built before the field existed,
+   * which is judged by its setting alone.
+   */
+  knobQueries?: readonly unknown[];
+  /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none, and a declared
    * widget's empty-state action's, when it has one.
@@ -234,7 +242,29 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
     ...collectionSettingField(definition.settings),
+    ...knobQueriesField(definition),
   };
+}
+
+/**
+ * The queries a declaration's settings may drive, as a summary field: its
+ * query, or each of its cells' queries.
+ */
+export function knobQueriesField(declaration: {
+  query?: unknown;
+  cells?: unknown;
+}): Pick<CanonicalWidget, "knobQueries"> {
+  const cells = Array.isArray(declaration.cells) ? declaration.cells : [];
+  const knobQueries = [
+    ...(declaration.query === undefined ? [] : [declaration.query]),
+    ...cells.map((cell: unknown) =>
+      typeof cell === "object" && cell !== null
+        ? (cell as { query?: unknown }).query
+        : undefined
+    ),
+  ];
+  // Absent when it asks nothing, as every unstated field is.
+  return knobQueries.length === 0 ? {} : { knobQueries };
 }
 
 /**
@@ -399,6 +429,10 @@ function mergeCanonical(
     ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
+    // The registration's queries alone, as the admin's merge takes its query
+    // and cells: the drawn widget asks what the registration declares, and
+    // asks nothing when it declares neither, though the contribution did.
+    knobQueries: registration.knobQueries ?? [],
     // Both copies' action gates, because both copies ship: the payload carries
     // each channel's declaration and withholds the actions in each, so every
     // gate either names has to be resolved.
