@@ -279,7 +279,7 @@ const DeliveryDetailContent: React.FC<{
   );
 };
 
-export default function WebhookDeliveryDetailPage() {
+export default function WebhookDeliveryDetailPage(): React.JSX.Element {
   const { route } = useRouter();
   const id =
     route?.params?.id && typeof route.params.id === "string"

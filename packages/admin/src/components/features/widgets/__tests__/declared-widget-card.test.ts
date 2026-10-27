@@ -135,7 +135,14 @@ describe("a card core answers, as the frame draws it", () => {
   it("draws the empty state over a widget's own component", () => {
     const custom: DashboardWidget = { ...declared, archetype: "custom" };
     expect(resolveWidgetOutcome(custom, markedEmpty([])).state).toBe("empty");
-    expect(resolveWidgetOutcome(custom, list([])).state).toBe("self-drawn");
+    // Otherwise its own data reaches its component, which the frame draws
+    // inside itself (`answered`).
+    expect(
+      resolveWidgetOutcome(custom, {
+        ok: true,
+        result: { op: "data", data: [] },
+      }).state
+    ).toBe("answered");
   });
 
   it("puts the declared words in place of a display's own when the answer has nothing", () => {
@@ -176,6 +183,25 @@ describe("what a card core answers asks with", () => {
     expect(questionOf(declared, { items: 5 })).toBe(before);
     expect(questionOf(declared, { items: 7 })).not.toBe(before);
     expect(questionOf(declared, undefined)).toBe(questionOf(declared, {}));
+  });
+});
+
+describe("what a card that asks through its cells asks with", () => {
+  it("asks again when its Collection setting changes, though it has no query of its own", () => {
+    // A Count card's numbers come from its cells, each with no source until
+    // its Collection setting supplies one: a change of collection is a new
+    // question even though the card declares no top-level query.
+    const count = {
+      id: "core/count",
+      title: "Count",
+      archetype: "custom",
+      component: "core#Count",
+      settings: [{ name: "collection", type: "collection" }],
+      cells: [{ key: "total", query: { op: "count", status: "all" } }],
+    } as unknown as DashboardWidget;
+    const posts = questionOf(count, { collection: "posts" });
+    expect(questionOf(count, { collection: "posts" })).toBe(posts);
+    expect(questionOf(count, { collection: "pages" })).not.toBe(posts);
   });
 });
 

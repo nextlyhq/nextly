@@ -3,9 +3,10 @@
 /**
  * The four states a card shows instead of its content, and the skeleton it shows first.
  *
- * Every card, core or plugin, draws these the same way: one wording, one look, one place an
- * action goes. A widget supplies data and a body; it never draws its own loading, empty,
- * unavailable or error state, which is what kept them differing card by card before.
+ * The frame draws these for every card, core or plugin, from its `CardState`
+ * (`card-state`): one wording, one look, one place an action goes. A widget supplies data and a
+ * body, and reports a state its own data says with `FrameState`; it never draws one itself, which
+ * is what kept them differing card by card before.
  *
  * None of them is a live region. The dashboard announces through its one polite region, and a
  * card that announced its own error would talk over it (see `WidgetCard`).

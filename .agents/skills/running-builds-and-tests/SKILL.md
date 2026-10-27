@@ -62,6 +62,24 @@ held in every session.
   hypothetical: the first version of this entry claimed 19 of 21 passing and
   `lint` clean at 22 of 22, and both numbers came from cache hits.
 
+  `--force` reruns the task, not the type check. `incremental` is on in the
+  shared config, so `tsc` reads the `.tsbuildinfo` an earlier run in the same
+  checkout left (git ignores it, so a clean `git status` says nothing) and
+  checks only what changed. To TIME a type check, or to compare one checkout
+  with another, delete every `.tsbuildinfo` first, or pass
+  `--incremental false`, as a fresh checkout in CI has none. Measured on
+  nextly: 0.48 s reading an earlier run's build info, 19.6 s with none.
+
+  `check-types` runs TypeScript 7 through `scripts/tsc.mjs`, which passes
+  `--checkers` sized to the machine by `local-limits.mjs`: 4 on a 16 GB machine,
+  2 below that, 1 under `NEXTLY_LOCAL_MAX_WORKERS=1` (`pnpm local-limits` prints
+  it). `scripts/check-types-checkers.test.mjs` holds every package to the
+  wrapper. The number of parallel checkers can occasionally change which
+  diagnostics appear, so a result that looks order-dependent, appearing or
+  vanishing between runs or machines, is ruled in or out by rerunning that
+  package's command with `--singleThreaded`, which checks in one fixed order.
+  Do not change a package's checkers to make a result go away.
+
   `TS2307` naming a workspace package (`nextly/...`, `@nextlyhq/...`) is USUALLY
   a missing build, and the rebuild is what confirms it. It is not proof on its
   own: a misspelled specifier, a removed export-map subpath, or a broken
@@ -121,9 +139,12 @@ held in every session.
     that is rarely the one you are standing in, and compose then tries to
     CREATE containers whose names are taken and fails. `docker start` addresses
     them by name and does not care which project owns them.
-- Integration files in `packages/nextly` run sequentially on purpose
-  (`fileParallelism: false`, single fork): system-table suites share fixed
-  table names. Do not "fix" slow integration runs by re-enabling parallelism.
+- Integration files in `packages/nextly` run in sequence on one worker by
+  default: system-table suites share fixed table names. More workers
+  (`NEXTLY_INTEGRATION_WORKERS`) run only where each worker has its own
+  database, which `packages/nextly/src/__tests__/worker-database-guard.ts`
+  enforces (today: in-memory SQLite, no TEST\_\*\_URL set). Never run them
+  in parallel on a shared database.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to

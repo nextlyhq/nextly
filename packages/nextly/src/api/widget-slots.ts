@@ -357,6 +357,8 @@ async function answerOne(ready: ReadyQuery, run: SlotRun): Promise<void> {
         executeWidgetQuery(ready.query, run.caller, {
           signal,
           scope: run.scope.forSource(source),
+          // Facts about the caller, kept once for every source in the batch.
+          callerScope: run.scope.forCaller(),
           // The batch's one instant, this query's own copy, so every card
           // asking for a window measures it from the same moment.
           now: new Date(run.now),
@@ -575,8 +577,10 @@ export async function answerReadyQueries(
   const run: SlotRun = {
     caller,
     scope,
-    now: new Date(),
     signal: options.signal,
+    // Taken once, so every card and cell in the batch measures "the last 30
+    // days" from the same moment.
+    now: new Date(),
     settle(entries, slots) {
       const settled: SettledSlot[] = [];
       entries.forEach((entry, position) => {

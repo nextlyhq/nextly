@@ -5,7 +5,7 @@ import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
-import type { AccessSubject } from "../types/access-subject";
+import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { routedDocumentView } from "./plugins/document-view-registry";
@@ -47,6 +47,12 @@ export interface RouteResult {
    * visit can name it. Set beside `requiredPermission` from the same table.
    */
   accessSubject?: AccessSubject;
+  /**
+   * What the route asks of the collection or Single it opens, which the guard
+   * decides from the server's answer. Set beside `requiredPermission` from the
+   * same table.
+   */
+  entityAccess?: EntityAccess;
   /** Route is part of the schema builder, which is disabled in production. */
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
@@ -155,16 +161,18 @@ const SLUG_ROUTE_ACCESS: Record<
 > = {
   [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
-  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "update", subject: "collection" },
+  // An entry opens for a user who may read it, and is editable only for one
+  // who may change it: the editor shows a reader the same page, read-only.
+  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "read", subject: "collection" },
   // A document view is an editor of the document, so it asks what editing
-  // it asks: the same claim, the same save.
-  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "update", subject: "collection" },
+  // it asks.
+  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
   // Reading a document's history is a read of that document, and restoring
   // from it goes through the ordinary update path with its own check.
   [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
-  [ROUTES.SINGLE_EDIT]: { action: "update", subject: "single" },
-  [ROUTES.SINGLE_VIEW]: { action: "update", subject: "single" },
+  [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
 };
@@ -172,7 +180,13 @@ const SLUG_ROUTE_ACCESS: Record<
 function getSlugRouteAccess(
   pattern: string,
   params: Params
-): { requiredPermission: string; accessSubject: AccessSubject } | undefined {
+):
+  | {
+      requiredPermission: string;
+      accessSubject: AccessSubject;
+      entityAccess: EntityAccess;
+    }
+  | undefined {
   const slug = typeof params.slug === "string" ? params.slug : undefined;
   const access = Object.hasOwn(SLUG_ROUTE_ACCESS, pattern)
     ? SLUG_ROUTE_ACCESS[pattern]
@@ -181,6 +195,7 @@ function getSlugRouteAccess(
   return {
     requiredPermission: `${access.action}-${slug}`,
     accessSubject: access.subject,
+    entityAccess: { slug, action: access.action },
   };
 }
 
@@ -251,6 +266,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission:
         slugAccess?.requiredPermission ?? dynamic.requiredPermission,
       accessSubject: slugAccess?.accessSubject,
+      entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
     };

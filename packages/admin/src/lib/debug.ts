@@ -14,7 +14,7 @@ const DEBUG_PERMISSIONS = process.env.NEXT_PUBLIC_DEBUG_PERMISSIONS === "true";
  * Logs messages only in development mode or when DEBUG_PERMISSIONS is enabled.
  * Use this instead of console.log for debugging code that should not run in production.
  */
-export const debugLog = (component: string, ...args: unknown[]) => {
+export const debugLog = (component: string, ...args: unknown[]): void => {
   if (IS_DEV || DEBUG_PERMISSIONS) {
     console.log(`[${component}]`, ...args);
   }
@@ -25,7 +25,7 @@ export const debugLog = (component: string, ...args: unknown[]) => {
  *
  * Always logs errors (even in production) but with component context.
  */
-export const debugError = (component: string, ...args: unknown[]) => {
+export const debugError = (component: string, ...args: unknown[]): void => {
   console.error(`[${component}]`, ...args);
 };
 
@@ -34,7 +34,7 @@ export const debugError = (component: string, ...args: unknown[]) => {
  *
  * Logs warnings only in development mode or when DEBUG_PERMISSIONS is enabled.
  */
-export const debugWarn = (component: string, ...args: unknown[]) => {
+export const debugWarn = (component: string, ...args: unknown[]): void => {
   if (IS_DEV || DEBUG_PERMISSIONS) {
     console.warn(`[${component}]`, ...args);
   }

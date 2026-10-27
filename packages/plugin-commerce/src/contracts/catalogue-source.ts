@@ -142,36 +142,88 @@ export interface CatalogueSource {
   readonly stock?: CatalogueStockListener;
 }
 
-const priceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("listed"),
-    // Money may be negative in arithmetic, but a price commerce charges from
-    // is not: a negative one would take money off an order's total.
-    unitPrice: moneySchema.refine(m => m.amount >= 0, {
-      message: "a listed price is not negative",
-    }),
-  }),
-  z.strictObject({ kind: z.literal("on-request") }),
-]);
+/** A listed price: what one unit costs. */
+type ListedPriceShape = {
+  kind: z.ZodLiteral<"listed">;
+  unitPrice: typeof moneySchema;
+};
+/** A price given only on request. */
+type OnRequestPriceShape = { kind: z.ZodLiteral<"on-request"> };
+/** The kinds of price {@link priceSchema} accepts, in the order it lists them. */
+type PriceVariants = [
+  z.ZodObject<ListedPriceShape, z.core.$strict>,
+  z.ZodObject<OnRequestPriceShape, z.core.$strict>,
+];
 
-const stockSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("one-off"),
-    available: z.union([z.literal(0), z.literal(1)]),
-  }),
-  z.strictObject({
-    kind: z.literal("counted"),
-    available: z.number().int().nonnegative(),
-  }),
-  z.strictObject({ kind: z.literal("untracked") }),
-  z.strictObject({
-    kind: z.literal("to-order"),
-    maxPerLine: z.number().int().positive(),
-  }),
-]);
+const priceSchema: z.ZodDiscriminatedUnion<PriceVariants, "kind"> =
+  z.discriminatedUnion<PriceVariants, "kind">("kind", [
+    z.strictObject<ListedPriceShape>({
+      kind: z.literal("listed"),
+      // Money may be negative in arithmetic, but a price commerce charges from
+      // is not: a negative one would take money off an order's total.
+      unitPrice: moneySchema.refine(m => m.amount >= 0, {
+        message: "a listed price is not negative",
+      }),
+    }),
+    z.strictObject<OnRequestPriceShape>({ kind: z.literal("on-request") }),
+  ]);
+
+/** One item, either available or not. */
+type OneOffStockShape = {
+  kind: z.ZodLiteral<"one-off">;
+  available: z.ZodUnion<readonly [z.ZodLiteral<0>, z.ZodLiteral<1>]>;
+};
+/** A counted quantity. */
+type CountedStockShape = {
+  kind: z.ZodLiteral<"counted">;
+  available: z.ZodNumber;
+};
+/** Stock nobody counts. */
+type UntrackedStockShape = { kind: z.ZodLiteral<"untracked"> };
+/** Made to order, up to a quantity per line. */
+type ToOrderStockShape = {
+  kind: z.ZodLiteral<"to-order">;
+  maxPerLine: z.ZodNumber;
+};
+/** The kinds of stock {@link stockSchema} accepts, in the order it lists them. */
+type StockVariants = [
+  z.ZodObject<OneOffStockShape, z.core.$strict>,
+  z.ZodObject<CountedStockShape, z.core.$strict>,
+  z.ZodObject<UntrackedStockShape, z.core.$strict>,
+  z.ZodObject<ToOrderStockShape, z.core.$strict>,
+];
+
+const stockSchema: z.ZodDiscriminatedUnion<StockVariants, "kind"> =
+  z.discriminatedUnion<StockVariants, "kind">("kind", [
+    z.strictObject<OneOffStockShape>({
+      kind: z.literal("one-off"),
+      available: z.union([z.literal(0), z.literal(1)]),
+    }),
+    z.strictObject<CountedStockShape>({
+      kind: z.literal("counted"),
+      available: z.number().int().nonnegative(),
+    }),
+    z.strictObject<UntrackedStockShape>({ kind: z.literal("untracked") }),
+    z.strictObject<ToOrderStockShape>({
+      kind: z.literal("to-order"),
+      maxPerLine: z.number().int().positive(),
+    }),
+  ]);
+
+/** The fields of {@link catalogueItemSchema}. */
+type CatalogueItemShape = {
+  reference: z.ZodString;
+  name: z.ZodString;
+  sku: z.ZodOptional<z.ZodString>;
+  price: typeof priceSchema;
+  stock: typeof stockSchema;
+};
 
 /** @experimental */
-export const catalogueItemSchema = z.strictObject({
+export const catalogueItemSchema: z.ZodObject<
+  CatalogueItemShape,
+  z.core.$strict
+> = z.strictObject<CatalogueItemShape>({
   reference: z.string().min(1).max(255),
   // Bounded so every dialect stores an order's snapshot of them whole: past
   // 255 characters is a broken answer everywhere, not a failed order on one
@@ -182,30 +234,65 @@ export const catalogueItemSchema = z.strictObject({
   stock: stockSchema,
 });
 
+/** A line whose item was found, with its price and stock. */
+type FoundLineShape = {
+  reference: z.ZodString;
+  quantity: z.ZodNumber;
+  found: z.ZodLiteral<true>;
+  price: typeof priceSchema;
+  stock: typeof stockSchema;
+};
+/** A line whose item was not found. */
+type MissingLineShape = {
+  reference: z.ZodString;
+  quantity: z.ZodNumber;
+  found: z.ZodLiteral<false>;
+};
+/** The kinds of line {@link pricedLineSchema} accepts, in the order it lists them. */
+type PricedLineVariants = [
+  z.ZodObject<FoundLineShape, z.core.$strict>,
+  z.ZodObject<MissingLineShape, z.core.$strict>,
+];
+
 /** @experimental */
-export const pricedLineSchema = z.discriminatedUnion("found", [
-  z.strictObject({
+export const pricedLineSchema: z.ZodDiscriminatedUnion<
+  PricedLineVariants,
+  "found"
+> = z.discriminatedUnion<PricedLineVariants, "found">("found", [
+  z.strictObject<FoundLineShape>({
     reference: z.string().min(1),
     quantity: z.number().int().positive(),
     found: z.literal(true),
     price: priceSchema,
     stock: stockSchema,
   }),
-  z.strictObject({
+  z.strictObject<MissingLineShape>({
     reference: z.string().min(1),
     quantity: z.number().int().positive(),
     found: z.literal(false),
   }),
 ]);
 
+/** The kinds of stock movement {@link stockReportSchema} reports. */
+type StockReportKinds = readonly ["hold", "release", "sale"];
+/** The fields of {@link stockReportSchema}. */
+type StockReportShape = {
+  operationId: typeof operationIdSchema;
+  kind: z.ZodEnum<{ [K in StockReportKinds[number]]: K }>;
+  reference: z.ZodString;
+  quantity: z.ZodNumber;
+  orderReference: z.ZodString;
+};
+
 /** @experimental */
-export const stockReportSchema = z.strictObject({
-  operationId: operationIdSchema,
-  kind: z.enum(["hold", "release", "sale"]),
-  reference: z.string().min(1),
-  quantity: z.number().int().positive(),
-  orderReference: z.string().min(1),
-});
+export const stockReportSchema: z.ZodObject<StockReportShape, z.core.$strict> =
+  z.strictObject<StockReportShape>({
+    operationId: operationIdSchema,
+    kind: z.enum<StockReportKinds>(["hold", "release", "sale"]),
+    reference: z.string().min(1),
+    quantity: z.number().int().positive(),
+    orderReference: z.string().min(1),
+  });
 
 /**
  * Refuse a source whose declaration is malformed: no id, a missing required

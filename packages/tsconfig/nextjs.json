@@ -3,7 +3,9 @@
   "extends": "./base.json",
   "compilerOptions": {
     "plugins": [{ "name": "next" }],
-    "module": "ESNext",
+    // Module syntax checked as the bundler keeps it, which is what tsdown and
+    // Next do with it: TypeScript's advice for code a bundler builds.
+    "module": "Preserve",
     "moduleResolution": "Bundler",
     "allowJs": true,
     "jsx": "preserve",

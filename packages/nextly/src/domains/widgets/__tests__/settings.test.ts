@@ -10,10 +10,13 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { PublishedContentSource } from "../publish";
+import type { SourcelessWidgetQuery } from "../query";
 import {
   type AnyWidgetSetting,
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
+  effectiveWidgetSettings,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
@@ -78,6 +81,27 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
         "core/x"
       )
     ).toThrow(/function default/);
+  });
+
+  it("takes rows on a Collection setting alone, and only titled", () => {
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", rows: "titled" }],
+        "core/x"
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "note", type: "text", rows: "titled" } as never],
+        "core/x"
+      )
+    ).toThrow(/declares rows, which only a Collection setting takes/);
+    expect(() =>
+      validateWidgetSettings(
+        [{ name: "collection", type: "collection", rows: "all" } as never],
+        "core/x"
+      )
+    ).toThrow(/has rows "all"; expected "titled"/);
   });
 
   /*
@@ -473,6 +497,88 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
       100000
     );
   });
+
+  it("reads the collection a card is set to, in place of the one declared", () => {
+    const collection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    const out = applyWidgetSettings(base, [collection], {
+      collection: "pages",
+    });
+    expect(out.source).toBe("collection:pages");
+    // The rest of the query is the widget's own.
+    expect(out).toEqual({ ...base, source: "collection:pages" });
+    expect(base.source).toBe("collection:posts");
+  });
+
+  it("reads the declared collection when the card is set to none, and keeps the query otherwise", () => {
+    const withDefault: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+      defaultValue: "pages",
+    };
+    expect(applyWidgetSettings(base, [withDefault], {}).source).toBe(
+      "collection:pages"
+    );
+    const without: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    // Nothing chosen and nothing declared: the source the widget names stands.
+    expect(applyWidgetSettings(base, [without], {})).toBe(base);
+  });
+
+  it("reads only a value shaped like a collection slug as a collection", () => {
+    // A special default such as "*" names no collection, so the declared query
+    // is asked as it is rather than for a source that cannot exist.
+    const wildcard: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+      defaultValue: "*",
+    };
+    expect(applyWidgetSettings(base, [wildcard], {})).toBe(base);
+    expect(
+      applyWidgetSettings(base, [wildcard], { collection: "Not A Slug" })
+    ).toBe(base);
+    expect(
+      applyWidgetSettings(base, [wildcard], { collection: "pages" }).source
+    ).toBe("collection:pages");
+  });
+
+  it("drives the collection only over a collection source, or none", () => {
+    const collection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+    };
+    // A system source is one read of its own: a Collection setting there would
+    // mean something else, so this knob leaves it as declared.
+    const system = { source: "system:releases", op: "list" as const, limit: 5 };
+    expect(
+      applyWidgetSettings(system, [collection], { collection: "pages" })
+    ).toBe(system);
+    // The source handed in is the one judged, whatever the query names.
+    expect(
+      applyWidgetSettings(
+        base,
+        [collection],
+        { collection: "pages" },
+        {
+          source: { id: "system:releases" },
+        }
+      )
+    ).toBe(base);
+    // No declared source at all: the card's collection is its source.
+    // Typed with the source it does not have yet, which the knob gives it.
+    const sourceless: { source?: string; op: "list"; limit: number } = {
+      op: "list",
+      limit: 5,
+    };
+    expect(
+      applyWidgetSettings(sourceless, [collection], { collection: "pages" })
+        .source
+    ).toBe("collection:pages");
+  });
 });
 
 describe("the content settings: a collection, and a filter, sort or grouping over it", () => {
@@ -555,25 +661,364 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(list).toContain('setting "where" is typed "filter"');
   });
 
-  it("is refused at registration, naming its mark and what to use instead", () => {
-    // A registered widget's settings reach its query through knobs that carry
-    // `limit` alone, so a content setting there would change nothing the card
-    // shows; a declared widget, whose card query is built from them, may hold
-    // these.
+  it("admits a Collection setting at registration over a collection source, or none", () => {
+    // The collection a card reads becomes its query's source, so the setting
+    // changes what the card shows and is drawn rather than refused.
+    expect(widgetSettingsProblem([content[0]])).toBeUndefined();
+    expect(
+      widgetSettingsProblem([content[0]], false, { id: "collection:posts" })
+    ).toBeUndefined();
+    expect(() => validateWidgetSettings([content[0]], "core/x")).not.toThrow();
+  });
+
+  it("refuses a content setting at registration over a source no knob drives it on", () => {
+    // Every content knob reads a collection: on a system source the setting
+    // would be drawn and saved and change nothing, so it is refused with the
+    // mark, the core-built widget aside.
     for (const setting of content) {
       const set =
         setting.type === "collection" ? [setting] : [content[0], setting];
-      const problem = widgetSettingsProblem(set);
-      expect(problem, setting.type).toContain(CONTENT_SETTING_NOT_DRAWN);
-      expect(problem).toContain(
-        "use a text, number, checkbox or select setting until those settings reach a registered widget's query"
+      expect(
+        widgetSettingsProblem(set, false, { id: "system:releases" }),
+        setting.type
+      ).toContain(CONTENT_SETTING_NOT_DRAWN);
+    }
+    expect(() =>
+      validateWidgetSettings([content[0]], "core/x", false, {
+        id: "system:releases",
+      })
+    ).toThrow(CONTENT_SETTING_NOT_DRAWN);
+  });
+
+  it("refuses a content setting on a widget that asks nothing a knob could drive", () => {
+    // No query and no cells: the setting would be drawn and saved and change
+    // nothing the card shows.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(widgetSettingsProblem(set, false, null), setting.type).toContain(
+        CONTENT_SETTING_NOT_DRAWN
       );
     }
-    expect(() => validateWidgetSettings(content, "core/x")).toThrow(
-      CONTENT_SETTING_NOT_DRAWN
+    // The widget whose data core builds holds them, as before.
+    expect(widgetSettingsProblem([content[0]], true, null)).toBeUndefined();
+  });
+
+  it("refuses a second Collection setting, which would always lose to the first", () => {
+    const two = [
+      { name: "collection", type: "collection" as const },
+      { name: "other", type: "collection" as const },
+    ];
+    expect(widgetSettingsProblem(two)).toContain(
+      'declares 2 Collection settings ("collection", "other")'
     );
-    // The control: the field settings beside it register as before.
-    expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
+    expect(widgetSettingsProblem(two, true)).toBeUndefined();
+  });
+
+  it("is admitted at registration, since a knob drives each one into the card's query", () => {
+    // A registered widget's settings reach its query only through the knobs of
+    // `applyWidgetSettings`; each content type has one, so none of them is a
+    // control that would change nothing.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(widgetSettingsProblem(set), setting.type).toBeUndefined();
+    }
+    expect(() => validateWidgetSettings(content, "core/x")).not.toThrow();
+  });
+
+  describe("driving the card's query", () => {
+    // Sourceless, as a per-collection widget declares it: the Collection
+    // setting supplies the source.
+    const base: SourcelessWidgetQuery = { op: "list", limit: 5 };
+    const fields = [
+      { name: "title", offered: true, groupable: true },
+      { name: "status", offered: true, groupable: true },
+      { name: "updatedAt", offered: true, groupable: false },
+      { name: "salary", offered: false, groupable: true },
+    ];
+    const ctx = {
+      fieldsOf: (collection: string) =>
+        collection === "posts" ? fields : undefined,
+    };
+
+    it("reads the chosen collection, and its filter, sort and grouping over it", () => {
+      expect(
+        applyWidgetSettings(
+          base,
+          content,
+          {
+            collection: "posts",
+            where: { status: { equals: "draft" } },
+            order: "-title",
+            by: "status",
+          },
+          ctx
+        )
+      ).toEqual({
+        ...base,
+        source: "collection:posts",
+        where: { status: { equals: "draft" } },
+        sort: "-title",
+        groupBy: "status",
+      });
+    });
+
+    it("asks with a setting's default, before the query is built, where the stored one names a field the reader may not use", () => {
+      const out = applyWidgetSettings(
+        base,
+        content,
+        {
+          collection: "posts",
+          // Through an `or`, so a field named only inside a branch counts.
+          where: { or: [{ title: { equals: "a" } }, { salary: { gt: 1 } }] },
+          order: "salary",
+          by: "salary",
+        },
+        ctx
+      );
+      // The filter and the grouping have no default, so they are left off;
+      // the sort takes its declared one.
+      expect(out).toEqual({
+        ...base,
+        source: "collection:posts",
+        sort: "-updatedAt",
+      });
+    });
+
+    it("hands the card the same values its query was asked with, not the stored ones it set aside", () => {
+      // 🔴 Drawn from the stored values, a card links its number to a filter
+      // the query never counted under.
+      const stored = {
+        collection: "posts",
+        where: { salary: { gt: 1 } },
+        order: "salary",
+        by: "status",
+      };
+      expect({
+        ...effectiveWidgetSettings(content, stored, ctx),
+      }).toEqual({ collection: "posts", order: "-updatedAt", by: "status" });
+      // Without the reader's fields, nothing is known to be withheld.
+      expect(effectiveWidgetSettings(content, stored).where).toEqual({
+        salary: { gt: 1 },
+      });
+    });
+
+    it("narrows a declared condition with the reader's Filter, keeping the declared keys at the top level", () => {
+      // A workflow condition is read only at the top level, so the Filter
+      // joins it under `and` rather than wrapping it.
+      const scheduled = { ...base, where: { _inRelease: true } };
+      const filter = { title: { contains: "news" } };
+      expect(
+        applyWidgetSettings(
+          scheduled,
+          content,
+          { collection: "posts", where: filter },
+          ctx
+        ).where
+      ).toEqual({ _inRelease: true, and: [filter] });
+      // A declared `and` keeps its branches, and the Filter is one more.
+      const both = {
+        ...base,
+        where: { and: [{ status: { equals: "draft" } }] },
+      };
+      expect(
+        applyWidgetSettings(
+          both,
+          content,
+          { collection: "posts", where: filter },
+          ctx
+        ).where
+      ).toEqual({ and: [{ status: { equals: "draft" } }, filter] });
+    });
+
+    it("leaves a grouping off when its field can be read but not grouped by", () => {
+      const out = applyWidgetSettings(
+        base,
+        content,
+        { collection: "posts", by: "updatedAt" },
+        ctx
+      );
+      expect(out.groupBy).toBeUndefined();
+    });
+
+    it("reaches back as far as the card's Date range, as its query's since", () => {
+      const dateRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "30d",
+        options: [
+          { label: "7 days", value: "7d" },
+          { label: "30 days", value: "30d" },
+        ],
+      };
+      // On a count, which a window bounds.
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [dateRange], {}).since).toBe("30d");
+      expect(
+        applyWidgetSettings(counted, [dateRange], { dateRange: "7d" }).since
+      ).toBe("7d");
+      // A list takes no window, so the same setting leaves it as declared.
+      expect(applyWidgetSettings(base, [dateRange], { dateRange: "7d" })).toBe(
+        base
+      );
+    });
+
+    it("sets a ranged chart's range from the card's Date range, never a since beside it", () => {
+      // 🔴 Joined by a since, the query names two windows and the server
+      // refuses it, so the chart would never draw.
+      const dateRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "30d",
+        options: [
+          { label: "7 days", value: "7d" },
+          { label: "30 days", value: "30d" },
+          { label: "60 days", value: "60d" },
+          { label: "12 months", value: "12m" },
+        ],
+      };
+      const ranged = {
+        op: "timeseries" as const,
+        dateField: "createdAt",
+        range: "30d" as const,
+      };
+      const asked = applyWidgetSettings(ranged, [dateRange], {
+        dateRange: "12m",
+      });
+      expect(asked).toMatchObject({ range: "12m" });
+      expect(asked).not.toHaveProperty("since");
+      // A span that is no range leaves the declared range as it was.
+      expect(
+        applyWidgetSettings(ranged, [dateRange], { dateRange: "60d" })
+      ).toBe(ranged);
+    });
+
+    describe("a titled list", () => {
+      const titled = {
+        name: "collection",
+        type: "collection" as const,
+        rows: "titled" as const,
+      };
+      const list: {
+        op: "list";
+        sort: string;
+        limit: number;
+        select?: string[];
+      } = { op: "list", sort: "-updatedAt", limit: 5 };
+      const published = (over: Partial<PublishedContentSource> = {}) => ({
+        sourceOf: (collection: string) =>
+          collection === "posts"
+            ? {
+                collection: "posts",
+                label: "Posts",
+                lifecycle: true,
+                titleField: "headline",
+                fields: [
+                  { name: "headline", type: "string" as const },
+                  { name: "updatedAt", type: "date" as const },
+                ],
+                ...over,
+              }
+            : undefined,
+      });
+
+      it("asks each row's title, its status and when it was updated, and nothing else", () => {
+        expect(
+          applyWidgetSettings(
+            list,
+            [titled],
+            { collection: "posts" },
+            published()
+          )
+        ).toEqual({
+          ...list,
+          source: "collection:posts",
+          select: ["headline", "status", "updatedAt"],
+        });
+        // No lifecycle, no status.
+        expect(
+          applyWidgetSettings(
+            list,
+            [titled],
+            { collection: "posts" },
+            published({ lifecycle: false })
+          ).select
+        ).toEqual(["headline", "updatedAt"]);
+      });
+
+      it.each([
+        ["names no title", { titleField: undefined }],
+        [
+          "has no updatedAt",
+          { fields: [{ name: "headline", type: "string" as const }] },
+        ],
+      ])(
+        "asks nothing of a collection that %s, rather than whole rows",
+        (_why, over) => {
+          // 🔴 Given its source with no select, the read would return every
+          // column of every row.
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled],
+              { collection: "posts" },
+              published(over)
+            )
+          ).toBe(list);
+        }
+      );
+
+      it("drops the source and fields it was declared with, set to a collection it cannot title", () => {
+        // 🔴 Kept, the card would read pages' rows under a setting naming posts.
+        const declared = {
+          ...list,
+          source: "collection:pages",
+          select: ["title", "updatedAt"],
+        };
+        expect(
+          applyWidgetSettings(
+            declared,
+            [titled],
+            { collection: "posts" },
+            published({ titleField: undefined })
+          )
+        ).toEqual(list);
+      });
+
+      it("asks nothing where the reader's collections are not known", () => {
+        expect(
+          applyWidgetSettings(list, [titled], { collection: "posts" })
+        ).toBe(list);
+      });
+    });
+
+    it("leaves a widget's own select named dateRange alone when it offers anything but the query's spans", () => {
+      // A plugin card that reads its own "week" or "month" in its component,
+      // as it did before the knob existed: never sent to the query as since.
+      const ownRange = {
+        name: "dateRange",
+        type: "select" as const,
+        defaultValue: "week",
+        options: [
+          { label: "This week", value: "week" },
+          { label: "Last 30 days", value: "30d" },
+        ],
+      };
+      const counted = { ...base, op: "count" as const };
+      expect(applyWidgetSettings(counted, [ownRange], {})).toBe(counted);
+      expect(
+        applyWidgetSettings(counted, [ownRange], { dateRange: "30d" })
+      ).toBe(counted);
+    });
+
+    it("applies a stored value as it is where the collection's fields are not known, for the server to judge", () => {
+      const out = applyWidgetSettings(base, content, {
+        collection: "posts",
+        order: "salary",
+      });
+      expect(out.sort).toBe("salary");
+    });
   });
 
   it("is admitted where core builds the card's query from it, and still judged by every other rule", () => {

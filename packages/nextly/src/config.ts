@@ -43,6 +43,34 @@ export {
   type SinglePreviewConfig,
 } from "./singles/config/define-single";
 
+// Editorial workflows (@experimental): a workflow defined in code, attached
+// to collections and Singles with their `workflow` option. Only modules that
+// reach no Node built-in are exported here, so a collection file can import
+// them beside `defineCollection`; the definition hash is computed at boot.
+export {
+  allowsSelfApproval,
+  defineWorkflow,
+  entersReview,
+  isReviewStage,
+  MAX_WORKFLOW_NAME_LENGTH,
+  primaryStep,
+} from "./domains/workflows/define-workflow";
+export {
+  reviewWorkflow,
+  type ReviewWorkflowOptions,
+} from "./domains/workflows/preset";
+export {
+  WORKFLOW_STEP_KINDS,
+  type ResolvedWorkflowStep,
+  type Workflow,
+  type WorkflowInput,
+  type WorkflowStage,
+  type WorkflowStageName,
+  type WorkflowStep,
+  type WorkflowStepKind,
+  type WorkflowStepName,
+} from "./domains/workflows/types";
+
 // Hook types for collection hooks
 export type { HookContext } from "./hooks/types";
 
@@ -254,14 +282,14 @@ export type {
   WidgetSetting,
   WidgetAction,
   WidgetStatCell,
+  WidgetQueryCell,
   WidgetHeight,
   WidgetSize,
-  WidgetChrome,
 } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
 // module that builds it into a `nextly.config.ts`.
-export type { PublishedContentSource } from "./domains/widgets/publish";
+export type { PublishedContentSource } from "./domains/widgets/published-content-source";
 // The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
@@ -281,7 +309,27 @@ export {
   type OnboardingStepId,
   type OnboardingStep,
 } from "./domains/widgets/onboarding-steps";
-export type { WidgetQuery } from "./domains/widgets/query";
+/**
+ * The Get started steps the layout read answers, for the card that draws them:
+ * the admin names each kind of step, and restating the shapes there would be
+ * a second answer to the host's.
+ *
+ * @experimental The card is new, and these shapes may change before it settles.
+ */
+export {
+  GET_STARTED_SKIPPABLE_KINDS,
+  GET_STARTED_STEP_KINDS,
+  GET_STARTED_WIDGET_ID,
+  type GetStartedAnswer,
+  type GetStartedStep,
+  type GetStartedStepKind,
+  type GetStartedStepStatus,
+} from "./domains/widgets/get-started-steps";
+export type {
+  SourcelessWidgetQuery,
+  TimeseriesRange,
+  WidgetQuery,
+} from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the
 // server when it reduces the same declaration to a canonical summary. Two
@@ -295,7 +343,10 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
  */
 export {
   applyWidgetSettings,
+  effectiveWidgetSettings,
+  naturalGroupBy,
   resolveWidgetSettings,
+  type AppliedQuery,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
@@ -306,6 +357,9 @@ export { isAdminRelativePath } from "./domains/widgets/admin-path";
 export type {
   AnyWidgetSetting,
   ContentSetting,
+  KnobContext,
+  KnobField,
+  KnobSource,
 } from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a
@@ -344,6 +398,9 @@ export {
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
 } from "./domains/widgets/layout-payload";
+// A text's length in characters, as the layout write counts a note against its
+// bound, so the settings sheet counts it the same way. Import-free.
+export { textLength } from "./shared/text-length";
 // The width vocabulary a dashboard stores and draws: the five widths in their
 // ranking, and the one conversion from a declared size. The admin derives its
 // own list, check and size map from these rather than restating them, since a

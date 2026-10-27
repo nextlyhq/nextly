@@ -50,7 +50,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { Button, Skeleton } from "@nextlyhq/ui";
 import { LayoutGrid } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 
 import type { ComponentLibraryState } from "./component-library-client";
 import type { PageRenderInputs } from "./page-render-inputs";
@@ -91,7 +91,7 @@ export const OPEN_BUILDER_LABEL = "Open Page Builder";
  * document gains or loses blocks — which is otherwise a failure that names the
  * wording rather than the change that caused it.
  */
-export const OPEN_BUILDER_ACTION = new RegExp(
+export const OPEN_BUILDER_ACTION: RegExp = new RegExp(
   `^(?:${BUILD_PAGE_LABEL}|${OPEN_BUILDER_LABEL})$`
 );
 
@@ -307,7 +307,7 @@ export function PageBuilderCard({
   href,
   onNavigate,
   note,
-}: PageBuilderCardProps) {
+}: PageBuilderCardProps): JSX.Element {
   const total = useMemo(
     // Counted under the SITE's cap rather than an unbounded read, so the number
     // beside the page comes from the same bound the renderer reads under.

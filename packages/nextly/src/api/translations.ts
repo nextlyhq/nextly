@@ -99,11 +99,11 @@ function parseLimit(raw: string | null): number {
  * Asked of `canReadEntity`, which is the SAME decision the row read makes, and
  * whose own docblock says reproducing any of it would be a second
  * implementation to keep in step. That is exactly what a permission-only
- * approximation is: `checkAccess` resolves a code-defined `access.read` — `true`
- * or a callback — BEFORE falling back to stored grants, so a collection
- * authorized purely in code has no `slug:read` pair to find. Filtering on those
- * pairs removed it before the row read could allow it, and its outstanding work
- * vanished from the worklist without any refusal being reported.
+ * approximation is: `checkAccess` asks a code-defined `access.read` — `true` or
+ * a callback — after the stored grant, so a collection refused in code still
+ * has its `slug:read` pair. Filtering on those pairs kept it although the row
+ * read refuses it, and its outstanding work showed on the worklist of a
+ * caller who may not read it.
  *
  * Coarse only in WHAT it decides — whether a collection is worth querying at
  * all. The per-row rules inside `listEntries` still decide which documents come

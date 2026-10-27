@@ -310,7 +310,7 @@ function ProviderTestDialog({
 
 const ALWAYS_VISIBLE = new Set(["name"]);
 
-function EmailProviderTable() {
+function EmailProviderTable(): React.JSX.Element {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   // `undefined` is "no filter". A hardcoded sentinel would have to be a string

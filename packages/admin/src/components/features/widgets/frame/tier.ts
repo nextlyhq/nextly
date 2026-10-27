@@ -20,7 +20,7 @@ import { createContext, useContext, type RefObject, type Context } from "react";
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
-import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
+import { bandForWidth, drawnSpan, gridColumnGapPx } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -46,7 +46,8 @@ export function cardOuterWidth(
   dashboardWidth: number
 ): number {
   const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
-  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+  const gap = gridColumnGapPx(dashboardWidth);
+  return ((dashboardWidth + gap) * tracks) / 12 - gap;
 }
 
 /**
@@ -111,10 +112,60 @@ export function rowsLayout(tier: SizeTier, columns: number): RowsLayout {
     : { kind: "list" };
 }
 
+/** Where the one card-tier context is kept, across every copy of this module. */
+const CARD_TIER_CONTEXT_KEY = Symbol.for("nextly.admin.card-tier-context");
+
+/** Whether a second copy has been named already, across every copy. */
+const SECOND_COPY_WARNED_KEY = Symbol.for(
+  "nextly.admin.card-tier-context.second-copy-warned"
+);
+
+const contexts = globalThis as {
+  [CARD_TIER_CONTEXT_KEY]?: Context<SizeTier | undefined>;
+  [SECOND_COPY_WARNED_KEY]?: true;
+};
+
+/** What the console is told when a second copy of the kit is loaded. */
+const SECOND_ADMIN_COPY_WARNING =
+  "[nextly] A second copy of @nextlyhq/admin's widget kit was loaded. " +
+  "A plugin likely bundles the admin: import the kit from " +
+  "@nextlyhq/plugin-sdk/admin and leave @nextlyhq/admin to the host.";
+
+/**
+ * The card-tier context, one for the whole page however many copies of the
+ * admin are loaded.
+ *
+ * 🔴 A plugin that bundles its own copy of the admin, rather than importing the
+ * kit through `@nextlyhq/plugin-sdk/admin` with the admin left to the host,
+ * would otherwise make a second context: its card states would read the tier
+ * of a provider that is never drawn, `undefined`, and draw at the wrong size
+ * with nothing saying why. Kept on a global key, the second copy reads the
+ * host's, and the console is told once that a second copy was loaded.
+ *
+ * 🔴 Once, and in every environment, with no `NODE_ENV` test: the admin is
+ * built as a library with `NODE_ENV` set to production, so a development-only
+ * guard is folded away and the published package would never say it. Loading
+ * the admin twice is a mistake wherever it happens, and the one line is the
+ * only sign of it. The flag lives on a global key too, so a third copy says
+ * nothing more.
+ */
+function sharedCardTierContext(): Context<SizeTier | undefined> {
+  const existing = contexts[CARD_TIER_CONTEXT_KEY];
+  if (existing !== undefined) {
+    if (contexts[SECOND_COPY_WARNED_KEY] !== true) {
+      contexts[SECOND_COPY_WARNED_KEY] = true;
+      console.warn(SECOND_ADMIN_COPY_WARNING);
+    }
+    return existing;
+  }
+  const created = createContext<SizeTier | undefined>(undefined);
+  contexts[CARD_TIER_CONTEXT_KEY] = created;
+  return created;
+}
+
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */
-export const CardTierContext: Context<SizeTier | undefined> = createContext<
-  SizeTier | undefined
->(undefined);
+export const CardTierContext: Context<SizeTier | undefined> =
+  sharedCardTierContext();
 
 /** The tier of the card this is drawn in. */
 export function useCardTier(): SizeTier | undefined {
@@ -135,6 +186,11 @@ const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
   medium: 1,
   large: 2,
 };
+
+/** Whether a card drawn at `tier` draws what is drawn from `from` up. */
+export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
+  return TIER_ORDER[tier] >= TIER_ORDER[from];
+}
 
 /**
  * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at

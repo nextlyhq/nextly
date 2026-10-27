@@ -88,6 +88,14 @@ async function attention(caller: ReadCaller) {
   return resolve(QUERY, caller);
 }
 
+/** An answer without the instant it was read at, to compare two answers. */
+function withoutInstant(result: unknown): unknown {
+  if (typeof result !== "object" || result === null) return result;
+  const rest: Record<string, unknown> = { ...result };
+  delete rest.asOf;
+  return rest;
+}
+
 /** The buckets of an answer, by key. */
 async function bucketsFor(caller: ReadCaller) {
   const result = await attention(caller);
@@ -268,7 +276,9 @@ describe.each(getConfiguredTestDialects())(
     it("answers a caller who may not read releases exactly as a site with nothing due answers", async () => {
       const { t, ids } = await boot();
       const readsReleases = scoped([...read(first20), "read-content-releases"]);
-      const before = JSON.stringify(await attention(readsReleases));
+      const before = JSON.stringify(
+        withoutInstant(await attention(readsReleases))
+      );
 
       await release(t, new Date(Date.now() + DAY), ids.get(COLLECTIONS[0])!);
       await release(
@@ -278,9 +288,56 @@ describe.each(getConfiguredTestDialects())(
       );
       const barred = scoped(read(first20));
       // The control: releases are now due, and a reader who may see them does.
-      expect(JSON.stringify(await attention(readsReleases))).not.toBe(before);
-      // The barred reader's answer is byte for byte the empty site's.
-      expect(JSON.stringify(await attention(barred))).toBe(before);
+      expect(
+        JSON.stringify(withoutInstant(await attention(readsReleases)))
+      ).not.toBe(before);
+      // The barred reader's answer is byte for byte the empty site's, apart
+      // from the instant each answer was read at.
+      expect(JSON.stringify(withoutInstant(await attention(barred)))).toBe(
+        before
+      );
+    });
+
+    it("never reads unread lists as clear: nothing in the twenty counted, more left unread, is a floor of zero", async () => {
+      const { t } = await boot();
+      // Nothing pending in the first twenty collections; the twenty-first,
+      // past the bound, still holds a pending change.
+      for (const slug of first20) {
+        await t.adapter.delete(VERSIONS_TABLE, {
+          and: [{ column: "scopeSlug", op: "=", value: slug }],
+        });
+      }
+      const buckets = await bucketsFor(scoped(read(COLLECTIONS)));
+      // The kind stays, as a zero floor, so the card cannot call it clear.
+      expect(buckets.get("unpublished")).toEqual({ count: 0, atLeast: true });
+      expect(
+        [...buckets.keys()].filter(key => key?.startsWith("unpublished:"))
+      ).toEqual([]);
+    });
+
+    it("carries no more kinds and parts than the query's limit, says so, and dates the answer", async () => {
+      await boot();
+      const resolve = sourceResolver(ATTENTION_SOURCE_ID);
+      if (!resolve) throw new Error("system:attention is not registered");
+      const result = await resolve(
+        { ...QUERY, limit: 3 },
+        scoped([...read(COLLECTIONS), `read-${HOME}`])
+      );
+      if (result.op !== "groupBy") throw new Error(result.op);
+      // The kind, then the parts with most waiting, up to the limit.
+      expect(result.buckets).toHaveLength(3);
+      expect(result.buckets.map(bucket => bucket.value)).toContain(
+        "unpublished"
+      );
+      expect(result.truncated).toBe(true);
+      // The kind reached its collection bound, so its own bucket is a floor;
+      // the result-level flag, which claims EVERY bucket is one, is not set.
+      expect(
+        result.buckets.find(bucket => bucket.value === "unpublished")?.atLeast
+      ).toBe(true);
+      expect("atLeast" in result).toBe(false);
+      // The instant the answer was computed at, which a card links from.
+      expect(new Date(result.asOf ?? "").toISOString()).toBe(result.asOf);
     });
 
     it("is not available, never all clear, to a caller who may read none of what it counts", async () => {

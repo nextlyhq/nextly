@@ -57,6 +57,12 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  clauseName,
+  declarationFor,
+  exportStatements,
+  exportedNames,
+} from "@nextlyhq/module-specifiers/declaration-exports";
 import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
@@ -160,43 +166,11 @@ function declarationGraph(entry: string): string[] {
 
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(/from\s*['"](\.[^'"]*)['"]/g)) {
-      const resolved = resolveDeclaration(dirname(file), match[1]!);
-      if (resolved !== undefined) queue.push(resolved);
+      queue.push(declarationFor(match[1]!, file));
     }
   }
 
   return [...seen];
-}
-
-/**
- * A relative specifier as written in the emitted declarations.
- *
- * The bundler emits runtime specifiers (`./chunk-ABC.js`) inside declaration
- * files, so the extension on the page is never the extension on disk.
- */
-function resolveDeclaration(
-  from: string,
-  specifier: string
-): string | undefined {
-  const base = resolve(from, specifier).replace(/\.(m|c)?js$/, "");
-  for (const candidate of [
-    `${base}.d.ts`,
-    `${base}.d.mts`,
-    `${base}.d.cts`,
-    join(base, "index.d.ts"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  // A relative specifier inside an emitted declaration names another emitted
-  // declaration. Finding none means the artifact is INCOMPLETE — a build stopped
-  // after writing the entries and before their chunks — and returning
-  // `undefined` would walk a smaller graph, derive fewer required types, and
-  // read as a clean pass. Under-reporting the obligation is the one answer this
-  // suite must never give, so an unresolvable reference stops the run.
-  throw new Error(
-    `${specifier} is referenced by ${from} and no declaration for it exists. ` +
-      `These declarations are incomplete; rebuild before asserting against them.`
-  );
 }
 
 /**
@@ -269,11 +243,6 @@ function namesEngine(specifier: string): boolean {
 
 const originsByFile = new Map<string, Map<string, string | undefined>>();
 
-/** A name in an import or export clause, written as an identifier or a string. */
-function clauseName(node: { name?: string; value?: unknown }): string {
-  return node.name ?? String(node.value);
-}
-
 type Statements = ReturnType<typeof parseSource>["program"]["body"];
 
 /** Each local name a file imports, with the module and the name it comes from. */
@@ -302,8 +271,7 @@ function originThrough(
 ): string | undefined {
   if (namesEngine(from)) return name;
   if (!from.startsWith(".")) return undefined;
-  const chunk = resolveDeclaration(dirname(file), from);
-  return chunk === undefined ? undefined : exportOrigins(chunk).get(name);
+  return exportOrigins(declarationFor(from, file)).get(name);
 }
 
 /**
@@ -329,23 +297,21 @@ function exportOrigins(file: string): Map<string, string | undefined> {
 
   const { body } = parseSource(readFileSync(file, "utf8"), file).program;
   const imports = importedBindings(body);
-  for (const statement of body) {
-    if (statement.type === "ExportAllDeclaration") {
-      throw new Error(
-        `${file} re-exports everything from ${statement.source.value}, which names nothing to follow`
-      );
-    }
-    if (statement.type !== "ExportNamedDeclaration") continue;
-    for (const specifier of statement.specifiers) {
-      const local = clauseName(specifier.local);
-      const imported = imports.get(local);
-      origins.set(
-        clauseName(specifier.exported),
-        statement.source
-          ? originThrough(file, statement.source.value, local)
-          : imported && originThrough(file, imported.from, imported.name)
-      );
-    }
+  const { named, stars } = exportStatements(file);
+  const star = stars[0];
+  if (star !== undefined) {
+    throw new Error(
+      `${file} re-exports everything from ${star.from}, which names nothing to follow`
+    );
+  }
+  for (const { exported, local, from } of named) {
+    const imported = imports.get(local);
+    origins.set(
+      exported,
+      from !== undefined
+        ? originThrough(file, from, local)
+        : imported && originThrough(file, imported.from, imported.name)
+    );
   }
   return origins;
 }
@@ -371,43 +337,6 @@ function engineReExports(declarationFile: string): Set<string> {
       (name): name is string => name !== undefined
     )
   );
-}
-
-/**
- * The names a declaration file actually exports.
- *
- * **The alias form is the whole difficulty, and it is why this parser exists
- * rather than a grep.** A bundled declaration re-exports as
- * `export { a as BlockRenderArgs }`, so the exported NAME is on the right of
- * `as` while the local name on the left is a generated letter; reading the
- * left-hand side concludes the type is missing when it is not. `export type
- * { ... }`, inline `{ type X }` and direct `export interface X` all have to be
- * read for the same reason — any form missed reports an absence that is not
- * there.
- */
-function exportedNames(declaration: string): Set<string> {
-  const names = new Set<string>();
-
-  for (const block of declaration.matchAll(
-    /export\s+(?:type\s+)?\{([^}]*)\}/g
-  )) {
-    for (const clause of block[1]!.split(",")) {
-      const trimmed = clause.trim().replace(/^type\s+/, "");
-      if (trimmed === "") continue;
-      // `a as BlockRenderArgs` exports the RIGHT-hand name.
-      const parts = trimmed.split(/\s+as\s+/);
-      const exported = (parts[parts.length - 1] ?? "").trim();
-      if (exported !== "") names.add(exported);
-    }
-  }
-
-  for (const declared of declaration.matchAll(
-    /export\s+(?:declare\s+)?(?:type|interface|const|function|class)\s+([A-Za-z0-9_$]+)/g
-  )) {
-    names.add(declared[1]!);
-  }
-
-  return names;
 }
 
 /** The nearest `package.json` at or above a resolved module file. */
@@ -496,7 +425,7 @@ function engineSurface(): EngineSurface {
   // Exports come from the ENTRY alone. A chunk exports for the entry to
   // re-export, so reading the graph here would report a private declaration as
   // published purely because the bundler had to move it.
-  return { declarations, exported: exportedNames(readFileSync(entry, "utf8")) };
+  return { declarations, exported: exportedNames(entry) };
 }
 
 /** A `type X = ...` runs to its terminating `;` at nesting depth zero. */
@@ -599,23 +528,8 @@ describe("the published type surface", () => {
       []
     );
 
-    expect([
-      ...exportedNames(
-        `export { a as BlockRenderArgs, type b as NodeStyles };\n` +
-          `export type { PageStyles } from './styles.js';\n` +
-          `export interface DerivedPageSeo {}\n` +
-          `export declare function createBlocksPage(): void;`
-      ),
-    ]).toEqual([
-      "BlockRenderArgs",
-      "NodeStyles",
-      "PageStyles",
-      "DerivedPageSeo",
-      "createBlocksPage",
-    ]);
-
-    // A name only MENTIONED is the case the whole test exists to separate.
-    expect([...exportedNames(`interface BlockDocument {}`)]).toEqual([]);
+    // The export forms the bundler emits are pinned where they are read, in
+    // module-specifiers' declaration-exports.test.ts.
   });
 
   it("follows an engine type the bundler routes through a chunk under a generated name", () => {
@@ -670,10 +584,7 @@ describe("the published type surface", () => {
       }
 
       const exportsBySubpath = new Map<string, Set<string>>(
-        entries.map(entry => [
-          entry.subpath,
-          exportedNames(readFileSync(entry.declaration, "utf8")),
-        ])
+        entries.map(entry => [entry.subpath, exportedNames(entry.declaration)])
       );
 
       // The positive control, and it is load-bearing. A parser that found NOTHING

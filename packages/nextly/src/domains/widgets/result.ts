@@ -15,6 +15,7 @@ import type { TimeseriesInterval } from "../collections/query/timeseries-interva
 import type { TransportableValue } from "./declaration/transportable";
 import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
+import type { WidgetWidth } from "./widths";
 
 /**
  * One column of a list result, as the admin needs to head it.
@@ -89,6 +90,17 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * The span of time the source looked at, in whole days back from now.
+       *
+       * A source that keeps rows only for a period answers from that period
+       * alone, so an empty answer means "none in that span" rather than
+       * "none ever", and a card can say which. Absent when the source looked
+       * without a bound, and from a source that does not say.
+       *
+       * @experimental
+       */
+      window?: { days: number };
     }
   | {
       op: "groupBy";
@@ -113,6 +125,16 @@ export type WidgetResult =
        * `atLeast` makes for a bounded count. Absent means every bucket is here.
        */
       truncated?: boolean;
+      /**
+       * The instant the answer was computed at, in ISO 8601 UTC, for a source
+       * whose buckets depend on it (a window ending "a week from now"). A card
+       * building a link from such a bucket builds it from this instant rather
+       * than its own clock, so the list it opens holds what was counted.
+       * Additive: absent, nothing in the answer depends on when it was read.
+       *
+       * @experimental
+       */
+      asOf?: string;
       /**
        * The grouped field: its label for the chart's axis, and the label of each value a bucket
        * holds. Absent when the source does not declare the field.
@@ -219,6 +241,50 @@ export interface WidgetQueryBatchResponse {
 }
 
 /**
+ * A card's current size, which changes as its width does.
+ *
+ * Not `WidgetSize`: that name is the published `"sm" | … | "full"` step of
+ * the column grid, and a plugin reading both must not find one name meaning
+ * two things. Declared here, beside the props it travels in, so the admin
+ * that builds those props and the declaration that types them read one shape.
+ *
+ * @experimental
+ */
+export interface WidgetRenderSize {
+  width: WidgetWidth;
+  class: "small" | "medium" | "large";
+}
+
+/**
+ * What a widget declared with `defineWidget` and drawn by its own component is
+ * handed, as the admin builds it: the shape `WidgetProps<W>` types from the
+ * declaration, its settings and data left untyped here because only the
+ * declaration knows them.
+ *
+ * 🔴 A `type`, for the reason `WidgetComponentProps` below is one: the admin
+ * annotates the object it forwards through `PluginSlot` with it, so a renamed
+ * or dropped prop fails to compile there.
+ *
+ * @experimental
+ */
+export type DeclaredComponentProps = {
+  widgetId: string;
+  /** The card's id: one widget may sit on a dashboard more than once. */
+  placementId: string;
+  settings: Record<string, unknown>;
+  size: WidgetRenderSize;
+  /**
+   * The card's data, always present: the host draws loading, no permission
+   * and error itself, and calls the component only once there is data.
+   */
+  data: unknown;
+  /** True while a newer answer is on its way; `data` is the last one. */
+  refreshing: boolean;
+  /** Asks for the card's data again. */
+  retry: () => void;
+};
+
+/**
  * The props a widget component is handed, whatever it draws.
  *
  * 🔴 Declared in core rather than in the admin that builds it or the plugin-sdk
@@ -270,6 +336,14 @@ export type WidgetComponentProps = {
    * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
+  /**
+   * The answer to each of this card's cells, by key, for a card that declares
+   * several reads (`cells`); absent for one that declares none. A key with no
+   * answer yet is absent from it, as `slot` is.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  cells?: Readonly<Record<string, WidgetSlot>>;
   /**
    * Whether this card's question is in flight, the FIRST request included: its
    * query, or the data core builds for a widget that declares its own.

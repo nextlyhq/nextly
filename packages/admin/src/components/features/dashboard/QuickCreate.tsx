@@ -50,17 +50,12 @@ import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 
+import { FrameState } from "../widgets/frame/card-state";
+import { EMPTY_DEFAULT } from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
 
-/**
- * How many shortcuts are drawn before the rest are counted.
- *
- * The same budget the `actions` archetype uses, for the same reason: past a
- * handful this stops being a shortcut and becomes a second navigation menu,
- * which the sidebar already is. The surplus is reachable there.
- */
 /**
  * The shortcuts the card offers at each tier; the rest are a menu away. Past a handful a row of
  * shortcuts stops being one and becomes a second navigation menu, which the sidebar already is.
@@ -91,54 +86,78 @@ export function QuickCreate(): JSX.Element | null {
     data,
     isLoading: collectionsLoading,
     error: collectionsError,
+    refetch: refetchCollections,
   } = useCollections({
     pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
   });
   const {
-    hasPermission,
-    isLoading: permissionsLoading,
-    error: permissionsError,
+    canAccessCollection,
+    content,
+    retry: retryPermissions,
   } = useCurrentUserPermissions();
   const tier = useCardTier();
 
   const creatable = useMemo(() => {
     const items = data?.items ?? [];
     // A collection kept off the dashboard (internal, or hidden from the navigation) is never a
-    // shortcut here, whatever the reader may create in it.
+    // shortcut here, whatever the reader may create in it. Nor is one whose documents only a
+    // machine creates (`admin.disableCreate`, as form submissions declare): its own list offers
+    // no "New" either, so a shortcut here would lead to a form nobody is meant to fill.
     return items.filter(
       collection =>
         !keptOffDashboard(collection) &&
-        hasPermission(`create-${collection.name}`)
+        !collection.admin?.disableCreate &&
+        // The server's answer, not the `create-` slug: a collection's code
+        // rule can refuse a create the reader's role holds the permission for.
+        canAccessCollection(collection.name, "create")
     );
-  }, [data?.items, hasPermission]);
+  }, [data?.items, canAccessCollection]);
 
-  // 🔴 BOTH requests, and a failure of either. `hasPermission` answers from an
-  // empty set until `/me/permissions` lands, so a collection list that resolves
-  // first filters every row out and the card says the reader may create
-  // nothing — for the whole of that interval, and permanently if either request
-  // fails. Absence is the honest answer until both have arrived, because a
-  // claim about what someone may do cannot be made from an answer that has not
-  // come back.
-  if (collectionsLoading || permissionsLoading) return null;
-  if (collectionsError || permissionsError) return null;
+  // 🔴 BOTH requests, and a failure of either. `canAccessCollection` answers
+  // no until the server's answer about collections lands, so a collection list
+  // that resolves first filters every row out and the card says the reader may
+  // create nothing — for the whole of that interval, and permanently if a
+  // request fails. Absence is the honest answer until both have arrived,
+  // because a claim about what someone may do cannot be made from an answer
+  // that has not come back.
+  if (collectionsLoading || content.isLoading) {
+    return (
+      <FrameState state={{ kind: "loading", skeleton: { shape: "actions" } }} />
+    );
+  }
+  if (collectionsError || !content.hasAnswer) {
+    return (
+      <FrameState
+        state={{
+          kind: "error",
+          message: "What you can create could not be read just now.",
+          // Asks both again: the card needs the collections and the answer about them.
+          retry: () => {
+            void refetchCollections();
+            retryPermissions();
+          },
+        }}
+      />
+    );
+  }
 
   // 🔴 A truncated list cannot support the empty claim either. The page holds
   // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than
   // that may have every creatable one beyond the boundary — and "you may create
-  // nothing" would then be false rather than merely incomplete. Saying nothing
-  // is wrong in a way the reader can recover from; saying the wrong thing is
-  // not.
+  // nothing" would then be false rather than merely incomplete. The frame's own
+  // neutral empty state says no more than is known; saying the wrong thing
+  // could not be recovered from.
   const truncated = data?.meta?.hasNext === true;
-  if (creatable.length === 0 && truncated) return null;
-
   if (creatable.length === 0) {
     return (
-      <p
-        data-testid="quick-create-empty"
-        className="text-sm text-muted-foreground"
-      >
-        Nothing here for you to create.
-      </p>
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: truncated
+            ? EMPTY_DEFAULT
+            : { title: "Nothing here for you to create." },
+        }}
+      />
     );
   }
 

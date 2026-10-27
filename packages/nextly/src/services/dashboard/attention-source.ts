@@ -50,11 +50,15 @@ import {
 } from "../../domains/releases/releases-widget-source";
 import { singlesWithPendingChanges } from "../../domains/versions/versions-widget-source";
 import {
+  ATTENTION_DUE_WINDOW_MS,
   attentionPartKey,
   type AttentionContentKind,
   type AttentionKind,
 } from "../../domains/widgets/attention-keys";
-import type { WidgetQuery } from "../../domains/widgets/query";
+import {
+  MAX_WIDGET_LIMIT,
+  type WidgetQuery,
+} from "../../domains/widgets/query";
 import {
   queryableSlugs,
   readableCollectionSlugs,
@@ -96,13 +100,12 @@ export const ATTENTION_COUNT_CAP = 99;
  */
 export const ATTENTION_MAX_COLLECTIONS = 20;
 
-/** How far ahead "due soon" looks: a week, what someone can act on this week. */
-const DUE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
 /** One collection's or Single's share of a kind. */
 interface AttentionPart {
   contentKind: AttentionContentKind;
   slug: string;
+  /** For a Single, the language its pending change was counted in. */
+  locale?: string;
   count: number;
   atLeast: boolean;
 }
@@ -227,9 +230,10 @@ const readUnpublished: AttentionKindReader = async (caller, context) => {
     kind: "unpublished",
     parts: [
       ...inCollections.parts,
-      ...singles.slugs.map(slug => ({
+      ...singles.singles.map(({ slug, locale }) => ({
         contentKind: "single" as const,
         slug,
+        ...(locale !== null ? { locale } : {}),
         count: 1,
         // The walk's floor belongs to the kind, not to any one Single.
         atLeast: false,
@@ -246,7 +250,9 @@ const readScheduled: AttentionKindReader = async (caller, context) => {
     {
       pendingChange: false,
       inRelease: {
-        scheduledBefore: new Date(context.now.getTime() + DUE_WINDOW_MS),
+        scheduledBefore: new Date(
+          context.now.getTime() + ATTENTION_DUE_WINDOW_MS
+        ),
       },
     },
     context
@@ -294,14 +300,22 @@ function answerBuckets(answer: AttentionAnswer): {
   const parts = answer.parts.filter(part => part.count > 0);
   const total =
     answer.count ?? parts.reduce((sum, part) => sum + part.count, 0);
-  if (total === 0) return { buckets: [], choices: [] };
   const atLeast = answer.atLeast || parts.some(part => part.atLeast);
+  // Nothing found, and nothing left unread: the kind is absent, as if empty.
+  // Nothing found while some lists went unread is NOT empty: the kind stays,
+  // a zero floor, so the card never says "All clear" over lists it skipped.
+  if (total === 0 && !atLeast) return { buckets: [], choices: [] };
   const buckets: AttentionBucket[] = [
     { value: answer.kind, count: total, ...(atLeast ? { atLeast: true } : {}) },
   ];
   const choices: { value: string; label: string }[] = [];
   for (const part of parts) {
-    const value = attentionPartKey(answer.kind, part.contentKind, part.slug);
+    const value = attentionPartKey(
+      answer.kind,
+      part.contentKind,
+      part.slug,
+      part.locale
+    );
     buckets.push({
       value,
       count: part.count,
@@ -318,26 +332,51 @@ function answerBuckets(answer: AttentionAnswer): {
  * grouped result is. Empty kinds and parts are left out, so absence and zero
  * read the same.
  */
-function asGroupedResult(answers: readonly AttentionAnswer[]): WidgetResult {
-  const buckets: AttentionBucket[] = [];
-  const choices: { value: string; label: string }[] = [];
+function asGroupedResult(
+  answers: readonly AttentionAnswer[],
+  limit: number,
+  asOf: Date
+): WidgetResult {
+  const kinds: AttentionBucket[] = [];
+  const parts: AttentionBucket[] = [];
+  const labels = new Map<string, string>();
   for (const answer of answers) {
-    const read = answerBuckets(answer);
-    buckets.push(...read.buckets);
-    choices.push(...read.choices);
+    const [kind, ...own] = answerBuckets(answer).buckets;
+    if (kind !== undefined) kinds.push(kind);
+    parts.push(...own);
   }
-  // Stable, so equal counts keep the kind-then-part order they were built in.
-  buckets.sort((a, b) => b.count - a.count);
+  for (const answer of answers) {
+    for (const choice of answerBuckets(answer).choices) {
+      labels.set(choice.value, choice.label);
+    }
+  }
+  // The query's bucket limit bounds the answer as it bounds every grouped one.
+  // Kinds first, since each is the total its parts break down, then the parts
+  // with most waiting; what the limit leaves out is said with `truncated`.
+  // Stable, so equal counts keep the order they were built in.
+  const ranked = [...kinds, ...parts.sort((a, b) => b.count - a.count)];
+  const kept = ranked.slice(0, Math.max(0, limit));
+  const buckets = [...kept].sort((a, b) => b.count - a.count);
+  const choices = kept.flatMap(bucket => {
+    const label = labels.get(bucket.value);
+    return label === undefined ? [] : [{ value: bucket.value, label }];
+  });
   const field: WidgetResultField = {
     name: "item",
     label: "Item",
     type: "string",
     ...(choices.length > 0 ? { choices } : {}),
   };
+  // No result-level `atLeast`: it says EVERY bucket is a floor, and here a
+  // floor belongs to the kinds and parts that reached a bound, each saying so
+  // on its own bucket.
   return {
     op: "groupBy",
     buckets,
-    ...(buckets.some(bucket => bucket.atLeast) ? { atLeast: true } : {}),
+    ...(kept.length < ranked.length ? { truncated: true } : {}),
+    // The one instant every kind was read at, so a card links the week the
+    // scheduled count was measured over rather than one from its own clock.
+    asOf: asOf.toISOString(),
     field,
   };
 }
@@ -350,8 +389,8 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   source: "consumed",
   op: "consumed",
   groupBy: "consumed",
-  // Defaulted by validation for every grouped query; the kinds are few and
-  // all of them are answered.
+  // Defaulted and bounded by validation for every grouped query; it bounds
+  // how many kinds and parts the answer carries.
   limit: "consumed",
   select: "refused",
   where: "refused",
@@ -359,6 +398,9 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   status: "refused",
   dateField: "refused",
   interval: "refused",
+  since: "refused",
+  until: "refused",
+  range: "refused",
 };
 
 async function resolveAttention(
@@ -385,7 +427,7 @@ async function resolveAttention(
       `source "${ATTENTION_SOURCE_ID}" has no kind this caller may read`
     );
   }
-  return asGroupedResult(answers);
+  return asGroupedResult(answers, query.limit ?? MAX_WIDGET_LIMIT, context.now);
 }
 
 /**

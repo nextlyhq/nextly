@@ -11,6 +11,8 @@
  * @since 1.0.0
  */
 
+import type { JSX } from "react";
+
 import { ApiPlaygroundPage } from "@admin/components/features/entries/APIPlayground";
 
 interface APIPlaygroundPageProps {
@@ -19,6 +21,8 @@ interface APIPlaygroundPageProps {
   };
 }
 
-export default function APIPlaygroundPage({ params }: APIPlaygroundPageProps) {
+export default function APIPlaygroundPage({
+  params,
+}: APIPlaygroundPageProps): JSX.Element {
   return <ApiPlaygroundPage kind="collection" slug={params?.slug} />;
 }

@@ -1143,10 +1143,6 @@
     "count": 1,
     "digests": ["60e14a2b22612b00"]
   },
-  "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
-    "count": 1,
-    "digests": ["92615760254a3a7f"]
-  },
   "scripts/check-comment-convention.mjs": {
     "count": 4,
     "digests": [

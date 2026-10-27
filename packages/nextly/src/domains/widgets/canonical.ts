@@ -37,7 +37,13 @@ import {
   generatedWidgets,
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
+import type { WidgetPermissionGate } from "./gate";
 import { publishableWidgets } from "./publish";
+import {
+  textBoundsOf,
+  type AnyWidgetSetting,
+  type TextBound,
+} from "./settings";
 import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
 
 /**
@@ -94,7 +100,7 @@ export interface CanonicalWidget {
    * so the admin asks for its cards by card rather than by query.
    */
   serverData?: true;
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   defaultSize?: string;
   /**
    * The smallest and largest size the declaration allows, carried so the
@@ -116,6 +122,14 @@ export interface CanonicalWidget {
   defaultWidth?: WidgetWidth;
   allowsSeveral?: boolean;
   /**
+   * Where the add panel offers this widget, as its definition states it: per
+   * collection, or on request (a card a reader asks for, such as a note).
+   * Either keeps it off the default dashboard and allows any number of cards.
+   *
+   * @experimental
+   */
+  offered?: "per-collection" | "on-request";
+  /**
    * How long the widget stays, and the condition it stays under.
    *
    * Carried through because the LAYOUT endpoint is where a transient card is
@@ -128,6 +142,29 @@ export interface CanonicalWidget {
   visibleWhen?: string | readonly string[];
   /** Whether the reader may send this card away; see `WidgetDefinition`. */
   dismissible?: boolean;
+  /** Whether the card leaves the grid while its answer is empty; see `WidgetDefinition`. */
+  hidesWhenEmpty?: boolean;
+  /**
+   * The bounds the declaration's textarea settings state, from either channel,
+   * so the layout write holds a placement's text to them whichever channel
+   * declared the widget. Absent when the declaration states no settings.
+   */
+  textBounds?: readonly TextBound[];
+  /**
+   * The declaration's Collection setting, from either channel (a widget states
+   * at most one), so the layout read and write judge which collection a card
+   * reads by the declaration the admin draws, whichever channel stated it.
+   * Absent when the declaration states none.
+   */
+  collectionSetting?: AnyWidgetSetting;
+  /**
+   * The queries a setting of the declaration may drive: its query, or each of
+   * its cells' queries. A Collection setting no knob drives on any of them
+   * names no collection the card reads, so it decides nothing about which
+   * cards are withheld. Absent on a summary built before the field existed,
+   * which is judged by its setting alone.
+   */
+  knobQueries?: readonly unknown[];
   /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none, and a declared
@@ -184,6 +221,8 @@ const REGISTRATION_FIELDS = [
   "lifecycle",
   "visibleWhen",
   "dismissible",
+  "hidesWhenEmpty",
+  "offered",
 ] as const satisfies ReadonlyArray<
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
@@ -204,7 +243,56 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
         : [definition.empty.action.requiredPermission]),
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
+    ...textBoundsField(definition.settings),
+    ...collectionSettingField(definition.settings),
+    ...knobQueriesField(definition),
   };
+}
+
+/**
+ * The queries a declaration's settings may drive, as a summary field: its
+ * query, or each of its cells' queries.
+ */
+export function knobQueriesField(declaration: {
+  query?: unknown;
+  cells?: unknown;
+}): Pick<CanonicalWidget, "knobQueries"> {
+  const cells = Array.isArray(declaration.cells) ? declaration.cells : [];
+  const knobQueries = [
+    ...(declaration.query === undefined ? [] : [declaration.query]),
+    ...cells.map((cell: unknown) =>
+      typeof cell === "object" && cell !== null
+        ? (cell as { query?: unknown }).query
+        : undefined
+    ),
+  ];
+  // Absent when it asks nothing, as every unstated field is.
+  return knobQueries.length === 0 ? {} : { knobQueries };
+}
+
+/**
+ * A declaration's textarea bounds as a summary field: absent when it states no
+ * settings, so a merge reads the other channel's, as the admin reads its
+ * settings.
+ */
+export function textBoundsField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "textBounds"> {
+  const textBounds = textBoundsOf(settings);
+  return textBounds === undefined ? {} : { textBounds };
+}
+
+/**
+ * A declaration's Collection setting as a summary field: absent when it states
+ * none, so a merge reads the other channel's, as `textBounds` does.
+ */
+export function collectionSettingField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "collectionSetting"> {
+  const collectionSetting = settings?.find(
+    setting => setting.type === "collection"
+  );
+  return collectionSetting === undefined ? {} : { collectionSetting };
 }
 
 /**
@@ -275,6 +363,32 @@ function lifecycleFallback(
  * the plugin's, so a search still finds the row by them. Only the contribution channel names a
  * plugin, so an override leaves the widget under the plugin its users look for it in.
  */
+/**
+ * The fields read from a declaration's settings, by the admin's own rule for
+ * settings: the registration's whole list wherever it states any, else the
+ * contribution's. Dropped by the spread in `mergeCanonical`, a merged widget's
+ * sheet would bound a note its layout write let through, and a card would be
+ * judged by a Collection setting the admin does not draw.
+ *
+ * 🔴 Both fields from the ONE declaration whose list wins, never field by
+ * field: a registration stating settings without a Collection setting would
+ * otherwise keep the contribution's, and its cards be withheld and their
+ * writes refused by a setting the drawn widget does not have. A declaration
+ * states settings exactly when its `textBounds` is present (empty when none
+ * is a bounded textarea), so that is what decides.
+ */
+function settingsFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "textBounds" | "collectionSetting"> {
+  const { textBounds, collectionSetting } =
+    registration.textBounds === undefined ? contribution : registration;
+  return {
+    ...(textBounds === undefined ? {} : { textBounds }),
+    ...(collectionSetting === undefined ? {} : { collectionSetting }),
+  };
+}
+
 function addPanelFallback(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -290,6 +404,28 @@ function addPanelFallback(
   };
 }
 
+/**
+ * The registration's card flags, with the contribution's wherever the registration states none.
+ *
+ * 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a contributed `dismissible`
+ * colliding with a registration that states nothing is dropped HERE and kept THERE -- the browser
+ * draws a card its reader can send away while the server's canonical copy of the same declaration
+ * says nothing about it, which is exactly the two-implementations divergence the merge exists to
+ * prevent. `hidesWhenEmpty` falls back the same way, for the same reason.
+ */
+function flagFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "dismissible" | "hidesWhenEmpty"> {
+  const dismissible = registration.dismissible ?? contribution.dismissible;
+  const hidesWhenEmpty =
+    registration.hidesWhenEmpty ?? contribution.hidesWhenEmpty;
+  return {
+    ...(dismissible === undefined ? {} : { dismissible }),
+    ...(hidesWhenEmpty === undefined ? {} : { hidesWhenEmpty }),
+  };
+}
+
 function mergeCanonical(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -297,13 +433,6 @@ function mergeCanonical(
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
   const defaultHeight =
     registration.defaultHeight ?? contribution.defaultHeight;
-  // 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a
-  // contributed `dismissible` colliding with a registration that states
-  // nothing is dropped HERE and kept THERE -- the browser draws a card its
-  // reader can send away while the server's canonical copy of the same
-  // declaration says nothing about it, which is exactly the two-implementations
-  // divergence this function exists to prevent.
-  const dismissible = registration.dismissible ?? contribution.dismissible;
   return {
     // The contribution's explicit width terms, field by field, wherever the
     // registration states none: spread first, so any the registration states
@@ -314,9 +443,14 @@ function mergeCanonical(
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
-    ...(dismissible === undefined ? {} : { dismissible }),
+    ...flagFallback(contribution, registration),
+    ...settingsFallback(contribution, registration),
     ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
+    // The registration's queries alone, as the admin's merge takes its query
+    // and cells: the drawn widget asks what the registration declares, and
+    // asks nothing when it declares neither, though the contribution did.
+    knobQueries: registration.knobQueries ?? [],
     // Both copies' action gates, because both copies ship: the payload carries
     // each channel's declaration and withholds the actions in each, so every
     // gate either names has to be resolved.
@@ -494,9 +628,14 @@ export interface WidgetWidthFacts {
  * plugin may put one is its suggestion, which the site may decline, and an
  * unsuggested one stays in the add panel. Until suggestions are placed, no
  * declared widget enters it at all.
+ *
+ * Nor does a widget that is offered (`offered`): one offered per collection
+ * reads the collection a card is set to, and the default arrangement places a
+ * widget once, set to nothing; one offered on request, a note, has nothing to
+ * show until its reader writes it.
  */
 export function placedByDefault(widget: CanonicalWidget): boolean {
-  return widget.serverData !== true;
+  return widget.serverData !== true && widget.offered === undefined;
 }
 
 /**
@@ -520,6 +659,9 @@ export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
   return {
     allowedWidths: allowed,
     defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
-    allowsSeveral: widget.allowsSeveral ?? false,
+    // An offered widget is added on request: once for each collection, or a
+    // note for each thing a reader wants to keep, so a dashboard holds several
+    // of it by design.
+    allowsSeveral: widget.allowsSeveral ?? widget.offered !== undefined,
   };
 }

@@ -7,9 +7,10 @@
  * consulted. Treating the two as one is what left `access: { create: false }`
  * accepted at boot and never asked.
  *
- * With no rule governing the operation, the request falls through to the
- * permission-less default and is allowed. Publishing is the exception, refused
- * in this service before the default is reached.
+ * With no rule governing the operation, a read falls through to the
+ * permission-less default and is allowed, while a write is refused: an
+ * anonymous create, update or delete needs a rule that answers `true`.
+ * Publishing is refused whatever the rule says.
  *
  * The pairing is the point. A service that denied every anonymous request would
  * pass the publish case while being wrong about the read, and one that never
@@ -79,20 +80,39 @@ function buildService(rule?: AccessControlFunction) {
 }
 
 describe("checkCollectionAccess with no user", () => {
-  it("allows an ordinary operation and never looks a caller up", async () => {
+  it("refuses a write no rule names, and never looks a caller up", async () => {
     const { service } = buildService();
 
-    const result = await service.checkCollectionAccess({
-      collectionName: "posts",
-      operation: "update",
-      user: undefined,
-    });
+    for (const operation of ["create", "update", "delete"] as const) {
+      const result = await service.checkCollectionAccess({
+        collectionName: "posts",
+        operation,
+        user: undefined,
+      });
 
-    expect(result).toBeNull();
+      expect(result?.statusCode, operation).toBe(403);
+      expect(result?.refusalReason, operation).toBe(
+        `${operation} on posts requires an authenticated user`
+      );
+    }
     // What a missing user skips is the permission lookup: there are no
     // permissions to look up for a caller with no identity.
     expect(fakeActorForUser).not.toHaveBeenCalled();
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+  });
+
+  it("allows a write the inline rule answers true for", async () => {
+    // The control for the refusal above: the same anonymous write, with a
+    // rule that lets it through, as a public form's submissions declare.
+    const { service } = buildService(() => true);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "create",
+      user: undefined,
+    });
+
+    expect(result).toBeNull();
   });
 
   it("applies the collection's inline code rule, which needs no user", async () => {

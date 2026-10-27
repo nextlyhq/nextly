@@ -30,10 +30,7 @@ import {
 
 import { Pencil, Trash2 } from "@admin/components/icons";
 import { RangeField } from "@admin/components/shared/range-field";
-import type {
-  DataTableSelection,
-  RowAction,
-} from "@admin/components/ui/table/data-table";
+import type { RowAction } from "@admin/components/ui/table/data-table";
 import {
   ListView,
   type ListColumnsControl,
@@ -42,13 +39,15 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
-import { type TranslationListFilter } from "./entryFilters";
+import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
   getEntryTitleField,
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { useEntryBulkActions } from "./useEntryBulkActions";
+import { rowId, useEntrySelection, type EntryRow } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -69,10 +68,6 @@ export interface TablePaginationState {
   /** Total number of pages */
   totalPages: number;
 }
-
-type EntryRow = Record<string, unknown>;
-
-const rowId = (row: EntryRow): string => String(row.id);
 
 /**
  * Props for the EntryTable component.
@@ -214,7 +209,12 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const [globalFilter, setGlobalFilter] = useState("");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Rows are selectable only when some bulk action is offered on them, and a
+  // row's Delete only with the delete permission.
+  const offered = useEntryBulkActions(collection);
+  const { selection, selected, selectAll, clear } = useEntrySelection(
+    offered.any
+  );
 
   // -------------------------------------------------------------------------
   // Columns
@@ -252,40 +252,21 @@ export const EntryTable: ForwardRefExoticComponent<
   // Selection
   // -------------------------------------------------------------------------
 
-  const selection = useMemo<DataTableSelection<EntryRow>>(
-    () => ({
-      selectedIds,
-      onToggle: row => {
-        const id = rowId(row);
-        setSelectedIds(prev =>
-          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
-      },
-      onToggleAll: (rows, allSelected) => {
-        const ids = rows.map(rowId);
-        setSelectedIds(prev =>
-          allSelected
-            ? prev.filter(id => !ids.includes(id))
-            : Array.from(new Set([...prev, ...ids]))
-        );
-      },
-    }),
-    [selectedIds]
-  );
-
   // Notify parent when selection changes.
   useEffect(() => {
-    onSelectionChange?.(selectedIds);
-  }, [selectedIds, onSelectionChange]);
+    onSelectionChange?.(selected);
+  }, [selected, onSelectionChange]);
 
+  // The list's select-all shortcut reaches rows through here, so it selects
+  // nothing where the checkboxes are not offered.
   useImperativeHandle(
     ref,
     () => ({
-      selectAll: () => setSelectedIds(entries.map(rowId)),
-      clearSelection: () => setSelectedIds([]),
-      getSelectedIds: () => selectedIds,
+      selectAll: () => selectAll(entries),
+      clearSelection: clear,
+      getSelectedIds: () => selected,
     }),
-    [entries, selectedIds]
+    [entries, selectAll, clear, selected]
   );
 
   // -------------------------------------------------------------------------
@@ -303,16 +284,20 @@ export const EntryTable: ForwardRefExoticComponent<
             icon: <Pencil className="h-4 w-4" />,
             onSelect: () => onEdit(id),
           },
-          {
-            id: "delete",
-            label: "Delete",
-            icon: <Trash2 className="h-4 w-4" />,
-            destructive: true,
-            onSelect: () => onDelete(id),
-          },
+          ...(offered.delete
+            ? [
+                {
+                  id: "delete",
+                  label: "Delete",
+                  icon: <Trash2 className="h-4 w-4" />,
+                  destructive: true,
+                  onSelect: () => onDelete(id),
+                },
+              ]
+            : []),
         ];
       },
-    [onEdit, onDelete]
+    [onEdit, onDelete, offered.delete]
   );
 
   // -------------------------------------------------------------------------
@@ -493,22 +478,22 @@ export const EntryTable: ForwardRefExoticComponent<
         ) : null
       }
       bulkBar={
-        selectedIds.length > 0 ? (
+        selected.length > 0 ? (
           <BulkActionBar
-            selectedCount={selectedIds.length}
+            selectedCount={selected.length}
             collection={collection}
-            onDelete={() => onBulkDelete(selectedIds)}
+            onDelete={() => onBulkDelete(selected)}
             onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selectedIds, data) : undefined
+              onBulkUpdate ? data => onBulkUpdate(selected, data) : undefined
             }
             onPublish={
-              onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
+              onBulkPublish ? () => onBulkPublish(selected) : undefined
             }
             onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
+              onBulkUnpublish ? () => onBulkUnpublish(selected) : undefined
             }
             isPublishing={isBulkPublishing}
-            onClear={() => setSelectedIds([])}
+            onClear={clear}
           />
         ) : undefined
       }
@@ -517,6 +502,7 @@ export const EntryTable: ForwardRefExoticComponent<
       columns={columns}
       rows={entries}
       getRowId={rowId}
+      // No selection removes the checkbox column, on every width.
       selection={selection}
       rowActions={rowActions}
       sort={sort}

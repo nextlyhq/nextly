@@ -716,9 +716,15 @@ export function formatPluginMigrationsIndex(
     " * generation; the runner sorts by module name anyway, so a hand reorder",
     " * changes nothing.",
     " */",
+    'import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";',
+    "",
     imports,
     "",
-    "export const migrations = [",
+    // Annotated, because a plugin's published declarations are written
+    // without a type checker (`isolatedDeclarations`), which cannot infer an
+    // array of imported bindings. Every module the list names declares
+    // itself `PluginMigration`, so the annotation is the inferred type.
+    "export const migrations: PluginMigration[] = [",
     `  ${list},`,
     "];",
     "",

@@ -207,11 +207,13 @@ describe("what Reset to defaults leaves in the form", () => {
       {
         collection: "posts",
         label: "Posts",
+        lifecycle: false,
         fields: [{ name: "updatedAt", type: "date" }],
       },
       {
         collection: "pages",
         label: "Pages",
+        lifecycle: false,
         fields: [{ name: "title", type: "string" }],
       },
     ];

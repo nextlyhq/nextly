@@ -10,6 +10,12 @@ import { expect, type Page } from "@playwright/test";
 
 const API = "/admin/api";
 
+/**
+ * What the helpers write through: a page, or any session's request context
+ * wrapped as one, for a spec seeding through more than one account.
+ */
+export type Requester = Pick<Page, "request">;
+
 /** The response's JSON, once the response is known to be a success. */
 export async function ok<T>(
   response: Awaited<ReturnType<Page["request"]["post"]>>
@@ -19,7 +25,7 @@ export async function ok<T>(
 }
 
 /** A post to put in releases: a release with no documents is not scheduled. */
-export async function post(page: Page, stamp: string): Promise<string> {
+export async function post(page: Requester, stamp: string): Promise<string> {
   const { item } = await ok<{ item: { id: string } }>(
     await page.request.post(`${API}/collections/posts/entries`, {
       data: { title: `Release e2e ${stamp}`, slug: `release-e2e-${stamp}` },
@@ -30,7 +36,7 @@ export async function post(page: Page, stamp: string): Promise<string> {
 
 /** A release holding one post, created as a draft. */
 export async function release(
-  page: Page,
+  page: Requester,
   title: string,
   postId: string
 ): Promise<string> {
@@ -52,7 +58,7 @@ export async function release(
 
 /** Schedule a release for `at`, stated in `timezone`. */
 export async function schedule(
-  page: Page,
+  page: Requester,
   id: string,
   at: Date,
   timezone: string
@@ -65,14 +71,14 @@ export async function schedule(
 }
 
 /** Run a release now, as Publish now does. */
-export async function publishNow(page: Page, id: string): Promise<void> {
+export async function publishNow(page: Requester, id: string): Promise<void> {
   await ok(
     await page.request.post(`${API}/releases/${id}/publish`, { data: {} })
   );
 }
 
 /** Cancel a release. */
-export async function cancel(page: Page, id: string): Promise<void> {
+export async function cancel(page: Requester, id: string): Promise<void> {
   await ok(
     await page.request.post(`${API}/releases/${id}/cancel`, { data: {} })
   );

@@ -9,8 +9,11 @@ export interface TscDiagnostic {
   code: string;
   /** The message, with its continuation lines. */
   message: string;
+  /** The continuation lines as printed, indentation (each step's depth) kept. */
+  chain: string[];
 }
 
+export function tscEntry(): string;
 export function tscMajor(): number;
 export function diagnosticsIn(output: string): TscDiagnostic[];
 export function compile(args: readonly string[], cwd: string): TscDiagnostic[];

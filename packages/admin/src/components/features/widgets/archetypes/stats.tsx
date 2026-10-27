@@ -9,6 +9,7 @@
  * @module components/features/widgets/archetypes/stats
  */
 
+import type { WidgetStatCell } from "nextly/config";
 import type { ReactNode } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -65,7 +66,11 @@ function cellValue(slot: WidgetSlot | undefined): {
 }
 
 export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
-  const cells = definition.cells ?? [];
+  // A stats card's cells are numbers with labels; the keyed reads a custom card
+  // declares are never drawn here.
+  const cells = (definition.cells ?? []).filter(
+    (cell): cell is WidgetStatCell => "label" in cell
+  );
 
   // 🔴 Every cell settled and every one refused is a FAILED card, not a
   // successful one drawn as dashes. Partial success is the reason this body

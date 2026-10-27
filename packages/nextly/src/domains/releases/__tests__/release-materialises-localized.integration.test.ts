@@ -16,6 +16,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -79,6 +83,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // A code rule only narrows the permission, so the releases' author holds
+  // read, update, publish and unpublish on the pages and the Single.
+  await userWhoMay(current, AUTHOR, "read", [SLUG, SINGLE_SLUG]);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(current, AUTHOR, action, [SLUG, SINGLE_SLUG]);
+  }
   return current;
 }
 

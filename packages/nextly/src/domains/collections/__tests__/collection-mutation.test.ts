@@ -332,7 +332,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Hooked Post" }
       );
 
@@ -348,7 +348,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Hooked Post" }
       );
 
@@ -366,7 +366,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Ordered Post" }
       );
 
@@ -396,7 +396,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Hooked Post" }
       );
 
@@ -409,7 +409,10 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     it("should load collection metadata for fields", async () => {
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
-      await service.createEntry({ collectionName: "posts" }, { title: "Test" });
+      await service.createEntry(
+        { overrideAccess: true, collectionName: "posts" },
+        { title: "Test" }
+      );
 
       expect(mockCollectionService.getCollection).toHaveBeenCalledWith("posts");
     });
@@ -428,7 +431,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         .mockRejectedValue(NextlyError.duplicate());
 
       const result = await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Duplicate Post" }
       );
 
@@ -446,7 +449,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       const result = await service.createEntry(
-        { collectionName: "missing" },
+        { overrideAccess: true, collectionName: "missing" },
         { title: "Test" }
       );
 
@@ -459,7 +462,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
       const result = await service.createEntry(
-        { collectionName: "posts" },
+        { overrideAccess: true, collectionName: "posts" },
         { title: "Test" }
       );
 
@@ -522,7 +525,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {
@@ -585,7 +588,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [];
 
       const result = await service.updateEntry(
-        { collectionName: "posts", entryId: "nonexistent" },
+        {
+          overrideAccess: true,
+          collectionName: "posts",
+          entryId: "nonexistent",
+        },
         { title: "Updated" }
       );
 
@@ -624,7 +631,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("runs no hook for a caller it refuses", async () => {
@@ -701,7 +708,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 
@@ -717,7 +724,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 
@@ -735,7 +742,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       const result = await service.updateEntry(
-        { collectionName: "posts", entryId: "entry-1" },
+        { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
         { title: "Updated" }
       );
 
@@ -753,6 +760,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [];
 
       const result = await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "nonexistent",
       });
@@ -785,13 +793,14 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
     });
 
     it("should execute beforeOperation hooks", async () => {
       selectData.rows = [createSampleEntry()];
 
       await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -809,6 +818,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [createSampleEntry()];
 
       await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -828,6 +838,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       selectData.rows = [entry];
 
       const result = await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });
@@ -842,6 +853,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       const result = await service.deleteEntry({
+        overrideAccess: true,
         collectionName: "posts",
         entryId: "entry-1",
       });

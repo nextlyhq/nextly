@@ -68,6 +68,7 @@ vitest.global-setup.*        @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escapes.ts @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escapes-inventory.ts @mobeenabdullah
 /packages/nextly/src/__tests__/transaction-escape-baseline.ts @mobeenabdullah
+/packages/nextly/src/__tests__/worker-database-guard.ts @mobeenabdullah
 /packages/plugin-form-builder/src/__tests__/setup.ts @mobeenabdullah
 /packages/plugin-accounts/src/test-support/dom-setup.ts @mobeenabdullah
 

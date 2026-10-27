@@ -348,7 +348,12 @@ export function addPlacement(
    * The new card's id, when the caller has to know it before the list changes (to highlight
    * the card, or to move focus to it). Decided by {@link addedPlacementId} otherwise.
    */
-  id: string = addedPlacementId(placements, widgetId)
+  id: string = addedPlacementId(placements, widgetId),
+  /**
+   * The settings the card starts with: for a widget offered per collection, the collection it
+   * was added from. Absent, the card starts on its widget's defaults.
+   */
+  config?: Record<string, unknown>
 ): WidgetPlacement[] {
   // 🔴 REFUSED at capacity, and refused HERE rather than only at the control.
   // `MAX_PLACEMENTS` is what the layout endpoint accepts in one submission --
@@ -365,6 +370,7 @@ export function addPlacement(
       widgetId,
       width: defaultWidth,
       removed: false,
+      ...(config === undefined ? {} : { config }),
     },
   ];
 }
