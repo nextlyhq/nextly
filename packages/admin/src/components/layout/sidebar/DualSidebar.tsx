@@ -399,6 +399,14 @@ export function DualSidebar({
                 : "text-muted-foreground hover-unified"
             );
 
+            // The rail's label is reachable by pointer alone, inside a tooltip
+            // that mounts on hover; a screen reader cannot hover, so each item
+            // repeats its label as its own accessible name. It reads the label
+            // per render rather than baking one in, so a name follows its label
+            // wherever the item list takes it — a plugin's own wording or a
+            // permission set that shortens the rail.
+            const accessibleName = { "aria-label": item.label };
+
             const iconContent = (
               <>
                 <Icon className="h-5 w-5" />
@@ -414,6 +422,7 @@ export function DualSidebar({
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
                       data-active={isSelected}
+                      {...accessibleName}
                     >
                       {iconContent}
                     </Link>
@@ -422,6 +431,7 @@ export function DualSidebar({
                       onClick={() => setSelectedMain(item.id)}
                       className={className}
                       data-active={isSelected}
+                      {...accessibleName}
                     >
                       {iconContent}
                     </button>
