@@ -81,6 +81,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       versionNo: 7,
       snapshot: { title: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },
@@ -101,6 +102,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       versionNo: 7,
       snapshot: { title: "as it was" },
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },
@@ -128,6 +130,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       // which is what a disabled or paused read looks like.
       snapshot: undefined,
       locale: null,
+      withheld: [],
       isLoading: false,
       error: null,
       scope: { kind: "collection", slug: "posts", entryId: "e1" },

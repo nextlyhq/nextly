@@ -12,6 +12,7 @@
 
 import { Button, Input } from "@nextlyhq/ui";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
@@ -130,7 +131,7 @@ export function RelationshipSearch({
   placeholder = "Search...",
   limit = 10,
   className,
-}: RelationshipSearchProps) {
+}: RelationshipSearchProps): JSX.Element {
   const [search, setSearch] = useState("");
   const [selectedCollection, setSelectedCollection] = useState(collections[0]);
   // Not `usePagination`, because this list does not paginate: it ACCUMULATES.

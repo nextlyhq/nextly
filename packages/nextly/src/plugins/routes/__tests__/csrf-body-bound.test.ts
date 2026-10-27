@@ -25,7 +25,7 @@ vi.mock("../../../lib/env", () => ({
   env: { NEXTLY_ALLOWED_ORIGINS_PARSED: [] },
 }));
 
-vi.mock("../../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../../di/service-access", () => ({ getService: () => ({}) }));
 vi.mock("../../../utils/proxy-trust", () => ({
   readProxyTrustSettings: () => ({ trustProxy: false, trustedProxyIps: [] }),
 }));

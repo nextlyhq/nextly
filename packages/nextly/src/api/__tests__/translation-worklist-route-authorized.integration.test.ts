@@ -39,6 +39,7 @@ vi.mock("../../auth/middleware", async importActual => {
   };
 });
 
+import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -72,6 +73,9 @@ async function boot(read: () => boolean): Promise<{
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // The signed-in caller, `u1`. A rule only narrows a permission, so `u1`
+  // holds `read-pages` and the rule decides what it reads.
+  await userWhoMay(current, "u1", "read", ["pages"]);
   await current.nextly.create({
     collection: "pages",
     data: { title: "A" },
@@ -189,5 +193,41 @@ describe("the worklist endpoint itself", () => {
     expect(await missing.json()).toMatchObject({
       items: [{ collection: "pages" }],
     });
+  });
+});
+
+describe("the languages the worklist's read decision is told", () => {
+  it("are the language worked on, and those its titles are read in: the default and each it falls back to", async () => {
+    // English, the default, falls back to French; the worklist is for German.
+    const seen: { locale?: string; locales: string[] }[] = [];
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          localized: true,
+          access: {
+            read: ({ locale, locales }) => {
+              seen.push({ locale, locales: [...locales] });
+              return true;
+            },
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+      localization: {
+        locales: [{ code: "en", fallbackLocale: "fr" }, "fr", "de"],
+        defaultLocale: "en",
+      },
+    });
+    // `u1` holds `read-pages`, so the read rule is asked at all.
+    await userWhoMay(current, "u1", "read", ["pages"]);
+    const { getTranslationWorklist } = await import("../translations");
+
+    const res = await getTranslationWorklist(
+      new Request("http://t/api/translations?locale=de&state=missing")
+    );
+
+    expect(res.status).toBe(200);
+    expect(seen[0]).toEqual({ locale: "de", locales: ["en", "fr", "de"] });
   });
 });

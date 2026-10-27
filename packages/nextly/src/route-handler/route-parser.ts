@@ -128,6 +128,7 @@ export function getActionFromOperation(operation: string): string {
 function parseMeRoutes(
   httpMethod: string,
   subresource: string | undefined,
+  hasMoreSegments: boolean,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   // GET /api/me/permissions → get current user's resolved permissions
@@ -136,6 +137,22 @@ function parseMeRoutes(
       service: "users",
       operation: "list",
       method: "getCurrentUserPermissions",
+      routeParams,
+    };
+  }
+
+  // GET /api/me/capabilities → what the current caller may do with each
+  // collection and Single, as the route gates decide it. Nothing may follow:
+  // a longer path is another route, not this one with its tail ignored.
+  if (
+    subresource === "capabilities" &&
+    !hasMoreSegments &&
+    httpMethod === "GET"
+  ) {
+    return {
+      service: "users",
+      operation: "list",
+      method: "getCurrentUserCapabilities",
       routeParams,
     };
   }
@@ -300,6 +317,18 @@ function parseRoleRoutes(
       service: "rbac",
       operation: "list",
       method: "listRoles",
+      routeParams,
+    };
+  }
+
+  if (id === "screen" && !subresource && httpMethod === "GET") {
+    // GET /api/roles/screen → what the roles screen shows for each collection
+    // and Single. Ahead of the role-by-id branch, which would otherwise read
+    // "screen" as a role id.
+    return {
+      service: "rolesScreen",
+      operation: "list",
+      method: "getRolesScreen",
       routeParams,
     };
   }
@@ -905,6 +934,25 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft/take-live` POST brings one language's pending
+  // change up to date with the live shared values (`?locale=` names it).
+  // Authorized as an update, as a discard is: it rewrites the pending change.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[1] === "working-draft" &&
+    additionalParams[2] === "take-live" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "takeLiveSharedValues",
+      routeParams,
+    };
+  }
+
   // `versions/autosave` PUT records the author's rolling recovery point.
   // `autosave` is a named sub-resource and a version number is always numeric,
   // so the two can never collide.
@@ -1044,6 +1092,24 @@ function parseSingleVersionRoutes(
 ): ParsedRoute | null {
   if (!id || subresource !== "versions") {
     return null;
+  }
+
+  // `versions/working-draft/take-live` POST: see the collection parser. Matched
+  // before the version actions, whose `versions/{versionNo}/{action}` shape it
+  // shares; `working-draft` is a name, never a version number.
+  if (
+    subId === "working-draft" &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "take-live" &&
+    httpMethod.toUpperCase() === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "takeLiveSingleSharedValues",
+      routeParams,
+    };
   }
 
   // `versions/{versionNo}/{action}`: an action on one version, matched from
@@ -1365,9 +1431,9 @@ function parseSingleRoutes(
   }
 
   // POST /api/singles/[slug]/publish-all → publish every language at once.
-  // Authorized as an `update` like the collection entry equivalent: the route
-  // gate cannot express `publish`, so the service checks `publish-{slug}` for
-  // itself on top of the update the route authorized.
+  // Admitted on `publish-{slug}` like the collection entry equivalent (see
+  // the route's resolveAuthorization); the service asks the publish rule in
+  // each language the publish puts live.
   if (id && subresource === "publish-all" && !subId && httpMethod === "POST") {
     routeParams.slug = id;
     return {
@@ -1738,6 +1804,16 @@ const EMAIL_TEMPLATE_ITEM_ROUTES: Record<string, EmailTemplateRoute> = {
   DELETE: { operation: "delete", method: "deleteTemplate" },
 };
 
+/**
+ * `/api/email-templates/brand`, by HTTP method: the brand settings. Reading
+ * them needs the permission to read templates, and changing them the
+ * permission to update templates, as editing the default layout does.
+ */
+const EMAIL_TEMPLATE_BRAND_ROUTES: Record<string, EmailTemplateRoute> = {
+  GET: { operation: "single", method: "getBrand" },
+  PATCH: { operation: "update", method: "updateBrand" },
+};
+
 /** `/api/email-templates/[id]/<subresource>`: preview with sample data, and the ownership steps. */
 function emailTemplateSubresourceRoute(
   subresource: string,
@@ -1746,6 +1822,13 @@ function emailTemplateSubresourceRoute(
   if (subresource === "preview") {
     return httpMethod === "POST"
       ? { operation: "single", method: "previewTemplate" }
+      : undefined;
+  }
+  // A test send of the saved template, to the signed-in user's own address.
+  // PATCH so the method-derived permission is `update-email-templates`.
+  if (subresource === "send-test") {
+    return httpMethod === "PATCH"
+      ? { operation: "update", method: "sendTestTemplate" }
       : undefined;
   }
   // The ownership steps. Each changes the template, so each is a PATCH and
@@ -1766,11 +1849,14 @@ function emailTemplateSubresourceRoute(
  * - POST /api/email-templates → create template
  * - GET /api/email-templates/layout → get shared layout (header/footer)
  * - PATCH /api/email-templates/layout → update shared layout
+ * - GET /api/email-templates/brand → the brand settings and which emails they reach
+ * - PATCH /api/email-templates/brand → change the brand settings
  * - GET /api/email-templates/[id] → get template by id
  * - PATCH /api/email-templates/[id] → update template
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
+ * - PATCH /api/email-templates/[id]/send-test → send the saved template to the signed-in user
  * - PATCH /api/email-templates/[id]/override → override an owned template
  * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
@@ -1807,6 +1893,12 @@ function parseEmailTemplateRoutes(
   // create-or-manage on email-templates either way.
   if (id === "preview" && !subresource && httpMethod === "POST") {
     return parsed({ operation: "single", method: "previewDraft" });
+  }
+
+  // /api/email-templates/brand → the brand settings. Ahead of the `[id]`
+  // branches for the reason `preview` is: this segment is a route, not an id.
+  if (id === "brand" && !subresource) {
+    return parsed(EMAIL_TEMPLATE_BRAND_ROUTES[httpMethod]);
   }
 
   const route = subresource
@@ -2808,42 +2900,6 @@ function parseSchemaRoutes(
 }
 
 // ============================================================================
-// Email Routes Parser
-// ============================================================================
-
-/**
- * Parse Email send routes
- *
- * Handles email send endpoints (no specific permission required, any
- * authenticated request including API keys can call these):
- * - POST /api/email/send → send raw email
- * - POST /api/email/send-with-template → send templated email
- */
-function parseEmailRoutes(
-  id: string | undefined,
-  httpMethod: string,
-  routeParams: Record<string, string>
-): ParsedRoute | null {
-  if (id === "send" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "send",
-      routeParams,
-    };
-  }
-  if (id === "send-with-template" && httpMethod === "POST") {
-    return {
-      service: "email",
-      operation: "create",
-      method: "sendWithTemplate",
-      routeParams,
-    };
-  }
-  return null;
-}
-
-// ============================================================================
 // Main Route Parser
 // ============================================================================
 
@@ -2893,7 +2949,12 @@ export function parseRestRoute(
   // Handle /api/me endpoint for current user
   // For /api/me/permissions, id = "permissions" (sub-resource)
   if (resource === "me") {
-    const result = parseMeRoutes(httpMethod, id, routeParams);
+    const result = parseMeRoutes(
+      httpMethod,
+      id,
+      params.length > 2,
+      routeParams
+    );
     if (result) return result;
   }
 
@@ -3041,12 +3102,6 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // Handle Email send endpoints (any authenticated request)
-  if (resource === "email") {
-    const result = parseEmailRoutes(id, httpMethod, routeParams);
-    if (result) return result;
-  }
-
   // Handle Email Providers endpoints
   if (resource === "email-providers") {
     const result = parseEmailProviderRoutes(
@@ -3184,6 +3239,14 @@ export function parseRestRoute(
   if (resource === "schema") {
     const result = parseSchemaRoutes(id, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // The site's content languages, for Settings. Only the bare path: a trailing segment is another
+  // address, which must answer not found rather than list or change the languages.
+  if (resource === "languages" && id === undefined) {
+    const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
+    const operation = httpMethod === "GET" ? "list" : "update";
+    return { service: "languages", operation, method, routeParams };
   }
 
   // Handle General Settings endpoint

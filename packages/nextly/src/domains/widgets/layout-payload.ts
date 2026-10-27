@@ -15,14 +15,16 @@
 import { MAX_PLACEMENTS } from "./layout-limits";
 
 /**
- * The shape this core writes and understands.
+ * The shape this core writes and understands: placements sized `{ w, h }` in
+ * grid units.
  *
- * Bumped only when the payload's structure changes, alongside a conversion that
- * carries the older shape forward. A row naming a version this core does not
- * have was written by a NEWER core, and is refused rather than guessed at,
- * because guessing would silently discard the fields this core cannot see.
+ * Bumped when the payload's structure changes. A row of an EARLIER version is
+ * read as no saved arrangement at all (`layout.ts`), so nothing of it is ever
+ * carried forward. A row naming a version this core never wrote is refused
+ * rather than guessed at, because guessing would silently discard the fields
+ * this core cannot see.
  */
-export const LAYOUT_SCHEMA_VERSION = 3;
+export const LAYOUT_SCHEMA_VERSION = 4;
 
 /**
  * How large one layout's payload may be, in bytes.
@@ -34,6 +36,16 @@ export const LAYOUT_SCHEMA_VERSION = 3;
  * with, is declared in `layout-limits.ts`.
  */
 export const MAX_LAYOUT_BYTES = 32 * 1024;
+
+/**
+ * What a reader is told when their dashboard reaches `MAX_LAYOUT_BYTES`.
+ *
+ * In the reader's terms rather than the column's: they never see bytes, and
+ * the cards and notes they placed are what fill it, so the sentence names the
+ * two things they can do about it.
+ */
+export const DASHBOARD_FULL_MESSAGE =
+  "This dashboard is full: remove a card or shorten a Note";
 
 /**
  * The payload written into the `layout` column.
@@ -70,7 +82,7 @@ export function layoutSizeProblem<Placement extends object>(
   // `TextEncoder` rather than `Buffer`, so a browser measures it the same way.
   const bytes = new TextEncoder().encode(serializeLayout(placements)).length;
   if (bytes > MAX_LAYOUT_BYTES) {
-    return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
+    return DASHBOARD_FULL_MESSAGE;
   }
   return undefined;
 }

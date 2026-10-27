@@ -80,7 +80,7 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:orders", op: "count" },
       },
       { source: "@acme/stripe" }
@@ -99,7 +99,7 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: "collection:orders", op: "count" },
       })
     );
@@ -107,22 +107,25 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
     // And core's cards travel by the same route, which is what makes the
     // dashboard's own sections manageable rather than hardcoded above the grid
     // -- every one this reader may be told about. The session above holds no
-    // grant at all, so the one core card with a gate is withheld, exactly as
-    // the layout endpoint would withhold it: a declaration ships to a reader
-    // only when the reader may see the card.
+    // grant at all, so the core cards with a gate are withheld, exactly as the
+    // layout endpoint would withhold them: a declaration ships to a reader only
+    // when the reader may see the card.
     const gated = CORE_WIDGETS.filter(
       widget => widget.requiredPermission !== undefined
     );
     const open = CORE_WIDGETS.filter(
       widget => widget.requiredPermission === undefined
     );
-    expect(gated.map(widget => widget.id)).toEqual(["core/upcoming-releases"]);
+    expect(gated.map(widget => widget.id)).toEqual([
+      "core/team",
+      "core/upcoming-releases",
+    ]);
     expect(widgets.map(widget => widget.id)).toEqual(
       expect.arrayContaining(open.map(widget => widget.id))
     );
-    expect(widgets.map(widget => widget.id)).not.toContain(
-      "core/upcoming-releases"
-    );
+    for (const id of ["core/team", "core/upcoming-releases"]) {
+      expect(widgets.map(widget => widget.id)).not.toContain(id);
+    }
   });
 
   it("omits the key entirely when nothing is registered", async () => {

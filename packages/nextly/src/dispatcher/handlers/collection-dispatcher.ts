@@ -31,7 +31,10 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import type { UserContext } from "../../domains/collections/services/collection-types";
+import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
@@ -80,16 +83,19 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
-import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
-import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import {
+  readAuthenticatedUser,
+  requireAuthenticatedUser,
+} from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
@@ -118,6 +124,7 @@ import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   discardWorkingDraftForDocument,
+  takeLiveSharedValuesForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -125,7 +132,6 @@ import {
   respondVersionPage,
   markVersionSeenForDocument,
   setVersionLabelForDocument,
-  userFromParams,
   autosaveForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
@@ -133,6 +139,17 @@ import {
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
+
+/**
+ * The caller as the collection service takes it: the id, and the one user
+ * `readAuthenticatedUser` builds, claims and roles included, so a write's
+ * access rules and hooks see the same caller a read's do. Nothing for an
+ * unauthenticated request, which the service reads as anonymous.
+ */
+function callerUser(): { userId?: string; user?: UserContext } {
+  const user = readAuthenticatedUser();
+  return user ? { userId: user.id, user } : {};
+}
 
 // Decides whether the apply payload carries actionable rename hints we
 // should log a debug receipt for. Pure helper so tests can pin the
@@ -172,8 +189,8 @@ function formatToastSummary(summary: {
 /**
  * Both directions of the all-locales lifecycle, as one handler.
  *
- * i18n M7 publishes every language of an entry at once; the takedown is its
- * twin. They differ in exactly two things — the service method and the success
+ * Publishing every language of an entry at once has a twin, the takedown.
+ * They differ in exactly two things — the service method and the success
  * message — and everything else about them is the same identity forwarding and
  * the same attestation. Written twice, they were a 40-line clone whose halves
  * could drift in which credentials they passed, and the drift would show up as
@@ -181,12 +198,10 @@ function formatToastSummary(summary: {
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
- * `routeAuthorized` to attest that the route middleware already ran the
- * RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while field-level write access still runs — never inferred from a
- * userId; and `authenticatedScope` so a scoped API key's own
- * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
- * only as an `update`.
+ * `routeAuthorized` false, since the route admitted this POST on the
+ * `publish-`/`unpublish-` grant or on update, and attests no gate the service
+ * could skip; and `authenticatedScope` so a scoped API key's own grant and the
+ * rule are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",
@@ -201,19 +216,10 @@ function allLocalesLifecycle(
       const result = await svc[method]({
         collectionName,
         entryId,
-        actor: readAuthenticatedActor(p),
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        userRoles: readAuthenticatedRoles(p),
-        routeAuthorized: true,
-        authenticatedScope: readAuthenticatedScope(p),
+        actor: readAuthenticatedActor(),
+        ...callerUser(),
+        routeAuthorized: false,
+        authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
@@ -261,7 +267,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         versionNo: Number(p.versionNo),
         // Forwarded whole: whether `label` is present is part of what the
         // request means, and the core is what reads it.
@@ -277,8 +283,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         versionNo: Number(p.versionNo),
       });
       return respondMutation("Marked as seen.", seen);
@@ -290,8 +296,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        actor: readAuthenticatedActor(p),
+        user: requireAuthenticatedUser(),
+        actor: readAuthenticatedActor(),
         versionNo: Number(p.versionNo),
         params: p,
         // A restore replays a snapshot through the ordinary update, so its
@@ -307,7 +313,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
         // `?locale=` names the language whose pending change is being thrown
         // away. An empty value is the same as none: the request named no
@@ -317,13 +323,27 @@ export const COLLECTION_VERSION_METHODS: Record<
       return respondMutation("Working draft discarded.", item);
     },
   },
+  takeLiveSharedValues: {
+    execute: async (_svc, p) => {
+      const item = await takeLiveSharedValuesForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: requireAuthenticatedUser(),
+        // `?locale=` names the language whose pending change takes the live
+        // values. An empty value is the same as none: the default language.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Live values taken.", item);
+    },
+  },
   autosaveEntry: {
     execute: async (_svc, p, body) => {
       const item = await autosaveForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
         // The body IS the snapshot. Its CONTENTS are stored unvalidated,
         // because a recovery point records what the author had and someone
@@ -343,7 +363,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
+        user: requireAuthenticatedUser(),
         params: p,
       });
       // Private, never shared. This returns one author's unpublished snapshot
@@ -369,8 +389,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
@@ -382,8 +402,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
+        user: requireAuthenticatedUser(),
+        authenticatedScope: readAuthenticatedScope(),
         ...readComparisonParams(p),
       });
       // Private to the caller: a comparison from where this person last
@@ -441,10 +461,9 @@ const COLLECTIONS_METHODS: Record<
       // filter — an unauthenticated caller, gated at the route layer, or a
       // session super admin. An empty list means nothing is visible, which
       // the registry short-circuits to a zero-row, zero-total answer.
+      const reader = readAuthenticatedUser();
       const slugAllowlist = await readableSlugAllowlist(
-        p._authenticatedUserId
-          ? readAccessCallerForDispatch(p, userFromParams(p))
-          : undefined,
+        reader ? readAccessCallerForDispatch(reader) : undefined,
         "collection"
       );
 
@@ -568,11 +587,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
@@ -660,11 +675,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
-      if (collection.locked) {
-        throw new Error(
-          "This collection is managed via code and cannot be modified in the UI"
-        );
-      }
+      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const {
         fields,
         confirmed,
@@ -852,8 +863,7 @@ const COLLECTIONS_METHODS: Record<
             uiTargetKind: "collection" as const,
             // A field becoming translated keeps its value as this language's; the apply moves it
             // after its prompts and refusals, before it drops the main column.
-            defaultLocale:
-              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -894,7 +904,7 @@ const COLLECTIONS_METHODS: Record<
         // or no single candidate), the preflight finds it from the fields and refuses what it must.
         renamed: companionRename,
         tableName,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
         kind: "collection",
@@ -902,6 +912,8 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+        // This apply's push refuses a main-table column drop the admin did not confirm.
+        mainDropsConfirmed: true,
       });
 
       const result = await apply(desired, "ui", {
@@ -928,8 +940,7 @@ const COLLECTIONS_METHODS: Record<
           const oldFields = (collection.fields ??
             []) as unknown as FieldDefinition[];
           const newFields = fields as unknown as FieldDefinition[];
-          const defaultLocale =
-            getConfigFromDI()?.localization?.defaultLocale ?? "en";
+          const defaultLocale = appLocalization()?.defaultLocale ?? "en";
           const companionExists = await adapter.tableExists(
             `${tableName}_locales`
           );
@@ -1059,6 +1070,9 @@ const COLLECTIONS_METHODS: Record<
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
         );
+        // Written past the registry services, so the cached rows are cleared
+        // here: a read during the save may have cached the row from before it.
+        clearCollectionRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1213,7 +1227,7 @@ const COLLECTIONS_METHODS: Record<
       // permission-less default and returns every row over HTTP.
       // `routeAuthorized` attests that the route already ran the coarse RBAC
       // gate, so only that re-check is skipped.
-      const user = readAuthenticatedUser(p);
+      const user = readAuthenticatedUser();
 
       const result = await svc.listEntries({
         // The request this operation's hooks are told about.
@@ -1224,7 +1238,7 @@ const COLLECTIONS_METHODS: Record<
         // A scoped API key is judged on its own read grant rather than on the
         // permissions of the user that owns it, so a super-admin-owned key
         // cannot read past its scope by inheriting the session bypass.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1272,7 +1286,7 @@ const COLLECTIONS_METHODS: Record<
       // read rules while the list obeyed them would report totals for rows the
       // caller cannot see, which both leaks how much data exists and breaks
       // pagination in the UI.
-      const user = readAuthenticatedUser(p);
+      const user = readAuthenticatedUser();
 
       const result = await svc.countEntries({
         // The request this operation's hooks are told about.
@@ -1282,7 +1296,7 @@ const COLLECTIONS_METHODS: Record<
         routeAuthorized: !!user,
         // Same scope judgement as listEntries: a count that ignored the key's
         // own grant would disclose how many rows exist beyond it.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
         search: p.search,
         where: parseWhereParam(p.where, p.whereBrackets),
         status,
@@ -1307,27 +1321,18 @@ const COLLECTIONS_METHODS: Record<
           collectionName: p.collectionName,
           depth:
             p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
-          userId: p._authenticatedUserId
-            ? String(p._authenticatedUserId)
-            : undefined,
-          userName: p._authenticatedUserName
-            ? String(p._authenticatedUserName)
-            : undefined,
-          userEmail: p._authenticatedUserEmail
-            ? String(p._authenticatedUserEmail)
-            : undefined,
+          ...callerUser(),
           // i18n M5: `?locale=de` stores the translatable values for German.
           locale: p.locale,
-          userRoles: readAuthenticatedRoles(p),
           // Who performed the write, recorded on the outbox event.
-          actor: readAuthenticatedActor(p),
+          actor: readAuthenticatedActor(),
           // Route middleware already ran the RBAC/code-access gate; attest it
           // so the handler skips only that redundant re-check (field-level
           // write access still runs). Never inferred from userId.
           routeAuthorized: true,
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
-          authenticatedScope: readAuthenticatedScope(p),
+          authenticatedScope: readAuthenticatedScope(),
         },
         body as Record<string, unknown>
       );
@@ -1351,7 +1356,7 @@ const COLLECTIONS_METHODS: Record<
       // Same caller context as listEntries. Fetching one document by id is the
       // path where a missing user matters most: without it the gate falls
       // through to the permission-less default on a direct read.
-      const user = readAuthenticatedUser(p);
+      const user = readAuthenticatedUser();
 
       const result = await svc.getEntry({
         // The request this operation's hooks are told about.
@@ -1363,7 +1368,7 @@ const COLLECTIONS_METHODS: Record<
         // A scoped API key is judged on its own read grant rather than on the
         // permissions of the user that owns it, matching listEntries, countEntries
         // and the publish gate.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
@@ -1403,27 +1408,19 @@ const COLLECTIONS_METHODS: Record<
           entryId: p.entryId,
           depth:
             p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
-          userId: p._authenticatedUserId
-            ? String(p._authenticatedUserId)
-            : undefined,
-          userName: p._authenticatedUserName
-            ? String(p._authenticatedUserName)
-            : undefined,
-          userEmail: p._authenticatedUserEmail
-            ? String(p._authenticatedUserEmail)
-            : undefined,
+          ...callerUser(),
           // i18n M5: `?locale=de` updates only the German translatable values.
           locale: p.locale,
-          userRoles: readAuthenticatedRoles(p),
           // Who performed the write, recorded on the outbox event.
-          actor: readAuthenticatedActor(p),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          actor: readAuthenticatedActor(),
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). A caller admitted on publish or unpublish
+          // alone is judged by the service. Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
-          authenticatedScope: readAuthenticatedScope(p),
+          authenticatedScope: readAuthenticatedScope(),
         },
         body as Record<string, unknown>
       );
@@ -1453,19 +1450,10 @@ const COLLECTIONS_METHODS: Record<
         request,
         collectionName: p.collectionName,
         entryId: p.entryId,
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        userRoles: readAuthenticatedRoles(p),
+        ...callerUser(),
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
-        actor: readAuthenticatedActor(p),
+        actor: readAuthenticatedActor(),
         // Route middleware already ran the RBAC/code-access gate; attest it so
         // the handler skips only that redundant re-check (field-level write
         // access still runs). Never inferred from userId.
@@ -1473,7 +1461,7 @@ const COLLECTIONS_METHODS: Record<
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
@@ -1501,26 +1489,17 @@ const COLLECTIONS_METHODS: Record<
         request,
         collectionName: p.collectionName,
         ids: b.ids,
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        userRoles: readAuthenticatedRoles(p),
+        ...callerUser(),
         // Who performed the bulk delete (user vs API key), recorded on each
         // entry's `entry.deleted` event — same attribution as single delete.
-        actor: readAuthenticatedActor(p),
+        actor: readAuthenticatedActor(),
         // Route middleware already ran the RBAC/code-access gate; attest it so
         // the handler skips only that redundant re-check (field-level write
         // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // Carry the key's scope so each per-id delete is judged on the key's OWN
         // grant, not the key owner's super-admin roles.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
       });
       // Compose a server-authored toast string. Total here is the
       // request's id count, not just the success count, so the message
@@ -1556,25 +1535,16 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
-        actor: readAuthenticatedActor(p),
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        userRoles: readAuthenticatedRoles(p),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        actor: readAuthenticatedActor(),
+        ...callerUser(),
+        // Where the route admitted the caller on update, attest it so the
+        // handler skips only that redundant re-check (field-level write access
+        // still runs). Never inferred from userId.
+        routeAuthorized: routeAdmittedUpdate(),
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
         // judged on the key's OWN grants.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
       });
       const message =
         result.failures.length === 0
@@ -1623,25 +1593,16 @@ const COLLECTIONS_METHODS: Record<
           // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
-          actor: readAuthenticatedActor(p),
-          userId: p._authenticatedUserId
-            ? String(p._authenticatedUserId)
-            : undefined,
-          userName: p._authenticatedUserName
-            ? String(p._authenticatedUserName)
-            : undefined,
-          userEmail: p._authenticatedUserEmail
-            ? String(p._authenticatedUserEmail)
-            : undefined,
-          userRoles: readAuthenticatedRoles(p),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          actor: readAuthenticatedActor(),
+          ...callerUser(),
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
           // each per-row transition are judged on the key's OWN grants.
-          authenticatedScope: readAuthenticatedScope(p),
+          authenticatedScope: readAuthenticatedScope(),
         },
         { limit: b.limit }
       );
@@ -1670,24 +1631,15 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         entryId: p.entryId,
         overrides: b?.overrides,
-        actor: readAuthenticatedActor(p),
-        userId: p._authenticatedUserId
-          ? String(p._authenticatedUserId)
-          : undefined,
-        userName: p._authenticatedUserName
-          ? String(p._authenticatedUserName)
-          : undefined,
-        userEmail: p._authenticatedUserEmail
-          ? String(p._authenticatedUserEmail)
-          : undefined,
-        userRoles: readAuthenticatedRoles(p),
+        actor: readAuthenticatedActor(),
+        ...callerUser(),
         // Route middleware already ran the RBAC/code-access gate; attest it so
         // the handler skips only that redundant re-check (field-level write
         // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // A duplicate is a create; carry the scope so a create-as-published is
         // judged on the key's OWN publish grant, never the key owner's.
-        authenticatedScope: readAuthenticatedScope(p),
+        authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

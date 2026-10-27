@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import { Form } from "@admin/components/ui/form";
-import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 
 import { RoleBasicInfo } from "./RoleBasicInfo";
 

@@ -13,12 +13,24 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import {
+  readIndexUniqueness,
+  uniqueIndexNames,
+} from "../../schema/pipeline/live-table-facts";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
-import { companionColumnNames } from "../runtime/companion-io";
+import {
+  companionColumnNames,
+  localizedColumnsOnMain,
+} from "../runtime/companion-io";
 
+import {
+  isUniqueField,
+  type UniqueTranslatedColumn,
+} from "./companion-unique-indexes";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -27,6 +39,7 @@ import {
   refusalsForFieldsLeavingTranslation,
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
+  refusalsForTranslatedFieldsRemovedBesideAdded,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -36,6 +49,13 @@ import {
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
+import {
+  duplicateTranslatedValues,
+  duplicateValuesSeededFromMain,
+  refusalsForTranslatedUniqueOverDuplicates,
+  refuseUnindexableTranslatedUnique,
+  type TranslatedDuplicate,
+} from "./translated-unique-preconditions";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -96,6 +116,8 @@ async function writeArchiveFirst(
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
+ * Turning translation off or on still refuses a field that is or becomes translated removed beside
+ * an added one, as neither move can follow it to its new name.
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
  *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
@@ -122,10 +144,32 @@ export async function archiveFieldsLeavingTranslation(args: {
    * decides by the main table's rule (`detectFieldRename`) instead.
    */
   renamed?: FieldRename | null;
+  /**
+   * Set by the schema dialogs, whose push refuses a main-table column drop the admin did not
+   * confirm (`BrowserPromptDispatcher`). Before translation is on, every field is a main-table
+   * column, so that refusal already asks about each one the change takes away.
+   */
+  mainDropsConfirmed?: boolean;
 }): Promise<void> {
-  if (!args.wasLocalized) return;
+  await refuseTranslatedUniqueThatCannotHold(args);
+  if (!args.wasLocalized) {
+    // Turning translation on moves a field's main column to the companion only under a name the
+    // field has before and after the change (`buildCompanionTransitionStatements`), so one that
+    // becomes translated and is removed beside an added field, a rename included, would lose its
+    // value with its main column. A rename is not carried by that move, so only an explicit
+    // drop-and-add answer passes, or a save whose main-table drops are confirmed on their own.
+    if (args.isLocalized && !args.mainDropsConfirmed) {
+      refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields, {
+        translationStarts: true,
+      });
+    }
+    return;
+  }
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
+    // Turning translation off restores each field from the companion under the name it had, so
+    // a translated field removed beside an added one is restored under a name no field has.
+    refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields);
     return;
   }
   // A translated field renamed in this change is judged under its new name, as the companion
@@ -139,6 +183,9 @@ export async function archiveFieldsLeavingTranslation(args: {
     : args.oldFields;
   const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
   const joining = fieldsJoiningTranslation(oldFields, args.newFields);
+  // Before the early return below: a change that only removes and adds translated fields changes
+  // no field's translation, and is exactly the one that would drop a column unasked.
+  refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
@@ -198,6 +245,192 @@ export async function archiveFieldsLeavingTranslation(args: {
       renamedFrom: source.renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a translated field becoming unique within each language where the rule cannot hold,
+ * before anything runs: on a server that cannot key the index (`refuseUnindexableTranslatedUnique`),
+ * or where a language already holds a value twice (`refusalsForTranslatedUniqueOverDuplicates`),
+ * naming the documents. A field that was already unique and translated was checked when it became
+ * so, and a column the companion does not have yet holds nothing to collide.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each field the rule cannot hold for
+ */
+export async function refuseTranslatedUniqueThatCannotHold(
+  args: Pick<
+    Parameters<typeof archiveFieldsLeavingTranslation>[0],
+    | "adapter"
+    | "entity"
+    | "tableName"
+    | "builtBy"
+    | "oldFields"
+    | "newFields"
+    | "wasLocalized"
+    | "isLocalized"
+  > &
+    Partial<
+      Pick<
+        Parameters<typeof archiveFieldsLeavingTranslation>[0],
+        "defaultLocale" | "renamed"
+      >
+    >
+): Promise<void> {
+  const companionTable = `${args.tableName}_locales`;
+  // Judged against the indexes the companion has, so a field marked unique before the rule was
+  // enforced, and never indexed, is checked as the save that indexes it. Only read when a field
+  // is unique, so most saves ask nothing.
+  const indexedOn =
+    args.wasLocalized && args.isLocalized && args.newFields.some(isUniqueField)
+      ? {
+          companionTable,
+          // Only the unique ones: an index under the name that is not unique holds nothing, so
+          // the save that replaces it asks the duplicates first, as it would of a missing one.
+          names: uniqueIndexNames(
+            await readIndexUniqueness(
+              args.adapter.getDrizzle(),
+              args.adapter.getCapabilities().dialect,
+              companionTable
+            )
+          ),
+        }
+      : undefined;
+  const becoming = refuseUnindexableTranslatedUnique(args.adapter, {
+    ...args,
+    indexedOn,
+  });
+  if (becoming.length === 0 || !args.isLocalized) return;
+  // Where the values the new index must hold are RIGHT NOW, which is not always the column the
+  // field will end up in, so each field is judged where its values are:
+  // - a field that is translated already: on the companion, under the column the field has now,
+  //   which for a field this change renames is still its old one;
+  // - a field joining translation in this change, whether the entity's translation starts now or
+  //   the entity was translated already: on the main table, and the move copies every row into
+  //   the default language before creating the index, so main's duplicates become that
+  //   language's. Checked here because the main-table uniqueness preflight leaves out a field
+  //   that is becoming translated, so otherwise nobody looks at these values and the index fails
+  //   after the create, the seed and the column drops — on MySQL, already committed.
+  const onMain = await columnsStillOnMain(args, becoming);
+  const joining = new Set(onMain.map(c => c.column));
+  const duplicates = [
+    ...(args.wasLocalized
+      ? await duplicatesAlreadyOnCompanion(
+          args,
+          companionTable,
+          becoming.filter(c => !joining.has(c.column))
+        )
+      : []),
+    ...(await duplicateValuesSeededFromMain(
+      args.adapter,
+      { mainTable: args.tableName, locale: args.defaultLocale ?? "en" },
+      onMain
+    )),
+  ];
+  const refusals = refusalsForTranslatedUniqueOverDuplicates(duplicates);
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
+}
+
+/**
+ * The duplicates a companion already holds for the fields becoming unique, each read from the
+ * column its values are in now.
+ *
+ * A field this change renames keeps its values in its OLD column until the rename runs, so the
+ * new name finds nothing: asked under it, the check passed over existing duplicates, the rename
+ * carried them across intact, and the index creation failed afterwards — on MySQL behind DDL
+ * that had already committed. A column that is on neither name holds nothing to collide.
+ */
+async function duplicatesAlreadyOnCompanion(
+  args: Pick<
+    Parameters<typeof refuseTranslatedUniqueThatCannotHold>[0],
+    "adapter" | "tableName" | "builtBy" | "oldFields" | "newFields" | "renamed"
+  >,
+  companionTable: string,
+  becoming: readonly UniqueTranslatedColumn[]
+): Promise<TranslatedDuplicate[]> {
+  const live = new Set(
+    await companionColumnNames(args.adapter, args.tableName)
+  );
+  const renamedFrom = renamedColumn(
+    await renameInChange(args),
+    args.builtBy,
+    args.adapter.getCapabilities().dialect
+  );
+  const sources = becoming.flatMap(column => {
+    if (live.has(column.column)) return [column];
+    const from = renamedFrom?.get(column.column);
+    // Named by the field the save asks for, so the refusal reads under the name being saved.
+    return from !== undefined && live.has(from)
+      ? [{ ...column, column: from }]
+      : [];
+  });
+  return duplicateTranslatedValues(args.adapter, companionTable, sources);
+}
+
+/** Those of `becoming` whose values the main table still holds, and an enable will copy over. */
+async function columnsStillOnMain(
+  args: Pick<
+    Parameters<typeof refuseTranslatedUniqueThatCannotHold>[0],
+    "adapter" | "tableName" | "newFields"
+  >,
+  becoming: readonly UniqueTranslatedColumn[]
+): Promise<UniqueTranslatedColumn[]> {
+  const present = new Set(
+    (
+      await localizedColumnsOnMain(args.adapter, args.tableName, args.newFields)
+    ).map(c => c.name)
+  );
+  return becoming.filter(c => present.has(c.column));
+}
+
+/**
+ * Refuses a change that removes translated fields while it adds others with no rename decided
+ * for them (`refusalsForTranslatedFieldsRemovedBesideAdded`), before anything runs. An explicit
+ * drop-and-add answer from the schema dialog is the admin choosing the drop, so it passes.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each removed field and the two saves that work
+ */
+function refuseTranslatedFieldsRemovedBesideAdded(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0],
+  oldFields: readonly LeavingFieldLike[],
+  /** Set for the change that turns translation on, whose refusal names that save first. */
+  options: { translationStarts?: boolean } = {}
+): void {
+  if (args.renamed === null) return;
+  const before = new Set(oldFields.map(f => f.name));
+  const after = new Set(args.newFields.map(f => f.name));
+  // Any new field that stores something, translated or shared, wherever it stores it: a column
+  // on the main table or the companion, a junction table, a field group's own table. A translated
+  // field renamed to a type that is shared by default reads as one removed and one shared field
+  // added. Only a virtual field stores nothing.
+  const storesSomething = (
+    f: LeavingFieldLike & { virtual?: unknown; options?: unknown }
+  ) => !isVirtualField(f);
+  const added = args.newFields
+    .filter(f => !before.has(f.name) && storesSomething(f))
+    .map(f => f.name);
+  const removed = oldFields.filter(
+    f => !after.has(f.name) && isFieldLocalized(f, true)
+  );
+  // Judged by name first, so a change that does not both remove and add asks the adapter nothing.
+  if (added.length === 0 || removed.length === 0) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const refusals = refusalsForTranslatedFieldsRemovedBesideAdded({
+    removed: removed
+      .filter(
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null
+      )
+      .map(f => f.name),
+    added,
+    translationStarts: options.translationStarts,
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**

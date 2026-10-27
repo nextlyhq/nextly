@@ -16,13 +16,17 @@
  * A caller handed in by server code (a Direct API `user`, a service's `as`)
  * is resolved like any other, so a narrower caller is its own actor.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Principal } from "../../plugins/principals/types";
 import {
   hasPermission,
   isSuperAdmin,
+  isSuperAdminOrRefuse,
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+import { consoleLogger } from "../../shared/types";
 import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
 
 import {
@@ -55,11 +59,81 @@ export async function actorForUser(
 }
 
 /**
+ * A signed-in user's actor for a reader that refuses rather than fails: each
+ * lookup that fails counts as holding nothing of its kind, and is logged. A
+ * failed role lookup keeps the grants that were read, and a failed grant
+ * lookup keeps the roles, and with them a super-admin's authority, as the
+ * separate super-admin and permission checks such a reader replaced each
+ * answered on their own.
+ */
+export async function actorForUserFailingClosed(
+  userId: string
+): Promise<UserActor> {
+  const [roles, permissions] = await Promise.allSettled([
+    listRoleSlugsForUser(userId),
+    listEffectiveGrants(userId),
+  ]);
+  const settled = { roles, grants: permissions };
+  for (const [lookup, result] of Object.entries(settled)) {
+    if (result.status === "rejected") {
+      consoleLogger.error(`[rbac] Could not read the ${lookup} of ${userId}`, {
+        error: result.reason,
+      });
+    }
+  }
+  return userActor({
+    userId,
+    roles: roles.status === "fulfilled" ? roles.value : [],
+    permissions: permissions.status === "fulfilled" ? permissions.value : [],
+  });
+}
+
+/** A signed-in user's permissions, read once for work that asks about many. */
+export interface HeldPermissions {
+  readonly userId: string;
+  readonly superAdmin: boolean;
+  readonly grants: readonly PermissionGrant[];
+}
+
+const heldPermissions = new AsyncLocalStorage<HeldPermissions>();
+
+/**
+ * Runs `work` with `userId`'s permissions read once, so each permission check
+ * inside it answers from what was read instead of asking the database about
+ * one resource at a time. For work that asks the same caller about every
+ * entity at once; any other work asks as it always has. `work` is handed what
+ * was read, so anything it states about the user comes from the same read as
+ * the checks.
+ *
+ * The answers are the targeted check's: a role set holding the permission,
+ * super-admin authority included, read through the same effective-grant
+ * lookup a rule's context uses. A read that fails refuses the work rather
+ * than letting each check ask on its own, which would multiply the reads
+ * exactly while the database is failing, and rather than taking a super-admin
+ * whose roles could not be read for a non-admin.
+ *
+ * @throws NextlyError when the user's roles or permissions cannot be read.
+ */
+export async function withHeldPermissions<T>(
+  userId: string,
+  work: (held: HeldPermissions) => Promise<T>
+): Promise<T> {
+  const [superAdmin, grants] = await Promise.all([
+    isSuperAdminOrRefuse(userId),
+    listEffectiveGrants(userId),
+  ]);
+  const held: HeldPermissions = { userId, superAdmin, grants };
+  return heldPermissions.run(held, () => work(held));
+}
+
+/**
  * Whether a signed-in user holds the permission to `action` on `resource`,
  * super-admin authority included: what the decision reads of a user where the
  * target declares no rule for the action. Asked of the targeted permission
  * check and its caches, rather than by resolving the user's every role and
- * grant, which only a rule's context needs. A failed lookup answers no.
+ * grant, which only a rule's context needs, unless that user's permissions
+ * are held for the work in hand ({@link withHeldPermissions}). A failed lookup
+ * answers no.
  */
 export function userHoldsPermission(
   userId: string,
@@ -67,6 +141,16 @@ export function userHoldsPermission(
   resource: string,
   options: { executor?: unknown } = {}
 ): Promise<boolean> {
+  const held = heldPermissions.getStore();
+  // A transaction's own view is never answered from a pooled read.
+  if (held?.userId === userId && options.executor === undefined) {
+    return Promise.resolve(
+      held.superAdmin ||
+        held.grants.some(
+          grant => grant.action === action && grant.resource === resource
+        )
+    );
+  }
   return hasPermission(userId, action, resource, options.executor);
 }
 

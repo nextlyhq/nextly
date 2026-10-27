@@ -20,12 +20,18 @@
  * @since 1.0.0
  */
 
+import type { FieldAccess } from "../collections/fields/types/base";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 import { MAX_DECIMAL_PRECISION, MAX_DECIMAL_SCALE } from "./decimal-bounds";
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
+import { SLUG_PATTERN } from "./slug-pattern";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
+import type {
+  CollectionAccessControl,
+  SingleAccessControl,
+} from "./types/access";
 
 // ============================================================
 // Shared Types
@@ -79,12 +85,9 @@ export interface SlugValidationContext {
 // Shared Constants
 // ============================================================
 
-/**
- * Regex pattern for valid slugs.
- * Must start with a lowercase letter, contain only lowercase letters,
- * numbers, hyphens, and underscores. Length: 1-50 chars.
- */
-export const SLUG_PATTERN = /^[a-z][a-z0-9_-]*$/;
+// The slug rule, kept in a module that imports nothing so browser code can
+// read the same one; re-exported here for this module's existing importers.
+export { SLUG_PATTERN };
 
 /**
  * Regex pattern for valid field names.
@@ -772,35 +775,100 @@ export function validateContainerFieldsShared(
 }
 
 /**
- * Validate an entity's `access` object: optional, an object when present,
- * and each of the access keys the entity supports a function when set.
+ * The access rules each kind of entity declares, as its access type does:
+ * `CollectionAccessControl`, `SingleAccessControl` and `FieldAccess`. Held
+ * to those types by `access-rule-values.test.ts`, so a rule added to a type
+ * and not here is refused at startup only until that test fails.
+ */
+export const COLLECTION_ACCESS_KEYS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const satisfies readonly (keyof CollectionAccessControl)[];
+export const SINGLE_ACCESS_KEYS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const satisfies readonly (keyof SingleAccessControl)[];
+export const FIELD_ACCESS_KEYS = [
+  "create",
+  "read",
+  "update",
+] as const satisfies readonly (keyof FieldAccess)[];
+
+/**
+ * What every field is checked for, whatever its type and whichever entity it
+ * belongs to: a usable, unique name, and its own access rules, each a function
+ * or a boolean with no key a field does not have.
  *
- * Collections and Singles support different keys (Singles have no create or
- * delete), so the caller names them; the rule applied to each is the same.
+ * Checked before the type, because a contributed type defers its own checks
+ * to boot and returns early: left behind the type check, neither would run
+ * for a plugin field.
+ */
+export function validateFieldBasicsShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[],
+  seenNames: Set<string>,
+  sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
+): void {
+  validateFieldNameShared(field.name, path, errors, seenNames, sqlKeywordsSet);
+  validateAccessShared(
+    field.access,
+    FIELD_ACCESS_KEYS,
+    errors,
+    `${path}.access`
+  );
+}
+
+/**
+ * Validate an `access` object at `path`: optional, an object when present,
+ * each rule a function or a boolean, and no key the entity does not have.
+ *
+ * A key the entity does not have is refused, naming it, rather than ignored:
+ * a misspelt `reed` would otherwise leave `read` undeclared, and the
+ * operation it meant to govern would fall back to stored permissions without
+ * a word. Collections, Singles and fields declare different keys, so the
+ * caller names them; the rule applied to each is the same.
  */
 export function validateAccessShared(
   access: unknown,
   accessKeys: readonly string[],
-  errors: BaseValidationError[]
+  errors: BaseValidationError[],
+  path = "access"
 ): void {
   if (!access) return;
 
   if (typeof access !== "object" || Array.isArray(access)) {
     errors.push({
-      path: "access",
+      path,
       message: "Access control must be an object",
       code: "ACCESS_INVALID_TYPE",
     });
     return;
   }
 
-  const accessObj = access as Record<string, unknown>;
-  for (const key of accessKeys) {
-    const fn = accessObj[key];
-    if (fn !== undefined && typeof fn !== "function") {
+  for (const [key, rule] of Object.entries(access)) {
+    if (!accessKeys.includes(key)) {
       errors.push({
-        path: `access.${key}`,
-        message: `Access control '${key}' must be a function`,
+        path: `${path}.${key}`,
+        message: `Unknown access rule '${key}'; the rules here are ${accessKeys.join(", ")}`,
+        code: "ACCESS_KEY_UNKNOWN",
+      });
+      continue;
+    }
+    if (
+      rule !== undefined &&
+      typeof rule !== "function" &&
+      typeof rule !== "boolean"
+    ) {
+      errors.push({
+        path: `${path}.${key}`,
+        message: `Access rule '${key}' must be a function or a boolean`,
         code: "ACCESS_FUNCTION_INVALID",
       });
     }

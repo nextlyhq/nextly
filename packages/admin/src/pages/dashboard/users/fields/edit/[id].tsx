@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import {
   UserFieldForm,
@@ -24,7 +24,7 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
 
-export default function EditUserFieldPage() {
+export default function EditUserFieldPage(): JSX.Element {
   const { route } = useRouter();
 
   // Extract and validate field ID from route params

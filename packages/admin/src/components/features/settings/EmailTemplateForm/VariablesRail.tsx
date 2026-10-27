@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { useForm } from "react-hook-form";
 import { useFieldArray } from "react-hook-form";
 
@@ -14,7 +15,7 @@ import {
 } from "@admin/components/ui/form";
 
 import { BUILT_IN_VARIABLES } from "./sample-data";
-import { type TemplateFormValues, type TemplateFormVariable } from "./schema";
+import type { TemplateFormValues, TemplateFormVariable } from "./schema";
 
 // ============================================================
 // Rail: Variables tab
@@ -55,7 +56,7 @@ export function VariableChips({
 }: {
   declared: TemplateFormVariable[];
   onInsert: (name: string) => void;
-}) {
+}): JSX.Element {
   const builtInNames = new Set(BUILT_IN_VARIABLES.map(v => v.name));
   const declaredNames = declared
     .map(v => v.name)
@@ -77,45 +78,55 @@ export function VariablesRail({
   control,
   declared,
   onInsert,
+  locked,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   declared: TemplateFormVariable[];
   onInsert: (name: string) => void;
-}) {
+  /**
+   * The declarations are the owner's until the site overrides the email: shown,
+   * not changed, and nothing is inserted into a body the site can't edit.
+   */
+  locked: boolean;
+}): JSX.Element {
   const { fields, append, remove } = useFieldArray({
     control,
     name: "variables",
   });
   return (
     <div className="space-y-5">
-      <div>
-        <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Insert a variable
-        </h4>
-        <p className="mb-2 text-xs text-muted-foreground">
-          Click to insert at the cursor. Built-in variables are always
-          available.
-        </p>
-        <VariableChips declared={declared} onInsert={onInsert} />
-      </div>
+      {locked ? null : (
+        <div>
+          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Insert a variable
+          </h4>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Click to insert at the cursor. Built-in variables are always
+            available.
+          </p>
+          <VariableChips declared={declared} onInsert={onInsert} />
+        </div>
+      )}
 
       <div>
         <div className="mb-2 flex items-center justify-between">
           <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Declared variables
           </h4>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() =>
-              append({ name: "", description: "", required: false })
-            }
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            Add
-          </Button>
+          {locked ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() =>
+                append({ name: "", description: "", required: false })
+              }
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Add
+            </Button>
+          )}
         </div>
         {fields.length > 0 ? (
           <div className="space-y-2">
@@ -134,6 +145,7 @@ export function VariablesRail({
                           <FormControl>
                             <Input
                               placeholder="variableName"
+                              readOnly={locked}
                               className="h-8 font-mono text-sm"
                               {...f}
                             />
@@ -150,6 +162,7 @@ export function VariablesRail({
                           <FormControl>
                             <Input
                               placeholder="Description (optional)"
+                              readOnly={locked}
                               className="h-8 text-sm"
                               {...f}
                             />
@@ -159,16 +172,18 @@ export function VariablesRail({
                       )}
                     />
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => remove(index)}
-                    aria-label="Remove variable"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {locked ? null : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => remove(index)}
+                      aria-label="Remove variable"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
                 <FormField
                   control={control}
@@ -179,6 +194,7 @@ export function VariablesRail({
                         <Switch
                           checked={f.value}
                           onCheckedChange={f.onChange}
+                          disabled={locked}
                           className="scale-75"
                         />
                       </FormControl>

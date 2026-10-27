@@ -27,6 +27,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
+| `nextly upgrade` | Run after upgrading Nextly, once every instance serves the new release. Brings an existing database up to date in steps: it moves old migration records into `nextly_schema_events`, hashes passwords stored before this release, and removes passwords kept in version history. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
 | `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
@@ -42,6 +43,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
+- `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--force-unlock`.
 - `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ---
@@ -142,7 +144,7 @@ jobs:
       - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -579,8 +581,8 @@ Run it in your PR CI to catch mistakes before they reach production.
 | `NEXTLY_APPLIED_BY`          | `migrate`  | No effect today: the column exists on `nextly_schema_events` but the runner does not write it. |
 | `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
 | `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` | `migrate` | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it. |
-| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate` | Drop the retired `accounts` and `sessions` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape, so check a table is not another app's before setting it. |
-| `NEXTLY_DROP_NONEMPTY_RETIRED=1` | `migrate` | With the flag above, also drop a retired table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead. |
+| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate` | Drop the retired `accounts`, `sessions` and `user_permission_cache` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape as `accounts` or `sessions`, so check a table is not another app's before setting it. `user_permission_cache` held permission answers that are now recomputed from roles, so it is dropped even when it holds rows; the drop is logged. Drop it once every instance runs this release, since an earlier release reads it. |
+| `NEXTLY_DROP_NONEMPTY_RETIRED=1` | `migrate` | With the flag above, also drop a retired `accounts` or `sessions` table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead. |
 | `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | Runtime | The retired tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created either table, so unset, the rows stay and the startup warning says so. |
 
 ## When `migrate` refuses a destructive core change
@@ -672,7 +674,7 @@ or an administrator sets one for them.
 
 ## What you should never do
 
-- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with an ESLint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
+- **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with a lint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
 - **Don't edit applied migration files.** The hash check catches this and aborts with `MIGRATION_TAMPERED`. To change something already applied, write a new corrective migration.
 - **Concurrent `nextly migrate` runs are guarded by the migrate lock.** A second concurrent run won't apply schema at the same time — it either errors with `NEXTLY_MIGRATE_LOCK_BUSY` (CLI) or waits (boot run). If a crashed run leaves a stale lock, clear it with `nextly migrate --force-unlock`. (The lock is a pooler-safe row with a TTL; the `filename` UNIQUE constraint remains a second line of defense.)
 
@@ -705,6 +707,18 @@ When a translated field becomes shared, `migrate:create` writes a `<timestamp>_s
 - **The file moves several fields and only some columns are gone:** drop the rest from `<table>_locales` by hand, then mark it applied.
 
 On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt leaves nothing behind and `nextly migrate` runs it again.
+
+### Upgrading an existing database
+
+`nextly upgrade` is a list of steps, each of which brings one part of an existing database up to date. It takes the steps in order: it counts what a step would change and, when that is more than nothing, runs it and prints its count, before it looks at the next step. So when a later step stops the upgrade, the earlier ones have already been applied; run it again once the cause is fixed, and it carries on. It asks for a backup before the first step that has work. When no step has anything, it prints `Already upgraded. Nothing to do.` and asks for nothing. Running it again after it finishes changes nothing.
+
+- **Move the migration records into `nextly_schema_events`.** A database from an early alpha keeps them in `nextly_migrations` and `nextly_migration_journal`; the step copies them across and drops the old tables.
+- **Hash passwords stored before this release.** A password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working. A value already in a password hasher's format is left alone. The step prints a count for each collection, Single and field group, never a value.
+- **Remove passwords kept in version history.** A version's snapshot never keeps a password. The step strips any it finds from a snapshot captured by an earlier release, leaving the rest of the version as it was, and prints how many versions of each collection and Single it changed.
+
+`nextly migrate` prints how many passwords are not yet hashed, and names `nextly upgrade`.
+
+Run `nextly upgrade` once the new release serves every instance. An instance still running the earlier release can store a password as it was written after the step has passed its row, so if you ran it during a rollout, run it again after the last earlier instance has stopped. A run that finds nothing left says so.
 
 ### Core tables missing after an upgrade
 

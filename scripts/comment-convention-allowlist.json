@@ -176,10 +176,6 @@
     "count": 1,
     "digests": ["513d8eab1ebde6a2"]
   },
-  "packages/nextly/eslint.config.js": {
-    "count": 2,
-    "digests": ["bb3c9d25cf31add3", "e33b7f20fdbfeb37"]
-  },
   "packages/nextly/scripts/phase-gate.sh": {
     "count": 1,
     "digests": ["7bd26145a3c95304"]
@@ -350,7 +346,7 @@
     ]
   },
   "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
-    "count": 8,
+    "count": 7,
     "digests": [
       "1e8a73b1b250c068",
       "34be3f05d319e7dd",
@@ -358,8 +354,7 @@
       "56303ebc13cade9c",
       "75f892f575725597",
       "9c894904db58afcf",
-      "d8196efde331f07e",
-      "ec5df2b847c937f8"
+      "d8196efde331f07e"
     ]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
@@ -1090,7 +1085,7 @@
     ]
   },
   "packages/nextly/src/services/collections/collection-entry-service.ts": {
-    "count": 8,
+    "count": 7,
     "digests": [
       "2f095e3a68a58ceb",
       "371447533163ac46",
@@ -1098,8 +1093,7 @@
       "7e24d0d33b9cfad2",
       "c0d7765e95047d06",
       "c0d7765e95047d06",
-      "c0d7765e95047d06",
-      "d1c61cf331ff0345"
+      "c0d7765e95047d06"
     ]
   },
   "packages/nextly/src/services/collections/drizzle-condition.ts": {
@@ -1148,18 +1142,13 @@
     "count": 1,
     "digests": ["60e14a2b22612b00"]
   },
-  "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
-    "count": 1,
-    "digests": ["92615760254a3a7f"]
-  },
   "scripts/check-comment-convention.mjs": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "1d96a703ff67f6d2",
       "2421cd2ab9b9214b",
       "91e112e4507fb8ee",
-      "bdbe7173f0ca3a3f",
-      "dc84b3f296521a00"
+      "bdbe7173f0ca3a3f"
     ]
   }
 }

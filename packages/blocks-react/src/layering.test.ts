@@ -3,7 +3,10 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dirent } from "node:fs";
 
-import ts from "typescript";
+import {
+  moduleSpecifierRefs,
+  UNRESOLVABLE_SPECIFIER,
+} from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -75,15 +78,6 @@ const NEXT_ONLY_IMPORTS = [
 /** Files that are test harness rather than shipped code. */
 const TEST_FILE = /\.test\.tsx?$/;
 
-/**
- * Stand-in for a dynamic import whose target cannot be read from the source.
- *
- * It is deliberately not a real specifier, so it matches no allowlist entry and
- * therefore fails: an unreadable route into the module graph is treated as a
- * violation rather than waved through.
- */
-const UNRESOLVABLE_SPECIFIER = "<computed-dynamic-import>";
-
 /** Every source file, with its path relative to `src`. */
 function sourceFiles(dir: string = SRC_DIR): string[] {
   const entries: Dirent[] = readdirSync(dir, { withFileTypes: true });
@@ -99,11 +93,12 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
 /**
  * Module specifiers a source text imports at RUNTIME.
  *
- * Read from TypeScript's own parse of the file rather than by pattern. What
- * counts as an import is a question about syntax, and syntax has exactly one
- * authority; a text scan has to re-derive comments, string boundaries and
- * statement positions, and each of those is a way for a real import to go
- * unseen. Every form below is one the parser answers directly:
+ * DERIVED from the repository's one reader of what a source names
+ * (`@nextlyhq/module-specifiers`), keeping the references that survive the
+ * build. A reader of its own here would agree with that one the day it was
+ * written and drift silently after, in the direction that answers "clean".
+ * The cases below are the forms this guard depends on, asserted through this
+ * function so a change in the shared reader that drops one fails here too:
  *
  * - `import "x"` anywhere a statement may appear, including after another
  *   statement on the same line.
@@ -113,8 +108,7 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
  * - `import("x")` and `require("x")`. A dynamic import puts a module in the
  *   graph exactly as a static one does, and `import x = require("y")` is the
  *   documented CommonJS-interop spelling.
- * - `import("x").Foo` in type position, which is a type query and erases, so
- *   it is correctly absent — it parses as a type node, not a call.
+ * - `import("x").Foo` in type position, which is a type query and erases.
  *
  * A dynamic call whose argument is not a single string literal is reported as
  * {@link UNRESOLVABLE_SPECIFIER}: `import(base + name)` cannot be checked here,
@@ -122,54 +116,9 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
  * deliberate act.
  */
 export function collectRuntimeImports(source: string, fileName: string) {
-  const parsed = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.ESNext,
-    // Parent pointers are unused, but omitting them costs nothing to set and
-    // makes any later node-relative query work rather than crash.
-    true,
-    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
-
-  const specifiers: string[] = [];
-  const push = (node: ts.Expression): void => {
-    specifiers.push(
-      ts.isStringLiteralLike(node) ? node.text : UNRESOLVABLE_SPECIFIER
-    );
-  };
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) {
-      // No import clause is a bare side-effect import, which is a runtime
-      // import by definition and the form most likely to be overlooked.
-      if (!node.importClause?.isTypeOnly) push(node.moduleSpecifier);
-    } else if (ts.isExportDeclaration(node)) {
-      // A re-export without a specifier (`export { x }`) reaches no module.
-      if (node.moduleSpecifier && !node.isTypeOnly) push(node.moduleSpecifier);
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference)
-    ) {
-      if (!node.isTypeOnly) push(node.moduleReference.expression);
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      // A bare `require` identifier only. `foo.require("x")` is a method on
-      // some object, not a module resolve.
-      const isModuleCall =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require");
-      if (isModuleCall) {
-        const argument = node.arguments[0];
-        if (argument) push(argument);
-        else specifiers.push(UNRESOLVABLE_SPECIFIER);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(parsed);
-  return specifiers;
+  return moduleSpecifierRefs(source, fileName)
+    .filter(ref => !ref.typeOnly)
+    .map(ref => ref.specifier);
 }
 
 /** {@link collectRuntimeImports} for a file on disk. */

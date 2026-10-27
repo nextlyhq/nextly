@@ -1242,7 +1242,7 @@ export function BuilderShell({
   appliedScale = 1,
   notices: supplied,
   ...props
-}: BuilderShellProps) {
+}: BuilderShellProps): React.JSX.Element {
   // The browser store is built once: rebuilt each render it would change
   // `usePreferences`' callback identity every render, and the write effect with
   // it. Only the FALLBACK needs that treatment though. Capturing the caller's

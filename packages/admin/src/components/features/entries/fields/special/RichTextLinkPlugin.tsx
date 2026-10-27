@@ -39,6 +39,7 @@ import {
   type LexicalCommand,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { Link, Trash2 } from "@admin/components/icons";
 
@@ -164,7 +165,7 @@ export interface RichTextLinkPluginProps {
  */
 export function RichTextLinkPlugin({
   disabled = false,
-}: RichTextLinkPluginProps) {
+}: RichTextLinkPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [isOpen, setIsOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);

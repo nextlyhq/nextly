@@ -22,7 +22,10 @@ import {
   apiKeyViewer,
   type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
-import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   CheckAccessArgs,
@@ -54,6 +57,8 @@ import type { NextlyContext } from "./context";
 import {
   authorizeChecked,
   checkedCaller,
+  checkedRoleChange,
+  checkRead,
   checkWrite,
   mapPermission,
   mapRole,
@@ -80,6 +85,8 @@ export interface RolesNamespace {
 export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
   return {
     async find(args: FindRolesArgs = {}): Promise<ListResult<Role>> {
+      // Checked as REST's role list is, before anything is read.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.roles.read);
       // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
       // directly and throws NextlyError on failure.
       const result = await ctx.rbacRoleService.listRoles({
@@ -121,6 +128,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async findByID(args: FindRoleByIDArgs): Promise<Role> {
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.roles.read);
       // PR 4: getRoleById returns the role directly, throws NOT_FOUND.
       const role = await ctx.rbacRoleService.getRoleById(args.id);
       return mapRole(role);
@@ -128,11 +136,6 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async create(args: CreateRoleArgs): Promise<MutationResult<Role>> {
       // Checked as the REST route checks it, before anything is written.
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.roles.create
-      );
       // Pass through caller-provided permissionIds and childRoleIds.
       // Previously these were hardcoded to empty arrays, which made
       // every create call fail against the service's validation
@@ -142,14 +145,23 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
       // ordinary Direct API callers always need to pass at least one.
       //
       // PR 4: createRole returns the created role directly.
-      const role = await ctx.rbacRoleService.createRole({
-        name: args.data.name,
-        slug: args.data.slug,
-        description: args.data.description,
-        level: args.data.level ?? 0,
-        permissionIds: args.data.permissionIds ?? [],
-        childRoleIds: args.data.childRoleIds ?? [],
-      });
+      // Checked as the REST route checks it, before anything is written,
+      // then run as its caller: a role made to inherit super-admin is a grant
+      // of it, decided by the rule on granting super-admin.
+      const role = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.create,
+        () =>
+          ctx.rbacRoleService.createRole({
+            name: args.data.name,
+            slug: args.data.slug,
+            description: args.data.description,
+            level: args.data.level ?? 0,
+            permissionIds: args.data.permissionIds ?? [],
+            childRoleIds: args.data.childRoleIds ?? [],
+          })
+      );
       return {
         message: "Role created.",
         item: mapRole(role),
@@ -157,19 +169,20 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async update(args: UpdateRoleArgs): Promise<MutationResult<Role>> {
-      await checkWrite(
-        ctx.defaultConfig,
-        args,
-        SYSTEM_WRITE_POLICY.roles.update
-      );
       // PR 4: updateRole returns void; getRoleById returns the role
       // directly. Both throw on failure.
-      await ctx.rbacRoleService.updateRole(args.id, {
-        name: args.data.name,
-        slug: args.data.slug,
-        description: args.data.description ?? undefined,
-        level: args.data.level,
-      });
+      await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.update,
+        () =>
+          ctx.rbacRoleService.updateRole(args.id, {
+            name: args.data.name,
+            slug: args.data.slug,
+            description: args.data.description ?? undefined,
+            level: args.data.level,
+          })
+      );
       const updated = await ctx.rbacRoleService.getRoleById(args.id);
       return {
         message: "Role updated.",
@@ -180,13 +193,13 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     async delete(
       args: DeleteRoleArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await checkWrite(
+      // PR 4: deleteRole returns void; throws on failure.
+      await checkedRoleChange(
         ctx.defaultConfig,
         args,
-        SYSTEM_WRITE_POLICY.roles.delete
+        SYSTEM_WRITE_POLICY.roles.delete,
+        () => ctx.rbacRoleService.deleteRole(args.id)
       );
-      // PR 4: deleteRole returns void; throws on failure.
-      await ctx.rbacRoleService.deleteRole(args.id);
       return {
         message: "Role deleted.",
         item: { id: args.id },
@@ -194,6 +207,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async getPermissions(args: GetRolePermissionsArgs): Promise<Permission[]> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.roles.readPermissions
+      );
       const rolePerms = await ctx.rbacRolePermissionService.listRolePermissions(
         args.id
       );
@@ -271,6 +289,13 @@ export function createPermissionsNamespace(
     async find(
       args: FindPermissionsArgs = {}
     ): Promise<ListResult<Permission>> {
+      // REST lists permissions to whoever may read roles: the role form needs
+      // them to show what a role can grant.
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.permissions.list
+      );
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -304,6 +329,13 @@ export function createPermissionsNamespace(
     },
 
     async findByID(args: FindPermissionByIDArgs): Promise<Permission | null> {
+      // Refused before the lookup, so `disableErrors` answers a refusal as a
+      // refusal, never as a missing permission.
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.permissions.read
+      );
       try {
         // PR 4: getPermissionById returns the permission directly and
         // throws NextlyError(NOT_FOUND) on missing rows.
@@ -449,7 +481,8 @@ async function authorizeKeyOperation(
 ): Promise<void> {
   await authorizeChecked(caller, { anyOf: apiKeyPermissionsFor(operation) });
   if (operation !== "read" && caller.authMethod !== "session") {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "manage API keys",
       logContext: { reason: "session-only", action: operation },
     });
   }

@@ -71,6 +71,7 @@ import {
   convertToComponentRecords,
   convertToSingleRecords,
   convertToUserFieldRecords,
+  publishConfiguredWorkflows,
 } from "./generate-types";
 
 // ============================================================================
@@ -259,6 +260,10 @@ export async function runBuild(
     logger.error(describeDeclarationFailure(error));
     process.exit(1);
   }
+
+  // A workflow that cannot be attached fails the build rather than the
+  // deploy, and the types this build generates carry the workflows' names.
+  await publishConfiguredWorkflows(configResult, logger);
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);

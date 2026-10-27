@@ -30,7 +30,9 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
  * filtering another. Narrower than RESERVED_NAMES, which also covers columns
  * the builder never renders.
  */
-export const SYSTEM_FIELD_NAMES = DEFAULT_SYSTEM_FIELDS.map(f => f.name);
+export const SYSTEM_FIELD_NAMES: string[] = DEFAULT_SYSTEM_FIELDS.map(
+  f => f.name
+);
 
 /**
  * Single source of truth for reserved field names.

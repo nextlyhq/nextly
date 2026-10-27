@@ -1,6 +1,14 @@
-import { lazy } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
+import {
+  EMAIL_HUB_PERMISSIONS,
+  EMAIL_PROVIDER_CREATE_PERMISSIONS,
+  EMAIL_PROVIDER_READ_PERMISSIONS,
+  EMAIL_PROVIDER_UPDATE_PERMISSIONS,
+  EMAIL_TEMPLATE_CREATE_PERMISSIONS,
+  EMAIL_TEMPLATE_READ_PERMISSIONS,
+  EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
+} from "../constants/email-hub";
 import {
   API_KEYS_LIST_PERMISSIONS,
   RELEASE_SECTION_PERMISSIONS,
@@ -15,6 +23,13 @@ import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
+import "../hooks/useUnsavedChanges";
+// The unsaved-change guards register their one popstate listener when their
+// module evaluates, and it must evaluate before the router adds its own - the
+// entry editor was this module's only eager consumer before pages loaded on
+// demand, so the module is imported above for that side effect. Ordering is
+// the point: the import pulls no page code with it.
+
 import AcceptInvitePage from "./(auth)/accept-invite";
 import ForgotPasswordPage from "./(auth)/forgot-password";
 import LoginPage from "./(auth)/login";
@@ -22,80 +37,74 @@ import RegisterPage from "./(auth)/register";
 import ResetPasswordPage from "./(auth)/reset-password";
 import SetupPage from "./(auth)/setup";
 import VerifyEmailPage from "./(auth)/verify-email";
-import CollectionsPage from "./dashboard/collection/index";
-import EditEntryPage from "./dashboard/entries/[slug]/[id]/index";
-import EntryVersionsPage from "./dashboard/entries/[slug]/[id]/versions";
-import APIPlaygroundPage from "./dashboard/entries/[slug]/api";
-import CreateEntryPage from "./dashboard/entries/[slug]/create";
-import CollectionEntriesPage from "./dashboard/entries/[slug]/index";
-import FieldGroupsPage from "./dashboard/field-group/index";
-import DashboardPage from "./dashboard/index";
-import MediaLibraryPage from "./dashboard/media/index";
-import PluginDetailPage from "./dashboard/plugins/[slug]";
-import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
-import PluginBrowsePage from "./dashboard/plugins/browse";
-import PluginsOverviewPage from "./dashboard/plugins/index";
-import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
-import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
-import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
-import ReleaseDetailPage from "./dashboard/releases/[id]";
-import ReleasesPage from "./dashboard/releases/index";
-import RolesPage from "./dashboard/roles";
-import RolesCreatePage from "./dashboard/roles/create";
-import RolesEditPage from "./dashboard/roles/edit";
-import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
-import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
-import ApiKeysPage from "./dashboard/settings/api-keys/index";
-import BackgroundJobsPage from "./dashboard/settings/background-jobs/index";
-import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
-import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
-import EmailProvidersPage from "./dashboard/settings/email-providers/index";
-import CreateEmailTemplatePage from "./dashboard/settings/email-templates/create";
-import EditEmailTemplatePage from "./dashboard/settings/email-templates/edit/[id]";
-import EmailTemplatesPage from "./dashboard/settings/email-templates/index";
-import CreateImageSizePage from "./dashboard/settings/image-sizes/create";
-import EditImageSizePage from "./dashboard/settings/image-sizes/edit/[id]";
-import ImageSizesSettingsPage from "./dashboard/settings/image-sizes/index";
-import SettingsPage from "./dashboard/settings/index";
-import SettingsPermissionsPage from "./dashboard/settings/permissions/index";
-import WebhookDeliveryDetailPage from "./dashboard/settings/webhooks/[id]/deliveries/[deliveryId]";
-import WebhookDeliveriesPage from "./dashboard/settings/webhooks/[id]/deliveries/index";
-import CreateWebhookPage from "./dashboard/settings/webhooks/create";
-import EditWebhookPage from "./dashboard/settings/webhooks/edit/[id]";
-import WebhooksPage from "./dashboard/settings/webhooks/index";
-import SingleAPIPlaygroundPage from "./dashboard/singles/[slug]/api";
-import SingleEditPage from "./dashboard/singles/[slug]/index";
-import SingleVersionsPage from "./dashboard/singles/[slug]/versions";
-import SinglesPage from "./dashboard/singles/index";
-import TranslationsPage from "./dashboard/translations/index";
-import CreateUserPage from "./dashboard/users/create";
-import EditUserPage from "./dashboard/users/edit";
-import CreateUserFieldPage from "./dashboard/users/fields/create";
-import EditUserFieldPage from "./dashboard/users/fields/edit/[id]";
-import UserFieldsPage from "./dashboard/users/fields/index";
-import DashboardUsersPage from "./dashboard/users/index";
+import { lazyRoute } from "./lazy-route";
+// The other pages load through the same wrapper as the builders:
+// each chunk is fetched when its route renders, so opening one screen
+// does not download the other pages.
+const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
+const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
+const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
+const CreateEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/create"));
+const EditEmailTemplatePage = lazyRoute(() => import("./dashboard/email/messages/edit/[id]"));
+const CreateEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/create"));
+const EditEmailProviderPage = lazyRoute(() => import("./dashboard/email/sending/edit/[id]"));
+const EmailProvidersPage = lazyRoute(() => import("./dashboard/email/sending/index"));
+const EditEntryPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/index"));
+const EntryVersionsPage = lazyRoute(() => import("./dashboard/entries/[slug]/[id]/versions"));
+const APIPlaygroundPage = lazyRoute(() => import("./dashboard/entries/[slug]/api"));
+const CreateEntryPage = lazyRoute(() => import("./dashboard/entries/[slug]/create"));
+const CollectionEntriesPage = lazyRoute(() => import("./dashboard/entries/[slug]/index"));
+const FieldGroupsPage = lazyRoute(() => import("./dashboard/field-group/index"));
+const DashboardPage = lazyRoute(() => import("./dashboard/index"));
+const MediaLibraryPage = lazyRoute(() => import("./dashboard/media/index"));
+const PluginDetailPage = lazyRoute(() => import("./dashboard/plugins/[slug]"));
+const PluginSettingsPage = lazyRoute(() => import("./dashboard/plugins/[slug]/settings"));
+const PluginBrowsePage = lazyRoute(() => import("./dashboard/plugins/browse"));
+const PluginsOverviewPage = lazyRoute(() => import("./dashboard/plugins/index"));
+const CollectionsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/CollectionsLandingRedirect"));
+const EmailSettingsRedirect = lazyRoute(() => import("./dashboard/redirects/EmailSettingsRedirect"));
+const FieldGroupsLandingRedirect = lazyRoute(() => import("./dashboard/redirects/FieldGroupsLandingRedirect"));
+const SinglesLandingRedirect = lazyRoute(() => import("./dashboard/redirects/SinglesLandingRedirect"));
+const ReleaseDetailPage = lazyRoute(() => import("./dashboard/releases/[id]"));
+const ReleasesPage = lazyRoute(() => import("./dashboard/releases/index"));
+const RolesPage = lazyRoute(() => import("./dashboard/roles"));
+const RolesCreatePage = lazyRoute(() => import("./dashboard/roles/create"));
+const RolesEditPage = lazyRoute(() => import("./dashboard/roles/edit"));
+const CreateApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/create"));
+const EditApiKeyPage = lazyRoute(() => import("./dashboard/settings/api-keys/edit/[id]"));
+const ApiKeysPage = lazyRoute(() => import("./dashboard/settings/api-keys/index"));
+const BackgroundJobsPage = lazyRoute(() => import("./dashboard/settings/background-jobs/index"));
+const CreateImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/create"));
+const EditImageSizePage = lazyRoute(() => import("./dashboard/settings/image-sizes/edit/[id]"));
+const ImageSizesSettingsPage = lazyRoute(() => import("./dashboard/settings/image-sizes/index"));
+const SettingsPage = lazyRoute(() => import("./dashboard/settings/index"));
+const SettingsPermissionsPage = lazyRoute(() => import("./dashboard/settings/permissions/index"));
+const WebhookDeliveryDetailPage = lazyRoute(() => import("./dashboard/settings/webhooks/[id]/deliveries/[deliveryId]"));
+const WebhookDeliveriesPage = lazyRoute(() => import("./dashboard/settings/webhooks/[id]/deliveries/index"));
+const CreateWebhookPage = lazyRoute(() => import("./dashboard/settings/webhooks/create"));
+const EditWebhookPage = lazyRoute(() => import("./dashboard/settings/webhooks/edit/[id]"));
+const WebhooksPage = lazyRoute(() => import("./dashboard/settings/webhooks/index"));
+const SingleAPIPlaygroundPage = lazyRoute(() => import("./dashboard/singles/[slug]/api"));
+const SingleEditPage = lazyRoute(() => import("./dashboard/singles/[slug]/index"));
+const SingleVersionsPage = lazyRoute(() => import("./dashboard/singles/[slug]/versions"));
+const SinglesPage = lazyRoute(() => import("./dashboard/singles/index"));
+const TranslationsPage = lazyRoute(() => import("./dashboard/translations/index"));
+const CreateUserPage = lazyRoute(() => import("./dashboard/users/create"));
+const EditUserPage = lazyRoute(() => import("./dashboard/users/edit"));
+const CreateUserFieldPage = lazyRoute(() => import("./dashboard/users/fields/create"));
+const EditUserFieldPage = lazyRoute(() => import("./dashboard/users/fields/edit/[id]"));
+const UserFieldsPage = lazyRoute(() => import("./dashboard/users/fields/index"));
+const DashboardUsersPage = lazyRoute(() => import("./dashboard/users/index"));
 
-// Builder pages are lazy-loaded so that heavy dependencies (@dnd-kit, Lexical,
-// CodeMirror, schema-builder components) are split into separate chunks and
-// only fetched when navigating to builder routes.
-const CollectionBuilderPage = lazy(
-  () => import("./dashboard/collections/builder/index")
-);
-const CollectionBuilderEditPage = lazy(
-  () => import("./dashboard/collections/builder/[slug]")
-);
-const FieldGroupBuilderPage = lazy(
-  () => import("./dashboard/field-group/builder/index")
-);
-const FieldGroupBuilderEditPage = lazy(
-  () => import("./dashboard/field-group/builder/[slug]")
-);
-const SingleBuilderPage = lazy(
-  () => import("./dashboard/singles/builder/index")
-);
-const SingleBuilderEditPage = lazy(
-  () => import("./dashboard/singles/builder/[slug]")
-);
+// Heavy builder dependencies (@dnd-kit, Lexical, CodeMirror,
+// schema-builder components) stay in chunks fetched when a builder opens, and
+// the wrapper gives them the same retry a failed fetch gets anywhere else.
+const CollectionBuilderPage = lazyRoute(() => import("./dashboard/collections/builder/index"));
+const CollectionBuilderEditPage = lazyRoute(() => import("./dashboard/collections/builder/[slug]"));
+const FieldGroupBuilderPage = lazyRoute(() => import("./dashboard/field-group/builder/index"));
+const FieldGroupBuilderEditPage = lazyRoute(() => import("./dashboard/field-group/builder/[slug]"));
+const SingleBuilderPage = lazyRoute(() => import("./dashboard/singles/builder/index"));
+const SingleBuilderEditPage = lazyRoute(() => import("./dashboard/singles/builder/[slug]"));
 
 interface RouteConfigBase {
   component: React.ComponentType<PageProps>;
@@ -424,47 +433,95 @@ export const routeConfig: Record<string, RouteConfig> = {
   // picks the first destination in the panel they can actually open, and every
   // grant in `settingsPanelSlugs()` opens one, so the fallthrough to
   // `/admin/settings` is unreachable for anyone this guard admits.
+  // ============================================================
+  // The Email hub. Each tab is guarded by the grants that read what it shows,
+  // and each editor by the grant its save needs; the server checks the same
+  // grants again on every request. The landing page admits any hub grant and
+  // moves a reader who may not see Messages on to a tab they may see.
+  // Literal paths are registered before the [id] ones they would match.
+  // ============================================================
+  [ROUTES.EMAIL]: {
+    component: EmailMessagesPage,
+    type: "private",
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_DESIGN]: {
+    component: EmailDesignPage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING]: {
+    component: EmailProvidersPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_CREATE]: {
+    component: CreateEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_MESSAGES_EDIT]: {
+    component: EditEmailTemplatePage,
+    type: "private",
+    requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_CREATE]: {
+    component: CreateEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
+    section: "email",
+  },
+  [ROUTES.EMAIL_SENDING_EDIT]: {
+    component: EditEmailProviderPage,
+    type: "private",
+    requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
+    section: "email",
+  },
+
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
     requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
+  // Where email lived before the hub. Each redirects to its place there, and
+  // carries no permission of its own: the page it lands on is guarded, and a
+  // refusal here would leave the reader on a URL that no longer means
+  // anything.
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
-    component: EmailProvidersPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
-    component: CreateEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
-    component: EditEmailProviderPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-providers",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
-    component: EmailTemplatesPage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
-    component: CreateEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
-    component: EditEmailTemplatePage,
+    component: EmailSettingsRedirect,
     type: "private",
-    requiredPermission: "manage-email-templates",
-    section: overridableBy("settings"),
+    section: "email",
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
@@ -612,7 +669,7 @@ export const routeConfig: Record<string, RouteConfig> = {
 };
 
 // The builder's editor routes stay in the table unconditionally, and nothing
-// here may consult NODE_ENV to drop them. This package is PREBUILT: tsup folds
+// here may consult NODE_ENV to drop them. This package is PREBUILT: the bundler folds
 // `process.env.NODE_ENV` at package build time, so a module-load env check in
 // the dist answers where the LIBRARY was built, never where it is RUNNING.
 //

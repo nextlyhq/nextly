@@ -8,10 +8,12 @@
  * One overlay is open at a time, so the page holds a single `ActiveOverlay`
  * value rather than four booleans that could disagree.
  */
+import type { JSX } from "react";
+
 import { findFieldById, findParentContainerId } from "@admin/lib/builder";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 
-import type { BuilderConfig } from "./builder-config";
+import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
@@ -110,7 +112,7 @@ export function BuilderOverlays({
   settings,
   onSettingsChange,
   readOnly,
-}: Props) {
+}: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
   /** Commit a configured field to its parent, or to the top level. */
@@ -160,7 +162,7 @@ export function BuilderOverlays({
                 }`
               : undefined
           }
-          excludedTypes={config.picker.excludedTypes ?? []}
+          excludedTypes={pickerExcludedTypes(config, active.parentFieldId)}
           onCancel={close}
           onSelect={type =>
             onActiveChange({

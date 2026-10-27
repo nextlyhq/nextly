@@ -4,7 +4,7 @@
  * The declared widgets are known from the workspace payload the moment the
  * page mounts; the person's arrangement arrives with the layout read after.
  * Drawing the declared cards in the meantime, and asking for their data, drew
- * a dashboard the person may not have -- in another order, at other widths,
+ * a dashboard the person may not have -- in another order, at other sizes,
  * with cards they removed -- and then redrew it, which is the jump a reader
  * sees and the layout shift that measures it.
  */
@@ -36,6 +36,12 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 const api = vi.mocked(protectedApi);
 
@@ -46,17 +52,17 @@ const branding = {
       id: `acme/${name}`,
       title: `${name} count`,
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 3 } },
       query: { source: `collection:${name}`, op: "count" },
     }))
     .concat([
       {
-        // Declared at half width, so a card sized from its declaration and one
+        // Declared six columns wide, so a card sized from its declaration and one
         // sized from an arrangement that widens it ask for different rows.
         id: "acme/recent",
         title: "recent list",
         archetype: "list",
-        defaultSize: "lg",
+        size: { default: { w: 6, h: 3 } },
         query: {
           source: "collection:recent",
           op: "list",
@@ -70,12 +76,10 @@ const branding = {
 /** This person's arrangement: only the orders card. */
 const arrangement: DashboardLayoutResponse = {
   placements: [
-    { id: "p-orders", widgetId: "acme/orders", width: "third", removed: false },
+    { id: "p-orders", widgetId: "acme/orders", w: 4, h: 3, removed: false },
   ],
   widgets: {
     "acme/orders": {
-      allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-      defaultWidth: "third",
       allowsSeveral: false,
     },
   },
@@ -192,7 +196,7 @@ describe("when the arrangement cannot be read", () => {
 
 describe("the first request a card makes", () => {
   it("is sized for the width its arrangement gives it, not its declared one", async () => {
-    // On 680 px a half card is 328 px wide, small: three rows, asked as four. This person's
+    // On 680 px a six-column card is 332 px wide, small: three rows, asked as four. This person's
     // arrangement draws the same card full width, 680 px, medium: eight rows, asked as nine.
     // 🔴 A grid that sized from the declaration while the arrangement was on its way would ask
     // four first. The declared fallback (a FAILED read) cannot tell the two apart, so this is
@@ -205,14 +209,13 @@ describe("the first request a card makes", () => {
         {
           id: "p-recent",
           widgetId: "acme/recent",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ],
       widgets: {
         "acme/recent": {
-          allowedWidths: ["third", "half", "twoThirds", "full"],
-          defaultWidth: "half",
           allowsSeveral: false,
         },
       },

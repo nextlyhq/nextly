@@ -14,6 +14,7 @@
  */
 
 import { Input, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import {
   FieldOptionsEditor,
@@ -35,7 +36,7 @@ export function SelectOptionsEditor({
   onPlaceholderChange,
   layout,
   onLayoutChange,
-}: SelectOptionsEditorProps) {
+}: SelectOptionsEditorProps): JSX.Element {
   // `SelectOption` and the kit's `FieldOption` are the same id/label/value
   // shape, so the list passes through untouched. The `readonly` widening keeps
   // the kit's controlled contract explicit at the boundary.

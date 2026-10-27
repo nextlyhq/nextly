@@ -15,8 +15,7 @@
  * integration suites in this package boot a real Nextly instance and have no
  * use for a DOM.
  */
-import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -265,5 +264,90 @@ describe("the notification list", () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(toggle).toHaveAccessibleName("Edit notification Admin notification");
+  });
+});
+
+describe("the notification's email template", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * The admin's answers: one template, and the caller's grants. Returns
+   * whether the grants have been answered, so a test can wait for that answer
+   * rather than assert against the state before it.
+   */
+  function serve(permissions: string[]): () => boolean {
+    let answered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/email-templates")) {
+          return new Response(
+            JSON.stringify({
+              templates: [
+                {
+                  id: "tpl-1",
+                  name: "Form submitted",
+                  slug: "form-submitted",
+                  isActive: true,
+                  kind: "template",
+                },
+              ],
+            })
+          );
+        }
+        if (String(url).endsWith("/me/permissions")) {
+          answered = true;
+          return new Response(JSON.stringify({ permissions }));
+        }
+        return new Response("{}", { status: 404 });
+      })
+    );
+    return () => answered;
+  }
+
+  async function openEditor() {
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /edit notification admin notification/i,
+      })
+    );
+  }
+
+  it("links to the chosen template in the Email hub, in a new tab", async () => {
+    serve(["read-email-templates", "manage-email-templates"]);
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    await openEditor();
+
+    const link = await screen.findByRole("link", {
+      name: /open form submitted in email/i,
+    });
+    expect(link).toHaveAttribute("href", "/admin/email/messages/edit/tpl-1");
+    // A new tab, so leaving the builder can't lose its unsaved changes.
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("offers no link to someone who may only read templates", async () => {
+    const answered = serve(["read-email-templates"]);
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    await openEditor();
+
+    // The template is chosen and listed; only the link is withheld, since
+    // the editor it leads to would refuse them. Asserted once the grants are
+    // answered and applied, not against the state before they arrive.
+    await screen.findByText("Form submitted");
+    await waitFor(() => expect(answered()).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+  });
+
+  it("offers no link until a template is chosen", async () => {
+    serve(["manage-email-templates"]);
+    notifications = [aNotification()];
+    await openEditor();
+    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
   });
 });

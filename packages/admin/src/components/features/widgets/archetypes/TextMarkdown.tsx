@@ -25,6 +25,7 @@
 
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import type { JSX } from "react";
 import { useCallback, useMemo } from "react";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
@@ -60,7 +61,7 @@ function ProseRoot() {
   );
 }
 
-export function TextMarkdown({ content }: TextMarkdownProps) {
+export function TextMarkdown({ content }: TextMarkdownProps): JSX.Element {
   const initialConfig = useMemo(
     () => ({
       namespace: "widget-text",

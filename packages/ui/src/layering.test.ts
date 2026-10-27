@@ -52,8 +52,15 @@ import {
   importedSpecifiers,
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
-import { describe, expect, it } from "vitest";
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
+import type { MemberExpression, Node, Program } from "oxc-parser";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { listedFiles, showConfig } from "../../../scripts/tsc-cli.mjs";
 
 const SRC = join(__dirname);
 
@@ -72,7 +79,7 @@ const FORBIDDEN = "@nextlyhq/blocks-engine";
  * Every module extension the bundler follows.
  *
  * Pinned as a literal, and wider than the `.ts`/`.tsx` a source tree usually
- * holds: tsup follows a local `.mts` or `.cts` bridge as readily as a `.ts`
+ * holds: the bundler follows a local `.mts` or `.cts` bridge as readily as a `.ts`
  * one, so a scan that reads only the common two leaves a route into the bundle
  * unwatched. The `.js` family is here for the same reason — nothing stops a
  * shipped entry importing one.
@@ -111,14 +118,74 @@ function isShippedModule(entry: string): boolean {
  * scan. Asking the compiler makes the next convention added to `exclude` apply here for free.
  */
 function tsconfigShippedFiles(): string[] {
-  const path = join(SRC, "..", "tsconfig.json");
-  const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
-  const resolved = ts.parseJsonConfigFileContent(
-    parsed.config,
-    ts.sys,
-    join(SRC, "..")
-  );
-  return resolved.fileNames.map(file => resolve(file)).sort();
+  const dir = join(SRC, "..");
+  return resolvedConfig("tsconfig.json")
+    .files.map(file => resolve(dir, file))
+    .sort();
+}
+
+/**
+ * One of this package's tsconfigs as `tsc` resolves it — `extends` followed, and `files` the list
+ * `include` and `exclude` matched, relative to the config — refused unless `tsc` read it whole.
+ *
+ * `--showConfig` alone does not establish that on every version. TypeScript 7 prints a config it
+ * could not parse as empty options, and one whose `extends` it could not read without the base's
+ * options, and exits 0 for both; read as clean, either would answer "no aliases" for a file nobody
+ * read. `--listFilesOnly` loads the program and fails on both, so it is asked first. A resolved
+ * config listing no files is refused too: that is a compiler that answered differently, never a
+ * package that ships nothing.
+ */
+function resolvedConfig(name: string): ResolvedConfig {
+  let answer = resolvedConfigs.get(name);
+  if (answer === undefined) {
+    try {
+      answer = { config: askResolvedConfig(name) };
+    } catch (error) {
+      answer = { error };
+    }
+    resolvedConfigs.set(name, answer);
+  }
+  // A config that could not be read is refused by the test that reads it, every time it is read,
+  // rather than by whichever asked first.
+  if ("error" in answer) throw answer.error;
+  return answer.config;
+}
+
+type ResolvedConfig = ReturnType<typeof showConfig> & { files: string[] };
+
+/**
+ * Each config's answer, asked once per run of this file. Asking is two cold `tsc` runs, one of
+ * which loads the whole program, and nothing a test does changes a config; see
+ * {@link CONFIG_RESOLUTION_TIMEOUT_MS}.
+ */
+const resolvedConfigs = new Map<
+  string,
+  { config: ResolvedConfig } | { error: unknown }
+>();
+
+/** The tsconfigs the tests below read, resolved before them. */
+const READ_CONFIGS = ["tsconfig.json", "tsconfig.tests.json"] as const;
+
+/**
+ * How long resolving {@link READ_CONFIGS} may take.
+ *
+ * Measured on a CI runner, `tsc --listFilesOnly` and `--showConfig` for `tsconfig.json` took
+ * 3.3 s, and `tsconfig.tests.json`, whose program holds every test as well, about twice that:
+ * about 10 s for the two, where an in-process parse took milliseconds. Asked inside a test, that
+ * cost ran into the default 5 s limit. This allows six times the measured cost, for a runner
+ * loaded by the rest of the suite.
+ */
+const CONFIG_RESOLUTION_TIMEOUT_MS = 60_000;
+
+/** The config as `tsc` resolves it; see {@link resolvedConfig}. */
+function askResolvedConfig(name: string): ResolvedConfig {
+  const path = join(SRC, "..", name);
+  listedFiles(path);
+  const config = showConfig(path);
+  const { files } = config;
+  if (!files?.length)
+    throw new Error(`tsc --showConfig listed no files for ${name}`);
+  return { ...config, files };
 }
 
 /**
@@ -485,6 +552,66 @@ const RUNTIME_RESOLVERS = [
   "import.meta.resolve",
 ];
 
+/** Wrappers that change the type or the grouping of an expression, never which object is in hand. */
+const TRANSPARENT = new Set([
+  "ParenthesizedExpression",
+  "TSAsExpression",
+  "TSNonNullExpression",
+  "TSSatisfiesExpression",
+]);
+
+/** An expression with the transparent wrappers around it removed. */
+function unwrapped(node: Node): Node {
+  let current = node;
+  while (
+    current.type === "ParenthesizedExpression" ||
+    current.type === "TSAsExpression" ||
+    current.type === "TSNonNullExpression" ||
+    current.type === "TSSatisfiesExpression"
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * The node an expression is used by, seen through transparent wrappers: `child` is the outermost
+ * wrapper (or the node itself), `parent` what holds it.
+ */
+function usedBy(
+  node: Node,
+  ancestors: readonly Node[]
+): { child: Node; parent: Node | undefined } {
+  let child = node;
+  let i = ancestors.length - 1;
+  while (i >= 0 && TRANSPARENT.has(ancestors[i].type)) {
+    child = ancestors[i];
+    i--;
+  }
+  return { child, parent: ancestors[i] };
+}
+
+/**
+ * `TS*` nodes that survive into the emitted JavaScript. Every other `TS*` node is type syntax the
+ * compiler erases: an annotation, a type argument, an alias, an interface, a signature.
+ */
+const RUNTIME_TS_NODES = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+  "TSInstantiationExpression",
+  "TSParameterProperty",
+  "TSEnumDeclaration",
+  "TSEnumBody",
+  "TSEnumMember",
+  "TSModuleDeclaration",
+  "TSModuleBlock",
+  "TSImportEqualsDeclaration",
+  "TSExternalModuleReference",
+  "TSExportAssignment",
+]);
+
 /**
  * Whether an import of the loader module SURVIVES compilation.
  *
@@ -497,318 +624,358 @@ const RUNTIME_RESOLVERS = [
  * naming is a value import. Every form other than a marked `import type` emits: a dynamic
  * `import()`, a `require()` and `import x = require(…)` all produce a runtime load.
  */
-function loadsLoaderAtRuntime(tree: ts.SourceFile): boolean {
-  const namesLoader = (node: ts.Expression | undefined): boolean =>
-    node !== undefined &&
-    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
-    (node.text === "node:module" || node.text === "module");
+function loadsLoaderAtRuntime(program: Program): boolean {
+  const namesLoader = (node: Node | null | undefined): boolean => {
+    const text = literalText(node);
+    return text === "node:module" || text === "module";
+  };
 
   let runtime = false;
-  const visit = (node: ts.Node): void => {
-    if (runtime) return;
-    if (ts.isImportDeclaration(node) && namesLoader(node.moduleSpecifier)) {
-      const clause = node.importClause;
-      // No clause at all is a side-effect import, which runs.
-      if (clause === undefined) runtime = true;
-      else if (!clause.isTypeOnly) {
-        const bindings = clause.namedBindings;
-        const everyNamedIsType =
-          bindings !== undefined &&
-          ts.isNamedImports(bindings) &&
-          bindings.elements.length > 0 &&
-          bindings.elements.every(element => element.isTypeOnly);
-        // A default or namespace binding is a value; named bindings count only if some is not
-        // individually marked `type`.
-        if (clause.name !== undefined || !everyNamedIsType) runtime = true;
-      }
-    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly) {
+  walk(program, node => {
+    if (runtime) return false;
+    if (node.type === "ImportDeclaration" && namesLoader(node.source)) {
+      // No bindings at all is a side-effect import, which runs. A default or namespace binding is
+      // a value; named bindings count only if some is not individually marked `type`.
       if (
-        ts.isExternalModuleReference(node.moduleReference) &&
-        namesLoader(node.moduleReference.expression)
+        node.importKind !== "type" &&
+        (node.specifiers.length === 0 ||
+          node.specifiers.some(
+            specifier =>
+              specifier.type !== "ImportSpecifier" ||
+              specifier.importKind !== "type"
+          ))
       ) {
         runtime = true;
       }
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const isDynamic = callee.kind === ts.SyntaxKind.ImportKeyword;
-      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
-      if ((isDynamic || isRequire) && namesLoader(node.arguments[0])) {
-        runtime = true;
-      }
+    } else if (
+      node.type === "TSImportEqualsDeclaration" &&
+      node.importKind !== "type" &&
+      node.moduleReference.type === "TSExternalModuleReference" &&
+      namesLoader(node.moduleReference.expression)
+    ) {
+      runtime = true;
+    } else if (node.type === "ImportExpression" && namesLoader(node.source)) {
+      runtime = true;
+    } else if (
+      node.type === "CallExpression" &&
+      node.callee.type === "Identifier" &&
+      node.callee.name === "require" &&
+      namesLoader(node.arguments[0])
+    ) {
+      runtime = true;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(tree);
+  });
   return runtime;
+}
+
+/** `a.b` and `a["b"]` are the same read, and a rule for one is a rule the other walks around. */
+function readsMember(node: Node | undefined, member: string): boolean {
+  if (node?.type !== "MemberExpression") return false;
+  return node.computed
+    ? literalText(node.property) === member
+    : node.property.type === "Identifier" && node.property.name === member;
+}
+
+/**
+ * Whether an expression IS a host object, seen through casts and grouping.
+ *
+ * `(globalThis as typeof globalThis & { process: P }).process` reads the same binding as
+ * `globalThis.process`, but the receiver is an `as` expression rather than an identifier — so a
+ * check reading the receiver directly treats `process` as somebody else's property key. `as`,
+ * `satisfies`, `!` and parentheses change the type or the grouping and never which object is in
+ * hand, so they are transparent here for the same reason they are transparent to capture.
+ */
+function receiverIsHost(expression: Node): boolean {
+  const current = unwrapped(expression);
+  if (current.type === "Identifier") return GLOBAL_OBJECTS.has(current.name);
+  // A host object holds ITSELF under each host name — `globalThis.globalThis`,
+  // `globalThis["self"]`, and any chain of them — so reading one off another yields the host
+  // again. Recognising the names but not the self-reference lets one extra hop launder the
+  // receiver, which is the same laundering an alias performs and is refused for the same reason.
+  // Bounded because `GLOBAL_OBJECTS` is closed: the recursion only continues while both the
+  // receiver and the member are host names.
+  if (current.type === "MemberExpression") {
+    const member = current.computed
+      ? literalText(current.property)
+      : current.property.type === "Identifier"
+        ? current.property.name
+        : null;
+    return (
+      member !== null &&
+      GLOBAL_OBJECTS.has(member) &&
+      receiverIsHost(current.object)
+    );
+  }
+  return false;
+}
+
+/** A name written by a node: an identifier, or the identifier that names a JSX element. */
+function nameAt(node: Node, parent: Node | undefined): string | undefined {
+  if (node.type === "Identifier") return node.name;
+  // `<Function />` refers to the binding as surely as `Function` does; an attribute name such as
+  // `<Widget module={value} />` is a prop key and reaches nothing.
+  if (
+    node.type === "JSXIdentifier" &&
+    (parent?.type === "JSXOpeningElement" ||
+      parent?.type === "JSXClosingElement" ||
+      (parent?.type === "JSXMemberExpression" && parent.object === node))
+  ) {
+    return node.name;
+  }
+  return undefined;
+}
+
+/**
+ * Whether a node sits in syntax TypeScript ERASES, so it names nothing at runtime.
+ *
+ * `export type require = string`, `declare function require(…)`, `import type { require }` and
+ * any identifier inside a type annotation all compile to no reference at all — refusing them
+ * rejects a type-only API for a runtime property it does not have. This is the same distinction
+ * the loader-module check draws for `import type`, applied to bare identifiers.
+ */
+function inErasedPosition(
+  ancestors: readonly Node[],
+  fileName: string
+): boolean {
+  // A declaration FILE is entirely erased, whatever it contains.
+  if (/\.d\.[cm]?ts$/.test(fileName)) return true;
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const scope = ancestors[i];
+    const holder = ancestors[i - 1];
+    if (scope.type.startsWith("TS") && !RUNTIME_TS_NODES.has(scope.type)) {
+      return true;
+    }
+    if (scope.type === "TSImportEqualsDeclaration") {
+      return scope.importKind === "type";
+    }
+    if (scope.type === "ImportSpecifier") {
+      return (
+        scope.importKind === "type" ||
+        (holder?.type === "ImportDeclaration" && holder.importKind === "type")
+      );
+    }
+    if (
+      scope.type === "ImportDefaultSpecifier" ||
+      scope.type === "ImportNamespaceSpecifier"
+    ) {
+      return (
+        holder?.type === "ImportDeclaration" && holder.importKind === "type"
+      );
+    }
+    if (scope.type === "ExportSpecifier") {
+      return (
+        scope.exportKind === "type" ||
+        (holder?.type === "ExportNamedDeclaration" &&
+          holder.exportKind === "type")
+      );
+    }
+    // `declare` makes a declaration ambient: it describes something, it does not create it.
+    if ("declare" in scope && scope.declare === true) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether an identifier sits in a slot that NAMES a member, rather than referring to a binding.
+ *
+ * `holder.require` and `{ require: fn }` spell the word without reaching the ambient loader — the
+ * key belongs to some other object. Everything else is treated as a reference, including a
+ * DECLARATION of the name: `const require = …` shadows it, and a shipped module that introduces
+ * either name is refused rather than scope-analysed, which is the analysis this boundary exists
+ * to avoid needing.
+ */
+function isMemberName(node: Node, parent: Node | undefined): boolean {
+  if (parent === undefined) return false;
+  if (parent.type === "MemberExpression") return isMemberProperty(node, parent);
+  if (KEYED_MEMBERS.has(parent.type)) {
+    // A shorthand property's value is a node of its own, so `{ require }` is still reported as
+    // the read of the binding it is.
+    return (
+      "key" in parent &&
+      parent.key === node &&
+      !("computed" in parent && parent.computed)
+    );
+  }
+  return namesAnotherModulesMember(node, parent);
+}
+
+/** Parents whose plain `key` names a member of some object: properties, class members, signatures. */
+const KEYED_MEMBERS = new Set([
+  "Property",
+  "PropertyDefinition",
+  "MethodDefinition",
+  "AccessorProperty",
+  "TSPropertySignature",
+  "TSMethodSignature",
+  "TSAbstractPropertyDefinition",
+  "TSAbstractMethodDefinition",
+  "TSAbstractAccessorProperty",
+]);
+
+/**
+ * Whether `node` is the property of a member read rather than a reference.
+ *
+ * `globalThis.process` is the SAME binding as `process`, so treating the word as a harmless key
+ * there hands back every restricted global through one extra hop. The host objects that re-expose
+ * globals are a closed set the language defines, unlike the open set of member spellings this
+ * predicate exists to skip.
+ */
+function isMemberProperty(node: Node, parent: MemberExpression): boolean {
+  if (parent.computed || parent.property !== node) return false;
+  // Off a host, a RESTRICTED name is a reference to that global and must be reported. A HOST name
+  // is the object's self-reference — `globalThis.self` is the host again — and is not a reach in
+  // itself; `receiverIsHost` already follows the chain, so reporting it here would name every hop
+  // of `globalThis.self.window.require` instead of the reach at its end.
+  return receiverIsHost(parent.object)
+    ? !(node.type === "Identifier" && RESTRICTED_GLOBALS.has(node.name))
+    : true;
+}
+
+/**
+ * Whether `node` names a member of a namespace, an enum, or another module: the right side of
+ * `A.B` in a type, an enum member, or the far side of a renamed import or export.
+ */
+function namesAnotherModulesMember(node: Node, parent: Node): boolean {
+  switch (parent.type) {
+    case "TSQualifiedName":
+      return parent.right === node;
+    case "ImportSpecifier":
+      return parent.imported === node && parent.local !== node;
+    case "ExportSpecifier":
+      return parent.local === node && parent.exported !== node;
+    case "TSEnumMember":
+      return parent.id === node;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether a host-object reference is CAPTURED — bound to a name, passed, or stored.
+ *
+ * Aliasing is what defeats a rule that requires the receiver to be the literal host:
+ * `const host = globalThis; host.process` reaches the same binding through a name, and
+ * recognising that means following a value through a binding, which is dataflow rather than
+ * syntax. So capture itself is refused, and the three NON-capturing uses are allowed instead:
+ * testing with `typeof`, testing membership with `in`, and reading a member off it. That is a
+ * statement about what may be DONE with the object rather than a list of spellings, so an alias
+ * created in a way nobody has thought of is refused with the rest.
+ *
+ * `as`, `!` and parentheses are unwrapped on the way up: they change the type or the grouping,
+ * never which object is in hand, and real code cast `window` before reading a member off it.
+ */
+function capturesHost(node: Node, ancestors: readonly Node[]): boolean {
+  const { child, parent } = usedBy(node, ancestors);
+  if (parent === undefined) return true;
+  // Reading a member off it, which the member rules then judge on their own terms.
+  if (parent.type === "MemberExpression" && parent.object === child) {
+    return false;
+  }
+  // `typeof host`, and `"name" in host` — neither yields a reference to the object.
+  if (parent.type === "UnaryExpression" && parent.operator === "typeof") {
+    return false;
+  }
+  if (
+    parent.type === "BinaryExpression" &&
+    parent.operator === "in" &&
+    parent.right === child
+  ) {
+    return false;
+  }
+  // A declaration of the name, or any type position, introduces no value.
+  if (parent.type === "VariableDeclarator" && parent.id === child) return false;
+  if (parent.type === "TSTypeReference" || parent.type === "TSTypeQuery") {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * A restricted global read off a host object under a LITERAL key: `globalThis["process"]`.
+ *
+ * The identifier rules below cannot see this — there is no `process` identifier, only a string —
+ * and `isMemberName` is not involved either. Literal keys are covered because they are a fixed
+ * translation of the dotted form. A COMPUTED key is not, and cannot be without evaluating the
+ * expression; that limit is stated in this file's doc comment rather than left to be found.
+ */
+function readsRestrictedGlobal(node: Node): string | undefined {
+  if (node.type !== "MemberExpression" || !node.computed) return undefined;
+  // Through the SAME normalisation the dotted form uses. Fixing one and not the other is how
+  // `(globalThis as T)["process"]` slipped past while `(globalThis as T).process` did not.
+  if (!receiverIsHost(node.object)) return undefined;
+  const key = literalText(node.property);
+  return key !== null && RESTRICTED_GLOBALS.has(key) ? key : undefined;
+}
+
+/**
+ * `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is what
+ * makes this bounded where the artifact scan was not. Hunting means enumerating the ways a
+ * resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`, handed
+ * to a function — and the set has no end. Allowing only `import.meta.url` refuses every other use
+ * by construction, including ones nobody has thought of.
+ *
+ * Through the SAME transparent wrappers `receiverIsHost` and `capturesHost` see through.
+ * `(import.meta as { url: string }).url` reads the URL and resolves nothing, but the cast sits
+ * between the meta-property and the member access — so a check reading the immediate parent
+ * refuses a legal read.
+ */
+function readsImportMetaUrl(ancestors: readonly Node[], node: Node): boolean {
+  const { child, parent } = usedBy(node, ancestors);
+  return (
+    parent?.type === "MemberExpression" &&
+    parent.object === child &&
+    readsMember(parent, "url")
+  );
+}
+
+/**
+ * `process` cannot be refused outright — `process.env.NODE_ENV` is how this package decides
+ * whether to warn — so it is WHITELISTED down to the uses that exist, exactly as `import.meta` is.
+ * `process.getBuiltinModule("module")` hands back the loader without importing anything, and
+ * enumerating that member would leave `process["getBuiltin" + "Module"]` and any future host
+ * addition behind it. Reading `.env`, testing with `typeof`, and DECLARING the binding are the
+ * three forms this package uses; everything else, including taking a reference to pass on, is
+ * refused.
+ */
+function usesProcessAsAllowed(node: Node, parent: Node | undefined): boolean {
+  const declares = parent?.type === "VariableDeclarator" && parent.id === node;
+  const tested =
+    parent?.type === "UnaryExpression" && parent.operator === "typeof";
+  const readsEnv =
+    parent?.type === "MemberExpression" &&
+    parent.object === node &&
+    readsMember(parent, "env");
+  return declares || tested || readsEnv;
 }
 
 /** The runtime-resolution constructs a shipped source file names, read from the syntax. */
 function runtimeResolversIn(text: string, fileName: string): string[] {
-  const tree = ts.createSourceFile(
-    fileName,
-    text,
-    ts.ScriptTarget.Latest,
-    true
-  );
+  const { program } = parseSource(text, fileName);
   const found: string[] = [];
 
-  /** `a.b` and `a["b"]` are the same read, and a rule for one is a rule the other walks around. */
-  const readsMember = (node: ts.Node, member: string): boolean => {
-    if (ts.isPropertyAccessExpression(node)) return node.name.text === member;
-    if (!ts.isElementAccessExpression(node)) return false;
-    const key = node.argumentExpression;
-    return (
-      (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) &&
-      key.text === member
-    );
-  };
-
-  /**
-   * Whether an identifier sits in a slot that NAMES a member, rather than referring to a binding.
-   *
-   * `holder.require` and `{ require: fn }` spell the word without reaching the ambient loader — the
-   * key belongs to some other object. Everything else is treated as a reference, including a
-   * DECLARATION of the name: `const require = …` shadows it, and a shipped module that introduces
-   * either name is refused rather than scope-analysed, which is the analysis this boundary exists
-   * to avoid needing.
-   */
-  /**
-   * Whether an expression IS a host object, seen through casts and grouping.
-   *
-   * `(globalThis as typeof globalThis & { process: P }).process` reads the same binding as
-   * `globalThis.process`, but the receiver is an `AsExpression` rather than an identifier — so a
-   * check reading the receiver directly treats `process` as somebody else's property key. `as`,
-   * `satisfies`, `!` and parentheses change the type or the grouping and never which object is in
-   * hand, so they are transparent here for the same reason they are transparent to capture.
-   */
-  const receiverIsHost = (expression: ts.Expression): boolean => {
-    let current: ts.Node = expression;
-    while (
-      ts.isAsExpression(current) ||
-      ts.isParenthesizedExpression(current) ||
-      ts.isNonNullExpression(current) ||
-      ts.isSatisfiesExpression(current)
-    ) {
-      current = current.expression;
-    }
-    if (ts.isIdentifier(current)) return GLOBAL_OBJECTS.has(current.text);
-    // A host object holds ITSELF under each host name — `globalThis.globalThis`,
-    // `globalThis["self"]`, and any chain of them — so reading one off another yields the host
-    // again. Recognising the names but not the self-reference lets one extra hop launder the
-    // receiver, which is the same laundering an alias performs and is refused for the same reason.
-    // Bounded because `GLOBAL_OBJECTS` is closed: the recursion only continues while both the
-    // receiver and the member are host names.
-    if (
-      ts.isPropertyAccessExpression(current) ||
-      ts.isElementAccessExpression(current)
-    ) {
-      const member = ts.isPropertyAccessExpression(current)
-        ? current.name.text
-        : ts.isStringLiteral(current.argumentExpression) ||
-            ts.isNoSubstitutionTemplateLiteral(current.argumentExpression)
-          ? current.argumentExpression.text
-          : undefined;
-      return (
-        member !== undefined &&
-        GLOBAL_OBJECTS.has(member) &&
-        receiverIsHost(current.expression)
-      );
-    }
-    return false;
-  };
-
-  /**
-   * Whether a node sits in syntax TypeScript ERASES, so it names nothing at runtime.
-   *
-   * `export type require = string`, `declare function require(…)`, `import type { require }` and
-   * any identifier inside a type annotation all compile to no reference at all — refusing them
-   * rejects a type-only API for a runtime property it does not have. This is the same distinction
-   * the loader-module check draws for `import type`, applied to bare identifiers.
-   */
-  const inErasedPosition = (node: ts.Node): boolean => {
-    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-      if (ts.isTypeNode(scope)) return true;
-      if (
-        ts.isTypeAliasDeclaration(scope) ||
-        ts.isInterfaceDeclaration(scope)
-      ) {
-        return true;
-      }
-      if (ts.isImportSpecifier(scope) || ts.isExportSpecifier(scope)) {
-        return scope.isTypeOnly || scope.parent.parent.isTypeOnly === true;
-      }
-      if (ts.isImportClause(scope)) return scope.isTypeOnly;
-      // `declare` makes a declaration ambient: it describes something, it does not create it.
-      if (
-        ts.canHaveModifiers(scope) &&
-        ts
-          .getModifiers(scope)
-          ?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword)
-      ) {
-        return true;
-      }
-      if (ts.isSourceFile(scope)) break;
-    }
-    // A declaration FILE is entirely erased, whatever it contains.
-    return /\.d\.[cm]?ts$/.test(fileName);
-  };
-
-  const isMemberName = (node: ts.Identifier): boolean => {
-    const parent = node.parent;
-    if (parent === undefined) return false;
-    // `globalThis.process` is the SAME binding as `process`, so treating the word as a harmless
-    // key there hands back every restricted global through one extra hop. The host objects that
-    // re-expose globals are a closed set the language defines, unlike the open set of member
-    // spellings this predicate exists to skip.
-    if (ts.isPropertyAccessExpression(parent)) {
-      if (parent.name === node && receiverIsHost(parent.expression)) {
-        // Off a host, a RESTRICTED name is a reference to that global and must be reported. A
-        // HOST name is the object's self-reference — `globalThis.self` is the host again — and is
-        // not a reach in itself; `receiverIsHost` already follows the chain, so reporting it here
-        // would name every hop of `globalThis.self.window.require` instead of the reach at its end.
-        return !RESTRICTED_GLOBALS.has(node.text);
-      }
-      return parent.name === node;
-    }
-    if (ts.isQualifiedName(parent)) return parent.right === node;
-    if (ts.isBindingElement(parent)) return parent.propertyName === node;
-    // `<Widget module={value} require />` spells both words as PROP names. They reach no ambient
-    // binding, and reporting them would reject a component that resolves nothing.
-    if (ts.isJsxAttribute(parent)) return parent.name === node;
-    if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
-      return parent.propertyName === node;
-    }
-    if (
-      ts.isPropertyAssignment(parent) ||
-      ts.isPropertySignature(parent) ||
-      ts.isPropertyDeclaration(parent) ||
-      ts.isMethodSignature(parent) ||
-      ts.isMethodDeclaration(parent) ||
-      ts.isGetAccessorDeclaration(parent) ||
-      ts.isSetAccessorDeclaration(parent) ||
-      ts.isEnumMember(parent)
-    ) {
-      return parent.name === node;
-    }
-    return false;
-  };
-
-  /**
-   * A restricted global read off a host object under a LITERAL key: `globalThis["process"]`.
-   *
-   * The identifier rules below cannot see this — there is no `process` node, only a string — and
-   * `isMemberName` is not involved either. Literal keys are covered because they are a fixed
-   * translation of the dotted form. A COMPUTED key is not, and cannot be without evaluating the
-   * expression; that limit is stated in this file's doc comment rather than left to be found.
-   */
-  const readsRestrictedGlobal = (node: ts.Node): string | undefined => {
-    if (!ts.isElementAccessExpression(node)) return undefined;
-    // Through the SAME normalisation the dotted form uses. Fixing one and not the other is how
-    // `(globalThis as T)["process"]` slipped past while `(globalThis as T).process` did not.
-    if (!receiverIsHost(node.expression)) return undefined;
-    const key = node.argumentExpression;
-    if (!ts.isStringLiteral(key) && !ts.isNoSubstitutionTemplateLiteral(key)) {
-      return undefined;
-    }
-    return RESTRICTED_GLOBALS.has(key.text) ? key.text : undefined;
-  };
-
-  /**
-   * Whether a host-object reference is CAPTURED — bound to a name, passed, or stored.
-   *
-   * Aliasing is what defeats a rule that requires the receiver to be the literal host:
-   * `const host = globalThis; host.process` reaches the same binding through a name, and
-   * recognising that means following a value through a binding, which is dataflow rather than
-   * syntax. So capture itself is refused, and the three NON-capturing uses are allowed instead:
-   * testing with `typeof`, testing membership with `in`, and reading a member off it. That is a
-   * statement about what may be DONE with the object rather than a list of spellings, so an alias
-   * created in a way nobody has thought of is refused with the rest.
-   *
-   * `as`, `!` and parentheses are unwrapped on the way up: they change the type or the grouping,
-   * never which object is in hand, and real code cast `window` before reading a member off it.
-   */
-  const capturesHost = (node: ts.Identifier): boolean => {
-    let child: ts.Node = node;
-    let parent = node.parent;
-    while (
-      parent !== undefined &&
-      (ts.isAsExpression(parent) ||
-        ts.isParenthesizedExpression(parent) ||
-        ts.isNonNullExpression(parent) ||
-        ts.isSatisfiesExpression(parent))
-    ) {
-      child = parent;
-      parent = parent.parent;
-    }
-    if (parent === undefined) return true;
-    // Reading a member off it, which the member rules then judge on their own terms.
-    if (
-      (ts.isPropertyAccessExpression(parent) ||
-        ts.isElementAccessExpression(parent)) &&
-      parent.expression === child
-    ) {
-      return false;
-    }
-    // `typeof host`, and `"name" in host` — neither yields a reference to the object.
-    if (ts.isTypeOfExpression(parent)) return false;
-    if (
-      ts.isBinaryExpression(parent) &&
-      parent.operatorToken.kind === ts.SyntaxKind.InKeyword &&
-      parent.right === child
-    ) {
-      return false;
-    }
-    // A declaration of the name, or any type position, introduces no value.
-    if (ts.isVariableDeclaration(parent) && parent.name === child) return false;
-    if (ts.isTypeReferenceNode(parent) || ts.isTypeQueryNode(parent)) {
-      return false;
-    }
-    return true;
-  };
-
-  const visit = (node: ts.Node): void => {
+  walk(program, (node, ancestors) => {
+    const parent = ancestors.at(-1);
     const restricted = readsRestrictedGlobal(node);
     if (restricted !== undefined) found.push(restricted);
+
     if (
-      ts.isIdentifier(node) &&
-      GLOBAL_OBJECTS.has(node.text) &&
-      !isMemberName(node) &&
-      !inErasedPosition(node) &&
-      capturesHost(node)
+      node.type === "MetaProperty" &&
+      node.meta.name === "import" &&
+      !readsImportMetaUrl(ancestors, node)
     ) {
-      found.push(node.text);
+      found.push("import.meta.resolve");
     }
-    // `import.meta` is checked as a WHITELIST rather than by hunting for `.resolve`, and that is
-    // what makes this bounded where the artifact scan was not. Hunting means enumerating the ways
-    // a resolver can be reached — `.resolve`, `["resolve"]`, `const { resolve } = import.meta`,
-    // handed to a function — and the set has no end. Allowing only `import.meta.url` refuses every
-    // other use by construction, including ones nobody has thought of.
+
+    const name = nameAt(node, parent);
     if (
-      ts.isMetaProperty(node) &&
-      node.keywordToken === ts.SyntaxKind.ImportKeyword
+      name === undefined ||
+      isMemberName(node, parent) ||
+      inErasedPosition(ancestors, fileName)
     ) {
-      // Through the SAME transparent wrappers `receiverIsHost` and `capturesHost` see through.
-      // `(import.meta as { url: string }).url` reads the URL and resolves nothing, but the cast
-      // sits between the meta-property and the member access — so a check reading the immediate
-      // parent refuses a legal read. Three implementations of one notion is how that happened.
-      let read: ts.Node | undefined = node;
-      while (
-        read.parent !== undefined &&
-        (ts.isAsExpression(read.parent) ||
-          ts.isParenthesizedExpression(read.parent) ||
-          ts.isNonNullExpression(read.parent) ||
-          ts.isSatisfiesExpression(read.parent))
-      ) {
-        read = read.parent;
-      }
-      const access = read.parent;
-      const isUrl =
-        access !== undefined &&
-        (ts.isPropertyAccessExpression(access) ||
-          ts.isElementAccessExpression(access)) &&
-        access.expression === read &&
-        readsMember(access, "url");
-      if (!isUrl) found.push("import.meta.resolve");
+      return;
+    }
+    if (GLOBAL_OBJECTS.has(name) && capturesHost(node, ancestors)) {
+      found.push(name);
     }
     // The ambient CommonJS names are refused OUTRIGHT, not in the shapes that call them. A rule
     // written for `module.require(...)` is walked around by `module["req" + "uire"](...)`, and one
@@ -816,57 +983,23 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     // the name. Neither identifier is a reference a shipped module has any reason to make — the
     // package is authored as ESM and there are none today — so the name itself is the boundary,
     // and any use of it, including one nobody has thought of, is refused by construction.
-    if (
-      ts.isIdentifier(node) &&
-      (node.text === "require" || node.text === "module") &&
-      !isMemberName(node) &&
-      !inErasedPosition(node)
-    ) {
-      found.push(node.text);
-    }
+    //
     // Dynamic code evaluation puts the specifier in a STRING, where no visitor over syntax can
     // see it — `eval('require("react")')` contains no `require` node at all. There is no reading
     // of the source that recovers it, so the constructs themselves are refused: this package
     // renders components and computes styles, and never has cause to build code at runtime.
     if (
-      ts.isIdentifier(node) &&
-      (node.text === "eval" || node.text === "Function") &&
-      !isMemberName(node) &&
-      !inErasedPosition(node)
+      name === "require" ||
+      name === "module" ||
+      name === "eval" ||
+      name === "Function"
     ) {
-      found.push(node.text);
+      found.push(name);
     }
-    // `process` cannot be refused outright — `process.env.NODE_ENV` is how this package decides
-    // whether to warn — so it is WHITELISTED down to the uses that exist, exactly as `import.meta`
-    // is. `process.getBuiltinModule("module")` hands back the loader without importing anything,
-    // and enumerating that member would leave `process["getBuiltin" + "Module"]` and any future
-    // host addition behind it. Reading `.env`, testing with `typeof`, and DECLARING the binding are
-    // the three forms this package uses; everything else, including taking a reference to pass on,
-    // is refused.
-    if (
-      ts.isIdentifier(node) &&
-      node.text === "process" &&
-      !isMemberName(node) &&
-      !inErasedPosition(node)
-    ) {
-      const parent = node.parent;
-      const declares =
-        parent !== undefined &&
-        ts.isVariableDeclaration(parent) &&
-        parent.name === node;
-      const tested = parent !== undefined && ts.isTypeOfExpression(parent);
-      const readsEnv =
-        parent !== undefined &&
-        (ts.isPropertyAccessExpression(parent) ||
-          ts.isElementAccessExpression(parent)) &&
-        parent.expression === node &&
-        readsMember(parent, "env");
-      if (!declares && !tested && !readsEnv) found.push("process");
+    if (name === "process" && !usesProcessAsAllowed(node, parent)) {
+      found.push("process");
     }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(tree);
+  });
 
   // Node's module loader is banned by SPECIFIER rather than by import form. A static import, a
   // dynamic `await import("node:module")`, a `require("node:module")` and `import m = require(…)`
@@ -877,7 +1010,7 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
     importedSpecifiers(text, fileName).some(
       specifier => specifier === "node:module" || specifier === "module"
     ) &&
-    loadsLoaderAtRuntime(tree)
+    loadsLoaderAtRuntime(program)
   ) {
     found.push("createRequire");
   }
@@ -886,6 +1019,18 @@ function runtimeResolversIn(text: string, fileName: string): string[] {
 }
 
 describe("this package resolves no module at runtime", () => {
+  // Resolved here, under a limit sized to the cost, rather than inside the tests that read them.
+  // A failure is kept and thrown by the test that reads the config.
+  beforeAll(() => {
+    for (const name of READ_CONFIGS) {
+      try {
+        resolvedConfig(name);
+      } catch {
+        // Kept by `resolvedConfig`, and thrown by the test that reads it.
+      }
+    }
+  }, CONFIG_RESOLUTION_TIMEOUT_MS);
+
   it("is exercised — the reader finds each construct it bans", () => {
     // Without this the assertion below passes against a reader that finds nothing, which is the
     // shape of a guard reporting success because it looked for the wrong thing.
@@ -1042,8 +1187,34 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual([]);
+    // An ambient VARIABLE is erased by `declare` alone: nothing about its syntax is a type.
+    expect(
+      runtimeResolversIn(
+        `declare const require: (id: string) => unknown;`,
+        "a.ts"
+      )
+    ).toEqual([]);
     expect(
       runtimeResolversIn(`export interface X { process: string }`, "a.ts")
+    ).toEqual([]);
+    // Type-only at the BINDING as well as at the statement: each of these imports nothing.
+    expect(
+      runtimeResolversIn(`import { type require } from "x";`, "a.ts")
+    ).toEqual([]);
+    expect(runtimeResolversIn(`import type require from "x";`, "a.ts")).toEqual(
+      []
+    );
+    expect(
+      runtimeResolversIn(`export { type require } from "x";`, "a.ts")
+    ).toEqual([]);
+    // The separating control: the same binding without `type` is a value.
+    expect(runtimeResolversIn(`import { require } from "x";`, "a.ts")).toEqual([
+      "require",
+    ]);
+    // A RENAMED import names the other module's export on the far side of `as`; only the local
+    // name is a binding here, and `load` reaches nothing restricted.
+    expect(
+      runtimeResolversIn(`import { require as load } from "x";`, "a.ts")
     ).toEqual([]);
     // A cast between `import.meta` and `.url` is still a URL read.
     expect(
@@ -1104,6 +1275,11 @@ describe("this package resolves no module at runtime", () => {
         "a.ts"
       )
     ).toEqual([]);
+    // The separating control: a SHORTHAND property is the key and a read of the binding at once,
+    // so `{ require }` reaches the loader where `{ require: fn }` does not.
+    expect(runtimeResolversIn(`export const o = { require };`, "a.ts")).toEqual(
+      ["require"]
+    );
     // A prop is a name, not a binding — this component reaches no loader.
     expect(
       runtimeResolversIn(
@@ -1111,6 +1287,11 @@ describe("this package resolves no module at runtime", () => {
         "a.tsx"
       )
     ).toEqual([]);
+    // And the separating control: an element's TAG is a reference, so rendering the global
+    // constructor as a component reaches it.
+    expect(
+      runtimeResolversIn(`export const F = () => <Function />;`, "a.tsx")
+    ).toEqual(["Function"]);
     // The three `process` forms this package uses, exactly as `dev-warn.ts` writes them.
     expect(
       runtimeResolversIn(
@@ -1143,32 +1324,15 @@ describe("this package resolves no module at runtime", () => {
     // Read from the RESOLVED options, not the file's own JSON. `tsconfig.json` extends
     // `@nextlyhq/tsconfig/react-library-bundler.json`, so an alias declared in the base is one
     // TypeScript and the bundler both honour while a check reading the local file sees nothing.
-    // `parseJsonConfigFileContent` follows `extends`, which is why the scanned-file assertion
-    // above uses it too.
-    const aliases = ["tsconfig.json", "tsconfig.tests.json"].flatMap(name => {
-      const path = join(SRC, "..", name);
-      const parsed = ts.parseConfigFileTextToJson(
-        path,
-        readFileSync(path, "utf8")
-      );
-      // A failed parse leaves `config` undefined, which yields empty options and an empty alias
-      // list — the same answer as "there are no aliases". Reported as a failure of the CHECK
-      // rather than allowed to read as a clean result.
-      expect(parsed.error, `${name} must be parseable`).toBeUndefined();
-      const resolved = ts.parseJsonConfigFileContent(
-        parsed.config,
-        ts.sys,
-        join(SRC, "..")
-      );
-      expect(
-        resolved.errors.map(diagnostic =>
-          ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")
-        ),
-        `${name} must resolve, including anything it extends`
-      ).toEqual([]);
-      return Object.keys(resolved.options.paths ?? {}).map(
-        alias => `${name}: ${alias}`
-      );
+    // `resolvedConfig` follows `extends`, which is why the scanned-file assertion above uses it
+    // too, and it refuses a config that does not parse or resolve, so a broken file cannot read as
+    // one with no aliases.
+    const aliases = READ_CONFIGS.flatMap(name => {
+      const { compilerOptions } = resolvedConfig(name);
+      const paths = compilerOptions?.paths;
+      return Object.keys(
+        typeof paths === "object" && paths !== null ? paths : {}
+      ).map(alias => `${name}: ${alias}`);
     });
 
     expect(

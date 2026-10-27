@@ -1,6 +1,6 @@
 ---
 title: Page Builder
-description: Let your team compose pages from blocks you define, rendered on the server with no client JavaScript by default.
+description: Let your team compose pages from blocks you define. Pages render on the server, and the core blocks add no JavaScript of their own.
 ---
 
 The Page Builder gives non-developers a canvas. They drag blocks onto a page, arrange
@@ -18,17 +18,22 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
   image, gallery, button, embed, form), and one that reads from your content
   ([collection loop](#reading-content-into-a-page)).
-- **Your own blocks**, defined in code, sitting beside the built-in ones.
-- **Responsive control** per block, against breakpoints you declare.
-- **Server-first rendering.** A page ships no client JavaScript unless a block on it
-  needs some.
+- **Your own blocks**, defined in code, which the page renderer takes beside the
+  built-in ones.
+- **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
+  edits the breakpoint the canvas is sized to, and the canvas resizes to each breakpoint's
+  width. See [Breakpoints](#breakpoints).
+- **Server rendering.** Pages render on the server, and the core blocks add no
+  JavaScript of their own. Every page still loads the Next.js runtime, and a block you
+  write as a client component sends its own JavaScript. See
+  [What reaches the browser](#what-reaches-the-browser).
 
 ## Availability
 
 | | |
 |---|---|
 | Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
-| Status | Alpha. The block model, registries and render pipeline are stable; editor interactions are still evolving |
+| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
 | Permission | Editing a page requires update access to the collection holding it |
 
 ## Install
@@ -50,6 +55,25 @@ export default defineConfig({
 });
 ```
 
+Then install the plugin on your database. Nextly installs plugins explicitly, so a plugin
+that is configured but not installed only gets a warning in development, and a production
+boot refuses to start:
+
+```bash
+npx nextly plugins install @nextlyhq/plugin-page-builder
+```
+
+Last, load the editor's styles in your admin page,
+`src/app/admin/[[...params]]/page.tsx`. Without them the builder opens unstyled:
+
+```tsx
+import "@nextlyhq/plugin-page-builder/styles/editor.css";
+```
+
+Run `npx nextly generate:types` after adding the plugin, too. It writes the file that
+registers the builder's screen with the admin. A project created before that file existed
+also imports it in the same admin page; see [Admin UI](/docs/plugins/admin-ui).
+
 ## Render the pages
 
 A plugin cannot add routes to your Next.js app, so you declare one catch-all route and
@@ -57,14 +81,14 @@ let `createBlocksPage` fill it. It resolves the incoming path against your colle
 404s on a miss, and renders the stored document.
 
 ```tsx
-// app/(frontend)/[...slug]/page.tsx
+// src/app/(frontend)/[...slug]/page.tsx
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type { NextlyContentReader } from "nextly/runtime";
 
-import nextlyConfig from "../../../nextly.config";
+import nextlyConfig from "../../../../nextly.config";
 
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
@@ -118,6 +142,120 @@ breakpoint.
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
 two. Which one you call *is* the security posture — there is no option to flip.
 
+## Breakpoints
+
+Breakpoints are desktop-first. The `base` breakpoint applies at every width. Each other
+breakpoint has a `maxWidth`, and the values a block is given for it apply at that width
+and below, as an `@media (max-width: …)` rule.
+
+In the editor, the breakpoint switcher sizes the canvas to a breakpoint's width, and the
+Style tab edits the values for the breakpoint the canvas is sized to. The breakpoint
+manager beside it adds, changes and removes the site's breakpoints.
+
+### Limits
+
+- **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
+  content and settings are the same at every width.
+- **A width, not a device.** The switcher sizes the canvas; it does not show the page as a
+  phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
+  rules you write yourself and code that reads the window's width follow the admin
+  window, not the canvas.
+- **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
+  in the editor are stored in the plugin's `site-style` single. The route above compiles
+  against the breakpoints it declares in `styleContext` and never reads that single, so a
+  breakpoint added in the editor styles the canvas but not the published page. To serve
+  what the editor saved, pass `siteStyles` to `createBlocksPage`, with `loadSiteStyle` and
+  `SITE_STYLE_SLUG` from `@nextlyhq/plugin-page-builder`, and give the reader
+  `findSingle`, adding `NextlySingleReader` from `nextly/runtime` to its type:
+
+```tsx
+// src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
+import { getNextly } from "nextly";
+import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+const reader: NextlyContentReader &
+  NextlySingleReader & {
+    media: Pick<NextlyInstance["media"], "findByID">;
+  } = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // The site style is a single, read through this.
+  findSingle: async args => (await instance()).findSingle(args),
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
+};
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  blocks: createBlockResolver(coreBlocks),
+  siteStyles: {
+    read: () => loadSiteStyle({ nextly: reader }),
+    // Named so that saving the site style refreshes cached pages.
+    singles: [SITE_STYLE_SLUG],
+  },
+  // Used until breakpoints are saved in the editor: a new site has none
+  // stored, and with no breakpoint set the page gets no stylesheet.
+  styleContext: {
+    breakpoints: {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    },
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+## What reaches the browser
+
+A published page is rendered on the server by `@nextlyhq/blocks-react`. What a visitor's
+browser receives is the page's HTML and CSS, plus whatever JavaScript the page itself
+loads:
+
+- **The editor stays in the admin.** `@nextlyhq/builder` and the plugin's editor code run
+  only on the admin's builder screen. Your page route imports `@nextlyhq/blocks-react`, a
+  server renderer with no client components, so none of the editor is sent to visitors.
+- **The core blocks add no JavaScript of their own.** None of the 20 core blocks is a
+  client component. The accordion is a native `<details>`, and the form block is a plain
+  HTML form that posts where you point it.
+- **The page still loads Next.js.** Every App Router page carries the Next.js and React
+  runtime, and whatever your layout adds. "No JavaScript of their own" is about the blocks,
+  not the page.
+- **The embed block can run scripts.** It is an iframe sandboxed with `allow-scripts`, so
+  what you embed runs in the visitor's browser, inside the frame.
+- **Your own blocks decide for themselves.** A block whose component is, or renders, a
+  client component sends that component's JavaScript with every page that uses it.
+- **Styles arrive as CSS.** They are compiled on the server into `<style>` elements in the
+  page: the site's shared sheet and the page's own rules.
+- **Editor markers stay out.** The `data-nx-*` attributes the canvas uses to select blocks
+  are written only when the editor asks for them.
+- **Hidden is not always absent.** A block hidden at a breakpoint is in the HTML and hidden
+  with CSS. A block that carries display conditions is left out of the HTML, styles
+  included.
+
+The editor's canvas draws your page with the same React renderer that serves it,
+`PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
+page: the canvas adds editing outlines and markers, and, not being an iframe, it answers
+viewport units and your own `@media` rules with the admin window's width.
+
 ## Use it as a field instead
 
 You do not have to accept the `pages` collection. The builder is also a field, usable in
@@ -139,6 +277,47 @@ The **collection loop** block queries one of your collections and repeats its ch
 blocks once per entry — a post list, a team grid, a product row — without anyone writing
 a query. The developer decides which collections are available to it; the editor decides
 what each repeated item looks like.
+
+The loop reads through a `data` provider you pass to `createBlocksPage`. Without one it
+renders nothing. The provider answers one call, `find({ collection, limit, sort, locale })`,
+with `{ items, total }`. It is also where you name the collections a loop may read:
+
+```tsx
+// The collections an editor's loop may list. Anything else reads nothing.
+const loopCollections = ["posts"] as const;
+const isLoopCollection = (
+  name: string,
+): name is (typeof loopCollections)[number] =>
+  (loopCollections as readonly string[]).includes(name);
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  // ...and the rest of the options above...
+  data: {
+    find: async ({ collection, limit, sort, locale }) => {
+      if (!isLoopCollection(collection)) return { items: [], total: 0 };
+      const result = await (await instance()).find({
+        collection,
+        limit,
+        sort,
+        locale,
+        // Published entries only, judged by the collection's own read rule, as an
+        // anonymous visitor would read them.
+        status: "published",
+        overrideAccess: false,
+      });
+      return { items: result.items, total: result.meta.total };
+    },
+  },
+});
+```
+
+<Callout type="warn">
+Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
+the text its blocks were given in the editor, not the entry's own fields. See
+[Block document format](/docs/api-reference/block-document-format).
+</Callout>
 
 ## Related
 

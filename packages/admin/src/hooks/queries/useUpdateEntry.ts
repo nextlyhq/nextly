@@ -46,11 +46,17 @@
  * @see lib/errors/error-mapping.ts - Server error mapping utilities
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
+import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   createServerErrorHandler,
   parseServerErrorMessage,
@@ -100,6 +106,11 @@ export interface UseUpdateEntryOptions<
    * rollback, and query cancellation target the query the editor is showing.
    */
   draft?: boolean;
+  /**
+   * The entry's fields, for the labels a refusal over out-of-date shared
+   * fields names them by; their names are used without them.
+   */
+  fields?: readonly { name?: string; label?: unknown }[];
 }
 
 /**
@@ -108,6 +119,9 @@ export interface UseUpdateEntryOptions<
 interface UpdateContext<T> {
   previousEntry: T | undefined;
 }
+
+/** No fields: a refusal names fields by their names alone. */
+const NO_FIELDS: readonly { name?: string }[] = [];
 
 /**
  * useUpdateEntry - Mutation hook for updating an existing entry
@@ -229,8 +243,28 @@ export function useUpdateEntry<
   locale,
   fallbackLocale,
   draft,
-}: UseUpdateEntryOptions<T, TFieldValues>) {
+  fields,
+}: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
+  MutationResult<T>,
+  Error,
+  UpdateEntryPayload,
+  UpdateContext<T>
+> {
   const queryClient = useQueryClient();
+  // A publish refused over shared values someone else published since offers
+  // to take them; the reload that follows shows the change brought up to date.
+  const recoverSharedFields = useSharedFieldsRecovery({
+    scope: entryId
+      ? { kind: "collection", slug: collectionSlug, entryId }
+      : null,
+    locale,
+    fields: fields ?? NO_FIELDS,
+    onTaken: useCallback(() => {
+      void queryClient.invalidateQueries({
+        queryKey: entryKeys.detail(collectionSlug, entryId),
+      });
+    }, [queryClient, collectionSlug, entryId]),
+  });
   const { enabled: localizationEnabled } = useLocalization();
 
   // The optimistic cache is keyed by the same per-view dimensions useEntry reads
@@ -292,7 +326,7 @@ export function useUpdateEntry<
     },
 
     // Rollback on error
-    onError: (error: Error, _variables, context) => {
+    onError: (error: Error, variables, context) => {
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
         queryClient.setQueryData(localeKey, context.previousEntry);
@@ -304,6 +338,21 @@ export function useUpdateEntry<
       if (setError) {
         const errorHandler = createServerErrorHandler(setError);
         handledByForm = errorHandler(error);
+      }
+
+      // The out-of-date refusal reports itself, with the action that
+      // resolves it; saving the refused values without their status keeps
+      // them as the pending change.
+      if (!handledByForm) {
+        handledByForm = recoverSharedFields(error, () => {
+          const { status: _status, ...values } = variables;
+          return entryApi.update(
+            collectionSlug,
+            entryId,
+            values,
+            locale ? { locale, fallbackLocale } : undefined
+          );
+        });
       }
 
       // Show generic toast only if errors weren't mapped to form

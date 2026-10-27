@@ -97,16 +97,17 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
    */
   it("reveals Settings to an operator whose ONLY grant is the jobs permission", () => {
     expect(
-      buildCapabilities(["manage-background-jobs"], false).canViewSettings
+      buildCapabilities(["manage-background-jobs"], false, undefined)
+        .canViewSettings
     ).toBe(true);
   });
 
   it("still hides it from someone holding an unrelated grant", () => {
     // The control: without it the case above passes against a capability that
     // is true for everyone, which is the other way to be wrong here.
-    expect(buildCapabilities(["read-media"], false).canViewSettings).toBe(
-      false
-    );
+    expect(
+      buildCapabilities(["read-media"], false, undefined).canViewSettings
+    ).toBe(false);
   });
 
   it("reveals Settings for EVERY destination the panel declares", () => {
@@ -127,26 +128,23 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
       const permission =
         item.gate.kind === "permission" ? item.gate.permission : "";
       expect(
-        buildCapabilities([permission], false).canViewSettings,
+        buildCapabilities([permission], false, undefined).canViewSettings,
         `${item.id} (${permission})`
       ).toBe(true);
     }
     // The premise: this walked real destinations, not an empty list.
-    expect(gated.length).toBeGreaterThan(3);
+    expect(gated.length).toBeGreaterThan(2);
   });
 
   it("keeps revealing it for the grants it always revealed for", () => {
     // Adding to this list must not narrow it. One representative grant per
-    // group it already covered.
-    for (const grant of [
-      "manage-settings",
-      "read-api-keys",
-      "manage-email-providers",
-      "manage-email-templates",
-    ]) {
-      expect(buildCapabilities([grant], false).canViewSettings, grant).toBe(
-        true
-      );
+    // group it already covered. (Email left the panel for its own rail entry,
+    // so its grants no longer reveal it.)
+    for (const grant of ["manage-settings", "read-api-keys"]) {
+      expect(
+        buildCapabilities([grant], false, undefined).canViewSettings,
+        grant
+      ).toBe(true);
     }
   });
 });

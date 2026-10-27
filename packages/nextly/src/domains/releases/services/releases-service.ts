@@ -80,9 +80,9 @@ import {
   componentsToStop,
   planReleaseMaterialisation,
 } from "../plan-release-materialisation";
-import {
-  type ReleaseCheckReads,
-  type ReleaseCheckSource,
+import type {
+  ReleaseCheckReads,
+  ReleaseCheckSource,
 } from "../readiness/check-sources";
 import {
   CORE_AUTHOR_SOURCE,
@@ -113,8 +113,10 @@ import {
 } from "../release-calendar";
 import { isDueAt } from "../release-due";
 import {
+  documentOfReleaseEvent,
   keptAsRecord,
   releaseEventActorOf,
+  type ReleaseEventActor,
   type ReleaseRunHistory,
 } from "../release-events";
 import { releaseMemberKey } from "../release-member-key";
@@ -621,7 +623,7 @@ const NOT_DELETABLE_MESSAGES: Record<
   published:
     "This release has been published. It stays as the record of what went live, and cannot be deleted.",
   committed:
-    "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
+    "This release is scheduled or stopped, so it can't be deleted. Cancel it first to call it off; a release that never began publishing can then be deleted.",
   "was-scheduled":
     "This release began publishing before it was cancelled, so it's kept as the record of what went live.",
 };
@@ -1992,6 +1994,45 @@ export class ReleasesService {
   }
 
   /**
+   * Whether the caller may read a release at all: one exists that the list
+   * would show them.
+   *
+   * The same authorization `find` makes and the same filters it reads through,
+   * with nothing narrowing them, so it says "yes" exactly where an unfiltered
+   * list would not be empty. One id read with a bound of one, not a count, for
+   * a question a dashboard asks on every load.
+   *
+   * @experimental
+   */
+  async anyReadable(actor: ReleaseActor): Promise<boolean> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.anyRelease(this.listFilters({}));
+  }
+
+  /**
+   * Whether the caller may read releases, by the decision every read here makes.
+   *
+   * For a reader outside this service that must withhold what releases hold
+   * from a caller who may not read them — the entry list's `_inRelease` filter
+   * reveals which documents a release will publish and when — so that it asks
+   * this one rule rather than keeping a second. Only a refusal answers `false`;
+   * any other failure is thrown, so a fault is never mistaken for "may not".
+   *
+   * @experimental
+   */
+  async mayRead(actor: ReleaseActor): Promise<boolean> {
+    try {
+      await this.authorize(actor, "read");
+      return true;
+    } catch (error) {
+      if (error instanceof NextlyError && error.code === "FORBIDDEN") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * The list's filters, checked, as the repository takes them.
    *
    * Each refusal is one a caller can act on, and each guards against an answer
@@ -2705,6 +2746,34 @@ export class ReleasesService {
    * release while the names describe only what the reader may read. A trusted
    * caller reads every document unchecked, as it does through the content API.
    */
+  /**
+   * A release's history as `actor` may be shown it. An event about one of the
+   * release's documents is kept only when the actor may read that document,
+   * judged as the release's documents are (`membersVisibleTo`), so the
+   * history lists no document the release's own document list would not. An
+   * event about no document is kept, and a document event that does not say
+   * which document is left out. A trusted actor is shown everything.
+   *
+   * @experimental
+   */
+  async historyVisibleTo<
+    E extends { id: string; kind: string; payload: unknown },
+  >(events: readonly E[], actor: ReleaseActor): Promise<E[]> {
+    const about: ReleaseDocument[] = [];
+    const unnamed = new Set<string>();
+    for (const event of events) {
+      const document = documentOfReleaseEvent(event);
+      if (document === null) unnamed.add(event.id);
+      else if (document !== undefined)
+        about.push({ ...document, id: event.id });
+    }
+    const { sees } = await this.membersVisibleTo(actor, about);
+    const trusted = actor.overrideAccess === true;
+    return events.filter(
+      event => (trusted || !unnamed.has(event.id)) && sees(event.id)
+    );
+  }
+
   private async membersVisibleTo<T extends ReleaseDocument>(
     actor: ReleaseActor,
     members: readonly T[]
@@ -3452,12 +3521,16 @@ export class ReleasesService {
    */
   async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "publish");
+    // Who the release's history names for this Publish now, settled before
+    // anything is written, whether or not the release is moved: a key that
+    // does not say which it is is refused here.
+    const by = releaseEventActorOf(actor);
     const current = await this.publishableNow(id);
     // The same refusal scheduling makes, before anything is written, so a
     // release that would stop part-way, or a single-document release with no
     // document, sends nothing out and is not marked published.
     await this.assertReadyToRun(actor, id, current);
-    await this.moveToNowUnlessDue(current, actor);
+    await this.moveToNowUnlessDue(current, by);
     await this.runDrainForPublishNow(id);
     const [after] = await this.deps.repository.findReleases({ ids: [id] });
     return after ?? current;
@@ -3506,14 +3579,34 @@ export class ReleasesService {
    */
   private async moveToNowUnlessDue(
     current: ReleaseRow,
-    actor: ReleaseActor
+    by: ReleaseEventActor
   ): Promise<void> {
     const now = new Date();
     const alreadyDue =
       current.state === "scheduled" &&
       current.scheduledAt instanceof Date &&
       isDueAt(current.scheduledAt, now);
-    if (alreadyDue) return;
+    if (alreadyDue) {
+      // Not moved, but asked for all the same: the history says who did.
+      // Fenced on the revision the checks were made against, as the move
+      // below is, so a release rescheduled or cancelled in between is refused
+      // rather than reported as run.
+      if (
+        !(await this.deps.repository.recordPublishNow(
+          current.id,
+          by,
+          current.revision
+        ))
+      ) {
+        throw NextlyError.conflict({
+          logContext: {
+            reason: "release-moved-during-publish-now",
+            releaseId: current.id,
+          },
+        });
+      }
+      return;
+    }
     // Fenced on the state the checks were made against, so a release
     // cancelled or stopped in between is not run — and on its revision, so of
     // two overlapping requests (a double click, a retry) only one moves it;
@@ -3526,7 +3619,7 @@ export class ReleasesService {
       [current.state],
       current.revision,
       // Recorded as the caller's Publish now; the drain records the publish.
-      releaseEventActorOf(actor),
+      by,
       "publish-now"
     );
     if (!moved) {

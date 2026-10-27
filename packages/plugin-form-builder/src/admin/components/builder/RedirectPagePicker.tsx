@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@nextlyhq/ui";
 import { encodeSelectParam } from "nextly/query";
-import { useEffect, useState } from "react";
+import { type JSX, useEffect, useState } from "react";
 
 import {
   documentReachability,
@@ -759,7 +759,7 @@ export function RedirectPagePicker({
   collections,
   value,
   onChange,
-}: RedirectPagePickerProps) {
+}: RedirectPagePickerProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
 

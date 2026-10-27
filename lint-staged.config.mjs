@@ -1,6 +1,8 @@
 export default {
+  // Files the configuration ignores (scripts, tests, configs) can make up the
+  // whole of a commit, and oxlint refuses an empty selection unless told not to.
   '*.{js,jsx,ts,tsx}': (files) => [
-    `eslint --fix ${files.map((f) => JSON.stringify(f)).join(' ')}`,
+    `oxlint -c oxlint.config.mjs --fix --no-error-on-unmatched-pattern ${files.map((f) => JSON.stringify(f)).join(' ')}`,
     `prettier --write ${files.map((f) => JSON.stringify(f)).join(' ')}`,
   ],
   '*.{json,css,scss,md}': 'prettier --write',

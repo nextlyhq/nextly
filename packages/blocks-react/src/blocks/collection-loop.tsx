@@ -22,7 +22,7 @@
  *
  * @module blocks/library/collection-loop
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -138,55 +138,56 @@ export async function renderCollectionLoop({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
-  name: "core/collection-loop",
-  version: 1,
-  description:
-    "Repeats its children once per entry in a collection. Renders its template once while no collection is chosen, and renders empty when the data source cannot be reached.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Collection loop",
-    icon: "loop",
-    category: CONTENT,
-    keywords: ["repeat", "query", "entries", "dynamic"],
-  },
-  props: {
-    collection: { type: "text" },
-    limit: { type: "number", min: 1, max: 100 },
-    sort: { type: "text" },
-  },
-  defaultProps: { limit: 10 },
-  example: { props: { collection: "posts", limit: 3 } },
-  slots: {
-    // The template repeated per entry, structurally editable.
-    //
-    // It declares no starting children, and `contentOnly` would forbid exactly
-    // the edits that fill it: an author could never insert the blocks the loop
-    // repeats, so the loop could never show an entry. Locking is worth having
-    // once there is a way to lock a FINISHED body; locking an empty one only
-    // prevents it from being written.
-    //
-    // Nor could a default supply that body. What one entry should look like is
-    // a property of the collection being looped, which this block cannot see
-    // from its own declaration.
-    children: {},
-  },
-  supports: {
-    spacing: true,
-    layout: true,
-    dimensions: true,
-    background: true,
-    border: true,
-    effects: true,
-    position: true,
-    container: true,
-  },
-  // The children are drawn once per entry, so a query returning nothing draws
-  // them ZERO times. A reader of the stored document sees the template either
-  // way and cannot tell which happened without running the query, so it is told
-  // here instead — otherwise an empty loop's heading speaks for the page.
-  conditionalSlots: ["children"],
-  render: renderCollectionLoop,
-});
+export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
+  defineBlock({
+    name: "core/collection-loop",
+    version: 1,
+    description:
+      "Repeats its children once per entry in a collection. Renders its template once while no collection is chosen, and renders empty when the data source cannot be reached.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Collection loop",
+      icon: "loop",
+      category: CONTENT,
+      keywords: ["repeat", "query", "entries", "dynamic"],
+    },
+    props: {
+      collection: { type: "text" },
+      limit: { type: "number", min: 1, max: 100 },
+      sort: { type: "text" },
+    },
+    defaultProps: { limit: 10 },
+    example: { props: { collection: "posts", limit: 3 } },
+    slots: {
+      // The template repeated per entry, structurally editable.
+      //
+      // It declares no starting children, and `contentOnly` would forbid exactly
+      // the edits that fill it: an author could never insert the blocks the loop
+      // repeats, so the loop could never show an entry. Locking is worth having
+      // once there is a way to lock a FINISHED body; locking an empty one only
+      // prevents it from being written.
+      //
+      // Nor could a default supply that body. What one entry should look like is
+      // a property of the collection being looped, which this block cannot see
+      // from its own declaration.
+      children: {},
+    },
+    supports: {
+      spacing: true,
+      layout: true,
+      dimensions: true,
+      background: true,
+      border: true,
+      effects: true,
+      position: true,
+      container: true,
+    },
+    // The children are drawn once per entry, so a query returning nothing draws
+    // them ZERO times. A reader of the stored document sees the template either
+    // way and cannot tell which happened without running the query, so it is told
+    // here instead — otherwise an empty loop's heading speaks for the page.
+    conditionalSlots: ["children"],
+    render: renderCollectionLoop,
+  });

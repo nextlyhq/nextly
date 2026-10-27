@@ -60,7 +60,9 @@ export function seoIssuesWidget(
     archetype: "stats",
     title: "SEO issues",
     description: "Published pages missing search and social metadata",
-    size: "half",
+    // Half the row by default, two rows tall: a row of figures. From a third,
+    // where five figures still read, to the full width.
+    size: { default: { w: 6, h: 2 }, min: { w: 4, h: 2 } },
     cells: issues.map(issue => ({
       key: issue.key,
       label: issue.label,

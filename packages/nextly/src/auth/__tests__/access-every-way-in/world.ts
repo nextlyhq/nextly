@@ -35,6 +35,7 @@ import type { AuthenticatedScope } from "../../authenticated-scope";
 import { apiKeyScopeFrom } from "../../authenticated-scope";
 import { requireAuthentication } from "../../middleware/index";
 
+import { refusalFromError } from "./refusals";
 import {
   ENTRY_ACTIONS,
   CALLERS,
@@ -58,6 +59,13 @@ export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
  * that row was returned.
  */
 export const PROBE_WHERE = { slug: { equals: "probe" } };
+/**
+ * The filter the filter rule kinds answer with: it matches the probe entry
+ * and no other, so a door that applies it returns the probe and withholds the
+ * rest of the collection.
+ */
+const PROBE_FILTER = { slug: { equals: "probe" } };
+
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
@@ -101,6 +109,7 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "returns-false": () => false,
   "returns-null": () => null,
   "returns-undefined": () => undefined,
+  "returns-string": () => "yes",
   throws: () => {
     throw new Error("the rule failed");
   },
@@ -118,6 +127,10 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "user-is-key-maker": ({ user }) =>
     keyMaker.id !== undefined && user?.id === keyMaker.id,
   "publish-false": () => false,
+  "returns-filter": () => PROBE_FILTER,
+  "async-filter": async () => PROBE_FILTER,
+  "returns-empty-in": () => ({ slug: { in: [] } }),
+  "malformed-filter": () => ({ slug: { resembles: "probe" } }),
 };
 
 /**
@@ -132,10 +145,10 @@ const ruleBody = (rule: Rule) => RULE_BODIES[rule];
  * The access object a `rule` kind declares on a target that is asked
  * `operations`.
  *
- * The config validator refuses a boolean for create, read, update and delete,
- * though the rule types and the documentation allow one, so the collection is
- * defined with the rule as a function and the boolean put back afterwards: the
- * table asks what each way in answers once a boolean reaches it.
+ * The collection is defined with the rule as a function and the boolean put
+ * back afterwards, so each target is built the same way whatever the rule
+ * kind; the config validator accepts a boolean for every rule, and the table
+ * asks what each way in answers once a boolean reaches it.
  */
 function accessFor(
   rule: Rule,
@@ -244,11 +257,9 @@ async function outcome(work: () => Promise<unknown>): Promise<Response> {
       typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
     );
   } catch (error) {
-    const status = (error as { statusCode?: unknown }).statusCode;
-    return Response.json({
-      ok: false,
-      status: typeof status === "number" ? status : null,
-    });
+    // What the call threw, read the one way every door reads a thrown
+    // refusal, and handed back whole.
+    return Response.json({ ok: false, refusal: refusalFromError(error) });
   }
 }
 
@@ -284,6 +295,8 @@ const SERVICE_CALLS: Record<
 > = {
   read: (c, slug, id, opts) => c.findEntryById(slug, id, opts),
   create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
+  "new-pub": (c, slug, _id, opts) =>
+    c.createEntry(slug, { title: "made", status: "published" }, opts),
   update: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { title: "changed" }, opts),
   delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
@@ -663,13 +676,22 @@ async function seedUsers(t: TestNextly) {
     await permissionIds(t, slug => slug === "read-refs"),
     [superAdminRole]
   );
+  // `user-without` holds nothing on any target the table judges, but may read
+  // `refs`, the row its relationships are populated through: its rule no
+  // longer lets in a user without the permission, and without it every
+  // population cell would answer for `refs` rather than for the related row.
+  const refsReaderRole = await makeRole(
+    t,
+    "refs-reader",
+    await permissionIds(t, slug => slug === "read-refs")
+  );
 
   const users: Record<string, SeededUser> = {
     root: { id: rootId, roleIds: [superAdminRole] },
   };
   for (const [name, roleId] of [
     ["with", editorRole],
-    ["without", undefined],
+    ["without", refsReaderRole],
     ["custom", reviewerRole],
     ["chief", chiefRole],
     ["partial", partialRole],
@@ -845,7 +867,7 @@ function registerProbeWidgets(): void {
         id,
         title: id,
         archetype: "text",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         content: id,
         requiredPermission: `${action}-${slug}`,
       },

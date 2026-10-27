@@ -8,6 +8,8 @@
  * emits per-phase events.
  */
 
+import type { JSX } from "react";
+
 const PHASES = [
   "Uploading media",
   "Seeding roles",
@@ -19,7 +21,7 @@ const PHASES = [
   "Seeding newsletter form",
 ];
 
-export function ProgressList() {
+export function ProgressList(): JSX.Element {
   return (
     <ul className="font-mono text-xs text-muted-foreground space-y-1.5 max-w-xl">
       {PHASES.map((phase, i) => (

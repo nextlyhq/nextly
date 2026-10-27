@@ -526,4 +526,4 @@ export default {
       tables: [],
     },
   },
-} satisfies PluginMigration;
+} satisfies PluginMigration as PluginMigration;

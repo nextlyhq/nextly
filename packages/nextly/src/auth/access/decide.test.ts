@@ -29,7 +29,14 @@ import {
   type Actor,
   type PermissionGrant,
 } from "./actor";
-import { askRule, askRules, decide, judge, type AccessTarget } from "./decide";
+import {
+  askRule,
+  askRules,
+  decide,
+  decidePermission,
+  judge,
+  type AccessTarget,
+} from "./decide";
 
 const ACTIONS: AccessAction[] = [
   "create",
@@ -337,16 +344,16 @@ describe("a publish or an unpublish", () => {
     access: { update: () => false },
   };
 
-  it("must also satisfy the update rule", async () => {
+  it("is judged by its own rule, not the update rule", async () => {
     for (const action of ["publish", "unpublish"] as const) {
       expect(await decide(callers["user-with"], action, updateRefuses)).toEqual(
-        { allowed: false, reason: "update-rule-refused" }
+        { allowed: true }
       );
     }
-    // The control: the same target lets the caller read and create.
+    // The control: the update rule still refuses an update.
     expect(
-      (await decide(callers["user-with"], "read", updateRefuses)).allowed
-    ).toBe(true);
+      (await decide(callers["user-with"], "update", updateRefuses)).allowed
+    ).toBe(false);
   });
 
   it("needs its own permission, not update's", async () => {
@@ -381,7 +388,7 @@ describe("a publish or an unpublish", () => {
     }
   });
 
-  it("names an update rule that failed apart from one that refused", async () => {
+  it("is not refused by an update rule that fails", async () => {
     for (const rule of ["throws", "async-rejects"] as const) {
       const updateFails: AccessTarget = {
         kind: "collection",
@@ -390,11 +397,11 @@ describe("a publish or an unpublish", () => {
       };
       expect(
         await decide(callers["user-with"], "publish", updateFails)
-      ).toEqual({ allowed: false, reason: "update-rule-threw" });
+      ).toEqual({ allowed: true });
     }
   });
 
-  it("needs the update permission as well, since it changes the entry", async () => {
+  it("needs its own permission alone, not the update permission as well", async () => {
     const publisher = userActor({
       userId: "u5",
       roles: ["publisher"],
@@ -402,11 +409,10 @@ describe("a publish or an unpublish", () => {
     });
     const posts = postsWith("absent");
     for (const action of ["publish", "unpublish"] as const) {
-      expect(await decide(publisher, action, posts)).toEqual({
-        allowed: false,
-        reason: "no-permission",
-      });
+      expect(await decide(publisher, action, posts)).toEqual({ allowed: true });
     }
+    // The control: the same caller may not update.
+    expect((await decide(publisher, "update", posts)).allowed).toBe(false);
   });
 });
 
@@ -453,11 +459,10 @@ describe("what a rule is handed", () => {
     expect(ctx.collection).toBe("pages");
   });
 
-  it("is the role screen's permission spelling, with the earlier one after it for one release", async () => {
+  it("is the role screen's permission spelling, and no other", async () => {
     const ctx = await contextFor(callers["user-with"]);
     const stored = ACTIONS.map(action => `${action}-posts`);
-    const earlier = ACTIONS.map(action => `posts:${action}`);
-    expect([...ctx.permissions]).toEqual([...stored, ...earlier]);
+    expect([...ctx.permissions]).toEqual(stored);
   });
 
   it("names a key's maker as the user, with the key's own roles", async () => {
@@ -497,7 +502,12 @@ describe("askRule", () => {
       slug: "posts",
       access: { read: untypedRule(rule) },
     });
-    expect(outcome).toEqual({ declared: true, value: null });
+    // With what it means, read from that one call.
+    expect(outcome).toEqual({
+      declared: true,
+      value: null,
+      answer: { kind: "refuse" },
+    });
     expect(rule).toHaveBeenCalledTimes(1);
   });
 
@@ -583,39 +593,25 @@ describe("the judge seam", () => {
     expect(rule).not.toHaveBeenCalled();
   });
 
-  it("asks each rule once, and the update rule only after the action's own allows", async () => {
-    const publish = vi.fn(() => false);
-    const update = vi.fn(() => true);
+  it("asks a publish's own rule once, and never the update rule", async () => {
+    const publish = vi.fn(() => true);
+    const update = vi.fn(() => false);
     const target: AccessTarget = {
       kind: "collection",
       slug: "posts",
       access: { publish, update },
     };
-    const refused = await askRules(callers["user-with"], "publish", target);
-    expect(refused).toEqual({ action: { declared: true, value: false } });
-    expect(update).not.toHaveBeenCalled();
-    publish.mockReturnValue(true);
     expect(await askRules(callers["user-with"], "publish", target)).toEqual({
-      action: { declared: true, value: true },
-      update: { declared: true, value: true },
+      action: { declared: true, value: true, answer: { kind: "allow" } },
     });
-    expect(publish).toHaveBeenCalledTimes(2);
-    expect(update).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses to judge a publish whose update rule was not asked", () => {
-    // The update rule may refuse the change; judging without it would allow
-    // a publish it never saw.
-    const target: AccessTarget = {
-      kind: "collection",
-      slug: "posts",
-      access: { publish: () => true, update: () => false },
-    };
-    expect(() =>
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(update).not.toHaveBeenCalled();
+    // And the judgement allows on that one answer.
+    expect(
       judge(callers["user-with"], "publish", target, {
         action: { declared: true, value: true },
-      })
-    ).toThrow();
+      }).allowed
+    ).toBe(true);
   });
 
   it("refuses to judge a question whose rules were not asked", () => {
@@ -649,6 +645,311 @@ describe("a rule that fails", () => {
       );
     } finally {
       logged.mockRestore();
+    }
+  });
+});
+
+describe("something no rule can name", () => {
+  // Settings is no entry, and `manage` no operation a rule declares, so the
+  // permission alone answers.
+  const settingsGrant = {
+    slug: "manage-settings",
+    action: "manage",
+    resource: "settings",
+  };
+  const manager = userActor({
+    userId: "u10",
+    roles: ["manager"],
+    permissions: [settingsGrant],
+  });
+
+  it("is allowed to whoever holds the permission, and refused to whoever does not", () => {
+    expect(decidePermission(manager, "manage", "settings").allowed).toBe(true);
+    // `export` is no action a `manage-` permission counts as.
+    expect(decidePermission(manager, "export", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+  });
+
+  it("is allowed to trusted work and a super-admin, holding nothing", () => {
+    const admin = userActor({
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [],
+    });
+    expect(decidePermission(systemActor(), "manage", "").allowed).toBe(true);
+    expect(decidePermission(admin, "manage", "").allowed).toBe(true);
+  });
+
+  it("is judged on a key's grants, and gives a key no super-admin authority", () => {
+    const key = keyActor({
+      keyId: "k3",
+      userId: "u11",
+      roles: ["super-admin"],
+      permissions: [settingsGrant],
+    });
+    expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
+    expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+  });
+
+  it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {
+    const holder = (resource: string) =>
+      userActor({
+        userId: "u12",
+        roles: ["holder"],
+        permissions: [
+          { slug: `manage-${resource}`, action: "manage", resource },
+        ],
+      });
+    for (const resource of [
+      "media",
+      "settings",
+      "email-providers",
+      "email-templates",
+    ]) {
+      for (const action of ["read", "create", "update", "delete"]) {
+        expect(
+          decidePermission(holder(resource), action, resource).allowed,
+          `${action} ${resource}`
+        ).toBe(true);
+      }
+      // Never a publish or an unpublish, nor another resource's actions.
+      expect(
+        decidePermission(holder(resource), "publish", resource).allowed
+      ).toBe(false);
+      expect(decidePermission(holder(resource), "read", "roles").allowed).toBe(
+        false
+      );
+    }
+    // A resource outside the four, and a collection, get nothing from it.
+    expect(
+      decidePermission(holder("background-jobs"), "read", "background-jobs")
+        .allowed
+    ).toBe(false);
+    expect(decidePermission(holder("posts"), "read", "posts").allowed).toBe(
+      false
+    );
+  });
+
+  it("is refused to a visitor and a plugin's person, who hold no permission", () => {
+    const person = principalActor(MEMBER);
+    expect(decidePermission(visitorActor(), "read", "settings")).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+    expect(decidePermission(person, "read", "settings")).toEqual({
+      allowed: false,
+      reason: "principal-without-rule",
+    });
+  });
+});
+
+describe("a rule that answers with a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  const TEAM = { team: { equals: "t1" } };
+  /** `posts` declaring `rule` for every action. */
+  const postsAnswering = (rule: unknown): AccessTarget => ({
+    kind: "collection",
+    slug: "posts",
+    access: Object.fromEntries(
+      ACTIONS.map(action => [action, () => rule])
+    ) as CollectionAccessControl,
+  });
+
+  it.each(["read", "update", "delete"] as const)(
+    "allows only the entries it matches on a collection's %s, and nothing for every entry",
+    async action => {
+      const decision = await decide(
+        callers["user-with"],
+        action,
+        postsAnswering(OWN)
+      );
+      // POPULATION CONTROL: not `allowed`, so a way in reading `allowed`
+      // alone refuses it.
+      expect(decision.allowed).toBe(false);
+      expect(decision).toEqual({
+        allowed: false,
+        reason: "only-matching-entries",
+        filter: OWN,
+      });
+    }
+  );
+
+  it("answers the same from a promise, for a key as for a user", async () => {
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: untypedRule(async () => OWN) },
+    };
+    expect(await decide(callers["key-with"], "read", target)).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("limits a publish by its own rule's filter, not the update rule's", async () => {
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        publish: untypedRule(() => OWN),
+        update: untypedRule(() => TEAM),
+      },
+    };
+    expect(await decide(callers["user-with"], "publish", target)).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("is still refused where the caller lacks the permission", async () => {
+    expect(
+      await decide(callers["user-without"], "read", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "no-permission" });
+  });
+
+  it("is never applied to a super-admin or trusted work, which pass every rule", async () => {
+    const target = postsAnswering(OWN);
+    expect(await decide(callers["super-admin"], "read", target)).toEqual({
+      allowed: true,
+    });
+    expect(await decide(systemActor(), "read", target)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("limits a plugin's person to the matching entries too", async () => {
+    expect(
+      await decide(callers.principal, "read", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "only-matching-entries", filter: OWN });
+  });
+
+  it("is refused from a create rule, which has no entries to match", async () => {
+    expect(
+      await decide(callers["user-with"], "create", postsAnswering(OWN))
+    ).toEqual({ allowed: false, reason: "rule-filter-misplaced" });
+  });
+
+  it("is refused from a Single's rule, which is one entry", async () => {
+    const settings: AccessTarget = {
+      kind: "single",
+      slug: "settings",
+      access: { read: untypedRule(() => OWN) },
+    };
+    const editor = userActor({
+      userId: "u7",
+      roles: ["editor"],
+      permissions: only("settings", ["read"]),
+    });
+    expect(await decide(editor, "read", settings)).toEqual({
+      allowed: false,
+      reason: "rule-filter-misplaced",
+    });
+  });
+
+  it.each([
+    ["an unknown operator", { slug: { resembles: "probe" } }],
+    ["an empty in", { slug: { in: [] } }],
+    ["an and that is not a list", { and: { slug: { equals: "x" } } }],
+  ])("is refused when it is not well formed: %s", async (_name, filter) => {
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    expect(
+      await decide(callers["user-with"], "read", postsAnswering(filter))
+    ).toEqual({ allowed: false, reason: "rule-filter-malformed" });
+  });
+
+  it("is not refused by an update rule answering a filter that is not well formed", async () => {
+    // A publish is judged by its own rule alone, so the update rule's answer,
+    // however malformed, does not reach it.
+    const update = vi.fn(() => ({ and: "x" }));
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { publish: () => true, update: untypedRule(update) },
+    };
+    expect(await decide(callers["user-with"], "publish", target)).toEqual({
+      allowed: true,
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("keeps the filter a rule answered with, however its answer reads afterwards", async () => {
+    let reads = 0;
+    const shifting = {
+      get author() {
+        reads += 1;
+        return reads <= 2 ? { equals: "u1" } : undefined;
+      },
+    };
+    expect(
+      await decide(callers["user-with"], "read", postsAnswering(shifting))
+    ).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+  });
+
+  it("keeps each caller's filter apart when a rule answers with one shared object", async () => {
+    // A rule that writes the caller into one object it keeps, and answers it.
+    const shared: Record<string, unknown> = {};
+    const posts: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        read: untypedRule(({ user }) => {
+          shared.author = { equals: user?.id };
+          return shared;
+        }),
+      },
+    };
+    const reader = (userId: string) =>
+      userActor({
+        userId,
+        roles: ["editor"],
+        permissions: only("posts", ["read"]),
+      });
+    const first = await decide(reader("u1"), "read", posts);
+    const second = await decide(reader("u2"), "read", posts);
+    expect(first).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u1" } },
+    });
+    expect(second).toEqual({
+      allowed: false,
+      reason: "only-matching-entries",
+      filter: { author: { equals: "u2" } },
+    });
+  });
+
+  it("is refused from a Single's publish rule, the update rule never asked", async () => {
+    const update = vi.fn(() => true);
+    const settings: AccessTarget = {
+      kind: "single",
+      slug: "settings",
+      access: { publish: untypedRule(() => OWN), update: untypedRule(update) },
+    };
+    const editor = userActor({
+      userId: "u7",
+      roles: ["editor"],
+      permissions: only("settings", ["read", "update", "publish"]),
+    });
+    expect(await decide(editor, "publish", settings)).toEqual({
+      allowed: false,
+      reason: "rule-filter-misplaced",
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("is not mistaken for a filter when the answer is a list or a class instance", async () => {
+    for (const answer of [[OWN], new Date()]) {
+      expect(
+        await decide(callers["user-with"], "read", postsAnswering(answer))
+      ).toEqual({ allowed: false, reason: "rule-refused" });
     }
   });
 });

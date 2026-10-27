@@ -15,6 +15,7 @@ import { z } from "zod";
 import { defineCollection, defineSingle, text } from "../../config";
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
 import { container } from "../../di/container";
+import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { registerHook, unregisterHook } from "../../hooks";
@@ -477,15 +478,17 @@ describe("a publish inside ctx.db.transaction on sqlite", () => {
       });
     }
     const entries = handler.getEntryService() as CollectionEntryService;
-    const publish = async () => {
-      const result = await entries.publishAllLocales({
+    const publishResult = () =>
+      entries.publishAllLocales({
         collectionName: "pages",
         entryId: id,
         overrideAccess: true,
       });
+    const publish = async () => {
+      const result = await publishResult();
       expect(result.success).toBe(true);
     };
-    return { db, seen, publish };
+    return { db, seen, publish, publishResult };
   }
 
   it("announces a publish only once it commits", async () => {
@@ -506,5 +509,28 @@ describe("a publish inside ctx.db.transaction on sqlite", () => {
 
     expect(seen).toContain("document.published");
     expect(seen).toContain("document.statusTransition");
+  });
+
+  it("does not report a publish saved while the transaction around it can roll it back", async () => {
+    const { db, publishResult } = await bootWithDraft();
+    // The read after the publish fails, inside the plugin's transaction.
+    vi.spyOn(
+      CollectionMutationService.prototype as unknown as {
+        readCompanionSlugsAllLocales: () => Promise<unknown>;
+      },
+      "readCompanionSlugsAllLocales"
+    ).mockRejectedValueOnce(new Error("read failed"));
+
+    let result: Awaited<ReturnType<typeof publishResult>> | undefined;
+    await expect(
+      db.transaction(async () => {
+        result = await publishResult();
+        throw new Error("later step failed");
+      })
+    ).rejects.toThrow("later step failed");
+
+    // The outer transaction rolled the publish back, so it was never saved.
+    expect(result?.success).toBe(false);
+    expect(result?.committed).not.toBe(true);
   });
 });

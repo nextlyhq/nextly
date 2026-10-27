@@ -4,13 +4,18 @@
  * without manual host imports. */
 
 import { registerComponents } from "@nextlyhq/admin";
-import * as _p0 from "@nextlyhq/plugin-page-builder/admin";
-
+import * as _p0 from "@/plugins/widget-kit-fixture/admin";
+import * as _p1 from "@nextlyhq/plugin-page-builder/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
+import type { DeclaredComponentMap } from "nextly";
+import type * as siteConfig from "../../nextly.config";
 
 const registered = {
-  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p0.BlocksField,
-};
+  "@/plugins/widget-kit-fixture/admin#KitCard": _p0.KitCard,
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p0.ThrowingCard,
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p1.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p1.PageBuilderView,
+} satisfies DeclaredComponentMap<typeof siteConfig>;
 
 type Registered = keyof typeof registered;
 type Listed = (typeof listed)[number];

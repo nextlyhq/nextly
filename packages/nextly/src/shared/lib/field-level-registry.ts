@@ -45,11 +45,13 @@ import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
+import { immutableSystemColumnNames } from "../../lib/system-columns";
 import {
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
 import { addressableFields } from "../addressable-fields";
+import { FIELD_ACCESS_KEYS } from "../base-validator";
 import { consoleLogger } from "../types";
 import type { AccessRuleContext, AccessRuleTarget } from "../types/access";
 
@@ -87,7 +89,8 @@ export interface CallerGrants {
  */
 function grantsResolver(
   userId: string | undefined,
-  scope?: AuthenticatedScope
+  scope?: AuthenticatedScope,
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
   return () => {
@@ -119,8 +122,8 @@ function grantsResolver(
       return pending;
     }
     pending = Promise.all([
-      listEffectiveGrants(userId),
-      listRoleSlugsForUser(userId),
+      listEffectiveGrants(userId, executor),
+      listRoleSlugsForUser(userId, executor),
     ])
       // A lookup that fails rejects, and every rule awaiting it is denied by
       // its own guard (`runFieldRule`). Not an empty grant set: that denies
@@ -183,6 +186,39 @@ function key(kind: EntityKind, slug: string): string {
   return `${kind}:${slug}`;
 }
 
+/**
+ * The answer of each rule written as `true` or `false`, keyed by the function
+ * that stands for it, so a rule run can answer one without resolving the
+ * caller's grants: a literal asks nothing of the caller.
+ */
+const literalRules = new WeakMap<FieldAccessFn, boolean>();
+
+/** A function standing for a literal rule, answering it. */
+function literalRule(answer: boolean): FieldAccessFn {
+  const rule: FieldAccessFn = () => answer;
+  literalRules.set(rule, answer);
+  return rule;
+}
+
+/**
+ * A field's access rules as the registry runs them: each a function.
+ *
+ * A rule written as `true` or `false` becomes a function answering itself,
+ * so every read and write that redacts asks it the way it asks a function;
+ * kept as a boolean, it would not be called, and `read: false` would withhold
+ * nothing. Undefined when the field declares no rule.
+ */
+function fieldRules(access: unknown): FieldFunctions["access"] | undefined {
+  if (!access || typeof access !== "object") return undefined;
+  const rules: NonNullable<FieldFunctions["access"]> = {};
+  for (const operation of FIELD_ACCESS_KEYS) {
+    const rule = (access as Record<string, unknown>)[operation];
+    if (typeof rule === "function") rules[operation] = rule as FieldAccessFn;
+    else if (typeof rule === "boolean") rules[operation] = literalRule(rule);
+  }
+  return Object.keys(rules).length > 0 ? rules : undefined;
+}
+
 /** Extract the function-bearing subset of one field config. */
 function extractFieldFunctions(
   field: Record<string, unknown>
@@ -198,13 +234,8 @@ function extractFieldFunctions(
     out.validate = field.validate as FieldFunctions["validate"];
     hasAny = true;
   }
-  const access = field.access as FieldFunctions["access"] | undefined;
-  if (
-    access &&
-    (typeof access.create === "function" ||
-      typeof access.read === "function" ||
-      typeof access.update === "function")
-  ) {
+  const access = fieldRules(field.access);
+  if (access) {
     out.access = access;
     hasAny = true;
   }
@@ -415,7 +446,7 @@ function nestedRows(value: unknown): Record<string, unknown>[] {
  * container back in the shape it arrived in, so a string column stays a string.
  * Returns null when there is nothing to descend into.
  */
-function openNestedContainer(
+export function openNestedContainer(
   value: unknown
 ): { rows: Record<string, unknown>[]; serialize: () => unknown } | null {
   if (typeof value !== "string") {
@@ -457,6 +488,30 @@ export function hasFieldAccessRule(
 ): boolean {
   const fns = getFieldFunctions(kind, slug);
   return fns ? nestedHasAccessCallback(fns, operation) : false;
+}
+
+/**
+ * Whether any field group declares an access rule for one operation, at any
+ * depth.
+ *
+ * The question a read asks before paying to resolve the field groups its
+ * fields reach: their rules live in their own registrations, so an
+ * application whose field groups declare none has nothing to judge inside
+ * them, and the schema lookups would be pure cost on every read.
+ */
+export function anyFieldGroupHasAccessRule(
+  operation: "create" | "update" | "read"
+): boolean {
+  const prefix = key("fieldGroup", "");
+  for (const [registered, fns] of store()) {
+    if (
+      registered.startsWith(prefix) &&
+      nestedHasAccessCallback(fns, operation)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function nestedHasAccessCallback(
@@ -530,12 +585,15 @@ async function runFieldRule(
   ctx: Omit<FieldRuleCaller, "id">,
   entry: Pick<AccessRuleContext, "id" | "data">
 ): Promise<boolean> {
+  // A literal answers before the grants are resolved: it reads neither them
+  // nor the entry, so resolving them would be a lookup with no question.
+  const literal = literalRules.get(fn);
+  if (literal !== undefined) return literal;
   try {
     const { permissions, roles } = await ctx.grants();
     const userId = ctx.user?.id;
     const email = ctx.user?.email;
     const args = buildRuleContext(
-      fn,
       {
         user:
           typeof userId === "string"
@@ -626,16 +684,18 @@ async function applyWriteAccessRec(
   data: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update",
-  ctx: FieldRuleCaller
+  ctx: FieldRuleCaller,
+  asStored?: (snapshot: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
   // Taken BEFORE the recursion below, which rewrites nested containers in
   // place as it redacts them: a rule at this level that reads into a nested
   // value must see what the level held when it was entered, not what an
   // earlier-registered field's recursion left behind. Skipped entirely when no
   // rule at this level will run.
-  const snapshot = levelHasAccessCallback(fns, operation)
+  const detached = levelHasAccessCallback(fns, operation)
     ? detachData(data)
     : undefined;
+  const snapshot = detached && asStored ? asStored(detached) : detached;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -667,6 +727,11 @@ export async function applyFieldWriteAccess(opts: {
   /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
   authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
+  /**
+   * The id the entry is stored under, which a rule is told as `id` and finds
+   * as `data.id`: the stored row's on an update, never the one the request
+   * named, which a database matching ids loosely may have found it by.
+   */
   id?: string;
   /**
    * A resolver shared with another pass over the same write, so the caller's
@@ -694,21 +759,49 @@ export async function applyFieldWriteAccess(opts: {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  await applyWriteAccessRec(opts.data, fns, opts.operation, {
-    user: opts.user,
-    id: opts.id,
-    target: fieldRuleTarget(opts.kind, opts.slug),
-    // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
-    // answers `{ permissions: [], roles: [] }` — so a rule written as
-    // `({ permissions }) => permissions.includes(...)` refuses it, which is
-    // the correct answer rather than an accident of the shape.
-    grants:
-      opts.grants ??
-      grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined,
-        opts.authenticatedScope
-      ),
-  });
+  await applyWriteAccessRec(
+    opts.data,
+    fns,
+    opts.operation,
+    {
+      user: opts.user,
+      id: opts.id,
+      target: fieldRuleTarget(opts.kind, opts.slug),
+      // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
+      // answers `{ permissions: [], roles: [] }` — so a rule written as
+      // `({ permissions }) => permissions.includes(...)` refuses it, which is
+      // the correct answer rather than an accident of the shape.
+      grants:
+        opts.grants ??
+        grantsResolver(
+          typeof opts.user?.id === "string" ? opts.user.id : undefined,
+          opts.authenticatedScope
+        ),
+    },
+    asStoredFor(opts.kind, opts.id)
+  );
+}
+
+/**
+ * The entry a write rule reads as `data`, made the stored one's where the
+ * caller could make it differ: the system columns only the service decides
+ * are not there, and `id` is the id the entry is stored under. A body may
+ * carry any of them, and none of them is what is stored. A field group's
+ * instances are told their own stored id by the write that saves them.
+ */
+function asStoredFor(
+  kind: EntityKind,
+  id: string | undefined
+):
+  | ((snapshot: Record<string, unknown>) => Record<string, unknown>)
+  | undefined {
+  if (kind === "fieldGroup") return undefined;
+  const closed = immutableSystemColumnNames(kind);
+  return snapshot => {
+    for (const name of closed) delete snapshot[name];
+    if (id !== undefined) snapshot.id = id;
+    return snapshot;
+  };
 }
 
 /**
@@ -927,11 +1020,18 @@ export async function resolvedCallerGrants(
  */
 export function callerAccessGrants(
   user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /**
+   * The transaction-bound executor, for a pass that runs while a write holds
+   * its connection: the lookups then read on it, rather than waiting on the
+   * pool for the connection the transaction itself is holding.
+   */
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   return grantsResolver(
     typeof user?.id === "string" ? user.id : undefined,
-    authenticatedScope
+    authenticatedScope,
+    executor
   );
 }
 

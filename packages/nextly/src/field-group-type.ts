@@ -67,3 +67,12 @@ export {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "./domains/field-groups/storage/field-group-field-type";
+
+// Which component fields sit directly in a component's own fields, where nothing stores them. The
+// write refuses a value for one and `defineConfig` warns about each; a surface that names them
+// asks the same walk, so the three cannot disagree. Its only other import is the leaf `virtual`
+// check, so the entry stays as light as its header promises.
+export {
+  directComponentFields,
+  type DirectField,
+} from "./domains/field-groups/direct-component-fields";

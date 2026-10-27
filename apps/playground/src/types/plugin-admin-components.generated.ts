@@ -4,5 +4,8 @@
  * without importing the components. Regenerated with it. */
 
 export const registeredComponentPaths = [
+  "@/plugins/widget-kit-fixture/admin#KitCard",
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard",
   "@nextlyhq/plugin-page-builder/admin#BlocksField",
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView",
 ] as const;

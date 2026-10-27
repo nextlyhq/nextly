@@ -26,6 +26,7 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useCallback, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -48,7 +49,7 @@ export function RepeaterFieldEditor({
   rowLabelField,
   onRowLabelFieldChange,
   nestedFields = [],
-}: RepeaterFieldEditorProps) {
+}: RepeaterFieldEditorProps): JSX.Element {
   // Get fields that can be used as row labels (text-like fields with names)
   const labelableFields = useMemo(() => {
     return nestedFields.filter(

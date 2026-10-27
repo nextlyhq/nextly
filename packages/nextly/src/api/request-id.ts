@@ -40,18 +40,28 @@ export function generateRequestId(): string {
   return "req_" + base32(bytes).slice(0, 16);
 }
 
+/** The id each request was given, so it is given one id however often asked. */
+const settled = new WeakMap<Request, string>();
+
 /**
  * Read an upstream-set request id, falling back to a freshly generated one.
  * Header precedence (most-specific first): `x-request-id` (our convention) >
  * `x-vercel-id` (Vercel) > `cf-ray` (Cloudflare).
+ *
+ * The same request always reads the same id. A request that brought none is
+ * given one the first time it is asked, and every later read returns it, so
+ * its response and each log line written while serving it carry one id.
  */
 export function readOrGenerateRequestId(req: Request): string {
-  return (
+  const known = settled.get(req);
+  if (known !== undefined) return known;
+  const id =
     req.headers.get("x-request-id") ??
     req.headers.get("x-vercel-id") ??
     req.headers.get("cf-ray") ??
-    generateRequestId()
-  );
+    generateRequestId();
+  settled.set(req, id);
+  return id;
 }
 
 /**

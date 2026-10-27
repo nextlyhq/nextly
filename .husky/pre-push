@@ -120,10 +120,11 @@ echo "pre-push: $TURBO_CONCURRENCY package task(s) x $VITEST_WORKERS worker(s) o
 # push, and this runs under `set -e`.
 DIRTY="$(git status --porcelain 2>/dev/null || true)"
 
-# The two repo-wide lints CI gates on that `turbo lint` does not run. Both
-# finish in well under a second, and neither was reachable from any hook, so
-# knowing they existed was something each person carried privately: an `hsl()`
-# literal reached a theme file whose every other token is OKLCH, and an
+# The three lints CI gates on beside the main one, each reading what it does
+# not: design tokens, the workspace manifests and the dev-tooling scripts. Each
+# finishes in about a second. The first two were once reachable from no hook,
+# so knowing they existed was something each person carried privately: an
+# `hsl()` literal reached a theme file whose every other token is OKLCH, and an
 # out-of-order dependency key failed a build, each costing a CI round trip to
 # learn something a local prompt could have said immediately.
 pnpm lint:design
@@ -131,14 +132,16 @@ pnpm lint:workspace
 pnpm lint:scripts
 
 # The build BEFORE lint, for the reason the typecheck below follows it.
-# `import-x/no-unresolved` and every type-aware rule resolve a workspace import
-# through the sibling's `dist`, so lint on an unbuilt tree reports the missing
-# build rather than the diff. Linting first refused every push from a checkout
-# that had never been built — 16 of 23 lint tasks, all on unresolved imports —
-# and a new `pnpm worktree` checkout is exactly that.
+# Every type-aware rule resolves a workspace import through the sibling's
+# `dist`, so lint on an unbuilt tree reports the missing build rather than the
+# diff. Linting first refused every push from a checkout that had never been
+# built — 16 of 23 lint tasks, all on unresolved imports — and a new
+# `pnpm worktree` checkout is exactly that.
+#
+# One oxlint run over the whole repository: packages, `apps/*` and `e2e`
+# alike, where the per-package lint before it reached only `packages/*`.
 pnpm run build
-pnpm turbo lint --continue \
-  --filter='./packages/*'
+pnpm lint
 
 # Types AFTER the build, and over every package rather than the changed ones.
 #
@@ -169,7 +172,7 @@ set -e
 
 # The TESTS of the packages this branch actually changes.
 #
-# Two gaps this closes, and both were real. The lint above filters to
+# Two gaps this closes, and both were real. The lint here once filtered to
 # `./packages/*`, which excludes `apps/*` and `e2e` — workspaces this repo
 # declares and this hook could not reach. And nothing here ran tests at all, so
 # a guard that lives in a TEST was unreachable from any hook: a public-export
@@ -197,15 +200,30 @@ GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
 GATE_STATUS=$?
 set -e
 
+# Inside each package the change touches, only the test FILES it can affect run:
+# `scripts/test-changed.mjs` asks Vitest's `--changed` over the dependency records
+# each test left on its last run, always adds the tests that read files or spawn
+# processes (which no record names), runs the whole package when its tsconfig or
+# a workspace dependency changed beside it, runs EVERY package for a change every
+# test compiles against (the lockfile, `.nvmrc`, a root or shared tsconfig, a
+# file turbo hashes into every task), runs a package whose test task declares a
+# changed root file, runs a package in full when its dependency records may
+# predate the tree, and runs the root scripts tests when any root file or a
+# Vitest config changed.
+# NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
   pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
+  node scripts/test-changed.mjs --scripts-only
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
-elif [ -n "$GATE_FILTERS" ]; then
-  # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
-  pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
+elif [ "${NEXTLY_PREPUSH_ALL_TESTS:-}" = 1 ]; then
+  # The same scope as below, widened the same way, with every package in full:
+  # turbo on gate-scope's filters alone would miss what the widening adds.
+  node scripts/test-changed.mjs --all --max-workers="$VITEST_WORKERS"
+else
+  node scripts/test-changed.mjs --max-workers="$VITEST_WORKERS"
 fi
 
 # The TYPES of the packages this push AFFECTS, blocking.

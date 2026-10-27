@@ -15,7 +15,16 @@
  * - handleError / ServiceError translation
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+import {
+  callerLookupFails,
+  callerMay,
+  callerMayNot,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  resetCallerAccess,
+} from "../../../auth/access/__tests__/fake-caller";
 
 import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
@@ -36,6 +45,27 @@ import {
 // ============================================================
 // Test Fixture
 // ============================================================
+
+// The signed-in caller the gate looks up, set per test (`callerMay`).
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
+  return {
+    ...(await importOriginal<object>()),
+    actorForUser: fake.fakeActorForUser,
+    userHoldsPermission: fake.fakeUserHoldsPermission,
+    userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+  };
+});
+
+beforeEach(() => {
+  resetCallerAccess();
+  fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
+});
+
+/** The actions the permission check was asked about, in order. */
+const actionsAsked = () =>
+  fakeUserHoldsPermission.mock.calls.map(([, action]) => action);
 
 type EntryTestCtx = {
   service: SingleEntryService;
@@ -311,7 +341,8 @@ describe("SingleEntryService", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(ctx.rbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("skips RBAC check when no user is provided", async () => {
@@ -324,27 +355,28 @@ describe("SingleEntryService", () => {
 
       await ctx.service.get("site-settings");
 
-      expect(ctx.rbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("denies with 403 when RBAC reports access denied", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
 
       const result = await ctx.service.get("site-settings", {
         user: { id: "u1" },
       });
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
       expect(ctx.adapter.selectOne).not.toHaveBeenCalled();
     });
 
     it("fails secure (500) when RBAC check throws", async () => {
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockRejectedValue(new Error("boom"));
+      callerLookupFails(new Error("boom"));
 
       const result = await ctx.service.get("site-settings", {
         user: { id: "u1" },
@@ -364,12 +396,11 @@ describe("SingleEntryService", () => {
 
       await ctx.service.get("site-settings", { user: { id: "u1" } });
 
-      expect(ctx.rbac.checkAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          operation: "read",
-          resource: "site-settings",
-          userId: "u1",
-        })
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "u1",
+        "read",
+        "site-settings",
+        { executor: undefined }
       );
     });
   });
@@ -413,7 +444,11 @@ describe("SingleEntryService", () => {
     it("returns 404 when single is not in the registry", async () => {
       ctx.registry.getSingleBySlug.mockResolvedValue(null);
 
-      const result = await ctx.service.update("missing", { siteName: "New" });
+      const result = await ctx.service.update(
+        "missing",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(404);
@@ -439,9 +474,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "New",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(true);
       expect(result.data?.siteName).toBe("New");
@@ -466,9 +505,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "Set",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "Set",
+        },
+        { overrideAccess: true }
+      );
 
       // The auto-created default document once, with the history and outbox
       // events appended in the same update transaction.
@@ -500,9 +543,13 @@ describe("SingleEntryService", () => {
         Object.assign(new Error("database error"), { cause: validationError })
       );
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "New",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(400);
@@ -518,11 +565,15 @@ describe("SingleEntryService", () => {
         { id: "doc-1", updated_at: "2026-02-01T00:00:00.000Z" },
       ]);
 
-      await ctx.service.update("site-settings", {
-        id: "should-be-stripped",
-        createdAt: new Date(),
-        siteName: "Keep",
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          id: "should-be-stripped",
+          createdAt: new Date(),
+          siteName: "Keep",
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -541,9 +592,13 @@ describe("SingleEntryService", () => {
       });
       ctx.adapter.update.mockResolvedValue([]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "X",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "X",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(500);
@@ -573,9 +628,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        settings: { theme: "dark" },
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          settings: { theme: "dark" },
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -608,13 +667,17 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        logo: {
-          id: "media-2",
-          url: "/uploads/logo.png",
-          filename: "logo.png",
+      await ctx.service.update(
+        "site-settings",
+        {
+          logo: {
+            id: "media-2",
+            url: "/uploads/logo.png",
+            filename: "logo.png",
+          },
         },
-      });
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -639,13 +702,17 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        gallery: [
-          { id: "media-1", url: "/a.png" },
-          "media-2",
-          { id: "media-3", url: "/c.png" },
-        ],
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          gallery: [
+            { id: "media-1", url: "/a.png" },
+            "media-2",
+            { id: "media-3", url: "/c.png" },
+          ],
+        },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -682,10 +749,14 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", {
-        siteName: "New",
-        seo: { metaTitle: "Hello" },
-      });
+      await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "New",
+          seo: { metaTitle: "Hello" },
+        },
+        { overrideAccess: true }
+      );
 
       // The main update payload should NOT contain the component field
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
@@ -721,7 +792,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "New" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(
         ctx.fieldGroupDataService.saveComponentDataInTransaction
@@ -750,7 +825,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "New" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "New" },
+        { overrideAccess: true }
+      );
 
       expect(ctx.hookRegistry.executeBeforeOperation).toHaveBeenCalledTimes(1);
       const call = ctx.hookRegistry.executeBeforeOperation.mock.calls[0][0];
@@ -777,7 +856,11 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      await ctx.service.update("site-settings", { siteName: "Original" });
+      await ctx.service.update(
+        "site-settings",
+        { siteName: "Original" },
+        { overrideAccess: true }
+      );
 
       const payload = ctx.adapter.update.mock.calls[0][1] as Record<
         string,
@@ -807,9 +890,13 @@ describe("SingleEntryService", () => {
         },
       ]);
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "Whatever",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "Whatever",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.data?.siteName).toBe("After transform");
     });
@@ -820,10 +907,27 @@ describe("SingleEntryService", () => {
   // ============================================================
 
   describe("update — RBAC", () => {
-    it("denies with 403 when RBAC reports access denied", async () => {
+    it("refuses an update in words, to a caller who may read the Single", async () => {
+      // One it may read, the caller is told what it may not do.
       ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
-      ctx.rbac.checkAccess.mockResolvedValue(false);
+      callerMay("read");
+
+      const result = await ctx.service.update(
+        "site-settings",
+        { siteName: "X" },
+        { user: { id: "u1" } }
+      );
+
+      expect(result.statusCode).toBe(403);
+      expect(result.message).toMatch(/^You can't edit /);
+      expect(ctx.adapter.update).not.toHaveBeenCalled();
+    });
+
+    it("answers a caller who may not read the Single as if it were missing", async () => {
+      ctx = createCtx({ withRbac: true });
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      callerMay();
 
       const result = await ctx.service.update(
         "site-settings",
@@ -832,7 +936,13 @@ describe("SingleEntryService", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(403);
+      expect(result.statusCode).toBe(404); // May not read it either, so answered as missing.
+      // The missing Single's own answer, data and all, so nothing tells the two
+      // apart.
+      expect(result).toMatchObject({
+        statusCode: 404,
+        publicData: { single: "site-settings" },
+      });
       expect(ctx.adapter.update).not.toHaveBeenCalled();
     });
 
@@ -856,12 +966,11 @@ describe("SingleEntryService", () => {
         { user: { id: "u1" } }
       );
 
-      expect(ctx.rbac.checkAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          operation: "update",
-          resource: "site-settings",
-          userId: "u1",
-        })
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "u1",
+        "update",
+        "site-settings",
+        { executor: undefined }
       );
     });
   });
@@ -880,7 +989,11 @@ describe("SingleEntryService", () => {
         })
       );
 
-      const result = await ctx.service.update("site-settings", {});
+      const result = await ctx.service.update(
+        "site-settings",
+        {},
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("bad input");
@@ -893,9 +1006,13 @@ describe("SingleEntryService", () => {
       });
       ctx.adapter.update.mockRejectedValue(new Error("db exploded"));
 
-      const result = await ctx.service.update("site-settings", {
-        siteName: "X",
-      });
+      const result = await ctx.service.update(
+        "site-settings",
+        {
+          siteName: "X",
+        },
+        { overrideAccess: true }
+      );
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(500);
@@ -916,9 +1033,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         siteSettingsMeta({ status: true })
       );
-      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
-        Promise.resolve(args.operation !== deny)
-      );
+      callerMayNot(deny);
       ctx.adapter.update.mockResolvedValue([
         { id: "doc-1", siteName: "S", updated_at: "2026-02-01T00:00:00.000Z" },
       ]);
@@ -1001,9 +1116,7 @@ describe("SingleEntryService", () => {
           fields: [textField("siteName"), textField("status")],
         })
       );
-      ctx.rbac.checkAccess.mockImplementation((args: { operation: string }) =>
-        Promise.resolve(args.operation !== "publish")
-      );
+      callerMayNot("publish");
       ctx.adapter.selectOne.mockResolvedValue({
         id: "doc-1",
         siteName: "S",
@@ -1023,10 +1136,8 @@ describe("SingleEntryService", () => {
       // The write reaches and passes the gate (no lifecycle to enforce), rather
       // than 404-ing on an unregistered single.
       expect(result.success).toBe(true);
-      const publishConsulted = ctx.rbac.checkAccess.mock.calls.some(
-        ([args]: [{ operation: string }]) => args.operation === "publish"
-      );
-      expect(publishConsulted).toBe(false);
+      expect(actionsAsked()).toContain("update");
+      expect(actionsAsked()).not.toContain("publish");
     });
 
     it("bypasses the transition gate under overrideAccess", async () => {
@@ -1063,9 +1174,12 @@ describe("SingleEntryService", () => {
       const ctx = lifecycleCtx("publish");
       ctx.adapter.selectOne.mockResolvedValue(null);
 
+      // The write also edits a field, so the update gate admits it and the
+      // publish is refused inside the transaction. A status alone would be
+      // refused by the publish gate before any default is built.
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", siteName: "S2" },
         { user: { id: "u1" } }
       );
 
@@ -1166,7 +1280,7 @@ describe("SingleEntryService", () => {
       const ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       // The key's own grant does not cover this write. Only the scope can refuse
-      // it: the owner's roles say super-admin, and `rbac.checkAccess` allows.
+      // it: the owner's roles say super-admin, and the owner holds every action.
       const result = await ctx.service.update(
         "site-settings",
         { siteName: "x" },

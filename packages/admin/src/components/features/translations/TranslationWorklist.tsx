@@ -20,6 +20,7 @@
  * @module components/features/translations/TranslationWorklist
  */
 
+import type { JSX } from "react";
 import { useEffect } from "react";
 
 import {
@@ -425,7 +426,7 @@ export function TranslationWorklist({
    */
   onLocaleCorrected: (code: string) => void;
   onStateChange: (state: WorklistState) => void;
-}) {
+}): JSX.Element {
   const { enabled, locales, defaultLocale } = useLocalization();
   // Consulted before any conclusion is drawn from missing locale metadata —
   // the branding types say to, for exactly this reason.

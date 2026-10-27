@@ -20,9 +20,11 @@ import { commerceError } from "../errors";
 export type OperationId = string;
 
 /** @experimental */
-export const operationIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,255}$/, {
-  message: "an operation id is 1 to 255 letters, digits or -_.:",
-});
+export const operationIdSchema: z.ZodString = z
+  .string()
+  .regex(/^[A-Za-z0-9._:-]{1,255}$/, {
+    message: "an operation id is 1 to 255 letters, digits or -_.:",
+  });
 
 /**
  * Refuse a value that cannot be an operation identifier.

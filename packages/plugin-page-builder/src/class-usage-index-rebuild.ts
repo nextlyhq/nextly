@@ -37,7 +37,7 @@
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
 
-import { type ClassUsageIndexStore } from "./class-usage-maintenance";
+import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";

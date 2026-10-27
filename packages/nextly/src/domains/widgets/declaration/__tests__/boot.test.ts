@@ -13,9 +13,10 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import { getWidget } from "../../registry";
+import { getWidget, widgetSource } from "../../registry";
 import {
   cardQueryFor,
+  clearDeclaredWidgets,
   declaredWidget,
   resetLegacyIdWarnings,
 } from "../declared-widgets";
@@ -64,14 +65,34 @@ beforeEach(() => {
 });
 
 describe("startup with plugins that declare widgets", () => {
-  it("keeps each enabled plugin's declared widgets, and offers none to the admin yet", () => {
+  it("keeps each enabled plugin's declared widgets, and offers them to the admin as answered on the server", () => {
     resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
     expect(declaredWidget("acme/revenue")?.owner).toBe('plugin "@acme/shop"');
     expect(declaredWidget("acme/orders-by-state")).toBeDefined();
-    // Nothing runs a declared widget's data for a card yet, so the registry
-    // the admin reads holds none of them, and core's own cards as before.
-    expect(getWidget("acme/orders-by-state")).toBeUndefined();
+    // Published as they are kept: the admin is offered each one, with its data built on the
+    // server from the declaration only core holds, so the definition carries neither.
+    const published = getWidget("acme/orders-by-state");
+    expect(published).toMatchObject({
+      id: "acme/orders-by-state",
+      serverData: true,
+    });
+    expect(published).not.toHaveProperty("query");
+    expect(published).not.toHaveProperty("data");
+    expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
     expect(getWidget("core/recently-edited")).toBeDefined();
+  });
+
+  it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
+    resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
+    expect(getWidget("acme/orders-by-state")).toBeDefined();
+    clearDeclaredWidgets();
+    expect(getWidget("acme/orders-by-state")).toBeUndefined();
+    // Core's own cards were never a declaration's, so they stay.
+    expect(getWidget("core/recently-edited")).toBeDefined();
+    // And the same declarations can be made again.
+    expect(() =>
+      resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
+    ).not.toThrow();
   });
 
   it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
@@ -108,7 +129,12 @@ describe("startup with plugins that declare widgets", () => {
         plugin("@acme/shop", {
           dashboard: untyped([
             { ...revenue, title: "" },
-            { ...revenue, id: "acme/other", width: "quarter" },
+            {
+              ...revenue,
+              id: "acme/other",
+              // Narrower than the size it starts at.
+              size: { ...revenue.size, max: { w: 7, h: 4 } },
+            },
           ]),
         }),
         plugin("@other/stats", {
@@ -121,7 +147,7 @@ describe("startup with plugins that declare widgets", () => {
       'plugin "@acme/shop", widget "acme/revenue": title must be a non-empty string'
     );
     expect(message).toContain(
-      'plugin "@acme/shop", widget "acme/other": width "quarter" is not one of the widths it allows'
+      'plugin "@acme/shop", widget "acme/other": size.default must not be larger than size.max'
     );
     expect(message).toContain(
       'plugin "@other/stats", widget "other/x": category must be a non-empty string'

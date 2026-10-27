@@ -102,13 +102,9 @@ export interface AccessRuleContext {
   /**
    * The caller's permissions, spelled as the role screen and the database
    * spell them: `<action>-<resource>`, such as `read-posts`. Empty for a
-   * visitor and for a plugin-defined person, who hold none.
-   *
-   * For one release the list also carries each
-   * permission's earlier rule spelling, `<resource>:<action>` (`posts:read`),
-   * after the others, so an existing rule keeps its answer. A rule that
-   * checks that spelling is warned once; it stops being accepted in a later
-   * release.
+   * visitor and for a plugin-defined person, who hold none. The earlier
+   * rule spelling, `<resource>:<action>` (`posts:read`), is not in the list,
+   * so a rule checking it does not allow.
    */
   permissions: string[];
   /**
@@ -138,6 +134,31 @@ export interface AccessRuleContext {
   id?: string;
   /** The entry's data, where the rule is judging a known entry. */
   data?: Record<string, unknown>;
+  /**
+   * The one language this answer is for: the language a read reads or a
+   * write writes (an unknown or absent one being the default it resolves
+   * to), or, where a publish puts several languages live at once, the one
+   * being asked about, since it asks once for each. Absent where the
+   * operation involves every language, or the site has none.
+   */
+  locale?: string;
+  /**
+   * Every language the operation involves: `[locale]` for a read or a write
+   * in one language, a read's followed by each language a missing value
+   * falls back to, in the order it tries them (a bulk or transactional
+   * create or update writes the default; a duplicate, the default and each
+   * language it falls back to); every configured language for a read of
+   * every translation, a write to every language, an operation on the whole
+   * entry such as a delete, and any operation on content stored the same in
+   * every language.
+   * A publish that puts several languages live at once is asked once for
+   * each of them, with `locales` the languages it puts live: every
+   * configured language where its content reaches a localized field group.
+   * Empty only where the site has no languages. A rule that limits someone
+   * to some languages checks all of these, so it refuses an operation that
+   * reaches beyond them.
+   */
+  locales: string[];
 }
 
 /**
@@ -185,7 +206,8 @@ export type AccessControlFunction = (
  * - A **boolean** for simple allow/deny
  * - **Omitted** to fall back to database role/permission checks
  *
- * Code-defined access always takes precedence over database permissions.
+ * A signed-in user or an API key needs the database permission first;
+ * code-defined access only narrows it, allowing only on `true`.
  * Super-admin always bypasses all access checks.
  *
  * @example
@@ -195,7 +217,7 @@ export type AccessControlFunction = (
  *   access: {
  *     // Only admins and editors can create
  *     create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
- *     // Any authenticated user can read
+ *     // Visitors can read, and signed-in callers holding read-posts
  *     read: true,
  *     // Only the user's own posts (checked via roles/permissions)
  *     update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
@@ -216,14 +238,16 @@ export interface CollectionAccessControl {
   /** Access rule for deleting documents */
   delete?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving a document INTO published (publishing). Evaluated on
-   * top of `update`, so a caller must satisfy both to publish. Absent means the
-   * publish permission is resolved from DB grants alone (`publish-<slug>`).
+   * Access rule for moving a document INTO published (publishing). A write that
+   * changes only the status is judged by it alone; one that also edits fields
+   * needs `update` too. Absent means the publish permission is resolved from
+   * DB grants alone (`publish-<slug>`).
    */
   publish?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving a document OUT of published (unpublishing). Evaluated
-   * on top of `update`. Absent means it is resolved from DB grants alone
+   * Access rule for moving a document OUT of published (unpublishing). A write
+   * that changes only the status is judged by it alone; one that also edits
+   * fields needs `update` too. Absent means it is resolved from DB grants alone
    * (`unpublish-<slug>`).
    */
   unpublish?: AccessControlFunction | boolean;
@@ -257,14 +281,16 @@ export interface SingleAccessControl {
   /** Access rule for updating the single document */
   update?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving the single INTO published (publishing). Evaluated on
-   * top of `update`. Absent means it is resolved from DB grants alone
+   * Access rule for moving the single INTO published (publishing). A write that
+   * changes only the status is judged by it alone; one that also edits fields
+   * needs `update` too. Absent means it is resolved from DB grants alone
    * (`publish-<slug>`).
    */
   publish?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving the single OUT of published (unpublishing). Evaluated
-   * on top of `update`. Absent means it is resolved from DB grants alone
+   * Access rule for moving the single OUT of published (unpublishing). A write
+   * that changes only the status is judged by it alone; one that also edits
+   * fields needs `update` too. Absent means it is resolved from DB grants alone
    * (`unpublish-<slug>`).
    */
   unpublish?: AccessControlFunction | boolean;

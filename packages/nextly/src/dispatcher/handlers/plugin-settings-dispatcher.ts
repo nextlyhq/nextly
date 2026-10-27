@@ -127,14 +127,14 @@ export async function dispatchPluginSettings(
     // never populated here — so `updated_by` was null on every settings
     // update, losing the actor the column was added to keep.
     const changedKeys = await service.set(body as Record<string, unknown>, {
-      actorUserId: readAuthenticatedUser(params)?.id,
+      actorUserId: readAuthenticatedUser()?.id,
     });
     // Recorded by key NAME after the write commits: the last `updated_by` was
     // otherwise the only trace of who changed a plugin's credentials.
     await announcePluginSettingsChange({
       plugin: pluginName,
       changedKeys,
-      actor: readAuthenticatedActor(params),
+      actor: readAuthenticatedActor(),
     });
     // The CANONICAL mutation envelope, with the updated redacted value as
     // the item: a client processing this update like every other mutation

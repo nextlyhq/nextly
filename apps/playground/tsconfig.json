@@ -1,9 +1,11 @@
 {
   "extends": "../../packages/tsconfig/nextjs.json",
   "compilerOptions": {
-    "target": "ES2017",
+    "types": ["node"],
+    // Written out, because Next writes its own suggestion into a config that
+    // has none.
+    "target": "ES2024",
     "incremental": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       // admin's internal path alias — needed for tsc when it walks admin's

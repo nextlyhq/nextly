@@ -17,13 +17,14 @@
 import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isAdminRelativePath } from "../admin-path";
 import { isValidWidgetId } from "../definition";
+import { sizeDeclarationProblems } from "../grid-size";
 import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
-import { WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
-import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
+import { cardAnswerProblem } from "./card-answer";
+import { CORE_DISPLAYS, isCoreDisplay } from "./displays";
 import { quote } from "./quote";
-import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
 export interface WidgetDeclarationFault {
@@ -43,9 +44,6 @@ export interface WidgetDeclarationGroup {
   owner: string;
   declarations: unknown;
 }
-
-/** The widths a card may take: core's own list, narrowest first. */
-const WIDTHS: readonly WidgetWidth[] = WIDGET_WIDTHS;
 
 /**
  * Namespaces core keeps for itself: its own widgets, and the cards it generates
@@ -70,10 +68,10 @@ const FIELDS = new Set([
   "title",
   "description",
   "category",
-  "widths",
-  "width",
+  "size",
   "permission",
   "several",
+  "hidesWhenEmpty",
   "sketch",
   "settings",
   "data",
@@ -88,21 +86,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 /** One line of text: no line break anywhere in it. */
 const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
-
-/**
- * Whether a link is a path inside the admin: no scheme, no host, and not from
- * the root, where it would name the admin's own address. Core resolves it to
- * wherever the admin is served.
- */
-function isAdminRelative(link: unknown): boolean {
-  return (
-    typeof link === "string" &&
-    link.trim() !== "" &&
-    !/^[a-z][a-z0-9+.-]*:/i.test(link) &&
-    !link.startsWith("/") &&
-    !link.includes("\\")
-  );
-}
 
 /**
  * Everything wrong with one declaration, in field order.
@@ -146,7 +129,7 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
   d => requiredTextProblem("title", d.title),
   d => requiredTextProblem("category", d.category),
   d => descriptionProblem(d.description),
-  d => widthsProblems(d.widths, d.width),
+  d => sizeProblems(d.size),
   d =>
     d.permission === undefined || isPermissionName(d.permission)
       ? undefined
@@ -155,6 +138,10 @@ const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
     d.several === undefined || typeof d.several === "boolean"
       ? undefined
       : "several must be true or false",
+  d =>
+    d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
+      ? undefined
+      : "hidesWhenEmpty must be true or false",
   d =>
     d.sketch === undefined || isCoreDisplay(d.sketch)
       ? undefined
@@ -175,7 +162,8 @@ function declarationProblems(d: Record<string, unknown>): string[] {
   });
 }
 
-function requiredTextProblem(
+/** Why `value` is not a usable required text `field`, or `undefined`. */
+export function requiredTextProblem(
   field: string,
   value: unknown
 ): string | undefined {
@@ -186,24 +174,20 @@ function requiredTextProblem(
 }
 
 /**
- * An example must reach the browser as itself, since the admin draws it as a
- * preview, and a core display's example must have the shape that display
- * draws.
+ * An example is drawn as the card's preview, so it is held to the rule every
+ * card's data is held to (`cardAnswerProblem`): it reaches the browser as
+ * itself, and a core display's example has the shape that display draws.
  */
 function exampleProblem(
   example: unknown,
   display: unknown
 ): string | undefined {
   if (example === undefined) return undefined;
-  const untransportable = transportableProblem(example);
-  if (untransportable !== undefined) {
-    return `example cannot be sent to the browser as it is: ${untransportable.replace("the value", "example")}`;
-  }
-  if (!isCoreDisplay(display)) return undefined;
-  const mismatch = displayDataProblem(display, example);
-  return mismatch === undefined
-    ? undefined
-    : `example does not have the shape the "${display}" display draws (${mismatch})`;
+  const problem = cardAnswerProblem(display, example);
+  if (problem === undefined) return undefined;
+  return problem.kind === "untransportable"
+    ? `example cannot be sent to the browser as it is: ${problem.detail.replace("the value", "example")}`
+    : `example does not have the shape the "${problem.display}" display draws (${problem.detail})`;
 }
 
 function idProblem(id: unknown): string | undefined {
@@ -218,7 +202,8 @@ function idProblem(id: unknown): string | undefined {
   return undefined;
 }
 
-function descriptionProblem(description: unknown): string | undefined {
+/** Why `description` breaks the one-line, 80-character rule, or `undefined`. */
+export function descriptionProblem(description: unknown): string | undefined {
   if (description === undefined) return "description is required";
   const parsed = nonBlank.safeParse(description);
   if (!parsed.success) return "description must be a non-empty string";
@@ -231,51 +216,21 @@ function descriptionProblem(description: unknown): string | undefined {
 }
 
 /**
- * Every problem with the widths a declaration allows and its starting width.
+ * Every problem with a declaration's size: its starting size and the bounds
+ * it may be resized within, in grid units.
  *
- * The starting width is judged against the allowed widths only when those
- * could be read; otherwise the same mistake would be reported twice.
+ * 🔴 Judged by the grid's own rules (`sizeDeclarationProblems`), the ones the
+ * registry and the site config's checks use, so a declaration and a stored
+ * definition cannot be judged by two rules.
  */
-function widthsProblems(widths: unknown, width: unknown): string[] {
-  const named = `(${WIDTHS.join(", ")})`;
-  if (!Array.isArray(widths) || widths.length === 0) {
-    return [
-      `widths must list at least one of the widths a card may take ${named}`,
-      ...optional(widthProblem(width, undefined)),
-    ];
-  }
-  const strange = widths.filter(
-    entry => !(WIDTHS as readonly unknown[]).includes(entry)
-  );
-  const allowed = strange.length === 0 ? (widths as string[]) : undefined;
-  return [
-    ...strange.map(
-      entry => `widths holds ${quote(entry)}, which is not a width ${named}`
-    ),
-    ...optional(widthProblem(width, allowed)),
-  ];
+function sizeProblems(size: unknown): readonly string[] {
+  if (size === undefined) return ["size is required"];
+  return sizeDeclarationProblems(size);
 }
 
 /** A problem as a list of none or one, to spread into a longer list. */
 const optional = (problem: string | undefined): string[] =>
   problem === undefined ? [] : [problem];
-
-function widthProblem(
-  width: unknown,
-  widths: readonly string[] | undefined
-): string | undefined {
-  if (width === undefined) return "width is required";
-  if (
-    typeof width !== "string" ||
-    !(WIDTHS as readonly string[]).includes(width)
-  ) {
-    return `width must be one of the widths a card may take (${WIDTHS.join(", ")}), got ${quote(width)}`;
-  }
-  if (widths !== undefined && !widths.includes(width)) {
-    return `width ${quote(width)} is not one of the widths it allows (${widths.join(", ")})`;
-  }
-  return undefined;
-}
 
 function isPermissionName(value: unknown): boolean {
   return typeof value === "string" && PERMISSION_NAME.test(value);
@@ -375,7 +330,7 @@ function emptyActionProblems(action: unknown): string[] {
   }
   return [
     ...optional(
-      isAdminRelative(action.link)
+      isAdminRelativePath(action.link)
         ? undefined
         : `empty.action.link must be a path relative to the admin, such as "collections/orders", got ${quote(action.link)}`
     ),

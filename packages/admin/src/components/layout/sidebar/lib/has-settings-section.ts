@@ -26,8 +26,8 @@ export function canAccessWebhooks(
  * Whether the Settings entry appears in the primary rail.
  *
  * Settings is not one destination but a panel, and the grants that reach into
- * it are not one permission: it hosts email configuration, API keys, webhooks
- * and User Management alongside the settings screens themselves, each answering
+ * it are not one permission: it hosts API keys, webhooks and User Management
+ * alongside the settings screens themselves, each answering
  * to its own grant. A reader whose only access is `read-users` must still see
  * the icon, or the destination they can open has no route to it.
  *
@@ -40,11 +40,7 @@ export function canAccessWebhooks(
 export function hasSettingsSection(
   capabilities: Pick<
     AdminCapabilities,
-    | "canViewSettings"
-    | "canManageEmailProviders"
-    | "canManageEmailTemplates"
-    | "canViewUsers"
-    | "canViewRoles"
+    "canViewSettings" | "canViewUsers" | "canViewRoles"
   >,
   inputs: {
     /** True while permissions are still resolving. */
@@ -55,8 +51,6 @@ export function hasSettingsSection(
   if (inputs.isPending) return true;
   return (
     capabilities.canViewSettings ||
-    capabilities.canManageEmailProviders ||
-    capabilities.canManageEmailTemplates ||
     capabilities.canViewUsers ||
     capabilities.canViewRoles ||
     canAccessApiKeys(inputs.hasPermission) ||

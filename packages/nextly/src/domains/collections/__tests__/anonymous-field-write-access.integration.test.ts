@@ -28,6 +28,8 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -95,6 +97,9 @@ describe.each(getConfiguredTestDialects())(
       // an unstripped anonymous write would be indistinguishable from a rule
       // that was never registered.
       const t = await boot(dialect);
+      // The collection's rule only narrows the create permission, so the
+      // writer holds it.
+      await userWhoMay(t, "u1", "create", [SLUG]);
       const created = await (
         t.getService("collectionsHandler") as CollectionsHandler
       ).createEntry(
@@ -112,8 +117,7 @@ describe.each(getConfiguredTestDialects())(
     it("strips it from an ANONYMOUS write too", async () => {
       // The defect. A collection may legitimately allow anonymous creates, and
       // the REST path reaches this with no user at all: the dispatcher forwards
-      // `userId: p._authenticatedUserId`, which is undefined when nobody is
-      // signed in, and never passes `overrideAccess`.
+      // no user when nobody is signed in, and never passes `overrideAccess`.
       const t = await boot(dialect);
       const created = await (
         t.getService("collectionsHandler") as CollectionsHandler

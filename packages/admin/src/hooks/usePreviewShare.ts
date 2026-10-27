@@ -17,6 +17,8 @@ import {
   useQuery,
   useQueryClient,
   type QueryKey,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -24,10 +26,32 @@ import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import {
   previewLinkApi,
   type PreviewLinkDocument,
+  type PreviewLinkListItem,
 } from "@admin/services/previewLinkApi";
 
 /** The lifetimes an editor can choose from, shortest first. */
-export const PREVIEW_LINK_LIFETIMES = [
+export const PREVIEW_LINK_LIFETIMES: readonly [
+  {
+    readonly id: "1h";
+    readonly label: "1 hour";
+    readonly seconds: number;
+  },
+  {
+    readonly id: "1d";
+    readonly label: "1 day";
+    readonly seconds: number;
+  },
+  {
+    readonly id: "3d";
+    readonly label: "3 days";
+    readonly seconds: number;
+  },
+  {
+    readonly id: "7d";
+    readonly label: "7 days";
+    readonly seconds: number;
+  },
+] = [
   { id: "1h", label: "1 hour", seconds: 60 * 60 },
   { id: "1d", label: "1 day", seconds: 24 * 60 * 60 },
   { id: "3d", label: "3 days", seconds: 3 * 24 * 60 * 60 },
@@ -51,13 +75,53 @@ function messageOf(error: unknown, fallback: string): string {
     : fallback;
 }
 
+/** What {@link usePreviewShare} returns. */
+type PreviewShare = {
+  links: UseQueryResult<
+    {
+      items: PreviewLinkListItem[];
+      total: number;
+    },
+    Error
+  >;
+  create: UseMutationResult<
+    {
+      url: string;
+      copied: boolean;
+      expiresAt: string;
+    },
+    unknown,
+    void | {
+      ttlSeconds: number;
+    },
+    unknown
+  >;
+  revoke: UseMutationResult<
+    {
+      id: string;
+      revokedAt: string;
+    },
+    unknown,
+    string,
+    unknown
+  >;
+  revokeAll: UseMutationResult<
+    {
+      revoked: number;
+    },
+    unknown,
+    void,
+    unknown
+  >;
+};
+
 export function usePreviewShare(
   document: PreviewLinkDocument,
   {
     /** Whether to read the list: only while the popover is open. */
     enabled,
   }: { enabled: boolean }
-) {
+): PreviewShare {
   const queryClient = useQueryClient();
   const key = previewLinksKey(document);
   const refresh = () => void queryClient.invalidateQueries({ queryKey: key });

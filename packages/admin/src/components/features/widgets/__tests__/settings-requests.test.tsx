@@ -16,10 +16,17 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -40,7 +47,7 @@ function card(placementId: string, limit?: number): BatchCard {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "custom",
-    size: "md",
+    size: gridBounds(4),
     query: limit === undefined ? DECLARED : { ...DECLARED, limit },
   };
   return limit === undefined

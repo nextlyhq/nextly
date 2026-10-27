@@ -11,16 +11,21 @@
  * code-defined `access.read` — so a Single authorised entirely in code was
  * offered and not listed.
  *
- * Driven against a real instance with real code rules, in both directions:
- * a rule that admits a reader holding no grant, and a rule that refuses.
+ * Driven against a real instance with real code rules, in both directions: a
+ * rule that admits everyone, which a reader without the grant still cannot
+ * pass since a rule only narrows the grant, and a rule that refuses.
  *
  * @module dispatcher/handlers/__tests__/singles-list-agrees-with-the-condition.integration.test
  */
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { apiKeyScope } from "../../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../../auth/caller-scope";
+import {
+  apiKeyScope,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
+import type { RequestCaller } from "../../../auth/caller-scope";
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
 import { refreshCollectionWidgets } from "../../../domains/widgets/collection-widgets";
 import { evaluateConditions } from "../../../domains/widgets/conditions";
@@ -30,8 +35,13 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { dispatchSingles } from "../single-dispatcher";
+import {
+  asCaller,
+  keyCaller,
+  sessionCaller,
+} from "../../__tests__/request-caller";
 
-/** A reader with no roles and no stored grant. Everything it may read, code says. */
+/** A reader with no roles, holding a grant only where a test gives it one. */
 const READER_ID = "reader-with-no-grants";
 const reader: ReadCaller = { user: { id: READER_ID, roles: [] } };
 
@@ -47,7 +57,7 @@ async function boot(): Promise<void> {
     singles: [
       defineSingle({
         slug: "homepage",
-        // Admits everyone, by code. No grant row exists for this reader.
+        // Admits everyone, by code: the read grant decides who passes.
         access: { read: () => true, update: () => false },
         fields: [text({ name: "headline" })],
       }),
@@ -69,10 +79,10 @@ async function boot(): Promise<void> {
       }),
       defineSingle({
         slug: "spelled-out",
-        // Decides on the documented `resource:action` spelling. A key handed
-        // its stored slugs (`read-spelled-out`) is refused here.
+        // Decides on the permission a rule is handed, `read-spelled-out`. A
+        // key whose own grants never reach the rule is refused here.
         access: {
-          read: ({ permissions }) => permissions.includes("spelled-out:read"),
+          read: ({ permissions }) => permissions.includes("read-spelled-out"),
           update: () => false,
         },
         fields: [text({ name: "body" })],
@@ -101,13 +111,15 @@ async function conditionHolds(): Promise<boolean> {
   return verdicts.get("singles:present") === true;
 }
 
+/** The listing as the route handler serves `caller`: as the request's caller. */
 async function listedSlugs(
-  params: Record<string, string> = { _authenticatedUserId: READER_ID }
+  caller: RequestCaller = sessionCaller({ userId: READER_ID }),
+  scope?: AuthenticatedScope
 ): Promise<string[]> {
-  const response = (await dispatchSingles(
-    "listSingles",
-    params,
-    undefined
+  const response = (await asCaller(
+    caller,
+    () => dispatchSingles("listSingles", {}, undefined),
+    scope
   )) as Response;
   expect(response.status).toBe(200);
   const body = (await response.json()) as { items: Array<{ slug: string }> };
@@ -116,12 +128,7 @@ async function listedSlugs(
 
 /** The listing as the route handler serves an API key: scope pinned for the dispatch. */
 function listedForKey(scope = keyScope()): Promise<string[]> {
-  return runWithCallerScope(scope, () =>
-    listedSlugs({
-      _authenticatedUserId: KEY_OWNER,
-      _authenticatedActorType: "apiKey",
-    })
-  );
+  return listedSlugs(keyCaller("key-1", { userId: KEY_OWNER }), scope);
 }
 
 async function conditionHoldsForKey(scope = keyScope()): Promise<boolean> {
@@ -133,11 +140,18 @@ async function conditionHoldsForKey(scope = keyScope()): Promise<boolean> {
 }
 
 describe("the singles listing and the singles:present condition", () => {
-  it("both admit a Single that a code rule alone admits", async () => {
-    // 🔴 The reader holds no `homepage:read` grant. A listing scoped by grants
-    // answers nothing here while the condition answers yes, and the dashboard
-    // offers a card that draws an empty list.
+  it("both refuse a Single its rule admits to a reader without the grant", async () => {
+    // A code rule only narrows the read grant, so a reader holding none is
+    // refused `homepage` by the listing and the condition alike.
     await boot();
+    expect(await conditionHolds()).toBe(false);
+    expect(await listedSlugs()).not.toContain("homepage");
+  });
+
+  it("both admit it once the reader holds the grant", async () => {
+    // The control: the refusal above is the grant's, and the two still agree.
+    await boot();
+    await userWhoMay(current!, READER_ID, "read", ["homepage"]);
     expect(await conditionHolds()).toBe(true);
     expect(await listedSlugs()).toContain("homepage");
   });
@@ -182,9 +196,9 @@ describe("an API key, asked the same two ways", () => {
   });
 
   it("is admitted by a rule written to the documented permission spelling", async () => {
-    // 🔴 The key holds `read-spelled-out`; the rule checks
-    // `spelled-out:read`, which is what the context promises. Handed the
-    // stored spelling, the rule refused a correctly scoped key.
+    // 🔴 The key holds `read-spelled-out`, and the rule checks for it, as
+    // the context promises. A rule never handed the key's grants refuses a
+    // correctly scoped key.
     await boot();
     expect(await listedForKey()).toContain("spelled-out");
     // The condition's own builder, given a key holding ONLY this grant and

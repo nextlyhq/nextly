@@ -24,9 +24,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 
-const { headerProps, localization } = vi.hoisted(() => ({
+const { headerProps, localization, reader } = vi.hoisted(() => ({
   headerProps: vi.fn(),
   localization: { current: { defaultLocale: "en" } },
+  /** Whether the signed-in user may only read the Single. */
+  reader: { current: false },
+}));
+
+vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
+  useReadOnlyForReader: () => reader.current,
 }));
 
 vi.mock(
@@ -87,6 +93,25 @@ describe("SingleForm wires the shareable link into its header", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localization.current = { defaultLocale: "en" };
+    reader.current = false;
+  });
+
+  it("offers a user who may only read the Single neither the link nor the preview", () => {
+    // Both mint a credential the server grants only to a user who may change
+    // the Single.
+    reader.current = true;
+    renderForm();
+
+    expect(lastHeaderProps().isLinkAvailable).toBe(false);
+    expect(lastHeaderProps().onTogglePreviewPane).toBeUndefined();
+    // No document to share either, so no share popover can stay mounted.
+    expect(lastHeaderProps()).not.toHaveProperty("shareDocument");
+    // POPULATION CONTROL: the same Single offers both to one who may change it.
+    reader.current = false;
+    renderForm();
+    expect(lastHeaderProps().isLinkAvailable).toBe(true);
+    expect(lastHeaderProps().onTogglePreviewPane).toEqual(expect.any(Function));
+    expect(lastHeaderProps()).toHaveProperty("shareDocument");
   });
 
   it("offers the link once the language resolves", () => {

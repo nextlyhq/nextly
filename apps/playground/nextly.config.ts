@@ -40,7 +40,9 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
@@ -51,21 +53,7 @@ import { SiteSettings } from "./src/singles/site-settings";
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
-// Set by e2e/playwright.config.ts for the suite's dev server. The suite signs
-// in once and drives every spec through that one session at machine pace, far
-// past the 500 reads a minute the default session budget allows a person, so
-// it is given a session budget of its own. Every other limit keeps its
-// default, and the admin request budget test still holds each page to its bar
-// at the default numbers. Never honoured in a production build, so neither the
-// production suite nor a deployment can raise the limit through this flag.
-const e2eSessionBudget =
-  process.env.NEXTLY_E2E_SESSION_BUDGET === "1" &&
-  process.env.NODE_ENV !== "production";
-
 export default defineConfig({
-  ...(e2eSessionBudget
-    ? { rateLimit: { sessions: { readLimit: 5000, writeLimit: 1500 } } }
-    : {}),
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",
@@ -182,6 +170,16 @@ export default defineConfig({
     formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
+      : []),
+    // Always on, because its widgets are drawn by their own components, which
+    // the committed component map must hold; offered only from the add panel,
+    // named as test fixtures. Moves to the dev-only widget preview page once
+    // there is one.
+    widgetKitFixturePlugin,
+    // A card whose data answers as late as a spec asks, for the slow-card
+    // spec; off in a contributor's dev server, where it would be a test double.
+    ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"
+      ? [slowWidgetFixturePlugin]
       : []),
     // Refuses the admin by design (a widget whose component the committed map
     // lacks), so only the component-map e2e spec's own server turns it on.

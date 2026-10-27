@@ -1,3 +1,5 @@
+import { isAdminRelativePath } from "nextly/config";
+
 export const ROUTES = {
   // Public routes
   SETUP: "/admin/setup",
@@ -106,6 +108,18 @@ export const ROUTES = {
   USERS_FIELDS: "/admin/users/fields",
   USERS_FIELDS_CREATE: "/admin/users/fields/create",
   USERS_FIELDS_EDIT: "/admin/users/fields/edit/[id]",
+  // The Email hub: Messages (the hub's landing page), Design, Sending and
+  // Activity, each a tab, with the editors under the tab they belong to.
+  EMAIL: "/admin/email",
+  EMAIL_DESIGN: "/admin/email/design",
+  EMAIL_SENDING: "/admin/email/sending",
+  EMAIL_ACTIVITY: "/admin/email/activity",
+  EMAIL_MESSAGES_CREATE: "/admin/email/messages/create",
+  EMAIL_MESSAGES_EDIT: "/admin/email/messages/edit/[id]",
+  EMAIL_SENDING_CREATE: "/admin/email/sending/create",
+  EMAIL_SENDING_EDIT: "/admin/email/sending/edit/[id]",
+  // Where email lived under Settings before the hub. Each redirects to its
+  // place in the hub, so bookmarks and links keep working.
   SETTINGS_EMAIL_PROVIDERS: "/admin/settings/email-providers",
   SETTINGS_EMAIL_PROVIDERS_CREATE: "/admin/settings/email-providers/create",
   SETTINGS_EMAIL_PROVIDERS_EDIT: "/admin/settings/email-providers/edit/[id]",
@@ -173,7 +187,15 @@ export type RouteValue = (typeof ROUTES)[keyof typeof ROUTES];
  * are keyed by {@link PublicRoutePath}, so a path added here without a page
  * fails to compile rather than becoming a silently unguarded URL.
  */
-export const PUBLIC_ROUTE_PATHS = [
+export const PUBLIC_ROUTE_PATHS: readonly [
+  "/admin/setup",
+  "/admin/login",
+  "/admin/register",
+  "/admin/forgot-password",
+  "/admin/reset-password",
+  "/admin/verify-email",
+  "/admin/accept-invite",
+] = [
   ROUTES.SETUP,
   ROUTES.LOGIN,
   ROUTES.REGISTER,
@@ -240,4 +262,21 @@ export function withQuery(
 
   const queryString = params.toString();
   return queryString ? `${route}?${queryString}` : route;
+}
+
+/**
+ * The href of a path a plugin wrote relative to the admin, such as
+ * `"collections/orders"`, or `undefined` when the path is not one.
+ *
+ * 🔴 The one place such a path becomes an href, so wherever the admin is served
+ * changes here alone. The rule is startup's own, the one `isAdminRelativePath`
+ * both ask: no scheme (so never `javascript:`), no leading slash (so never
+ * `//host`), no backslash, and no segment that climbs out of the admin
+ * (`../logout`). A path that breaks it is not drawn as a link at all, whatever
+ * startup let through.
+ */
+export function adminHref(relative: string): string | undefined {
+  return isAdminRelativePath(relative)
+    ? `${ROUTES.DASHBOARD}/${relative}`
+    : undefined;
 }

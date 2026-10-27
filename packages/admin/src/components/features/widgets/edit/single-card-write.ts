@@ -22,7 +22,12 @@ import type {
 export function singleCardWrite(
   stored: DashboardLayoutResponse,
   placements: WidgetPlacement[]
-) {
+): {
+  placements: WidgetPlacement[];
+  version: number;
+  scope: string;
+  arranged: boolean;
+} {
   return {
     placements,
     version: stored.version,

@@ -21,3 +21,18 @@ export const RELEASES_SOURCE_ID = "system:releases";
 
 /** The documents carrying edits that are not live. */
 export const VERSIONS_SOURCE_ID = "system:versions";
+
+/** Who changed what, most recent first: the activity this caller may see. */
+export const ACTIVITY_SOURCE_ID = "system:activity";
+
+/** What is waiting for someone: pending changes, releases due soon and overdue. */
+export const ATTENTION_SOURCE_ID = "system:attention";
+
+/** The Team card's figures: the number of people, and of roles for a reader who may see them. */
+export const TEAM_SOURCE_ID = "system:team";
+
+/** The Content card's collections, each with its entries and how many are drafts. */
+export const CONTENT_SOURCE_ID = "system:content";
+
+/** The documents most recently saved, one row each: the saves this caller may see. */
+export const RECENT_EDITS_SOURCE_ID = "system:recent-edits";

@@ -8,6 +8,7 @@ import {
   getWidget,
   listWidgets,
   overrideWidget,
+  registerDeclaredDefinition,
   registerWidget,
 } from "../registry";
 
@@ -18,7 +19,7 @@ const def = (
   id,
   title: id,
   archetype: "metric",
-  defaultSize: "sm",
+  size: { default: { w: 3, h: 2 } },
   query: { source: "collection:posts", op: "count" },
   ...over,
 });
@@ -86,11 +87,14 @@ describe("widget registry", () => {
 
   it("lets a plugin patch named fields of a core widget", () => {
     registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
-    extendWidget("core/totals", { title: "Revenue totals", defaultSize: "lg" });
+    extendWidget("core/totals", {
+      title: "Revenue totals",
+      size: { default: { w: 6, h: 4 } },
+    });
 
     const patched = getWidget("core/totals");
     expect(patched?.title).toBe("Revenue totals");
-    expect(patched?.defaultSize).toBe("lg");
+    expect(patched?.size).toEqual({ default: { w: 6, h: 4 } });
     // Untouched fields survive.
     expect(patched?.archetype).toBe("metric");
   });
@@ -104,15 +108,16 @@ describe("widget registry", () => {
   it("re-validates the result of a patch, leaving the store unmutated", () => {
     registerWidget(def("core/totals"), { source: "core" });
     expect(() =>
-      extendWidget("core/totals", { minSize: "xl", maxSize: "sm" })
-    ).toThrow(/minSize/);
+      extendWidget("core/totals", {
+        size: { default: { w: 8, h: 2 }, max: { w: 6, h: 2 } },
+      })
+    ).toThrow(/size\.default must not be larger than size\.max/);
 
     // A rejected patch must not be written even partially: the stored widget
-    // still has no minSize/maxSize bounds, not the invalid ones the patch
-    // tried to set. This would stay green if validation ran AFTER the write.
+    // keeps its own size, not the invalid one the patch tried to set. This
+    // would stay green if validation ran AFTER the write.
     const survivor = getWidget("core/totals");
-    expect(survivor?.minSize).toBeUndefined();
-    expect(survivor?.maxSize).toBeUndefined();
+    expect(survivor?.size).toEqual({ default: { w: 3, h: 2 } });
   });
 
   it("stores a snapshot, so mutating the registered object changes nothing", () => {
@@ -167,5 +172,71 @@ describe("widget registry", () => {
     expect(deregisterWidget("core/totals")).toBe(true);
     expect(deregisterWidget("core/totals")).toBe(false);
     expect(getWidget("core/totals")).toBeUndefined();
+  });
+});
+
+describe("the doors a widget whose data core builds may come through", () => {
+  // A declared widget as core publishes it: its data is built on the server, so it has no query.
+  const declared = (id: string): WidgetDefinition => {
+    const { query: _query, ...rest } = def(id);
+    return { ...rest, serverData: true };
+  };
+
+  it("comes in through core's own door, and through no public one", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+
+    expect(() => registerWidget(declared("acme/other"))).toThrow(
+      /registerWidget\(\) with serverData/
+    );
+    expect(getWidget("acme/other")).toBeUndefined();
+  });
+
+  it("is refused through a public door even untyped, as a spread of a published one carries it", () => {
+    const spread = {
+      ...def("acme/spread"),
+      serverData: "yes",
+    } as unknown as WidgetDefinition;
+    expect(() => registerWidget(spread)).toThrow(/with serverData/);
+  });
+
+  it("cannot be replaced, since its card is answered from its declaration", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(
+      /"plugin @acme\/shop" declares it/
+    );
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+    // Nor replaced by one that claims to be server-built, through the public door.
+    expect(() =>
+      overrideWidget("acme/orders", declared("acme/orders"))
+    ).toThrow(/overrideWidget\(\) with serverData/);
+  });
+
+  it("cannot be handed a query by a patch", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    expect(() =>
+      extendWidget("acme/orders", {
+        query: { source: "collection:posts", op: "count" },
+      })
+    ).toThrow(/built on the server takes no query/);
+    expect(getWidget("acme/orders")?.query).toBeUndefined();
+  });
+
+  it("admits only what core built: a definition without the mark is refused at core's door too", () => {
+    let refused: unknown;
+    try {
+      registerDeclaredDefinition(def("acme/plain"), "plugin @acme/shop");
+    } catch (error) {
+      refused = error;
+    }
+    // Core's own fault, so an internal error whose detail is for the log only.
+    expect(refused).toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: {
+        widgetId: "acme/plain",
+        reason: "a declared widget was published without serverData",
+      },
+    });
+    expect(getWidget("acme/plain")).toBeUndefined();
   });
 });

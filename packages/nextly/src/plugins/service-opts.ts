@@ -7,6 +7,7 @@ import { runAsPrincipal } from "../auth/principal-scope";
 import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
+import { withCurrentLanguages } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
@@ -38,14 +39,17 @@ export interface ServiceOpts {
    * Who this operation runs as.
    *
    * `user` is a signed-in caller and requires one. `system` is the plugin
-   * acting on its own behalf, and bypasses the access check.
+   * acting on its own behalf, and bypasses the access check; a `user` named
+   * beside it is not judged, and is who the write is attributed to.
    *
    * `public` is a caller with no session AT ALL, with the collection's access
    * rules still enforced. A plugin serving a `public: true` route needs it and
    * had no way to say it: `user` throws without a user, and everything else
    * elevated to `system`, so a public route could only read by bypassing the
    * host's configured rules. Route auth and collection access are separate
-   * questions, and `public: true` answers only the first.
+   * questions, and `public: true` answers only the first. With no rule for
+   * the operation, a read keeps the public default and a create, update or
+   * delete is refused: a write needs a rule that answers `true`.
    */
   as?: "user" | "system" | "public";
   user?: AuthUser;
@@ -277,54 +281,82 @@ export async function resolveServiceOpts(
         logContext: { reason: "service-opts-user-missing" },
       });
     }
-    // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
-    // security defect rather than a tidiness one. `readCaller` spreads
-    // `auth.claims` onto the user it builds, so a caller handed to a plugin
-    // carries whatever the token proved -- a tenant, a plan, an entitlement --
-    // and a collection's code-defined `access` rule may read exactly those.
-    // Rebuilt from id/name/email/roles alone, the rule received a DIFFERENT
-    // caller than the endpoint authenticated: a positive check on a claim
-    // denies wrongly, and an absence-tolerant one like
-    // `user.plan !== "suspended"` GRANTS wrongly.
-    //
-    // Taken as "whatever else the supplied identity carried", so a caller
-    // passing a plain `AuthUser` contributes nothing and is unaffected.
-    const {
-      id: _id,
-      name: _name,
-      email: _email,
-      roles: _roles,
-      role: _role,
-      ...claims
-    } = user as typeof user & {
-      roles?: string[];
-      role?: string;
-    };
-    const identity = buildUserContext({
-      claims,
-      id: user.id,
-      name: user.name ?? undefined,
-      email: user.email,
-      // Copied: the scope's arrays are frozen, and the caller object is the
-      // mutable shape every consumer of it is typed against.
-      roles: authenticatedScope?.roles
-        ? [...authenticatedScope.roles]
-        : await deps.listRoleSlugs(user.id),
-    });
     return {
       overrideAccess: false,
-      user: {
-        ...identity,
-        id: user.id,
-        email: user.email,
-        role: identity.role ?? "",
-        permissions: [],
-      },
+      user: callerFor(
+        user,
+        // Copied: the scope's arrays are frozen, and the caller object is the
+        // mutable shape every consumer of it is typed against.
+        authenticatedScope?.roles
+          ? [...authenticatedScope.roles]
+          : await deps.listRoleSlugs(user.id)
+      ),
       ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
+  // The plugin acting as itself, beside a person it names: still trusted, and
+  // the person is the one the write is attributed to, so a folder records its
+  // creator and a hook sees who the change was made for. Nothing is asked
+  // about them, so no role lookup runs: a trusted call never needed one, and
+  // a lookup that failed would refuse a call that does not depend on it. No
+  // scope travels either: a scope narrows an access check, and a trusted call
+  // runs none.
+  if (user !== undefined) {
+    return {
+      overrideAccess: true,
+      user: callerFor(user, []),
+      ...carried,
+    };
+  }
   return { overrideAccess: true, ...carried };
+}
+
+/**
+ * The caller a plugin's `ServiceOpts.user` is, as every service receives one:
+ * built by `buildUserContext`, carrying `roles`.
+ */
+function callerFor(
+  user: AuthUser,
+  roles: string[]
+): NonNullable<RequestContext["user"]> {
+  // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
+  // security defect rather than a tidiness one. `readCaller` spreads
+  // `auth.claims` onto the user it builds, so a caller handed to a plugin
+  // carries whatever the token proved -- a tenant, a plan, an entitlement --
+  // and a collection's code-defined `access` rule may read exactly those.
+  // Rebuilt from id/name/email/roles alone, the rule received a DIFFERENT
+  // caller than the endpoint authenticated: a positive check on a claim
+  // denies wrongly, and an absence-tolerant one like
+  // `user.plan !== "suspended"` GRANTS wrongly.
+  //
+  // Taken as "whatever else the supplied identity carried", so a caller
+  // passing a plain `AuthUser` contributes nothing and is unaffected.
+  const {
+    id: _id,
+    name: _name,
+    email: _email,
+    roles: _roles,
+    role: _role,
+    ...claims
+  } = user as typeof user & {
+    roles?: string[];
+    role?: string;
+  };
+  const identity = buildUserContext({
+    claims,
+    id: user.id,
+    name: user.name ?? undefined,
+    email: user.email,
+    roles,
+  });
+  return {
+    ...identity,
+    id: user.id,
+    email: user.email,
+    role: identity.role ?? "",
+    permissions: [],
+  };
 }
 
 /**
@@ -526,7 +558,7 @@ export type PluginCollectionService = Pick<
  * transaction, and the scope that decides how long the token may reach it
  * (`transactionScope`, the same rule `ctx.db.transaction` follows).
  */
-interface PluginTransactionRecord {
+export interface PluginTransactionRecord {
   readonly tx: TransactionContext;
   readonly scope: TransactionScope;
 }
@@ -541,7 +573,7 @@ const pluginTransactions = new WeakMap<object, PluginTransactionRecord>();
  * The record a plugin's token stands for, or a refusal when the value is not
  * one `withTransaction` handed out.
  */
-function transactionOf(token: unknown): PluginTransactionRecord {
+export function transactionOf(token: unknown): PluginTransactionRecord {
   const record =
     typeof token === "object" && token !== null
       ? pluginTransactions.get(token)
@@ -674,10 +706,19 @@ function translateServiceOpts(
         // caller reaches a collection's public default where a person must be
         // refused. A call naming no person runs as none, so it never inherits
         // the person of an operation that set it going.
+        //
+        // And one language list for the whole call, as a Direct API call has: a
+        // plugin's write may run at boot, in a job or on a timer, with no request
+        // to have chosen one.
         const call = () =>
-          runAsPrincipal(opts.principal ?? null, () =>
-            runWithCallerScope(resolved.authenticatedScope, () =>
-              (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+          withCurrentLanguages(() =>
+            runAsPrincipal(opts.principal ?? null, () =>
+              runWithCallerScope(resolved.authenticatedScope, () =>
+                (fn as (...a: unknown[]) => Promise<unknown>).apply(
+                  target,
+                  next
+                )
+              )
             )
           );
 

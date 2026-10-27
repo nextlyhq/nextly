@@ -22,7 +22,9 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
+import type { LiveLocalization } from "../../i18n/localization-source";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import { companionUniqueIndexStatements } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
   buildFieldsJoiningTranslationStatements,
@@ -31,9 +33,11 @@ import {
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
+  companionIndexFacts,
   type FieldRename,
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -46,6 +50,7 @@ import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexColumns,
+  readIndexUniqueness,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
@@ -236,7 +241,7 @@ export class DynamicCollectionService extends BaseService {
    * localization is enabled/disabled on an existing collection. Injected from the localization
    * config; defaults to "en" for setups without localization (where transitions never run).
    */
-  private readonly defaultLocale: string;
+  private readonly defaultLocaleSource: string | LiveLocalization;
   /**
    * i18n: whether the constructing caller holds a localization config, when it
    * knows. `CollectionsHandler` takes one as a constructor argument and can be
@@ -244,20 +249,43 @@ export class DynamicCollectionService extends BaseService {
    * unconfigured by a container it never used. Undefined defers to DI, which is
    * the registered-services path every dispatcher request takes.
    */
-  private readonly localizationConfigured?: boolean;
+  private readonly localizationConfiguredGiven?: boolean;
 
   /** Lazily built field-group registry, owned by this instance's adapter. */
   private fieldGroupRegistry?: FieldGroupRegistryService;
 
+  /**
+   * Whether localization is configured, as the caller said or, handed the language registry, as
+   * the registry says now. Undefined defers to DI.
+   */
+  private get localizationConfigured(): boolean | undefined {
+    if (this.localizationConfiguredGiven !== undefined) {
+      return this.localizationConfiguredGiven;
+    }
+    const source = this.defaultLocaleSource;
+    return typeof source === "string" ? undefined : source.current() != null;
+  }
+
+  /**
+   * The default language as it is now. Handed the language registry, a language list changed in
+   * Settings after this service was built still decides it.
+   */
+  private get defaultLocale(): string {
+    const source = this.defaultLocaleSource;
+    return typeof source === "string"
+      ? source
+      : (source.current()?.defaultLocale ?? "en");
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    defaultLocale = "en",
+    defaultLocale: string | LiveLocalization = "en",
     localizationConfigured?: boolean
   ) {
     super(adapter, logger);
-    this.defaultLocale = defaultLocale;
-    this.localizationConfigured = localizationConfigured;
+    this.defaultLocaleSource = defaultLocale;
+    this.localizationConfiguredGiven = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(
@@ -785,10 +813,30 @@ export class DynamicCollectionService extends BaseService {
       status: opts.status,
     });
     if (!spec) return migrationSQL;
-    // Separate the companion CREATE from the main migration with the breakpoint marker so the
-    // runner executes it as its own statement (a multi-statement chunk is rejected by drivers
-    // with multi-statements disabled, e.g. MySQL).
-    return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
+    // A translated field marked unique is unique within each language: its index is created with
+    // the companion, which is new, so none exists yet. Refused first on a server that cannot key it.
+    const unique = refuseUnindexableTranslatedUnique(this.adapter, {
+      entity: slug,
+      builtBy: "collection",
+      oldFields: [],
+      newFields: opts.fields,
+      wasLocalized: false,
+      isLocalized: true,
+    });
+    // Separate each statement with the breakpoint marker so the runner executes it as its own
+    // statement (a multi-statement chunk is rejected by drivers with multi-statements disabled,
+    // e.g. MySQL).
+    return [
+      migrationSQL,
+      buildCompanionCreateOnlySql(spec),
+      ...companionUniqueIndexStatements({
+        dialect: this.adapter.dialect,
+        companionTable: `${tableName}_locales`,
+        wanted: unique,
+        translatedColumns: [],
+        liveIndexNames: new Set(),
+      }),
+    ].join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -1165,6 +1213,17 @@ export class DynamicCollectionService extends BaseService {
       liveCompanionColumns: companionExists
         ? await companionColumnNames(this.adapter, args.tableName)
         : undefined,
+      // Its indexes too, so a per-language unique index is created only where it is missing, and
+      // one under its name that is not unique is replaced.
+      ...(companionExists
+        ? companionIndexFacts(
+            await readIndexUniqueness(
+              this.adapter.getDrizzle(),
+              this.adapter.dialect,
+              companionTable
+            )
+          )
+        : {}),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
@@ -1677,6 +1736,23 @@ export class DynamicCollectionService extends BaseService {
       // the main columns and a disable restores + archives them, even without a field edit. A
       // simultaneous status flip still emits its main ADD/DROP `status` column.
       const oldUserFields = existingUserFieldsForTransition;
+      // The same preconditions a field-changing save is asked, because this save builds the same
+      // companion DDL: an enable creates, seeds, drops main's columns and then creates each
+      // per-language unique index. Skipped here, a field already marked unique reached the index
+      // on a server that cannot key it, or over values a language already holds twice, with the
+      // statements before it committed on MySQL.
+      await archiveFieldsLeavingTranslation({
+        builtBy: "collection",
+        tableName: collection.tableName,
+        defaultLocale: this.defaultLocale,
+        adapter: this.adapter,
+        entity: collectionName,
+        kind: "collection",
+        oldFields: oldUserFields,
+        newFields: oldUserFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+      });
       const hasStatus =
         updates.status !== undefined
           ? updates.status === true

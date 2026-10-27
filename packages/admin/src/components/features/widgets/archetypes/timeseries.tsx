@@ -44,7 +44,7 @@ const LABEL_OPTIONS: Record<string, Intl.DateTimeFormatOptions> = {
   year: { year: "numeric" },
 };
 
-function pointLabel(start: string, interval: string): string {
+export function pointLabel(start: string, interval: string): string {
   const options = LABEL_OPTIONS[interval] ?? LABEL_OPTIONS.day;
   // The raw value is the fallback, so an unparseable instant reaches the reader
   // as evidence rather than as an em dash claiming the interval has nothing.

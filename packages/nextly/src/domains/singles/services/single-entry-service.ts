@@ -16,6 +16,13 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  everyLanguageOf,
+  readLanguagesFor,
+  withRuleLanguage,
+  writeAsNamedLanguagesFor,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { HookRegistry } from "../../../hooks/hook-registry";
@@ -24,6 +31,10 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
@@ -64,6 +75,11 @@ export class SingleEntryService extends BaseService {
   private readonly mutationService: SingleMutationService;
   private readonly publishAllService: SinglePublishAllService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -73,7 +89,11 @@ export class SingleEntryService extends BaseService {
     rbacAccessControlService?: RBACAccessControlService,
     // i18n: normalized localization config so a localized single resolves/writes
     // translatable fields via its companion `single_<slug>_locales` table.
-    localization?: SanitizedLocalizationConfig,
+    // Kept here too: every operation runs inside `withRuleLanguage` with the
+    // languages it involves, so each rule it asks is told them. A read is told
+    // its language and the ones it falls back to, a write the language it
+    // writes, and an operation on the whole Single every language.
+    private readonly localizationSource?: LocalizationSource,
     /**
      * Retention passes offered after a write, so a frequently-written single
      * trims what it fills without waiting for a scheduled drain. The shared
@@ -118,7 +138,7 @@ export class SingleEntryService extends BaseService {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization,
+      localizationSource,
       releaseVisibility
     );
 
@@ -129,7 +149,7 @@ export class SingleEntryService extends BaseService {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization
+      localizationSource
     );
 
     // Publishing every language is its own write path — no caller content, no
@@ -141,7 +161,7 @@ export class SingleEntryService extends BaseService {
       singleRegistryService,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization,
+      localizationSource,
       // Publishing every language promotes every language's pending change,
       // and judging one before it is promoted means reading: the stored
       // snapshot in its logical shape, and the live document of the language
@@ -162,7 +182,15 @@ export class SingleEntryService extends BaseService {
    * field values.
    */
   get(slug: string, options?: GetSingleOptions): Promise<SingleResult> {
-    return this.queryService.get(slug, options);
+    return withRuleLanguage(
+      readLanguagesFor(
+        this.localization,
+        options?.locale,
+        options?.fallbackLocale,
+        options
+      ),
+      () => this.queryService.get(slug, options)
+    );
   }
 
   // ============================================================
@@ -180,7 +208,10 @@ export class SingleEntryService extends BaseService {
     data: Record<string, unknown>,
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
-    const result = await this.mutationService.update(slug, data, options);
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, options?.locale),
+      () => this.mutationService.update(slug, data, options)
+    );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
   }
@@ -197,7 +228,40 @@ export class SingleEntryService extends BaseService {
   async discardWorkingDraft(
     params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
-    return this.mutationService.discardWorkingDraft(params);
+    await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * {@link discardWorkingDraft}, answering how many drafts it removed, counted
+   * by the delete made under the Single's lock. A separate method so the
+   * published `discardWorkingDraft` keeps its contract.
+   */
+  async discardWorkingDraftCounted(
+    params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
+  ): Promise<number> {
+    // The draft is deleted under the language as named, so one the site no
+    // longer configures is told every language, not the default.
+    return withRuleLanguage(
+      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.discardWorkingDraft(params)
+    );
+  }
+
+  /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<SingleMutationService["takeLiveSharedValues"]> {
+    // A write to one language's change: its rules see that language, as a
+    // save of it does.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.takeLiveSharedValues(params)
+    );
   }
 
   /**
@@ -209,7 +273,9 @@ export class SingleEntryService extends BaseService {
   async releasePublishIssues(
     params: Parameters<SingleMutationService["releasePublishIssues"]>[0]
   ): ReturnType<SingleMutationService["releasePublishIssues"]> {
-    return this.mutationService.releasePublishIssues(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releasePublishIssues(params)
+    );
   }
 
   /**
@@ -233,7 +299,9 @@ export class SingleEntryService extends BaseService {
   async releaseHeldDraftLocales(
     params: Parameters<SingleMutationService["releaseHeldDraftLocales"]>[0]
   ): ReturnType<SingleMutationService["releaseHeldDraftLocales"]> {
-    return this.mutationService.releaseHeldDraftLocales(params);
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.releaseHeldDraftLocales(params)
+    );
   }
 
   /**
@@ -248,9 +316,9 @@ export class SingleEntryService extends BaseService {
     slug: string,
     options?: PublishAllSingleLocalesOptions
   ): Promise<SingleResult<PublishAllSingleResult>> {
-    const result = await this.publishAllService.publishAllLocales(
-      slug,
-      options
+    const result = await withRuleLanguage(
+      everyLanguageOf(this.localization),
+      () => this.publishAllService.publishAllLocales(slug, options)
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;

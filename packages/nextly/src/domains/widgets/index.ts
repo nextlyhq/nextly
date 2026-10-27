@@ -5,9 +5,6 @@
  */
 
 export {
-  WIDGET_SIZES,
-  WIDGET_CHROME,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   DATA_ARCHETYPES,
   QUERYLESS_ARCHETYPES,
@@ -18,14 +15,20 @@ export {
   type WidgetAction,
   type WidgetSetting,
   type WidgetStatCell,
-  type WidgetSize,
-  type WidgetChrome,
-  type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,
   type CellWidgetArchetype,
 } from "./definition";
+// The one size vocabulary, beside the definition whose `size` names it: the
+// grid's width and the size types. Its functions reach the admin through
+// `nextly/config`, which exports them from `grid-size.ts` directly.
+export {
+  GRID_COLUMNS,
+  type GridSize,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+} from "./grid-size";
 // The lifecycle vocabulary travels with the two fields that name it. A closed
 // set an author cannot import is one they must retype as a literal, and a
 // retyped set is a copy that stops matching the day a condition is added.

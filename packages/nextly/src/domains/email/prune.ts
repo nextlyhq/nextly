@@ -29,9 +29,13 @@
 
 import type { WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
+import { EMAIL_QUEUE_TABLE } from "../../schemas/email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../../schemas/email-queue-recipients/table-name";
+import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import type { Logger } from "../../shared/types";
 import { warnQuietly } from "../retention/safe-log";
 
+import { QUEUED_EMAIL_HOLD_MS } from "./queued-email-job";
 import {
   EMAIL_RETENTION_CLASSES,
   windowForEmailClass,
@@ -43,6 +47,9 @@ import { CLAIM_TAKEOVER_MS } from "./send-claims";
 const DELIVERIES_TABLE = "email_deliveries";
 
 const CLAIMS_TABLE = "email_send_claims";
+/** As `CLAIMS_TABLE`: the queue's raw name, so a pass reads it as it reads the claims. */
+const QUEUE_TABLE = EMAIL_QUEUE_TABLE;
+const QUEUE_RECIPIENTS_TABLE = EMAIL_QUEUE_RECIPIENTS_TABLE;
 
 /**
  * Rows removed per statement.
@@ -67,6 +74,11 @@ export interface EmailPruneAdapter {
   delete(table: string, where: { and: WhereCondition[] }): Promise<number>;
   /** Whether the calling flow has a transaction open, where the adapter says. */
   transactionOpenInFlow?(): boolean;
+}
+
+/** The adapter queued-email pruning needs: its deletes run in one transaction. */
+export interface QueuePruneAdapter extends EmailPruneAdapter {
+  transaction<T>(work: (tx: EmailPruneAdapter) => Promise<T>): Promise<T>;
 }
 
 export interface EmailPruneDeps {
@@ -255,6 +267,55 @@ export async function pruneSendClaims(
     });
   }
   return removed;
+}
+
+/**
+ * Remove queued emails settled more than `QUEUED_EMAIL_HOLD_MS` ago, one
+ * bounded batch: sent, cancelled, or failed for good, each with whatever of
+ * its message is still held. An email still waiting or sending is never
+ * removed, however old.
+ *
+ * Run by the `email:queue-prune` sweep on every jobs run, not by the
+ * retention pass: an install that keeps its delivery records for ever still
+ * holds a queued message seven days at most.
+ */
+export async function pruneQueuedEmails(
+  adapter: QueuePruneAdapter,
+  now: Date
+): Promise<number> {
+  const conditions: WhereCondition[] = [
+    { column: "state", op: "IN", value: ["sent", "failed", "cancelled"] },
+    {
+      column: "settledAt",
+      op: "<",
+      value: now.getTime() - QUEUED_EMAIL_HOLD_MS,
+    },
+  ];
+  const rows = await adapter.select<{ id: string }>(QUEUE_TABLE, {
+    where: { and: conditions },
+    limit: EMAIL_PRUNE_BATCH_SIZE,
+    columns: ["id"],
+  });
+  if (rows.length === 0) return 0;
+  const ids = rows.map(row => row.id);
+  // Their recipients' digests with them, which nothing else removes once the
+  // email has settled, in one transaction so a failure part way keeps both.
+  // The emails go first: a re-seal at rotation re-keys an email's digests
+  // only while its row is there, so one waiting on this row's lock finds it
+  // gone and writes none, and one this waits on has written its digests by
+  // the time they are deleted.
+  return runAdapterTransaction(
+    run => adapter.transaction(tx => run(tx)),
+    async (tx: EmailPruneAdapter) => {
+      const removed = await tx.delete(QUEUE_TABLE, {
+        and: [{ column: "id", op: "IN", value: ids }, ...conditions],
+      });
+      await tx.delete(QUEUE_RECIPIENTS_TABLE, {
+        and: [{ column: "queuedId", op: "IN", value: ids }],
+      });
+      return removed;
+    }
+  );
 }
 
 /**

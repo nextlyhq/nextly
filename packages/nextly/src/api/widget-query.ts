@@ -14,7 +14,10 @@
  * @module api/widget-query
  */
 
-import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
+import {
+  authorizationScheduler,
+  canReadEntity,
+} from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
@@ -29,6 +32,7 @@ import {
   readWidgetQuery,
   resolveWidgetSource,
   validateReadWidgetQuery,
+  type WidgetQuery,
 } from "../domains/widgets/query";
 import type { WidgetSlot } from "../domains/widgets/result";
 import {
@@ -37,21 +41,32 @@ import {
 } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
+import {
+  configuredTimezone,
+  normalizeTimestampsInPayload,
+} from "../shared/lib/date-formatting";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
+import { isCardEntry, prepareCards } from "./widget-cards";
 import {
   answerReadyQueries,
   failedSlot,
-  type ReadyQuery,
+  type AnswerOptions,
+  type ReadyEntry,
+  type SettledSlot,
 } from "./widget-slots";
 import { withErrorHandler } from "./with-error-handler";
 
+// `Accept` as well as `Cookie`: the same request answers as JSON or as a stream
+// of lines depending on what the client asked for, so a cache that kept one
+// must not hand it to a client asking for the other.
 const PRIVATE_NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store",
-  Vary: "Cookie",
+  Vary: "Cookie, Accept",
 } as const;
 
 /*
@@ -197,16 +212,24 @@ async function assertSourceReadable(
  * than its result, so concurrent slots share the one in-flight decision.
  *
  * Per request, never across requests: the verdicts belong to this caller.
+ *
+ * 🔴 Every decision it starts goes through ONE bounded schedule, the order
+ * `authorizationGroups` prescribes, and not only the ones the batch named in
+ * advance. A declared widget's data function reads collections nobody named
+ * beforehand, and each is decided as its read arrives, from every card at
+ * once; started on arrival, a cold session fanned out up to a batch's worth of
+ * permission reads together, around the bound the warm-up below exists to keep.
  */
 function readDecisionsFor(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
   const accessCaller = readAccessCaller(caller);
   const verdicts = new Map<string, Promise<boolean>>();
+  const scheduled = authorizationScheduler();
   return slug => {
     const pending = verdicts.get(slug);
     if (pending) return pending;
-    const verdict = canReadEntity(slug, accessCaller);
+    const verdict = scheduled(() => canReadEntity(slug, accessCaller));
     verdicts.set(slug, verdict);
     return verdict;
   };
@@ -275,23 +298,36 @@ function prepareOne(raw: unknown): PreparedQuery {
   try {
     const parsed = readWidgetQuery(raw);
     named = parsed.source;
-    const source = resolveWidgetSource(parsed.source);
-    // 🔴 Whether anything EXECUTES the source is decided here, before a read
-    // decision is taken or a field is validated, by the executor's own
-    // resolution rather than by the kind alone. A resolver-less system source
-    // registered through the generic `registerSource` door once reached
-    // field-level validation, where every message is specific: an undeclared
-    // `select` was answered ON that source while an invented id got the
-    // generic sentence, so the pair distinguished a registered system source
-    // from a nonexistent one -- the enumeration oracle the gate exists to
-    // close. Every refusal below is the one shared sentence.
-    return { ok: true, parsed, executable: resolveExecutableSource(source.id) };
+    return { ok: true, ...resolvedEntry(parsed) };
   } catch (error) {
     const slot = failedSlot(error);
     return slot.code === "unavailable"
       ? { ok: false, slot, decoy: decoyRead(named) }
       : { ok: false, slot };
   }
+}
+
+/**
+ * A read query resolved to what executes its source.
+ *
+ * Shared by the batch's own entries and by every read a declared widget's data
+ * makes, so both are resolved, and refused, one way.
+ */
+function resolvedEntry(parsed: ReturnType<typeof readWidgetQuery>): {
+  parsed: ReturnType<typeof readWidgetQuery>;
+  executable: ExecutableSource;
+} {
+  const source = resolveWidgetSource(parsed.source);
+  // 🔴 Whether anything EXECUTES the source is decided here, before a read
+  // decision is taken or a field is validated, by the executor's own
+  // resolution rather than by the kind alone. A resolver-less system source
+  // registered through the generic `registerSource` door once reached
+  // field-level validation, where every message is specific: an undeclared
+  // `select` was answered ON that source while an invented id got the
+  // generic sentence, so the pair distinguished a registered system source
+  // from a nonexistent one -- the enumeration oracle the gate exists to
+  // close. Every refusal below is the one shared sentence.
+  return { parsed, executable: resolveExecutableSource(source.id) };
 }
 
 /**
@@ -325,9 +361,11 @@ function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
  * `canReadEntity` resolves a session caller through a shared per-user TTL
  * cache, so firing them together makes every one of them a miss.
  *
- * The grouping is `authorizationGroups`', not a second one written here: it
- * owns both the bound and the lone warm-up round that converts N cold misses
- * into one miss and N-1 hits, and a copy of that reasoning would drift from it.
+ * The order is `authorizationGroups`', not a second one written here: every
+ * decision goes through the schedule `readDecisionsFor` keeps
+ * (`authorizationScheduler`), which owns both the bound and the lone warm-up
+ * that converts N cold misses into one miss and N-1 hits, and a copy of that
+ * reasoning would drift from it.
  *
  * `allSettled`, so a decision that REJECTS still fails only the slots that
  * named it. `Promise.all` would throw out of the warm-up and answer the whole
@@ -339,9 +377,7 @@ async function warmReadDecisions(
   slugs: readonly string[],
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<void> {
-  for (const group of authorizationGroups(slugs)) {
-    await Promise.allSettled(group.map(mayRead));
-  }
+  await Promise.allSettled(slugs.map(mayRead));
 }
 
 /** Runs one prepared query's preconditions: the caller may read its source, and it is valid. */
@@ -349,21 +385,44 @@ async function checkPrepared(
   entry: Extract<PreparedQuery, { ok: true }>,
   index: number,
   mayRead: (slug: string) => Promise<boolean>
-): Promise<ReadyQuery | QuerySlot> {
+): Promise<ReadyEntry | QuerySlot> {
   try {
-    await assertSourceReadable(entry.executable, mayRead);
-    const query = validateReadWidgetQuery(
-      entry.parsed,
-      entry.executable.source
-    );
+    const query = await checkedAgainst(entry, mayRead);
     return { index, query, executable: entry.executable };
   } catch (error) {
     return failedSlot(error);
   }
 }
 
-function isReady(entry: ReadyQuery | QuerySlot): entry is ReadyQuery {
-  return "query" in entry;
+/**
+ * A resolved query's preconditions, in their order: the caller may read its
+ * source, and only then is it validated against it. Shared by the batch's own
+ * entries and a declared widget's reads, so one door judges both.
+ */
+async function checkedAgainst(
+  entry: {
+    parsed: ReturnType<typeof readWidgetQuery>;
+    executable: ExecutableSource;
+  },
+  mayRead: (slug: string) => Promise<boolean>
+): Promise<WidgetQuery> {
+  await assertSourceReadable(entry.executable, mayRead);
+  return validateReadWidgetQuery(entry.parsed, entry.executable.source);
+}
+
+/**
+ * A query a declared widget's card or data function asks, checked exactly as a
+ * batch entry is, throwing the refusal that entry's slot would carry.
+ */
+function checkedQuery(
+  raw: unknown,
+  mayRead: (slug: string) => Promise<boolean>
+): Promise<WidgetQuery> {
+  return checkedAgainst(resolvedEntry(readWidgetQuery(raw)), mayRead);
+}
+
+function isReady(entry: ReadyEntry | QuerySlot): entry is ReadyEntry {
+  return "query" in entry || ("kind" in entry && entry.kind === "data");
 }
 
 /**
@@ -380,7 +439,24 @@ function unanswered(): QuerySlot {
   );
 }
 
-export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+/** A batch every whole-batch check has passed: each query either ready to run, or already refused. */
+interface PreparedBatch {
+  checked: Array<ReadyEntry | QuerySlot>;
+  caller: ReadCaller;
+}
+
+/**
+ * Everything that can fail the WHOLE batch, done before any answer is written:
+ * authentication, the body, the source refresh, the caller, the read-decision
+ * warm-up, and each query's own preconditions.
+ *
+ * 🔴 All of it before the first byte, because a streamed answer has committed
+ * to a 200 the moment it starts: a refusal raised after that could no longer be
+ * the canonical error envelope, and a client would read a failed batch as a
+ * dashboard of cards that never arrive. Everything here throws into
+ * `withErrorHandler` exactly as it did when the answer was only ever JSON.
+ */
+async function prepareBatch(req: Request): Promise<PreparedBatch> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
@@ -421,32 +497,196 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
 
   const mayRead = readDecisionsFor(caller);
 
-  // Read and resolve every entry FIRST, so the batch's distinct entities are
-  // known before a single read decision is taken -- then take them through the
-  // bounded path, and only then run the slots, which now find every decision
-  // already made.
-  const prepared = queries.map(prepareOne);
-  await warmReadDecisions(batchSlugs(prepared), mayRead);
+  // A declared widget's cards, asked by card rather than by query: looked up
+  // in what this caller was handed, before the first byte, like every other
+  // whole-batch step. Each one's own reads are checked by the same door.
+  const cards = await prepareCards(queries, {
+    auth,
+    caller,
+    check: raw => checkedQuery(raw, mayRead),
+  });
+
+  // Read and resolve every query entry FIRST, so the batch's distinct entities
+  // are known before a single read decision is taken -- then take them through
+  // the bounded path, and only then run the slots, which now find every
+  // decision already made.
+  const prepared = queries.map(raw =>
+    isCardEntry(raw) ? undefined : prepareOne(raw)
+  );
+  await warmReadDecisions(
+    batchSlugs(prepared.filter(entry => entry !== undefined)),
+    mayRead
+  );
 
   // Every query's own checks first -- the caller may read its source, and the
   // query is valid for it -- since these are preconditions. Only the queries that
   // pass are run, and they run through ONE path: grouped by source, with work
   // shared within this batch for this caller and nowhere else.
   const checked = await Promise.all(
-    prepared.map((entry, index) =>
-      entry.ok
+    prepared.map((entry, index) => {
+      if (entry === undefined) {
+        return Promise.resolve(cards.get(index) ?? unanswered());
+      }
+      return entry.ok
         ? checkPrepared(entry, index, mayRead)
-        : Promise.resolve(entry.slot)
-    )
+        : Promise.resolve(entry.slot);
+    })
   );
+  return { checked, caller };
+}
+
+/**
+ * Every slot of a prepared batch, each settled ONCE and handed to `onSettled`
+ * as it settles: the refused ones first, then each answer as it arrives, then
+ * any the runner lost.
+ *
+ * ONE implementation of which slot is which, read by both encodings. The JSON
+ * answer is what this returns; the stream is what it hands `onSettled`, line by
+ * line. Two assemblies of one batch would agree on the day they were written and
+ * drift after -- a stream that put a slot at another index, or carried a detail
+ * the JSON answer withholds, would look correct in isolation.
+ */
+async function answerBatch(
+  batch: PreparedBatch,
+  options: AnswerOptions = {}
+): Promise<QuerySlot[]> {
+  const { checked, caller } = batch;
+  const refused: SettledSlot[] = [];
+  checked.forEach((entry, index) => {
+    if (!isReady(entry)) refused.push({ index, slot: entry });
+  });
+  if (refused.length > 0) options.onSettled?.(refused);
+
   const answered = await answerReadyQueries(
     checked.filter(isReady),
     caller,
-    createBatchScope()
+    createBatchScope(),
+    options
   );
-  const results: QuerySlot[] = checked.map((entry, index) =>
-    isReady(entry) ? (answered.get(index) ?? unanswered()) : entry
-  );
+  // A batch given up has no reader left to answer: the slots it never settled
+  // are not lost, and nothing more is written or logged for them.
+  if (options.signal?.aborted === true) return [];
+  const lost: SettledSlot[] = [];
+  const results: QuerySlot[] = checked.map((entry, index) => {
+    if (!isReady(entry)) return entry;
+    const slot = answered.get(index);
+    if (slot) return slot;
+    const missing = unanswered();
+    lost.push({ index, slot: missing });
+    return missing;
+  });
+  if (lost.length > 0) options.onSettled?.(lost);
+  return results;
+}
 
+/** The media type a client asks for to have each slot written as it settles. */
+const NDJSON = "application/x-ndjson";
+
+/** Whether the request asked for the streamed answer, by its `Accept` header. */
+function wantsStream(req: Request): boolean {
+  return (req.headers.get("accept") ?? "").toLowerCase().includes(NDJSON);
+}
+
+/**
+ * The batch as a stream of one `{index, slot}` line per settled slot, written
+ * as each settles, so a slow card holds no other.
+ *
+ * Each line is a slot exactly as the JSON answer holds it: settled by
+ * {@link answerBatch}, so the same redaction reaches it, and its timestamps
+ * formatted with the timezone the JSON pass uses -- that pass reads only JSON
+ * bodies, so a streamed answer formats each line itself rather than reach the
+ * reader unformatted.
+ *
+ * A reader that goes away cancels the stream, and that gives the batch up:
+ * every slot still running is told through its own signal, and none not yet
+ * started is started. `X-Accel-Buffering` and `no-transform` ask proxies not to
+ * hold the lines back; one that buffers anyway degrades to today's behaviour,
+ * late but never wrong.
+ */
+function streamBatch(batch: PreparedBatch, left: AbortSignal): Response {
+  const giveUp = new AbortController();
+  // Given up when the reader cancels the stream, or when the request itself
+  // ends: one signal for both, so every slot still running is told either way.
+  const gone = AbortSignal.any([giveUp.signal, left]);
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Not awaited: `start` returns at once, and the lines are written as the
+      // slots settle rather than once the batch has.
+      void (async () => {
+        const timezone = await configuredTimezone();
+        // Each settle is ONE write, so slots one many-query call answered reach
+        // the reader together, as they were settled.
+        const write = (settled: readonly SettledSlot[]) => {
+          if (gone.aborted) return;
+          const lines = settled.map(({ index, slot }) =>
+            JSON.stringify({
+              index,
+              slot: normalizeTimestampsInPayload(slot, timezone),
+            })
+          );
+          controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+        };
+        try {
+          await answerBatch(batch, {
+            signal: gone,
+            onSettled: write,
+          });
+        } catch (error) {
+          // Past the 200 there is no envelope left to answer with. Ending the
+          // stream is the answer: the client files every slot it did not
+          // receive as missing, which is what they are.
+          logStreamFailure(error);
+        } finally {
+          endStream(controller, gone);
+        }
+      })();
+    },
+    cancel() {
+      giveUp.abort();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...PRIVATE_NO_STORE_HEADERS,
+      "Cache-Control": "private, no-store, no-transform",
+      "Content-Type": NDJSON,
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+/** Closes a stream the reader has not cancelled; one already ended is left as it is. */
+function endStream(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  givenUp: AbortSignal
+): void {
+  if (givenUp.aborted) return;
+  try {
+    controller.close();
+  } catch {
+    // Already closed or errored: there is nothing left to end.
+  }
+}
+
+/** A streamed batch that failed after its 200, logged as `failedSlot` logs, guarded likewise. */
+function logStreamFailure(error: unknown): void {
+  try {
+    getNextlyLogger().error({
+      kind: "widget-query-stream-failed",
+      err: error instanceof Error ? error.stack : String(error),
+    });
+  } catch {
+    // Deliberately swallowed: a log line never fails the stream.
+  }
+}
+
+export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+  const batch = await prepareBatch(req);
+  if (wantsStream(req)) return streamBatch(batch, req.signal);
+  // The whole answer is given up with the request too: a reader who left is
+  // not waiting for it, and each slot still running is told through its signal.
+  const results = await answerBatch(batch, { signal: req.signal });
   return respondData({ results }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

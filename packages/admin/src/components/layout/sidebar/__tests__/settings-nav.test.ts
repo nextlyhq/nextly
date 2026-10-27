@@ -43,7 +43,6 @@ describe("settings nav table", () => {
   it("configures the system before the people in it", () => {
     expect(visibleSettingsNav(superuser).map(g => g.id)).toEqual([
       "system",
-      "email",
       "users",
     ]);
   });

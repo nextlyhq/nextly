@@ -1,11 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
+  SelectOptions,
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { isVirtualField } from "../../../collections/fields/virtual";
@@ -18,20 +21,39 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
+import { keepDeniedAtStored } from "../../../shared/lib/denied-change";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
+  applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   getFieldFunctions,
+  type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
-import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  carryStoredPasswords,
+  type FieldGroupReach,
+  hashPasswordFieldValues,
+  NO_FIELD_GROUPS,
+  reachesPasswordField,
+  storedPasswordValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_PARENT_COLUMN,
+} from "../../i18n/companion-columns";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { resolveRequestedLocale } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -44,6 +66,12 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import {
+  containedComponentResolver,
+  type ComponentFieldResolver,
+} from "../../versions/tag-component-types";
+import { omitDirectComponentFields } from "../direct-component-fields";
+import { applyInlineFieldGroupWriteAccess } from "../field-group-write-access";
+import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
 } from "../storage/field-group-field-type";
@@ -51,6 +79,7 @@ import {
   currentFieldGroupTypeKey,
   readFieldGroupType,
 } from "../storage/field-group-type-key";
+import { unstoredNestedComponentIssues } from "../unstored-nested-components";
 
 import {
   COMPONENT_META_KEYS,
@@ -61,6 +90,41 @@ import {
   type ComponentInstanceData,
 } from "./field-group-utils";
 import { INSTANCE_ORDER, instanceKey } from "./instance-query";
+
+/**
+ * Who a field-group write is made as, for the write rules declared on the
+ * field groups' own fields: the same caller, trust and grants the parent
+ * entry's own fields are judged with.
+ *
+ * Required of every write rather than optional, so a door that saves field
+ * groups cannot leave it out and have them saved unjudged: trusted server code
+ * says so with `overrideAccess: true`.
+ */
+export interface FieldGroupWriteAccess {
+  /** True for trusted server code, which writes every field. */
+  overrideAccess: boolean;
+  user?: Record<string, unknown>;
+  /** A scoped API key's own grants, which its rules are judged by. */
+  authenticatedScope?: AuthenticatedScope;
+  /** The parent write's grants resolver, shared so roles are read once. */
+  grants?: () => Promise<CallerGrants>;
+}
+
+/**
+ * The access a write made as `caller` hands its field-group save: the one
+ * spelling of it, so every door states trust, user and key scope alike.
+ */
+export function fieldGroupWriteAccessOf(caller: {
+  overrideAccess?: boolean;
+  user?: Record<string, unknown>;
+  authenticatedScope?: AuthenticatedScope;
+}): FieldGroupWriteAccess {
+  return {
+    overrideAccess: caller.overrideAccess === true,
+    user: caller.user,
+    authenticatedScope: caller.authenticatedScope,
+  };
+}
 
 /**
  * Parameters for saving component data as part of a parent entry operation.
@@ -98,6 +162,9 @@ export interface SaveComponentDataParams {
    * anything else the parent write puts on its request travels with it.
    */
   req?: Record<string, unknown>;
+
+  /** Who the write is made as; see {@link FieldGroupWriteAccess}. */
+  access: FieldGroupWriteAccess;
 }
 
 /**
@@ -107,6 +174,133 @@ export interface DeleteComponentDataParams {
   parentId: string;
   parentTable: string;
   fields: FieldConfig[];
+}
+
+/**
+ * One component write's scope, for what is read deep inside it.
+ *
+ * Preparing an instance reads the schemas of the components nested in it. Inside a transaction
+ * that read must use the transaction's own connection, `executor`: a pooled read while the
+ * transaction holds the only connection waits on itself. `nested` keeps the schemas this write has
+ * resolved, by the outer component's fields, so the rows of a repeatable component, which share
+ * one schema, resolve it once rather than once each; scoped to the write, so a schema edited
+ * between writes is read afresh. Each entry point binds a scope once, so the save paths beneath
+ * it, which mirror their pooled twins, need not each carry it.
+ */
+interface WriteScope {
+  executor: unknown;
+  /** Who the write is made as, for each instance's own field rules. */
+  access: FieldGroupWriteAccess;
+  nested: Map<
+    readonly FieldConfig[],
+    Promise<ComponentFieldResolver | undefined>
+  >;
+  /**
+   * The stored rows this write has read, by id: an update of one is judged
+   * against what its container columns hold, since each is written whole.
+   */
+  stored: Map<string, ComponentRow>;
+  /** The language the write is made in, for a translated container's row. */
+  locale?: string;
+  /** A read on the write's own connection: the pool's, or its transaction's. */
+  select: (
+    tableName: string,
+    options: SelectOptions
+  ) => Promise<Record<string, unknown>[]>;
+}
+
+const writeScope = new AsyncLocalStorage<WriteScope>();
+
+function newWriteScope(
+  executor: unknown,
+  access: FieldGroupWriteAccess,
+  connection: Pick<WriteScope, "locale" | "select">
+): WriteScope {
+  // One grants resolver for the whole write, read on its own connection, so
+  // every instance it judges reads the caller's roles once.
+  const grants =
+    access.grants ??
+    callerAccessGrants(access.user, access.authenticatedScope, executor);
+  return {
+    executor,
+    access: { ...access, grants },
+    nested: new Map(),
+    stored: new Map(),
+    ...connection,
+  };
+}
+
+/** `rows`, each noted on the current write's scope by its id. */
+function rememberStored(rows: ComponentRow[]): ComponentRow[] {
+  const stored = writeScope.getStore()?.stored;
+  for (const row of rows) stored?.set(row.id, row);
+  return rows;
+}
+
+/**
+ * The container fields (groups and repeaters) a stored row holds, by field
+ * name and parsed from their JSON columns, or nothing when it holds none.
+ */
+function storedContainers(
+  row: Record<string, unknown> | undefined,
+  fields: readonly FieldConfig[]
+): Record<string, unknown> | undefined {
+  if (!row) return undefined;
+  const found: Record<string, unknown> = {};
+  for (const field of fields) {
+    const name = containerName(field);
+    if (name === undefined) continue;
+    const value = parsedColumn(row[toSnakeCase(name)]);
+    if (value !== undefined) found[name] = value;
+  }
+  return Object.keys(found).length > 0 ? found : undefined;
+}
+
+/** A field's name where it is a group or repeater, which holds fields. */
+function containerName(field: FieldConfig): string | undefined {
+  const { name, fields } = field as { name?: unknown; fields?: unknown };
+  return typeof name === "string" && Array.isArray(fields) ? name : undefined;
+}
+
+/** A JSON column's value as a container, or nothing where it holds none. */
+function parsedColumn(value: unknown): unknown {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return parsed !== null && typeof parsed === "object" ? parsed : undefined;
+}
+
+/**
+ * Where the password walk follows the field groups an instance holds inline:
+ * the resolver of their fields, or none where its containers hold none.
+ */
+function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
+  return nested ? { fieldsOf: nested } : NO_FIELD_GROUPS;
+}
+
+/**
+ * Judge `instance` with its container columns' denied children kept at their
+ * stored values, in place: a container column is written whole, so a denied
+ * child removed from the update would be erased from the row, where a denied
+ * top-level field keeps its value by not being written.
+ */
+async function keepContainersAtStored(
+  instance: Record<string, unknown>,
+  stored: Record<string, unknown>,
+  judge: (data: Record<string, unknown>) => Promise<void>
+): Promise<void> {
+  const kept = await keepDeniedAtStored({
+    update: instance,
+    stored,
+    applyRules: judge,
+  });
+  for (const key of Object.keys(instance)) delete instance[key];
+  Object.assign(instance, kept);
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
@@ -136,13 +330,18 @@ function resolveZoneInstances(
 export class FieldGroupMutationService extends BaseService {
   private readonly registryService: FieldGroupRegistryService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     registryService: FieldGroupRegistryService,
     // i18n: when set and an embedded component is localized, translatable field values are
     // routed to the component's companion `comp_<slug>_locales` row for the write locale.
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
     this.registryService = registryService;
@@ -394,46 +593,61 @@ export class FieldGroupMutationService extends BaseService {
   async saveComponentData(params: SaveComponentDataParams): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
-    await this.eachFieldGroupWrite(fields, data, {
-      clear: async f => {
-        await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
-      },
-      save: async (f, fieldData) => {
-        if (f.components && f.components.length > 0) {
-          await this.saveMultiComponents({
-            parentId,
-            parentTable,
-            fieldName: f.name,
-            field: f,
-            data: fieldData,
-            locale,
-            req,
-          });
-        } else if (f.component) {
-          if (f.repeatable) {
-            await this.saveRepeatableComponents({
+    // A pooled write reads pooled; the scope still shares what it resolves; see `writeScope`.
+    const connection = {
+      locale,
+      select: (tableName: string, options: SelectOptions) =>
+        this.adapter.select<Record<string, unknown>>(tableName, options),
+    };
+    await writeScope.run(
+      newWriteScope(undefined, params.access, connection),
+      () =>
+        this.eachFieldGroupWrite(fields, data, {
+          clear: async f => {
+            await this.deleteFieldComponentData(
               parentId,
               parentTable,
-              fieldName: f.name,
-              componentSlug: f.component,
-              data: fieldData,
-              locale,
-              req,
-            });
-          } else {
-            await this.saveSingleComponent({
-              parentId,
-              parentTable,
-              fieldName: f.name,
-              componentSlug: f.component,
-              data: fieldData as ComponentInstanceData,
-              locale,
-              req,
-            });
-          }
-        }
-      },
-    });
+              f.name,
+              f
+            );
+          },
+          save: async (f, fieldData) => {
+            if (f.components && f.components.length > 0) {
+              await this.saveMultiComponents({
+                parentId,
+                parentTable,
+                fieldName: f.name,
+                field: f,
+                data: fieldData,
+                locale,
+                req,
+              });
+            } else if (f.component) {
+              if (f.repeatable) {
+                await this.saveRepeatableComponents({
+                  parentId,
+                  parentTable,
+                  fieldName: f.name,
+                  componentSlug: f.component,
+                  data: fieldData,
+                  locale,
+                  req,
+                });
+              } else {
+                await this.saveSingleComponent({
+                  parentId,
+                  parentTable,
+                  fieldName: f.name,
+                  componentSlug: f.component,
+                  data: fieldData as ComponentInstanceData,
+                  locale,
+                  req,
+                });
+              }
+            }
+          },
+        })
+    );
   }
 
   /**
@@ -560,66 +774,77 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
-    await this.eachFieldGroupWrite(fields, data, {
-      clear: async f => {
-        // Clearing a field holds nothing to validate.
-        if (validateOnly) return;
-        await this.deleteFieldComponentDataInTx(
-          tx,
-          parentId,
-          parentTable,
-          f.name,
-          f
-        );
-      },
-      save: async (f, fieldData) => {
-        if (f.components && f.components.length > 0) {
-          await this.saveMultiComponentsInTx(
-            tx,
-            {
+    // Every read made beneath this write goes through the transaction's own connection; see
+    // `writeScope`.
+    const connection = {
+      locale,
+      select: (tableName: string, options: SelectOptions) =>
+        tx.select<Record<string, unknown>>(tableName, options),
+    };
+    await writeScope.run(
+      newWriteScope(tx.getDrizzle(), params.access, connection),
+      () =>
+        this.eachFieldGroupWrite(fields, data, {
+          clear: async f => {
+            // Clearing a field holds nothing to validate.
+            if (validateOnly) return;
+            await this.deleteFieldComponentDataInTx(
+              tx,
               parentId,
               parentTable,
-              fieldName: f.name,
-              field: f,
-              data: fieldData,
-              locale,
-              req,
-            },
-            validateOnly
-          );
-        } else if (f.component) {
-          if (f.repeatable) {
-            await this.saveRepeatableComponentsInTx(
-              tx,
-              {
-                parentId,
-                parentTable,
-                fieldName: f.name,
-                componentSlug: f.component,
-                data: fieldData,
-                locale,
-                req,
-              },
-              validateOnly
+              f.name,
+              f
             );
-          } else {
-            await this.saveSingleComponentInTx(
-              tx,
-              {
-                parentId,
-                parentTable,
-                fieldName: f.name,
-                componentSlug: f.component,
-                data: fieldData as ComponentInstanceData,
-                locale,
-                req,
-              },
-              validateOnly
-            );
-          }
-        }
-      },
-    });
+          },
+          save: async (f, fieldData) => {
+            if (f.components && f.components.length > 0) {
+              await this.saveMultiComponentsInTx(
+                tx,
+                {
+                  parentId,
+                  parentTable,
+                  fieldName: f.name,
+                  field: f,
+                  data: fieldData,
+                  locale,
+                  req,
+                },
+                validateOnly
+              );
+            } else if (f.component) {
+              if (f.repeatable) {
+                await this.saveRepeatableComponentsInTx(
+                  tx,
+                  {
+                    parentId,
+                    parentTable,
+                    fieldName: f.name,
+                    componentSlug: f.component,
+                    data: fieldData,
+                    locale,
+                    req,
+                  },
+                  validateOnly
+                );
+              } else {
+                await this.saveSingleComponentInTx(
+                  tx,
+                  {
+                    parentId,
+                    parentTable,
+                    fieldName: f.name,
+                    componentSlug: f.component,
+                    data: fieldData as ComponentInstanceData,
+                    locale,
+                    req,
+                  },
+                  validateOnly
+                );
+              }
+            }
+          },
+        })
+    );
   }
   /**
    * Validates component values the way {@link saveComponentDataInTransaction}
@@ -722,7 +947,9 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         existing.length > 0 ? "update" : "create",
         req,
-        componentMeta.slug
+        componentMeta.slug,
+        // The row this field's single instance is, whatever id is sent.
+        existing[0]?.id
       );
 
       // i18n: split translatable values out of the main comp_ write — they live on the
@@ -842,7 +1069,9 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         existing.length > 0 ? "update" : "create",
         req,
-        componentMeta.slug
+        componentMeta.slug,
+        // The row this field's single instance is, whatever id is sent.
+        existing[0]?.id
       );
       // Validation only: the instance has been judged as the write would
       // judge it, and nothing is stored.
@@ -960,7 +1189,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1097,7 +1328,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -1271,24 +1504,15 @@ export class FieldGroupMutationService extends BaseService {
           continue;
         }
 
-        const meta = metaCache.get(componentType);
-        if (!meta) continue;
-
-        const tableName = meta.tableName;
-        const componentFields = meta.fields;
-        const instanceId = instance.id;
-        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
-        // `companion` out of the instance by value when the field group is
-        // localized, so a default filled in, a relationship normalized or a
-        // password hashed after the split stays on the instance and never
-        // reaches the rows this write stores.
-        await this.prepareInstanceForWrite(
+        const prepared = await this.prepareZoneBlock({
           instance,
-          componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          componentType,
+          metaCache,
+          globalExistingMap,
           req,
-          meta.slug
-        );
+        });
+        if (!prepared) continue;
+        const { meta, componentFields, instanceId, existingEntry } = prepared;
 
         // i18n: split translatable values out per instance using its own component meta.
         const { schema, main, companion } = await this.splitLocalizedComponent(
@@ -1297,14 +1521,13 @@ export class FieldGroupMutationService extends BaseService {
           locale
         );
 
-        if (instanceId && globalExistingMap.has(instanceId)) {
+        if (instanceId && existingEntry) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
           updateData[STORAGE_FORMAT.columns.order] = i;
           updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
-          const existingEntry = globalExistingMap.get(instanceId)!;
           await this.adapter.update(
             existingEntry.tableName,
             updateData,
@@ -1330,7 +1553,9 @@ export class FieldGroupMutationService extends BaseService {
             componentType,
           });
 
-          await this.adapter.insert(tableName, row, { returning: ["id"] });
+          await this.adapter.insert(meta.tableName, row, {
+            returning: ["id"],
+          });
           if (schema) {
             await this.upsertLocalizedComponent(
               schema,
@@ -1442,24 +1667,15 @@ export class FieldGroupMutationService extends BaseService {
 
         if (!componentType || !allowedSlugs.includes(componentType)) continue;
 
-        const meta = metaCache.get(componentType);
-        if (!meta) continue;
-
-        const tableName = meta.tableName;
-        const componentFields = meta.fields;
-        const instanceId = instance.id;
-        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
-        // `companion` out of the instance by value when the field group is
-        // localized, so a default filled in, a relationship normalized or a
-        // password hashed after the split stays on the instance and never
-        // reaches the rows this write stores.
-        await this.prepareInstanceForWrite(
+        const prepared = await this.prepareZoneBlock({
           instance,
-          componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          componentType,
+          metaCache,
+          globalExistingMap,
           req,
-          meta.slug
-        );
+        });
+        if (!prepared) continue;
+        const { meta, componentFields, instanceId, existingEntry } = prepared;
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
 
@@ -1474,14 +1690,13 @@ export class FieldGroupMutationService extends BaseService {
           { adapter: this.txWriteAdapter(tx) }
         );
 
-        if (instanceId && globalExistingMap.has(instanceId)) {
+        if (instanceId && existingEntry) {
           incomingIds.add(instanceId);
           const updateData = this.serializeComponentRow(main, componentFields);
           updateData[STORAGE_FORMAT.columns.order] = i;
           updateData[STORAGE_FORMAT.columns.type] = componentType;
           updateData.updated_at = this.formatDateForDb();
 
-          const existingEntry = globalExistingMap.get(instanceId)!;
           await tx.update(
             existingEntry.tableName,
             updateData,
@@ -1508,7 +1723,7 @@ export class FieldGroupMutationService extends BaseService {
             componentType,
           });
 
-          await tx.insert(tableName, row, { returning: ["id"] });
+          await tx.insert(meta.tableName, row, { returning: ["id"] });
           if (schema) {
             await this.upsertLocalizedComponent(
               schema,
@@ -1608,10 +1823,12 @@ export class FieldGroupMutationService extends BaseService {
     fieldName: string
   ): Promise<ComponentRow[]> {
     try {
-      return await this.adapter.select<ComponentRow>(tableName, {
-        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
-        orderBy: INSTANCE_ORDER,
-      });
+      return rememberStored(
+        await this.adapter.select<ComponentRow>(tableName, {
+          where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+          orderBy: INSTANCE_ORDER,
+        })
+      );
     } catch (error) {
       this.logger.debug("Could not query component table", {
         tableName,
@@ -1629,10 +1846,12 @@ export class FieldGroupMutationService extends BaseService {
     fieldName: string
   ): Promise<ComponentRow[]> {
     try {
-      return await tx.select<ComponentRow>(tableName, {
-        where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
-        orderBy: INSTANCE_ORDER,
-      });
+      return rememberStored(
+        await tx.select<ComponentRow>(tableName, {
+          where: this.whereAnd(instanceKey(parentId, parentTable, fieldName)),
+          orderBy: INSTANCE_ORDER,
+        })
+      );
     } catch (error) {
       this.logger.debug("Could not query component table in tx", {
         tableName,
@@ -1686,7 +1905,10 @@ export class FieldGroupMutationService extends BaseService {
    * Validation runs before hashing so length rules see the plaintext value,
    * matching the parent entry pipeline. `mode` is "update" for an instance
    * that already exists (so a write-only password left empty keeps the stored
-   * hash) and "create" for a new one.
+   * hash) and "create" for a new one. An update's rules are told the id of the
+   * row it updates: `storedId` where the save path names it, and otherwise the
+   * instance's own id, which the save path has matched to a stored row before
+   * choosing "update".
    *
    * `req` is the parent write's request context. It reaches the field
    * validators unchanged, so a rule on a component field sees the same `user`
@@ -1704,7 +1926,8 @@ export class FieldGroupMutationService extends BaseService {
      * read from the field-level registry. The fields above come from the
      * stored definition, which carries constants and cannot carry a function.
      */
-    slug?: string
+    slug?: string,
+    storedId?: string
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -1722,6 +1945,93 @@ export class FieldGroupMutationService extends BaseService {
         ],
       });
     }
+    const restoredHashes = await this.judgeInstanceForWrite(
+      instance,
+      componentFields,
+      mode,
+      slug,
+      storedId
+    );
+    // Reduced in place, and before validation, because both halves of the write
+    // depend on it. A validator is written against a field's public value, the
+    // document id, and would otherwise be handed the populated row. The
+    // localized split then copies values out of this same object into the
+    // companion payload, which never reaches `serializeComponentRow` — so a
+    // reference left populated here is stored there as a snapshot of the row.
+    normalizeRelationshipFields(instance, componentFields);
+
+    // The components nested in this one: their schemas judge one held in a group or repeater here,
+    // whose value no component write of its own reaches, and tell a seeded value from a real one.
+    const nested = await this.nestedComponentsOf(componentFields);
+    // The stored definition carries no functions, so a component field's own
+    // `validate` is attached from the field-level registry, as the parent's
+    // fields are; without it that validator never ran on any write.
+    // A component placed directly among these fields is judged by the refusal alone: nothing
+    // stores it and the admin never draws it, so the rest of validation does not ask for it, a
+    // required one included, or an instance of this component could never be written.
+    const judged = omitDirectComponentFields(componentFields);
+    const issues = [
+      ...unstoredNestedComponentIssues(instance, componentFields),
+      ...(await validateEntryData(
+        instance,
+        slug ? attachFieldValidators("fieldGroup", slug, judged) : judged,
+        { mode, req, componentFields: nested }
+      )),
+    ];
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
+    }
+    // After validation, which judges what the writer sent: each password an
+    // update left out of a container keeps its stored hash, whoever writes.
+    const keep = new Set(restoredHashes);
+    if (mode === "update" && slug !== undefined && storedId !== undefined) {
+      const reach = reachOf(nested);
+      if (reachesPasswordField(componentFields, reach)) {
+        const carried = carryStoredPasswords(
+          instance,
+          await this.storedContainerValues(slug, storedId, componentFields),
+          componentFields,
+          reach
+        );
+        for (const hash of carried) keep.add(hash);
+      }
+    }
+    // Through the field groups held inline in this one's containers too: their
+    // passwords are stored in those containers, which no save of their own
+    // reaches.
+    await hashPasswordFieldValues(
+      instance,
+      componentFields,
+      reachOf(nested),
+      keep
+    );
+  }
+
+  /**
+   * The field group's own rules on one instance about to be written, and on
+   * what its defaults bring in for a new one; see `prepareInstanceForWrite`.
+   * Returns the stored hashes an update's restore put back.
+   */
+  private async judgeInstanceForWrite(
+    instance: ComponentInstanceData,
+    componentFields: FieldConfig[],
+    mode: "create" | "update",
+    slug: string | undefined,
+    storedId: string | undefined
+  ): Promise<ReadonlySet<string>> {
+    // The id an update's rules are told: the row the save updates.
+    const ruleId =
+      storedId ??
+      (mode === "update" && typeof instance.id === "string"
+        ? instance.id
+        : undefined);
+    const restoredHashes = await this.applyInstanceWriteRules(
+      instance,
+      mode,
+      slug,
+      ruleId,
+      componentFields
+    );
     // A new instance takes its declared defaults before validation, as a new
     // entry does, so a required child with a default is not refused on an
     // instance the caller could not have completed. An existing instance is
@@ -1732,29 +2042,211 @@ export class FieldGroupMutationService extends BaseService {
         componentFields,
         slug ? getFieldFunctions("fieldGroup", slug) : undefined
       );
+      // Judged again: a default is a value like any other, so a field the
+      // writer may not create does not take one, as an entry's does not.
+      await this.applyInstanceWriteRules(
+        instance,
+        mode,
+        slug,
+        ruleId,
+        componentFields
+      );
+      // A default can bring in a field group of its own, held inline in a
+      // group or repeater here, after the parent write judged the inline
+      // ones: judged now, by that field group's own rules.
+      await this.judgeInlineFieldGroupsOf(instance, componentFields);
     }
-    // Reduced in place, and before validation, because both halves of the write
-    // depend on it. A validator is written against a field's public value, the
-    // document id, and would otherwise be handed the populated row. The
-    // localized split then copies values out of this same object into the
-    // companion payload, which never reaches `serializeComponentRow` — so a
-    // reference left populated here is stored there as a snapshot of the row.
-    normalizeRelationshipFields(instance, componentFields);
+    return restoredHashes;
+  }
 
-    // The stored definition carries no functions, so a component field's own
-    // `validate` is attached from the field-level registry, as the parent's
-    // fields are; without it that validator never ran on any write.
-    const issues = await validateEntryData(
-      instance,
-      slug
-        ? attachFieldValidators("fieldGroup", slug, componentFields)
-        : componentFields,
-      { mode, req }
-    );
-    if (issues.length > 0) {
-      throw NextlyError.validation({ errors: issues });
+  /**
+   * The field group's own write rules on one instance, in place, before
+   * anything else reads it: a field the writer may not set is removed, as the
+   * parent entry's own fields are judged. `mode` is the instance's own: one
+   * that already exists is an update, judged with `storedId`, the id of the
+   * row the save updates, so a field removed here keeps its stored value (an
+   * existing instance is written key by key); a new one is a create.
+   *
+   * Every save binds who the write is made as on its scope, so an instance
+   * reached without one, or without the field group's slug to look its rules
+   * up by, cannot be judged and is refused rather than written unjudged.
+   */
+  private async applyInstanceWriteRules(
+    instance: ComponentInstanceData,
+    mode: "create" | "update",
+    slug: string | undefined,
+    storedId: string | undefined,
+    componentFields: readonly FieldConfig[]
+  ): Promise<ReadonlySet<string>> {
+    const access = writeScope.getStore()?.access;
+    if (access === undefined || slug === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "field-group-write-unjudged",
+          fieldGroup: slug ?? null,
+        },
+      });
     }
-    await hashPasswordFieldValues(instance, componentFields);
+    if (access.overrideAccess) return new Set();
+    const judge = (data: Record<string, unknown>) =>
+      applyFieldWriteAccess({
+        kind: "fieldGroup",
+        slug,
+        data,
+        operation: mode,
+        user: access.user,
+        authenticatedScope: access.authenticatedScope,
+        overrideAccess: false,
+        // The id of the row the save updates, never the one the instance was
+        // sent with: a new instance is stored under an id of its own, and a
+        // single field group's row is updated whatever id is sent.
+        id: mode === "update" ? storedId : undefined,
+        grants: access.grants,
+      });
+    const stored =
+      mode === "update" && storedId !== undefined
+        ? await this.storedContainerValues(slug, storedId, componentFields)
+        : undefined;
+    if (!stored) {
+      await judge(instance);
+      return new Set();
+    }
+    await keepContainersAtStored(instance, stored, judge);
+    // The stored hashes the write may put back, so the hashing pass leaves
+    // them as they are: at every depth, as the hashing pass reaches them.
+    return storedPasswordValues(
+      stored,
+      componentFields,
+      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
+    );
+  }
+
+  /**
+   * What a stored instance's container fields hold, by field name: from its
+   * own row, and, for a translated container, from its companion row in the
+   * write's language, since that is the value the write replaces whole.
+   */
+  private async storedContainerValues(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<Record<string, unknown> | undefined> {
+    const scope = writeScope.getStore();
+    const own = storedContainers(
+      scope?.stored.get(instanceId),
+      componentFields
+    );
+    const translated = await this.translatedContainers(
+      slug,
+      instanceId,
+      componentFields
+    );
+    return own || translated ? { ...own, ...translated } : undefined;
+  }
+
+  /**
+   * The translated containers a localized field group's stored instance holds
+   * on its companion row in the write's language, or nothing where it has
+   * none. Read on the write's own connection; a failed read fails the write
+   * rather than leaving a denied child unrestored.
+   */
+  private async translatedContainers(
+    slug: string,
+    instanceId: string,
+    componentFields: readonly FieldConfig[]
+  ): Promise<Record<string, unknown> | undefined> {
+    const scope = writeScope.getStore();
+    if (!scope || !this.localization) return undefined;
+    if (
+      !componentFields.some(field =>
+        Array.isArray((field as { fields?: unknown }).fields)
+      )
+    ) {
+      return undefined;
+    }
+    const meta = await this.registryService.getComponent(slug, scope.executor);
+    if (meta.localized !== true) return undefined;
+    const schema = buildCompanionSchema({
+      slug: meta.slug,
+      tableName: meta.tableName,
+      fields: meta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: false,
+    });
+    if (!schema) return undefined;
+    // Before its migration the companion is not there, and a translated
+    // container is still on the instance's own row. Off a transaction the
+    // verdict is resolved here, so a cold cache cannot skip the read; inside
+    // one only the cached verdict is read, which the write resolved before
+    // opening it.
+    const readiness =
+      scope.executor === undefined
+        ? await resolveCompanionReadiness(this.adapter, {
+            companionTableName: schema.companionTableName,
+            mainTableName: meta.tableName,
+            localizedColumns: schema.localizedFields.map(f => f.column),
+          })
+        : cachedCompanionReadiness(this.adapter, schema.companionTableName);
+    if (readiness !== "ready") return undefined;
+    const rows = await scope.select(schema.companionTableName, {
+      where: this.whereAnd({
+        [COMPANION_PARENT_COLUMN]: instanceId,
+        [COMPANION_LOCALE_COLUMN]: resolveRequestedLocale(
+          this.localization,
+          scope.locale
+        ),
+      }),
+    });
+    return storedContainers(rows[0], componentFields);
+  }
+
+  /**
+   * The field groups `instance` holds inline, judged by their own create
+   * rules on the write's own connection, in place.
+   */
+  private async judgeInlineFieldGroupsOf(
+    instance: ComponentInstanceData,
+    componentFields: readonly FieldConfig[]
+  ): Promise<void> {
+    const scope = writeScope.getStore();
+    if (!scope) return;
+    await applyInlineFieldGroupWriteAccess({
+      data: instance,
+      fields: componentFields,
+      source: {
+        getComponentFields: async (nestedSlug, executor) =>
+          (await this.registryService.getComponentBySlug(nestedSlug, executor))
+            ?.fields ?? null,
+      },
+      operation: "create",
+      access: scope.access,
+      executor: scope.executor,
+    });
+  }
+
+  /**
+   * The schemas of the components nested in a component, for judging its instances: read on the
+   * write's connection, once per write; see `writeScope`.
+   */
+  private nestedComponentsOf(
+    componentFields: FieldConfig[]
+  ): Promise<ComponentFieldResolver | undefined> {
+    const scope = writeScope.getStore();
+    const known = scope?.nested.get(componentFields);
+    if (known) return known;
+    const resolving = containedComponentResolver(
+      componentFields,
+      async nestedSlug =>
+        (
+          await this.registryService.getComponentBySlug(
+            nestedSlug,
+            scope?.executor
+          )
+        )?.fields ?? null,
+      true
+    );
+    scope?.nested.set(componentFields, resolving);
+    return resolving;
   }
 
   private serializeComponentRow(
@@ -1810,6 +2302,62 @@ export class FieldGroupMutationService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Resolve one dynamic-zone block for writing, and judge and prepare it: the
+   * field group's record, the stored row the block updates, and the mode that
+   * row decides.
+   *
+   * A block updates only a row stored as the type it claims. The id of a row
+   * stored as another type names a row this block's rules and schema do not
+   * describe, so a block carrying one is new, of the type it claims, and is
+   * judged by a create.
+   *
+   * Prepared BEFORE the caller splits: `splitLocalizedComponent` copies
+   * `main` and `companion` out of the instance by value when the field group
+   * is localized, so a default filled in, a relationship normalized or a
+   * password hashed after the split stays on the instance and never reaches
+   * the rows the write stores.
+   *
+   * Both save paths resolve a block exactly this way, and this is where the
+   * block's own field rules run, so it has one implementation: a second copy
+   * of a judgment is how two paths come to allow different things.
+   *
+   * Null when this write resolved no record for the type the block claims.
+   */
+  private async prepareZoneBlock(args: {
+    instance: ComponentInstanceData;
+    componentType: string;
+    metaCache: Map<string, DynamicFieldGroupRecord>;
+    globalExistingMap: Map<string, { row: ComponentRow; tableName: string }>;
+    req?: Record<string, unknown>;
+  }): Promise<{
+    meta: DynamicFieldGroupRecord;
+    componentFields: FieldConfig[];
+    instanceId: string | undefined;
+    existingEntry: { row: ComponentRow; tableName: string } | undefined;
+  } | null> {
+    const meta = args.metaCache.get(args.componentType);
+    if (!meta) return null;
+    const componentFields = meta.fields;
+    const instanceId = args.instance.id;
+    const storedAs =
+      instanceId !== undefined
+        ? args.globalExistingMap.get(instanceId)
+        : undefined;
+    const existingEntry =
+      storedAs?.tableName === meta.tableName ? storedAs : undefined;
+    await this.prepareInstanceForWrite(
+      args.instance,
+      componentFields,
+      existingEntry ? "update" : "create",
+      args.req,
+      meta.slug,
+      // The stored row an existing block is, for its stored passwords.
+      existingEntry ? instanceId : undefined
+    );
+    return { meta, componentFields, instanceId, existingEntry };
   }
 
   private buildRowMap(rows: ComponentRow[]): Map<string, ComponentRow> {

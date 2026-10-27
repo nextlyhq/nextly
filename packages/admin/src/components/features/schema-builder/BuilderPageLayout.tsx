@@ -14,7 +14,7 @@
  * the layout's business.
  */
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
@@ -74,7 +74,7 @@ export function BuilderPageLayout({
   isSaving,
   savingLabel,
   children,
-}: Props) {
+}: Props): JSX.Element {
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <BuilderToolbar

@@ -26,10 +26,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // to gate access. Tests force the happy path (auth allowed); negative auth
 // paths are covered by other test suites.
 vi.mock("../auth/middleware", () => ({
+  admittedActionOf: vi.fn(),
   requireAnyPermission: vi.fn(),
   requirePermission: vi.fn(),
   requireAuthentication: vi.fn(),
   requireCollectionAccess: vi.fn(),
+  requireCollectionWriteAccess: vi.fn(),
+  requireLifecycleAccess: vi.fn(),
   isErrorResponse: vi.fn(),
   createJsonErrorResponse: vi.fn(),
 }));
@@ -121,6 +124,7 @@ vi.mock("../route-handler", async () => {
 
 // --- SUT imports (must come AFTER vi.mock calls so the mocks apply) -----
 
+import { runWithRequestCaller } from "../auth/caller-scope";
 import {
   isErrorResponse,
   requireAnyPermission,
@@ -133,7 +137,8 @@ import {
   _handleAdminMetaRequestForTest,
   _handleAdminMetaSidebarGroupsForTest,
   _needsResolvedRolesForTest,
-  _setAuthenticatedRouteParamsForTest,
+  _requestCallerForTest,
+  _stripReservedIdentityParamsForTest,
 } from "../routeHandler";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import {
@@ -384,7 +389,7 @@ describe("deleteImageSize (DELETE /image-sizes/:id)", () => {
 // barrel).
 void createJsonErrorResponse;
 
-describe("setAuthenticatedRouteParams", () => {
+describe("requestCallerFor", () => {
   const resolveRoleSlugsMock = vi.mocked(resolveRoleSlugs);
   const sessionUser = {
     userId: "u1",
@@ -393,99 +398,167 @@ describe("setAuthenticatedRouteParams", () => {
     authMethod: "session" as const,
   };
 
-  it("strips client-injected reserved params and writes resolved roles when needed", async () => {
+  it("resolves the caller's role slugs when the route needs them", async () => {
+    // Session auth carries role IDs; the handlers hand access rules SLUGS, so
+    // the caller carries the resolved slugs rather than the IDs it came with.
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = {
-      collectionName: "posts",
-      // Attacker-supplied copies of server-authored identity params.
-      _authenticatedUserId: "attacker",
-      _authenticatedUserRoles: JSON.stringify(["admin"]),
-    };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
+    const caller = await _requestCallerForTest(sessionUser, true);
 
-    expect(routeParams._authenticatedUserId).toBe("u1");
-    // Injected roles are clobbered by the resolved slugs, not trusted.
-    expect(routeParams._authenticatedUserRoles).toBe(
-      JSON.stringify(["editor"])
-    );
+    expect(caller).toMatchObject({
+      userId: "u1",
+      actor: { type: "user", id: "u1" },
+      roles: ["editor"],
+    });
   });
 
-  it("skips role resolution when roles are not needed (and strips injection)", async () => {
-    const routeParams: Record<string, string> = {
-      _authenticatedUserRoles: JSON.stringify(["admin"]),
-    };
-
-    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, false);
+  it("skips role resolution when roles are not needed", async () => {
+    const caller = await _requestCallerForTest(sessionUser, false);
 
     expect(resolveRoleSlugsMock).not.toHaveBeenCalled();
-    expect(routeParams._authenticatedUserId).toBe("u1");
-    // The injected value is stripped and never re-written.
-    expect(routeParams._authenticatedUserRoles).toBeUndefined();
+    expect(caller?.userId).toBe("u1");
+    // No roles at all, rather than an empty set standing in for "none".
+    expect(caller).not.toHaveProperty("roles");
   });
 
-  it("writes an empty roles array (clobbering injection) when the user has none", async () => {
+  it("carries an empty role set when the user has none", async () => {
+    // Resolved to nothing is still resolved: the caller says so with an empty
+    // set, which the handlers read as no roles.
     resolveRoleSlugsMock.mockResolvedValue([]);
-    const routeParams: Record<string, string> = {
-      _authenticatedUserRoles: JSON.stringify(["admin"]),
-    };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
+    const caller = await _requestCallerForTest(sessionUser, true);
 
-    expect(routeParams._authenticatedUserRoles).toBe("[]");
+    expect(caller?.roles).toEqual([]);
   });
 
-  it("carries verified claims through, and refuses an injected copy", async () => {
+  it("attributes an API-key request to the key, acting for its owner", async () => {
+    // A write records the key itself as its actor, not silently the user
+    // that owns the key.
+    const caller = await _requestCallerForTest(
+      { ...sessionUser, authMethod: "api-key", apiKeyId: "key-1" },
+      false
+    );
+
+    expect(caller).toMatchObject({
+      userId: "u1",
+      actor: { type: "apiKey", id: "key-1" },
+    });
+  });
+
+  it("carries verified claims through", async () => {
     // A stored `custom` rule may decide on a claim the framework knows nothing
     // about. Rebuilding the caller from the canonical fields alone leaves such a
     // rule reading `undefined` over HTTP while it works through the Direct API,
     // so an absence-tolerant rule admits the caller it was written to refuse.
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = {
-      // An attacker-supplied copy of the server-authored key.
-      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
-    };
 
-    await _setAuthenticatedRouteParamsForTest(
-      routeParams,
+    const caller = await _requestCallerForTest(
       { ...sessionUser, claims: { tenantId: "blocked" } },
       true
     );
 
-    expect(routeParams._authenticatedClaims).toBe(
-      JSON.stringify({ tenantId: "blocked" })
-    );
+    expect(caller?.claims).toEqual({ tenantId: "blocked" });
   });
 
-  it("strips an injected claims param when the caller carries none", async () => {
+  it("carries no claims when the caller has none", async () => {
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = {
-      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
-    };
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, sessionUser, true);
+    const caller = await _requestCallerForTest(sessionUser, true);
 
-    expect(routeParams._authenticatedClaims).toBeUndefined();
+    expect(caller).not.toHaveProperty("claims");
   });
 
-  it("strips reserved params when there is no authorized user", async () => {
-    const routeParams: Record<string, string> = {
-      _authenticatedUserId: "attacker",
-      _authenticatedUserRoles: JSON.stringify(["admin"]),
-    };
+  it("is frozen, so no handler can rewrite who the request is", async () => {
+    resolveRoleSlugsMock.mockResolvedValue(["editor"]);
 
-    await _setAuthenticatedRouteParamsForTest(routeParams, undefined, true);
+    const caller = await _requestCallerForTest(
+      { ...sessionUser, claims: { tenantId: "acme" } },
+      true
+    );
 
-    expect(routeParams._authenticatedUserId).toBeUndefined();
-    expect(routeParams._authenticatedUserRoles).toBeUndefined();
+    expect(Object.isFrozen(caller)).toBe(true);
+    expect(Object.isFrozen(caller?.actor)).toBe(true);
+    expect(Object.isFrozen(caller?.roles)).toBe(true);
+    expect(Object.isFrozen(caller?.claims)).toBe(true);
+  });
+
+  it("is no one when there is no authorized user", async () => {
+    const caller = await _requestCallerForTest(undefined, true);
+
+    expect(caller).toBeUndefined();
+    expect(resolveRoleSlugsMock).not.toHaveBeenCalled();
   });
 });
 
 /**
- * The role-resolution decision, tested apart from the stamping it drives.
+ * The reserved identity param names, which `parseRestRoute` fills from the
+ * query string like any other key. Identity no longer travels in them, so a
+ * client-supplied copy is dropped before dispatch and nothing can read it.
+ */
+describe("stripReservedIdentityParams", () => {
+  it("drops every reserved identity param a client sent, and keeps the rest", () => {
+    // Attacker-supplied copies of what used to be server-authored identity.
+    const routeParams: Record<string, string> = {
+      collectionName: "posts",
+      page: "2",
+      _authenticatedUserId: "attacker",
+      _authenticatedUserName: "Attacker",
+      _authenticatedUserEmail: "attacker@example.com",
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+      _authenticatedActorType: "system",
+      _authenticatedActorId: "forged",
+      _authenticatedPermissions: JSON.stringify(["delete-posts"]),
+      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
+    };
+
+    _stripReservedIdentityParamsForTest(routeParams);
+
+    expect(routeParams).toEqual({ collectionName: "posts", page: "2" });
+  });
+
+  it("tolerates a route with no params", () => {
+    expect(() => _stripReservedIdentityParamsForTest(undefined)).not.toThrow();
+  });
+
+  it("leaves the dispatcher reading the authenticated caller, never a forged param", async () => {
+    // The order the route handler runs them in: strip, then build the caller.
+    // The user a handler builds comes from the caller alone, so the injected
+    // id, roles and claims are nowhere in it.
+    vi.mocked(resolveRoleSlugs).mockResolvedValue(["editor"]);
+    const routeParams: Record<string, string> = {
+      collectionName: "posts",
+      _authenticatedUserId: "attacker",
+      _authenticatedUserRoles: JSON.stringify(["admin"]),
+      _authenticatedClaims: JSON.stringify({ tenantId: "acme" }),
+    };
+
+    _stripReservedIdentityParamsForTest(routeParams);
+    const caller = await _requestCallerForTest(
+      {
+        userId: "u1",
+        roles: ["role-id-1"],
+        permissions: [],
+        authMethod: "session",
+        claims: { tenantId: "blocked" },
+      },
+      true
+    );
+    const user = runWithRequestCaller(caller, () => readAuthenticatedUser());
+
+    expect(routeParams).toEqual({ collectionName: "posts" });
+    expect(user).toMatchObject({
+      id: "u1",
+      roles: ["editor"],
+      tenantId: "blocked",
+    });
+  });
+});
+
+/**
+ * The role-resolution decision, tested apart from the caller it shapes.
  *
  * The suite above supplies `needsRoles` directly, so it can only prove that
- * stamping honors the flag — never that a given request computes it correctly.
+ * building the caller honors the flag — never that a given request computes it correctly.
  * Any service or method whose access check reads roles has to be listed in the
  * decision, and a method missing from it fails silently: roles are simply absent
  * downstream, and a role-based rule then denies a caller who should be allowed.
@@ -556,34 +629,31 @@ describe("needsResolvedRoles", () => {
   });
 
   it("carries the caller's roles all the way to the dispatcher for an entry read", async () => {
-    // The full chain the entry reads depend on: decide, stamp, then decode.
-    // Asserting only the first or last link lets a break in the middle pass.
+    // The full chain the entry reads depend on: decide, build the caller, then
+    // read it in the handler. Asserting only the first or last link lets a
+    // break in the middle pass.
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = { collectionName: "posts" };
 
-    await _setAuthenticatedRouteParamsForTest(
-      routeParams,
+    const caller = await _requestCallerForTest(
       sessionUser,
       _needsResolvedRolesForTest("collections", "listEntries", "GET")
     );
 
-    const user = readAuthenticatedUser(routeParams);
+    const user = runWithRequestCaller(caller, () => readAuthenticatedUser());
     expect(user).toMatchObject({ id: "u1", roles: ["editor"], role: "editor" });
   });
 
   it("carries the caller's own claims the same way", async () => {
     // Same chain, for a claim the framework does not define. Asserting the
-    // stamping alone would not catch the decode dropping it again.
+    // caller alone would not catch the handler's read dropping it again.
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = { collectionName: "posts" };
 
-    await _setAuthenticatedRouteParamsForTest(
-      routeParams,
+    const caller = await _requestCallerForTest(
       { ...sessionUser, claims: { tenantId: "acme", plan: "pro" } },
       _needsResolvedRolesForTest("collections", "listEntries", "GET")
     );
 
-    const user = readAuthenticatedUser(routeParams);
+    const user = runWithRequestCaller(caller, () => readAuthenticatedUser());
     expect(user).toMatchObject({ id: "u1", tenantId: "acme", plan: "pro" });
   });
 
@@ -592,15 +662,13 @@ describe("needsResolvedRoles", () => {
     // itself: a token restating `id` or `roles` must not be able to displace
     // what the route actually authenticated.
     resolveRoleSlugsMock.mockResolvedValue(["editor"]);
-    const routeParams: Record<string, string> = { collectionName: "posts" };
 
-    await _setAuthenticatedRouteParamsForTest(
-      routeParams,
+    const caller = await _requestCallerForTest(
       { ...sessionUser, claims: { id: "someone-else", roles: ["admin"] } },
       true
     );
 
-    const user = readAuthenticatedUser(routeParams);
+    const user = runWithRequestCaller(caller, () => readAuthenticatedUser());
     expect(user).toMatchObject({ id: "u1", roles: ["editor"] });
   });
 });

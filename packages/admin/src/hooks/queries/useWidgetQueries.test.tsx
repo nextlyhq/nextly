@@ -17,6 +17,12 @@ import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -299,6 +305,66 @@ describe("useWidgetQueries", () => {
       "core/a": { ok: false, error: expect.stringMatching(/could not be/i) },
       "core/b": { ok: false, error: expect.stringMatching(/could not be/i) },
     });
+  });
+
+  it("hands a card the SAME slot object on every render while its cached answer is unchanged", async () => {
+    // 🔴 A card keys its component's draw on the slot it is handed: a new object
+    // is a new answer to draw. Rebuilt on every render, a component that throws
+    // was caught, re-rendered the grid by reporting it, met a "new" answer, drew
+    // and threw again until React stopped it, and every component card remounted
+    // whenever the grid re-rendered. An ok slot, a refusal and a short answer
+    // each keep their object.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 7 } },
+        { ok: false, error: "Source unavailable." },
+      ],
+    });
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/fine", query: countQuery("collection:posts") },
+          { placementId: "core/broken", query: countQuery("collection:gone") },
+          { placementId: "core/short", query: countQuery("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/short"]).toBeDefined()
+    );
+    const first = { ...result.current.slots };
+    rerender();
+    rerender();
+    for (const id of ["core/fine", "core/broken", "core/short"]) {
+      expect(result.current.slots[id]).toBe(first[id]);
+    }
+    // The control: the slots are the answers, not one shared placeholder.
+    expect(first["core/fine"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 7 },
+    });
+    expect(first["core/broken"]).not.toBe(first["core/short"]);
+  });
+
+  it("keeps a whole-request failure's slots the same objects across renders", async () => {
+    vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    const first = { ...result.current.slots };
+    rerender();
+    expect(result.current.slots["core/a"]).toBe(first["core/a"]);
+    expect(result.current.slots["core/b"]).toBe(first["core/b"]);
   });
 
   it("says nothing per widget while the request is still being retried", async () => {
@@ -761,6 +827,68 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("carries a bucket's own floor through, and only a true one", async () => {
+      // A bucket's floor is its own claim: dropped, the card would draw "12"
+      // where the source said "12 or more".
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [
+              { value: "unpublished", count: 12, atLeast: true },
+              { value: "overdue", count: 2, atLeast: false },
+              { value: "scheduled", count: 1, atLeast: "yes" },
+            ],
+            atLeast: true,
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [
+            { value: "unpublished", count: 12, atLeast: true },
+            { value: "overdue", count: 2 },
+            { value: "scheduled", count: 1 },
+          ],
+          atLeast: true,
+        },
+      });
+    });
+
+    it("carries a grouped answer's instant through only as an exact instant", async () => {
+      // The card measures its "this week" link from this instant, so a value
+      // that is not one is dropped and the card falls back to its own clock.
+      const answer = (asOf: unknown) =>
+        slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "overdue", count: 1 }],
+            asOf,
+          },
+        });
+      expect(await answer("2026-10-22T12:00:00.000Z")).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [{ value: "overdue", count: 1 }],
+          asOf: "2026-10-22T12:00:00.000Z",
+        },
+      });
+      for (const asOf of [
+        "2026-10-22",
+        "2026-02-30T12:00:00.000Z",
+        1761134400000,
+      ]) {
+        expect(await answer(asOf)).toEqual({
+          ok: true,
+          result: { op: "groupBy", buckets: [{ value: "overdue", count: 1 }] },
+        });
+      }
+    });
+
     it("keeps the buckets when the grouped field is malformed", async () => {
       expect(
         await slotFor({
@@ -1175,9 +1303,11 @@ describe("useWidgetQueries, a malformed timeline point", () => {
 
 describe("the tier an answer was fetched at", () => {
   it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
-    // A card asked at small leaves before its answer lands, and comes back wider: the new
-    // render takes over the request already in flight. The answer it receives is the small one,
-    // so it must know that, or it never asks for the rows it is missing.
+    // A card asked at small is drawn again wider before its answer lands -- a remount while the
+    // first render still holds the request -- and the first then leaves: the new render takes
+    // over the request already in flight. The answer it receives is the small one, so it must
+    // know that, or it never asks for the rows it is missing. (Once every render has left, the
+    // request is cancelled through its signal, and a card that comes back asks anew.)
     const client = new QueryClient({
       defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
     });
@@ -1205,11 +1335,11 @@ describe("the tier an answer was fetched at", () => {
       wrapper: shared,
     });
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    left.unmount();
-
     const back = renderHook(() => useWidgetQueries(asked("medium")), {
       wrapper: shared,
     });
+    left.unmount();
+
     answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
     await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
     expect(back.result.current.fetchedTierFor("p1")).toBe("small");

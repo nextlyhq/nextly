@@ -15,6 +15,7 @@
  * @module api/widget-slots
  */
 
+import { answerAsAsked } from "../domains/widgets/answer-as-asked";
 import type { BatchScope } from "../domains/widgets/batch-scope";
 import {
   resolveExecutableSource,
@@ -22,7 +23,10 @@ import {
 } from "../domains/widgets/executable-source";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
-import type { ManySourceResolver } from "../domains/widgets/resolved-sources";
+import type {
+  ManySourceResolver,
+  WidgetScope,
+} from "../domains/widgets/resolved-sources";
 import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import {
   isUnavailableSourceRefusal,
@@ -147,11 +151,27 @@ export const SLOT_TIMEOUT_MS = 30_000;
  */
 export async function withinSlotBudget<T>(
   start: (signal: AbortSignal) => Promise<T>,
-  onTimeout: () => never
+  onTimeout: () => never,
+  batch?: AbortSignal
 ): Promise<T> {
+  // A batch nobody is waiting for any more starts no new work: a slot reached
+  // after the reader left is refused before its resolver is called at all.
+  if (batch?.aborted) slotCancelled();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = Symbol("widget-slot-timeout");
+  const cancelled = Symbol("widget-batch-cancelled");
   const controller = new AbortController();
+  // The slot's one signal is aborted by EITHER end: its own budget running out,
+  // or the batch it belongs to being given up (the reader closed the stream).
+  // A resolver honours one signal whichever of the two fired.
+  let onBatchAbort: (() => void) | undefined;
+  const batchGone = new Promise<typeof cancelled>(resolve => {
+    onBatchAbort = () => {
+      controller.abort();
+      resolve(cancelled);
+    };
+    batch?.addEventListener("abort", onBatchAbort, { once: true });
+  });
   const work = start(controller.signal);
   try {
     // Attached to `work` itself, not to the race's result: the race settles on
@@ -163,7 +183,8 @@ export async function withinSlotBudget<T>(
       timer.unref?.();
     });
 
-    const outcome = await Promise.race([work, deadline]);
+    const outcome = await Promise.race([work, deadline, batchGone]);
+    if (outcome === cancelled) slotCancelled();
     // `onTimeout` returns `never`, so the compiler narrows `outcome` to `T`
     // past this line without an assertion.
     if (outcome === timedOut) {
@@ -175,7 +196,22 @@ export async function withinSlotBudget<T>(
     return outcome;
   } finally {
     if (timer) clearTimeout(timer);
+    if (onBatchAbort) batch?.removeEventListener("abort", onBatchAbort);
   }
+}
+
+/**
+ * The failure of a slot whose batch was given up. Nobody reads it -- the
+ * reader that asked has gone -- so it exists to end the slot's work and leave a
+ * line for the operator, not to explain anything.
+ */
+function slotCancelled(): never {
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "This widget's request was cancelled",
+    logMessage: "widget batch cancelled before this slot answered",
+    logContext: { reason: "widget-batch-cancelled" },
+  });
 }
 
 /**
@@ -201,7 +237,7 @@ export async function withinSlotBudget<T>(
  */
 export function serialisable(
   result: WidgetResult,
-  source: string
+  subject: SlotSubject
 ): WidgetResult {
   try {
     return JSON.parse(JSON.stringify(result)) as WidgetResult;
@@ -209,10 +245,10 @@ export function serialisable(
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage: "This widget returned something that could not be sent",
-      logMessage: `widget source "${source}" returned an unserialisable result`,
+      logMessage: `${named(subject)} returned an unserialisable result`,
       logContext: {
         reason: "widget-result-unserialisable",
-        source,
+        ...subject,
         err: error instanceof Error ? error.message : String(error),
       },
     });
@@ -221,13 +257,51 @@ export function serialisable(
 
 /** A query that passed its own read check and validation, at its place in the batch. */
 export interface ReadyQuery {
+  kind?: "query";
   index: number;
   query: WidgetQuery;
   executable: ExecutableSource;
 }
 
-/** The failure a slot that ran out of time becomes, naming its source for the operator. */
-function slotTimedOut(source: string): never {
+/**
+ * A declared card's own data, at its place in the batch: what core runs for a
+ * declared widget's card, as the person asking, under the card's own budget.
+ */
+export interface ReadyCardData {
+  kind: "data";
+  index: number;
+  /** The declared widget, named for the operator when its card fails or runs out of time. */
+  widgetId: string;
+  /** Who declared it, whose view of the batch's scope its data computes through. */
+  owner: string;
+  /**
+   * The card's answer as a slot carries it, and whether its empty test holds.
+   * Handed the card's own signal, aborted at its budget or when the batch is
+   * given up, and its owner's view of the batch's scope.
+   */
+  answer(input: {
+    signal: AbortSignal;
+    scope: WidgetScope;
+    /** The batch's instant, the card's own copy. */
+    now: Date;
+  }): Promise<{ result: WidgetResult; empty: boolean }>;
+}
+
+/** Anything a batch answers at its place: a ready query, or a declared card's own data. */
+export type ReadyEntry = ReadyQuery | ReadyCardData;
+
+/** What a failed or late slot names for the operator: the source asked, or the declared widget. */
+type SlotSubject = { source: string } | { widget: string };
+
+/** A slot's subject as the log names it. */
+function named(subject: SlotSubject): string {
+  return "source" in subject
+    ? `widget source "${subject.source}"`
+    : `declared widget "${subject.widget}"`;
+}
+
+/** The failure a slot that ran out of time becomes, naming its subject for the operator. */
+function slotTimedOut(subject: SlotSubject): never {
   // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire rather than
   // the generic one: a card that timed out is worth telling its reader about,
   // and the source id is already known to them -- they placed the card. The
@@ -236,40 +310,110 @@ function slotTimedOut(source: string): never {
   throw new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage: "This widget took too long to answer",
-    logMessage: `widget source "${source}" exceeded ${SLOT_TIMEOUT_MS}ms`,
+    logMessage: `${named(subject)} exceeded ${SLOT_TIMEOUT_MS}ms`,
     logContext: {
       reason: "widget-slot-timeout",
-      source,
+      ...subject,
       timeoutMs: SLOT_TIMEOUT_MS,
     },
   });
 }
 
-/** One query answered on its own, under its own budget. */
-async function answerOne(
-  ready: ReadyQuery,
-  caller: ReadCaller,
-  scope: BatchScope
-): Promise<QuerySlot> {
+/** A query's place in the batch with the slot it settled as. */
+export interface SettledSlot {
+  index: number;
+  slot: QuerySlot;
+}
+
+/**
+ * Everything one batch's answering shares: who asks, the work they share, the
+ * signal that gives the batch up, and where each settled slot goes.
+ */
+interface SlotRun {
+  caller: ReadCaller;
+  scope: BatchScope;
+  /** The batch's one instant, taken once where the run is built. */
+  now: Date;
+  signal: AbortSignal | undefined;
+  settle(entries: readonly ReadyEntry[], slots: readonly QuerySlot[]): void;
+}
+
+/**
+ * Whether a failure is the batch being given up, in which case no slot is
+ * settled: nobody is waiting for it, and logging every card a departing reader
+ * left behind as a failure would bury the real ones.
+ */
+function batchGivenUp(run: SlotRun): boolean {
+  return run.signal?.aborted === true;
+}
+
+/** One query answered on its own, under its own budget, and settled when it ends. */
+async function answerOne(ready: ReadyQuery, run: SlotRun): Promise<void> {
   const source = ready.query.source;
+  let slot: QuerySlot;
   try {
     const result = await withinSlotBudget(
       signal =>
-        executeWidgetQuery(ready.query, caller, {
+        executeWidgetQuery(ready.query, run.caller, {
           signal,
-          scope: scope.forSource(source),
+          scope: run.scope.forSource(source),
+          // Facts about the caller, kept once for every source in the batch.
+          callerScope: run.scope.forCaller(),
+          // The batch's one instant, this query's own copy, so every card
+          // asking for a window measures it from the same moment.
+          now: new Date(run.now),
         }),
-      () => slotTimedOut(source)
+      () => slotTimedOut({ source }),
+      run.signal
     );
-    return { ok: true, result: serialisable(result, source) };
+    slot = { ok: true, result: serialisable(result, { source }) };
   } catch (error) {
-    return failedSlot(error);
+    if (batchGivenUp(run)) return;
+    slot = failedSlot(error);
   }
+  run.settle([ready], [slot]);
+}
+
+/**
+ * A declared card's own data, answered on its own exactly as one query is: under
+ * its own budget, made sendable by the same check, failed by the same mapping,
+ * and settled when it ends. Its owner's view of the scope is what it shares work
+ * through, so its keys never meet a source's.
+ */
+async function answerCardData(
+  card: ReadyCardData,
+  run: SlotRun
+): Promise<void> {
+  const widget = card.widgetId;
+  let slot: QuerySlot;
+  try {
+    const { result, empty } = await withinSlotBudget(
+      signal =>
+        card.answer({
+          signal,
+          scope: run.scope.forOwner(card.owner),
+          // A copy: a Date is mutable, and a data function that moved its own
+          // would move every later card's.
+          now: new Date(run.now),
+        }),
+      () => slotTimedOut({ widget }),
+      run.signal
+    );
+    const sendable = serialisable(result, { widget });
+    slot = empty
+      ? { ok: true, result: sendable, empty: true }
+      : { ok: true, result: sendable };
+  } catch (error) {
+    if (batchGivenUp(run)) return;
+    slot = failedSlot(error);
+  }
+  run.settle([card], [slot]);
 }
 
 /**
  * Several of one source's queries answered by its many-query resolver, under one
- * budget and one abort signal.
+ * budget and one abort signal, and settled together when that call ends: they
+ * share one scan, so no part of the answer is ready before the scan is.
  *
  * Each answer goes back to its query by position. An `Error` at a position fails
  * that query alone; a time-out, or an answer whose length is not the number of
@@ -279,20 +423,22 @@ async function answerOne(
 async function answerMany(
   group: readonly ReadyQuery[],
   resolveMany: ManySourceResolver,
-  caller: ReadCaller,
-  scope: BatchScope
-): Promise<QuerySlot[]> {
+  run: SlotRun
+): Promise<void> {
   const source = group[0]?.query.source ?? "";
   const queries = group.map(ready => ready.query);
   let answers: ReadonlyArray<WidgetResult | Error>;
   try {
     answers = await withinSlotBudget(
       signal =>
-        resolveMany(queries, caller, {
+        resolveMany(queries, run.caller, {
           signal,
-          scope: scope.forSource(source),
+          scope: run.scope.forSource(source),
+          // The batch's one instant, as each query on its own gets it.
+          now: new Date(run.now),
         }),
-      () => slotTimedOut(source)
+      () => slotTimedOut({ source }),
+      run.signal
     );
     if (!Array.isArray(answers) || answers.length !== queries.length) {
       // A developer's mistake rather than a reader's, named in the log with the
@@ -307,17 +453,29 @@ async function answerMany(
       });
     }
   } catch (error) {
+    if (batchGivenUp(run)) return;
     const failed = failedSlot(error);
-    return group.map(() => failed);
+    run.settle(
+      group,
+      group.map(() => failed)
+    );
+    return;
   }
-  return answers.map(answer => {
-    if (answer instanceof Error) return failedSlot(answer);
-    try {
-      return { ok: true, result: serialisable(answer, source) };
-    } catch (error) {
-      return failedSlot(error);
-    }
-  });
+  run.settle(
+    group,
+    queries.map((query, position) => {
+      const answer = answers[position];
+      if (answer instanceof Error) return failedSlot(answer);
+      try {
+        // Each answer judged against the query at its own position, as one
+        // query's resolver answer is.
+        const asked = answerAsAsked(query, answer);
+        return { ok: true, result: serialisable(asked, { source }) };
+      } catch (error) {
+        return failedSlot(error);
+      }
+    })
+  );
 }
 
 /**
@@ -346,22 +504,42 @@ function liveResolveMany(source: string): ManySourceResolver | undefined {
  */
 async function answerGroup(
   group: readonly ReadyQuery[],
-  caller: ReadCaller,
-  scope: BatchScope
-): Promise<QuerySlot[]> {
+  run: SlotRun
+): Promise<void> {
   const source = group[0]?.query.source ?? "";
   let resolveMany: ManySourceResolver | undefined;
   try {
     resolveMany = liveResolveMany(source);
   } catch (error) {
     logAskedSeveral(source, group.length, false);
-    return group.map(() => failedSlot(error));
+    run.settle(
+      group,
+      group.map(() => failedSlot(error))
+    );
+    return;
   }
   // Logged from the live decision, so the line says what actually answered.
   logAskedSeveral(source, group.length, resolveMany !== undefined);
-  return resolveMany === undefined
-    ? Promise.all(group.map(entry => answerOne(entry, caller, scope)))
-    : answerMany(group, resolveMany, caller, scope);
+  if (resolveMany === undefined) {
+    await Promise.all(group.map(entry => answerOne(entry, run)));
+  } else {
+    await answerMany(group, resolveMany, run);
+  }
+}
+
+/** How a batch's ready queries are answered, beyond who asks. */
+export interface AnswerOptions {
+  /**
+   * Gives the batch up: every slot still running is told through its own
+   * signal, and none not yet started is started. Absent, the batch runs to the
+   * end, as a whole JSON answer does.
+   */
+  signal?: AbortSignal;
+  /**
+   * Handed each settled slot as it settles: one at a time for a query answered
+   * on its own, together for queries one many-query call answered.
+   */
+  onSettled?: (settled: readonly SettledSlot[]) => void;
 }
 
 /**
@@ -370,29 +548,56 @@ async function answerGroup(
  * Grouped by source; a source asked more than once is logged once, saying
  * whether its many-query resolver answered the group, so an operator can see
  * which sources share their work and which do it per query.
+ *
+ * Each slot is ALSO handed to `onSettled` the moment it settles, which is how a
+ * streamed answer writes it: the map and the stream are filled by the same
+ * call, so the two encodings of a batch cannot disagree about any slot.
  */
 export async function answerReadyQueries(
-  ready: readonly ReadyQuery[],
+  ready: readonly ReadyEntry[],
   caller: ReadCaller,
-  scope: BatchScope
+  scope: BatchScope,
+  options: AnswerOptions = {}
 ): Promise<Map<number, QuerySlot>> {
+  // A declared card's data is answered on its own; queries are grouped by the
+  // source they ask, so one source's can share a scan.
+  const cards: ReadyCardData[] = [];
   const bySource = new Map<string, ReadyQuery[]>();
   for (const entry of ready) {
+    if (entry.kind === "data") {
+      cards.push(entry);
+      continue;
+    }
     const list = bySource.get(entry.query.source);
     if (list) list.push(entry);
     else bySource.set(entry.query.source, [entry]);
   }
 
   const answered = new Map<number, QuerySlot>();
-  await Promise.all(
-    [...bySource.entries()].map(async ([source, group]) => {
-      const slots = await answerSource(source, group, caller, scope);
-      group.forEach((entry, position) => {
+  const run: SlotRun = {
+    caller,
+    scope,
+    signal: options.signal,
+    // Taken once, so every card and cell in the batch measures "the last 30
+    // days" from the same moment.
+    now: new Date(),
+    settle(entries, slots) {
+      const settled: SettledSlot[] = [];
+      entries.forEach((entry, position) => {
         const slot = slots[position];
-        if (slot) answered.set(entry.index, slot);
+        if (!slot) return;
+        answered.set(entry.index, slot);
+        settled.push({ index: entry.index, slot });
       });
-    })
-  );
+      if (settled.length > 0) options.onSettled?.(settled);
+    },
+  };
+  await Promise.all([
+    ...[...bySource.entries()].map(([source, group]) =>
+      answerSource(source, group, run)
+    ),
+    ...cards.map(card => answerCardData(card, run)),
+  ]);
   return answered;
 }
 
@@ -412,15 +617,14 @@ function preparedToGroup(group: readonly ReadyQuery[]): boolean {
 async function answerSource(
   source: string,
   group: readonly ReadyQuery[],
-  caller: ReadCaller,
-  scope: BatchScope
-): Promise<QuerySlot[]> {
+  run: SlotRun
+): Promise<void> {
   // Whether to group is read from the prepared copy, which says what the
   // source offered when the batch began; what answers it is asked again when
   // it runs, and `answerGroup` logs that live decision.
-  if (preparedToGroup(group)) return answerGroup(group, caller, scope);
+  if (preparedToGroup(group)) return answerGroup(group, run);
   if (group.length > 1) logAskedSeveral(source, group.length, false);
-  return Promise.all(group.map(entry => answerOne(entry, caller, scope)));
+  await Promise.all(group.map(entry => answerOne(entry, run)));
 }
 
 /** One line for a source asked more than once in a batch, guarded as `failedSlot`'s is. */

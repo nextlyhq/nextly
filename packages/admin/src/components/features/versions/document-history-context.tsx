@@ -15,6 +15,7 @@
  * @module components/features/versions/document-history-context
  */
 
+import type { Context } from "react";
 import { createContext, useContext } from "react";
 
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
@@ -32,6 +33,12 @@ export interface ViewedVersion {
   snapshot: unknown;
   /** The locale it was captured in, when the document is localized. */
   locale: string | null;
+  /**
+   * The fields the read held back, by their full paths, a list row named by
+   * its own index (`items.1.secret`). Empty while the read is in flight, and
+   * for a reader who may read all of it.
+   */
+  withheld: readonly string[];
   /** True while the snapshot is being read. */
   isLoading: boolean;
   /** Set when the read failed, so the document says so rather than blanking. */
@@ -100,12 +107,13 @@ export interface DocumentHistoryValue {
  * harness — behaves exactly as it did before history existed rather than
  * throwing. Both full-page editors provide it through the shared host.
  */
-export const DocumentHistoryContext = createContext<DocumentHistoryValue>({
-  viewing: null,
-  setViewing: () => {},
-  restore: null,
-  setRestore: () => {},
-});
+export const DocumentHistoryContext: Context<DocumentHistoryValue> =
+  createContext<DocumentHistoryValue>({
+    viewing: null,
+    setViewing: () => {},
+    restore: null,
+    setRestore: () => {},
+  });
 
 export function useDocumentHistory(): DocumentHistoryValue {
   return useContext(DocumentHistoryContext);

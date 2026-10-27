@@ -21,16 +21,17 @@
  */
 import { join } from "node:path";
 
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi, beforeAll } from "vitest";
 
 import {
-  apiKeyScope,
-  apiKeyScopeFrom,
-  type AuthenticatedScope,
-  type GrantedPermission,
-} from "../../../auth/authenticated-scope";
+  GATE_SETUPS,
+  gateCallers,
+  gateRules,
+  type GateRule,
+  type GateSetup,
+} from "../../../auth/access/__tests__/gate-answer-fixtures";
+import { runWithCallerScope } from "../../../auth/caller-scope";
 import type { AccessOperation } from "../../../services/access";
-import type { CollectionAccessControl } from "../../../shared/types/access";
 import { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import {
   createMockAdapter,
@@ -39,6 +40,19 @@ import {
 } from "../__tests__/collection-test-helpers";
 
 import { CollectionAccessService } from "./collection-access-service";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
+
+vi.mock("../../../services/lib/permissions", async importOriginal =>
+  (
+    await import("../../../auth/access/__tests__/gate-answer-fixtures")
+  ).fakePermissions(await importOriginal<object>())
+);
 
 const SLUG = "posts";
 
@@ -51,152 +65,24 @@ const OPERATIONS: readonly AccessOperation[] = [
   "unpublish",
 ];
 
-const grant = (action: string): GrantedPermission => ({
-  slug: `${action}-${SLUG}`,
-  action,
-  resource: SLUG,
-});
+/** The gate's logger: a refusal it only returns is not logged by it. */
+const logger = { ...silentLogger, info: vi.fn() };
 
-const ALL_GRANTS = OPERATIONS.map(grant);
+/**
+ * Every reason a refusal carried for the server's log, so each kind is seen
+ * to have been reached. The gate returns it on the refusal; it is logged where
+ * the refusal reaches its caller.
+ */
+const reasons: string[] = [];
 
-/** Who holds what, as the database would answer it. */
-const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
-  {
-    editor: { roles: ["editor"], grants: ALL_GRANTS },
-    viewer: { roles: ["viewer"], grants: [] },
-    publisher: {
-      roles: ["publisher"],
-      grants: [grant("read"), grant("publish"), grant("unpublish")],
-    },
-    admin: { roles: ["super-admin"], grants: [] },
-    "admin-inherited": { roles: ["chief", "super-admin"], grants: [] },
-    owner: { roles: ["editor"], grants: ALL_GRANTS },
-  };
+const CALLERS = gateCallers(SLUG, OPERATIONS);
+const RULES = gateRules(SLUG);
 
-const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
-
-vi.mock("../../../services/lib/permissions", async importOriginal => {
-  const real =
-    await importOriginal<typeof import("../../../services/lib/permissions")>();
-  const holds = (userId: string, action: string, resource: string) =>
-    stored(userId).roles.includes("super-admin") ||
-    stored(userId).grants.some(
-      g => g.action === action && g.resource === resource
-    );
-  return {
-    ...real,
-    isSuperAdmin: vi.fn(async (userId: string) =>
-      stored(userId).roles.includes("super-admin")
-    ),
-    hasPermission: vi.fn(async (userId: string, action: string, r: string) =>
-      holds(userId, action, r)
-    ),
-    listRoleSlugsForUser: vi.fn(async (userId: string) => [
-      ...stored(userId).roles,
-    ]),
-    listRoleSlugsForUserStrict: vi.fn(async (userId: string) => [
-      ...stored(userId).roles,
-    ]),
-    listEffectivePermissions: vi.fn(async (userId: string) =>
-      stored(userId)
-        .grants.map(g => `${g.resource}:${g.action}`)
-        .sort()
-    ),
-    listEffectiveGrants: vi.fn(async (userId: string) => [
-      ...stored(userId).grants,
-    ]),
-  };
-});
-
-interface Caller {
-  user?: { id: string; roles?: string[] };
-  scope?: AuthenticatedScope;
-}
-
-const CALLERS: Record<string, Caller> = {
-  visitor: {},
-  "user-with": { user: { id: "editor" } },
-  "user-without": { user: { id: "viewer" } },
-  "user-partial": { user: { id: "publisher" } },
-  "super-admin": { user: { id: "admin" } },
-  "super-admin-inherited": { user: { id: "admin-inherited" } },
-  "super-admin-claimed": { user: { id: "viewer", roles: ["super-admin"] } },
-  "super-admin-claimed-key": {
-    user: { id: "owner", roles: ["super-admin"] },
-    scope: apiKeyScope([grant("read")], ["editor"]),
-  },
-  "key-with": {
-    user: { id: "owner" },
-    scope: apiKeyScope(ALL_GRANTS, ["editor"]),
-  },
-  "key-without": { user: { id: "owner" }, scope: apiKeyScope([], ["editor"]) },
-  "key-partial": {
-    user: { id: "owner" },
-    scope: apiKeyScope(
-      [grant("read"), grant("publish"), grant("unpublish")],
-      ["editor"]
-    ),
-  },
-  "key-slugs-only": {
-    user: { id: "owner" },
-    scope: apiKeyScopeFrom({
-      permissions: OPERATIONS.map(op => `${op}-${SLUG}`),
-      roles: ["editor"],
-    }),
-  },
-  // A key made by a super-admin carries that role's name, and no authority.
-  "key-made-by-super-admin": {
-    user: { id: "admin" },
-    scope: apiKeyScope([grant("read")], ["super-admin"]),
-  },
-  // A key whose grants carry slugs of their own: publishing as
-  // `release-posts` and updating as `edit-posts`, not `publish-posts` and
-  // `update-posts`.
-  "key-custom-slugs": {
-    user: { id: "owner" },
-    scope: apiKeyScope(
-      [
-        grant("read"),
-        { slug: "edit-posts", action: "update", resource: SLUG },
-        { slug: "release-posts", action: "publish", resource: SLUG },
-      ],
-      ["editor"]
-    ),
-  },
-  "key-own-roles": {
-    user: { id: "owner", roles: ["owner-role"] },
-    scope: apiKeyScopeFrom({ grants: ALL_GRANTS }),
-  },
-};
-
-type Rule = CollectionAccessControl[keyof CollectionAccessControl];
-
-const RULES: Record<string, Rule | undefined> = {
-  none: undefined,
-  true: true,
-  false: false,
-  "returns-true": () => true,
-  "returns-false": () => false,
-  "returns-null": () => null as unknown as boolean,
-  "returns-undefined": () => undefined as unknown as boolean,
-  "returns-truthy": () => "yes" as unknown as boolean,
-  throws: () => {
-    throw new Error("rule failed");
-  },
-  "async-true": async () => true,
-  "role-name": ({ roles }) => roles.includes("editor"),
-  "permission-spelling": ({ permissions, operation }) =>
-    permissions.includes(`${SLUG}:${operation}`),
-  "signed-in": ({ user }) => user !== null,
-};
-
-const SETUPS = ["service", "no-service", "route-authorized"] as const;
-
-function gateFor(setup: (typeof SETUPS)[number], rule: Rule | undefined) {
+function gateFor(setup: GateSetup, rule: GateRule | undefined) {
   if (setup === "no-service") {
     return new CollectionAccessService(
       createMockAdapter(createMockDb({ rows: [] })) as never,
-      silentLogger as never
+      logger as never
     );
   }
   const rbac = new RBACAccessControlService();
@@ -209,29 +95,32 @@ function gateFor(setup: (typeof SETUPS)[number], rule: Rule | undefined) {
   }
   return new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
-    silentLogger as never,
+    logger as never,
     rbac
   );
 }
 
 /** Each caller's answers for one setup and rule, one line per action. */
 async function answersFor(
-  setup: (typeof SETUPS)[number],
+  setup: GateSetup,
   ruleName: string,
-  rule: Rule | undefined
+  rule: GateRule | undefined
 ): Promise<string[]> {
   const gate = gateFor(setup, rule);
   const lines: string[] = [];
   for (const [callerName, caller] of Object.entries(CALLERS)) {
     lines.push(`${setup} ${ruleName} ${callerName}`);
     for (const operation of OPERATIONS) {
-      const refused = await gate.checkCollectionAccess({
-        collectionName: SLUG,
-        operation,
-        user: caller.user,
-        authenticatedScope: caller.scope,
-        routeAuthorized: setup === "route-authorized",
-      });
+      const refused = await runWithCallerScope(caller.ambient, () =>
+        gate.checkCollectionAccess({
+          collectionName: SLUG,
+          operation,
+          user: caller.user,
+          authenticatedScope: caller.scope,
+          routeAuthorized: setup === "route-authorized",
+        })
+      );
+      if (refused?.refusalReason) reasons.push(refused.refusalReason);
       lines.push(
         refused === null
           ? `  ${operation}:A`
@@ -251,7 +140,7 @@ describe("the collection gate's answers", () => {
     // A rule that throws is reported by the gate that catches it.
     vi.spyOn(console, "error").mockImplementation(() => {});
     const lines: string[] = [];
-    for (const setup of SETUPS) {
+    for (const setup of GATE_SETUPS) {
       for (const [ruleName, rule] of Object.entries(RULES)) {
         // Without the service no rule is registered, so one row says it all.
         if (setup === "no-service" && ruleName !== "none") continue;
@@ -261,8 +150,21 @@ describe("the collection gate's answers", () => {
     // POPULATION CONTROL: every kind of answer was reached.
     const text = lines.join("\n");
     expect(text).toContain(":A");
-    expect(text).toContain(":403 Access denied: insufficient permissions");
-    expect(text).toContain(":403 Access denied: publish on posts requires");
+    // Both kinds of refusal were reached: a caller lacking the grant, and a
+    // publish with no user. They read alike to the caller; their reasons are
+    // the server's, carried on the refusal for its log.
+    expect(text).toContain(":403 You can't");
+    expect(reasons).toContainEqual(
+      expect.stringContaining("the caller may not")
+    );
+    expect(reasons).toContainEqual(
+      expect.stringContaining("publish on posts requires an authenticated user")
+    );
+    // Returned, not logged: a caller asking only whether it may is not refused.
+    expect(logger.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.anything()
+    );
     await expect(`${text}\n`).toMatchFileSnapshot(
       join(__dirname, "collection-gate-answers.txt")
     );

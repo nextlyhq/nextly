@@ -19,6 +19,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import { defineSingle } from "../../../config";
@@ -42,6 +46,7 @@ import { ReleasesRepository } from "../releases-repository";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
@@ -215,6 +220,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // A code rule only narrows the permission, so the releases' author holds
+  // read, update, publish and unpublish on every collection and the Single;
+  // the rules still decide, and refuse where they say nobody may.
+  const scopes = [POSTS, LOCKED, PAGES, HIDDEN, FLIPPED, STRIPPED, SHOWN];
+  await userWhoMay(current, "author", "read", [...scopes, SETTINGS]);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(current, "author", action, [...scopes, SETTINGS]);
+  }
   return current;
 }
 
@@ -272,7 +285,10 @@ async function dueRelease(
 
 /** The mutations the drain job performs, as the drain job builds them. */
 const mutationsOf = (t: TestNextly): ReleaseMutations =>
-  createReleaseMutations({ contentApi: t.nextly });
+  createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
 
 /** One materialisation pass, as the drain job performs it. */
 function materialise(

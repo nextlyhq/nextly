@@ -4,7 +4,7 @@
  * A change that alters the card's query is asked again for that card alone, and the old answer
  * stays on screen until the new one arrives. A quiet re-ask that is refused keeps the old answer
  * for good, so the end of the fetch alone does not say the card shows the change: the card's
- * answer time has to move.
+ * answer time has to move. A refused one is still announced, as saved but not shown.
  */
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -15,21 +15,31 @@ import {
   useCardQuickSetting,
   type CellSettingsWrite,
 } from "../useCardQuickSetting";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 // No quick setting drives a query knob yet, so the query a setting asks is stood in for here:
 // the chosen range becomes part of the query, which is what makes the change ask again.
-vi.mock("../../widget-as-asked", () => ({
-  widgetAsAsked: (
+vi.mock("../../widget-as-asked", () => {
+  const widgetAsAsked = (
     widget: DashboardWidget,
     config: Record<string, unknown> | undefined
-  ) => ({ ...widget, query: { ...widget.query, range: config?.range } }),
-}));
+  ) => ({ ...widget, query: { ...widget.query, range: config?.range } });
+  return {
+    widgetAsAsked,
+    // What the card asks with, over the same stand-in: for a widget with a query, the real one
+    // is its query as `widgetAsAsked` writes it.
+    questionOf: (
+      widget: DashboardWidget,
+      config: Record<string, unknown> | undefined
+    ) => JSON.stringify(widgetAsAsked(widget, config).query),
+  };
+});
 
 const WIDGET: DashboardWidget = {
   id: "core/activity",
   title: "Activity",
   archetype: "custom",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [
     {
@@ -53,7 +63,7 @@ const REPLACED = new Date(2_000);
 function changeAndSettle(settledAt: Date) {
   const announce = vi.fn();
   const settingsWrite: CellSettingsWrite = {
-    write: (_config, callbacks) => callbacks.onLanded(),
+    write: (_config, callbacks) => callbacks.onLanded?.(),
     isWriting: false,
     announce,
   };
@@ -78,10 +88,12 @@ describe("a quick setting that asks the card again", () => {
   it("is announced once the card's new answer arrives", () => {
     const announce = changeAndSettle(REPLACED);
     expect(announce).toHaveBeenCalledTimes(1);
-    expect(announce).toHaveBeenCalledWith("Date range", "Last 30 days");
+    expect(announce).toHaveBeenCalledWith("Date range", "Last 30 days", true);
   });
 
-  it("is not announced when the re-ask is refused and the old answer stays", () => {
-    expect(changeAndSettle(SHOWN)).not.toHaveBeenCalled();
+  it("is announced as saved but not shown when the re-ask is refused and the old answer stays", () => {
+    const announce = changeAndSettle(SHOWN);
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Date range", "Last 30 days", false);
   });
 });

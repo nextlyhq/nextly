@@ -17,7 +17,7 @@
  *    what remains is exactly the external packages, and JSX has already become a
  *    `react/jsx-runtime` import by the time it gets here.
  *
- * 2. **What was INLINED.** A bundled dependency leaves no import to find: tsup treats
+ * 2. **What was INLINED.** A bundled dependency leaves no import to find: the bundler treats
  *    `dependencies` as external and copies anything else into the artifact whole, so a
  *    `devDependencies` package is present with no specifier naming it. The build's own metafile is
  *    the record of what it read, and that is what this asks rather than the text.
@@ -58,7 +58,16 @@ import { isBuiltin } from "node:module";
 import { dirname as pathDirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import ts from "typescript";
+import {
+  literalText,
+  parseSource,
+  walk,
+} from "@nextlyhq/module-specifiers/parse-source";
+import type {
+  ArrowFunctionExpression,
+  Function as FunctionNode,
+  Node,
+} from "oxc-parser";
 
 import {
   SERVER_SAFE_ALLOWED_PACKAGES,
@@ -115,245 +124,261 @@ const DIST = join(pathDirname(fileURLToPath(import.meta.url)), "..", "dist");
  *
  */
 export function specifiersIn(source: string, fileName: string): string[] {
-  const tree = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true
-  );
+  const { program } = parseSource(source, fileName);
   const found: string[] = [];
 
-  const record = (node: ts.Node | undefined): void => {
-    if (node === undefined) return;
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      found.push(node.text);
+  const record = (node: Node | null | undefined): void => {
+    if (!node) return;
+    const text = literalText(node);
+    if (text !== null) {
+      found.push(text);
       return;
     }
-    found.push(`<unreadable specifier: ${node.getText()}>`);
+    found.push(`<unreadable specifier: ${source.slice(node.start, node.end)}>`);
   };
 
-  /**
-   * Every identifier a binding name introduces, including through destructuring.
-   *
-   * `const { require } = someObject` and `const [require] = pair` both bind the name, and reading
-   * only `ts.isIdentifier(node.name)` sees neither.
-   *
-   */
-  const eachBoundName = (
-    name: ts.BindingName | undefined,
-    add: (bound: string) => void
-  ): void => {
-    if (name === undefined) return;
-    if (ts.isIdentifier(name)) {
-      add(name.text);
-      return;
-    }
-    if (!ts.isObjectBindingPattern(name) && !ts.isArrayBindingPattern(name)) {
-      return;
-    }
-    for (const element of name.elements) {
-      // An array pattern hole — `const [, x] = pair` — has no binding at all.
-      if (ts.isOmittedExpression(element)) continue;
-      eachBoundName(element.name, add);
-    }
-  };
-
-  /**
-   * Whether a declaration list is `let`/`const`, which bind to the enclosing BLOCK.
-   *
-   * Anything else is `var`, which binds to the enclosing function however deeply nested it is.
-   *
-   */
-  const isBlockScoped = (list: ts.VariableDeclarationList): boolean =>
-    (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0;
-
-  /**
-   * Whether ONE node introduces a binding for `name` in the scope it opens.
-   *
-   * @param fromParameter entered through this scope's own parameter list
-   */
-  const bindsName = (
-    scope: ts.Node,
-    name: string,
-    fromParameter = false
-  ): boolean => {
-    let found2 = false;
-    const add = (bound: string): void => {
-      if (bound === name) found2 = true;
-    };
-
-    if (ts.isFunctionLike(scope)) {
-      for (const parameter of scope.parameters) {
-        eachBoundName(parameter.name, add);
-      }
-      if (
-        (ts.isFunctionDeclaration(scope) || ts.isFunctionExpression(scope)) &&
-        scope.name !== undefined
-      ) {
-        add(scope.name.text);
-      }
-    }
-
-    // A named CLASS binds its own name throughout its body, exactly as a named function expression
-    // does — `const C = class require { … }` makes `require` the class inside those braces.
+  walk(program, (node, ancestors) => {
     if (
-      (ts.isClassDeclaration(scope) || ts.isClassExpression(scope)) &&
-      scope.name !== undefined
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration"
     ) {
-      add(scope.name.text);
-    }
-
-    if (ts.isCatchClause(scope) && scope.variableDeclaration !== undefined) {
-      eachBoundName(scope.variableDeclaration.name, add);
-    }
-
-    // `var` is FUNCTION-scoped, so it belongs to the nearest function or the file rather than to
-    // the block it is written in. A class static block is its own `var` scope, and a default
-    // parameter initializer is evaluated before the body's `var`s exist — hence `fromParameter`.
-    if (
-      !fromParameter &&
-      (ts.isFunctionLike(scope) ||
-        ts.isSourceFile(scope) ||
-        ts.isClassStaticBlockDeclaration(scope))
-    ) {
-      const hoisted = (node: ts.Node): void => {
-        if (ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node)) {
-          return;
-        }
-        if (
-          ts.isVariableStatement(node) &&
-          !isBlockScoped(node.declarationList)
-        ) {
-          for (const declaration of node.declarationList.declarations) {
-            eachBoundName(declaration.name, add);
-          }
-        }
-        const init =
-          ts.isForStatement(node) ||
-          ts.isForInStatement(node) ||
-          ts.isForOfStatement(node)
-            ? node.initializer
-            : undefined;
-        if (
-          init !== undefined &&
-          ts.isVariableDeclarationList(init) &&
-          !isBlockScoped(init)
-        ) {
-          for (const declaration of init.declarations) {
-            eachBoundName(declaration.name, add);
-          }
-        }
-        ts.forEachChild(node, hoisted);
-      };
-      ts.forEachChild(scope, hoisted);
-    }
-
-    // A switch's CaseBlock is one lexical scope shared by every clause.
-    const statements = ts.isSourceFile(scope)
-      ? scope.statements
-      : ts.isBlock(scope) || ts.isModuleBlock(scope)
-        ? scope.statements
-        : ts.isCaseBlock(scope)
-          ? scope.clauses.flatMap(clause => clause.statements)
-          : undefined;
-    for (const statement of statements ?? []) {
-      if (ts.isVariableStatement(statement)) {
-        // A `var` here was already counted by the hoisting walk, against the function or file that
-        // owns it. Counting it in a BLOCK as well would make the block look like the binding scope.
-        if (
-          !isBlockScoped(statement.declarationList) &&
-          !ts.isSourceFile(scope)
-        ) {
-          continue;
-        }
-        for (const declaration of statement.declarationList.declarations) {
-          eachBoundName(declaration.name, add);
-        }
-      } else if (
-        (ts.isFunctionDeclaration(statement) ||
-          ts.isClassDeclaration(statement)) &&
-        statement.name !== undefined
-      ) {
-        add(statement.name.text);
-      } else if (ts.isImportDeclaration(statement)) {
-        const clause = statement.importClause;
-        if (clause?.name !== undefined) add(clause.name.text);
-        const bindings = clause?.namedBindings;
-        if (bindings !== undefined) {
-          if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
-          else for (const element of bindings.elements) add(element.name.text);
-        }
-      }
-    }
-
-    // Only a `let`/`const` initializer makes a loop a scope; `for (var x = …)` binds to the
-    // enclosing function and the hoisting walk has already counted it there.
-    const initializer =
-      ts.isForStatement(scope) ||
-      ts.isForInStatement(scope) ||
-      ts.isForOfStatement(scope)
-        ? scope.initializer
-        : undefined;
-    if (
-      initializer !== undefined &&
-      ts.isVariableDeclarationList(initializer) &&
-      isBlockScoped(initializer)
-    ) {
-      for (const declaration of initializer.declarations) {
-        eachBoundName(declaration.name, add);
-      }
-    }
-
-    return found2;
-  };
-
-  /**
-   * Whether `name` at this node is bound by anything at all, so it is not the AMBIENT one.
-   *
-   * Asked per call site rather than once per file: a single set of every name declared anywhere
-   * suppressed a top-level `require("react")` because an unrelated nested function had a
-   * parameter of that name.
-   *
-   */
-  const isShadowed = (node: ts.Node, name: string): boolean => {
-    let child: ts.Node = node;
-    for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-      const fromParameter =
-        ts.isFunctionLike(scope) &&
-        scope.parameters.some(parameter => parameter === child);
-      if (bindsName(scope, name, fromParameter)) return true;
-      child = scope;
-    }
-    return false;
-  };
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      record(node.moduleSpecifier);
-    } else if (ts.isImportEqualsDeclaration(node)) {
+      record(node.source);
+    } else if (node.type === "TSImportEqualsDeclaration") {
       // `import x = require("y")` survives into the CJS build of a TypeScript source.
-      if (ts.isExternalModuleReference(node.moduleReference)) {
+      if (node.moduleReference.type === "TSExternalModuleReference") {
         record(node.moduleReference.expression);
       }
-    } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
+    } else if (node.type === "ImportExpression") {
+      record(node.source);
+    } else if (
+      node.type === "CallExpression" &&
+      node.callee.type === "Identifier" &&
+      node.callee.name === "require" &&
+      node.arguments.length > 0 &&
       // The CJS build's own loader. A module that declares its OWN `require` is not reaching it,
       // and reporting that call's argument names something which is not a module specifier —
       // rejecting an artifact with no dependency at all.
-      const isRequire =
-        ts.isIdentifier(callee) &&
-        callee.text === "require" &&
-        !isShadowed(callee, "require");
-      if ((isDynamicImport || isRequire) && node.arguments.length > 0) {
-        record(node.arguments[0]);
+      !isShadowed([...ancestors, node], "require")
+    ) {
+      record(node.arguments[0]);
+    }
+  });
+  return found;
+}
+
+/** Nodes whose parameters and body open a function scope. */
+const FUNCTION_LIKE = new Set([
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ArrowFunctionExpression",
+  "TSDeclareFunction",
+  "TSEmptyBodyFunctionExpression",
+]);
+
+const isFunctionLike = (
+  node: Node
+): node is FunctionNode | ArrowFunctionExpression =>
+  FUNCTION_LIKE.has(node.type);
+
+/**
+ * Every identifier a binding pattern introduces, including through destructuring.
+ *
+ * `const { require } = someObject` and `const [require] = pair` both bind the name, and reading
+ * only a plain identifier sees neither.
+ */
+function eachBoundName(
+  pattern: Node | null | undefined,
+  add: (bound: string) => void
+): void {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case "Identifier":
+      add(pattern.name);
+      return;
+    case "AssignmentPattern":
+      eachBoundName(pattern.left, add);
+      return;
+    case "RestElement":
+      eachBoundName(pattern.argument, add);
+      return;
+    case "TSParameterProperty":
+      eachBoundName(pattern.parameter, add);
+      return;
+    case "ObjectPattern":
+      for (const property of pattern.properties) {
+        eachBoundName(
+          property.type === "RestElement" ? property.argument : property.value,
+          add
+        );
+      }
+      return;
+    case "ArrayPattern":
+      // An array pattern hole — `const [, x] = pair` — is null and has no binding at all.
+      for (const element of pattern.elements) eachBoundName(element, add);
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Whether a declaration is `let`/`const` (or `using`), which bind to the enclosing BLOCK.
+ *
+ * Anything else is `var`, which binds to the enclosing function however deeply nested it is.
+ */
+const isBlockScoped = (declaration: Node): boolean =>
+  declaration.type === "VariableDeclaration" && declaration.kind !== "var";
+
+/**
+ * The declaration a statement makes, seen through `export`: `export const require = …` binds
+ * `require` exactly as the unexported statement does.
+ */
+function declarationOf(statement: Node): Node {
+  return (statement.type === "ExportNamedDeclaration" ||
+    statement.type === "ExportDefaultDeclaration") &&
+    statement.declaration
+    ? statement.declaration
+    : statement;
+}
+
+/**
+ * The statements of a scope's own lexical block: a file, a block, a namespace body, or the cases
+ * of a switch — which share ONE scope, and only once inside the braces: the discriminant is read
+ * outside them.
+ */
+function lexicalStatements(scope: Node, child: Node): readonly Node[] {
+  switch (scope.type) {
+    case "Program":
+    case "BlockStatement":
+    case "TSModuleBlock":
+      return scope.body;
+    case "SwitchStatement":
+      return scope.cases.includes(child as never)
+        ? scope.cases.flatMap(clause => clause.consequent)
+        : [];
+    default:
+      return [];
+  }
+}
+
+/** Every `var` a function, file or static block owns, wherever in it the `var` is written. */
+function eachHoistedName(scope: Node, add: (bound: string) => void): void {
+  walk(scope, node => {
+    if (node === scope) return;
+    // A nested function or static block owns its own `var`s.
+    if (isFunctionLike(node) || node.type === "StaticBlock") return false;
+    if (node.type === "VariableDeclaration" && node.kind === "var") {
+      for (const declaration of node.declarations) {
+        eachBoundName(declaration.id, add);
       }
     }
-    ts.forEachChild(node, visit);
+  });
+}
+
+/**
+ * Whether ONE node introduces a binding for `name` in the scope it opens, as seen from `child`,
+ * the node under it on the way to the call.
+ *
+ * @param fromParameter entered through this scope's own parameter list
+ */
+function bindsName(
+  scope: Node,
+  name: string,
+  child: Node,
+  fromParameter: boolean
+): boolean {
+  let bound = false;
+  const add = (each: string): void => {
+    if (each === name) bound = true;
   };
 
-  visit(tree);
-  return found;
+  if (isFunctionLike(scope)) {
+    for (const parameter of scope.params) eachBoundName(parameter, add);
+    if (
+      (scope.type === "FunctionDeclaration" ||
+        scope.type === "FunctionExpression") &&
+      scope.id
+    ) {
+      add(scope.id.name);
+    }
+  }
+
+  // A named CLASS binds its own name throughout its body, exactly as a named function expression
+  // does — `const C = class require { … }` makes `require` the class inside those braces.
+  if (
+    (scope.type === "ClassDeclaration" || scope.type === "ClassExpression") &&
+    scope.id
+  ) {
+    add(scope.id.name);
+  }
+
+  if (scope.type === "CatchClause") eachBoundName(scope.param, add);
+
+  // `var` is FUNCTION-scoped, so it belongs to the nearest function or the file rather than to
+  // the block it is written in. A class static block is its own `var` scope, and a default
+  // parameter initializer is evaluated before the body's `var`s exist — hence `fromParameter`.
+  if (
+    !fromParameter &&
+    (isFunctionLike(scope) ||
+      scope.type === "Program" ||
+      scope.type === "StaticBlock")
+  ) {
+    eachHoistedName(scope, add);
+  }
+
+  for (const statement of lexicalStatements(scope, child)) {
+    const declaration = declarationOf(statement);
+    if (declaration.type === "VariableDeclaration") {
+      // A `var` here was already counted by the hoisting walk, against the function or file that
+      // owns it. Counting it in a BLOCK as well would make the block look like the binding scope.
+      if (!isBlockScoped(declaration) && scope.type !== "Program") continue;
+      for (const each of declaration.declarations) {
+        eachBoundName(each.id, add);
+      }
+    } else if (
+      (declaration.type === "FunctionDeclaration" ||
+        declaration.type === "ClassDeclaration") &&
+      declaration.id
+    ) {
+      add(declaration.id.name);
+    } else if (declaration.type === "ImportDeclaration") {
+      for (const specifier of declaration.specifiers) add(specifier.local.name);
+    }
+  }
+
+  // Only a `let`/`const` declaration makes a loop a scope; `for (var x = …)` binds to the
+  // enclosing function and the hoisting walk has already counted it there.
+  const head =
+    scope.type === "ForStatement"
+      ? scope.init
+      : scope.type === "ForInStatement" || scope.type === "ForOfStatement"
+        ? scope.left
+        : null;
+  if (head && isBlockScoped(head) && head.type === "VariableDeclaration") {
+    for (const each of head.declarations) eachBoundName(each.id, add);
+  }
+
+  return bound;
+}
+
+/**
+ * Whether `name` at the last node of `path` is bound by anything at all, so it is not the AMBIENT
+ * one. `path` runs from the file down to that node.
+ *
+ * Asked per call site rather than once per file: a single set of every name declared anywhere
+ * suppressed a top-level `require("react")` because an unrelated nested function had a
+ * parameter of that name.
+ */
+function isShadowed(path: readonly Node[], name: string): boolean {
+  for (let i = path.length - 2; i >= 0; i--) {
+    const scope = path[i];
+    const child = path[i + 1];
+    const fromParameter =
+      isFunctionLike(scope) && scope.params.some(param => param === child);
+    if (bindsName(scope, name, child, fromParameter)) return true;
+  }
+  return false;
 }
 
 /**
@@ -371,7 +396,7 @@ export function packageOf(specifier: string): string | null {
   // consumer. Named rather than exempted, so it fails the allow-list.
   if (specifier.startsWith("/")) return specifier;
   // Asked of Node rather than matched on the `node:` prefix. Both spellings resolve to the same
-  // built-in and tsup preserves whichever the source used, so recognising only the prefixed form
+  // built-in and the bundler preserves whichever the source used, so recognising only the prefixed form
   // rejects a server-safe entry for importing `path` or `fs/promises`.
   if (isBuiltin(specifier)) return null;
   const parts = specifier.split("/");
@@ -382,7 +407,7 @@ export function packageOf(specifier: string): string | null {
 /**
  * Every emitted file reachable from one artifact, following the relative specifiers between them.
  *
- * A split build does not put an entry's dependencies in the entry. With code splitting on — tsup's
+ * A split build does not put an entry's dependencies in the entry. With code splitting on — the bundler's
  * default — `utils.mjs` can be nothing but `export { x } from "./chunk-abc.js"`, and the chunk is
  * where `react` would appear. Scanning only the named entry exempts exactly the file that holds
  * what this is looking for.
@@ -548,7 +573,7 @@ function manifestName(directory: string): string | null {
  * The packages BUNDLED into one artifact, from the build's own record of what went into it.
  *
  * The specifier scan can only see what SURVIVES, and a bundled dependency leaves nothing to see:
- * tsup treats `dependencies` as external but INLINES anything else, so a `devDependencies` package
+ * The bundler treats `dependencies` as external but INLINES anything else, so a `devDependencies` package
  * is copied into the artifact whole with no import naming it. Asking the bundler what it read is
  * the only way to find that, and it is bounded — the list is finite and the build wrote it.
  *
