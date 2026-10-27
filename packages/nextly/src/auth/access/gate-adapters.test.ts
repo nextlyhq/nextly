@@ -250,7 +250,7 @@ describe("a visitor the Public role does not grant the action", () => {
         throw new Error("the rule ran");
       }),
     ]) {
-      const verdict = await collectionGateVerdict(asked({ read: rule }));
+      const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
       expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
       expect(rule).not.toHaveBeenCalled();
     }
@@ -261,7 +261,7 @@ describe("a visitor the Public role does not grant the action", () => {
     // refusal is the rule's.
     publicHolds("read");
     const rule = vi.fn(() => false);
-    const verdict = await collectionGateVerdict(asked({ read: rule }));
+    const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
     expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
     expect(rule).toHaveBeenCalledTimes(1);
   });
