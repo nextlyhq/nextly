@@ -28,6 +28,14 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
+import {
+  CONTENT_RAIL_ID,
+  contentItemHref,
+  contentSectionToOpen,
+  panelSectionIds,
+  railItemOf,
+  sectionShown,
+} from "./lib/content-rail";
 import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
 import {
   hasPluginsSection,
@@ -45,7 +53,11 @@ import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
-import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
+import type {
+  MainMenuCategory,
+  MainMenuItem,
+  RailItemId,
+} from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
@@ -218,10 +230,10 @@ export function DualSidebar({
           if (!needed.some(slug => hasPermission(slug))) return false;
         }
         switch (item.id) {
-          case "collections":
-            return hasCollectionsSection;
-          case "singles":
-            return hasSinglesSection;
+          case CONTENT_RAIL_ID:
+            // Shown while either kind has something to list; the panel shows
+            // only the kinds that do.
+            return hasCollectionsSection || hasSinglesSection;
           case "plugins":
             return pluginsSectionVisible;
           case "media":
@@ -269,10 +281,32 @@ export function DualSidebar({
 
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
+  // Which content kinds the reader can see now, read by every content decision
+  // below so none can answer from a different pair.
+  const contentAvailable = {
+    collections: hasCollectionsSection,
+    singles: hasSinglesSection,
+  };
+  // What the sidebar shows for the selection, which may give way to the other
+  // content kind once the lists settle.
+  const shownMain = sectionShown(selectedMain, contentAvailable);
 
-  const [collectionSearch, setCollectionSearch] = useState("");
-  const [singleSearch, setSingleSearch] = useState("");
+  // One search for both content kinds: it carries over when the Content panel
+  // switches between Collections and Singles.
+  const [contentSearch, setContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState("");
+
+  /**
+   * Open a rail item's panel. Content opens on the part already showing, or
+   * on Collections, or on Singles when the reader has no collections to list.
+   */
+  const selectRailItem = (id: RailItemId) => {
+    if (id !== CONTENT_RAIL_ID) {
+      setSelectedMain(id);
+      return;
+    }
+    setSelectedMain(contentSectionToOpen(selectedMain, contentAvailable));
+  };
 
   // Follows the route: a navigation selects the section it lands in. Adjusted during render
   // rather than in an effect, since an effect runs after the paint, so the page arrived at was
@@ -317,7 +351,12 @@ export function DualSidebar({
       item,
       visibleStandalonePlugins,
       settingsHref,
-      capabilities.canManageSettings
+      capabilities.canManageSettings,
+      contentItemHref({
+        panelShown: !suppressedChrome.has("subSidebar"),
+        current: shownMain,
+        available: contentAvailable,
+      })
     );
 
   // Resolve collections for the active standalone plugin section
@@ -375,7 +414,7 @@ export function DualSidebar({
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
           {visibleMenuItems.map(item => {
             const Icon = item.icon;
-            const isSelected = selectedMain === item.id;
+            const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);
             /*
              * On mobile a category normally stays put and opens the panel
@@ -416,7 +455,7 @@ export function DualSidebar({
                   {renderAsLink ? (
                     <Link
                       href={href}
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
                     >
@@ -424,7 +463,7 @@ export function DualSidebar({
                     </Link>
                   ) : (
                     <button
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
                     >
@@ -447,17 +486,20 @@ export function DualSidebar({
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel
         isMobile={Boolean(isMobile)}
-        selectedMain={selectedMain}
-        visibleMenuItemIds={visibleMenuItems.map(item => item.id)}
+        selectedMain={shownMain}
+        visibleMenuItemIds={panelSectionIds(
+          visibleMenuItems.map(item => item.id),
+          contentAvailable
+        )}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel={standaloneLabel}
         content={{
-          selectedMain,
+          selectedMain: shownMain,
           standaloneLabel,
-          collectionSearch,
-          onCollectionSearchChange: setCollectionSearch,
-          singleSearch,
-          onSingleSearchChange: setSingleSearch,
+          contentSearch,
+          onContentSearchChange: setContentSearch,
+          hasCollectionsSection,
+          hasSinglesSection,
           pluginSearch,
           onPluginSearchChange: setPluginSearch,
           isActive,
