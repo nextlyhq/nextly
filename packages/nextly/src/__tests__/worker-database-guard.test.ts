@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   claimWorker,
+  createWorkerDatabases,
   describeClaims,
   integrationWorkers,
   provisionServers,
@@ -190,6 +191,44 @@ describe("claimWorker", () => {
     // The id is free for the next process in the slot.
     claimWorker(dir, "1", 300, () => true);
     expect(readFileSync(join(dir, "pool-1"), "utf8")).toBe("300");
+  });
+});
+
+describe("createWorkerDatabases", () => {
+  it("drops the worker databases it made when a later one fails, closes, then fails", async () => {
+    // A setup that throws returns no teardown, so nothing else would drop
+    // pool 1's database when pool 2's cannot be created.
+    const statements: string[] = [];
+    let ended = false;
+    const open = async () => ({
+      query: async (sql: string) => {
+        statements.push(sql);
+        if (/CREATE DATABASE/i.test(sql) && sql.includes("_pool2")) {
+          throw new Error("no room for pool 2");
+        }
+        return [];
+      },
+      end: async () => {
+        ended = true;
+      },
+    });
+    await expect(
+      createWorkerDatabases(
+        "postgresql",
+        "postgres://u@localhost/nextly_test",
+        2,
+        open
+      )
+    ).rejects.toThrow("no room for pool 2");
+    const afterFailure = statements.slice(
+      statements.findIndex(
+        sql => /CREATE DATABASE/i.test(sql) && sql.includes("_pool2")
+      ) + 1
+    );
+    expect(afterFailure).toHaveLength(1);
+    expect(afterFailure[0]).toMatch(/DROP DATABASE/i);
+    expect(afterFailure[0]).toContain("nextly_test_pool1");
+    expect(ended).toBe(true);
   });
 });
 

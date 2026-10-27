@@ -174,30 +174,22 @@ async function openAdmin(
   return { query: sql => connection.query(sql), end: () => connection.end() };
 }
 
-async function createWorkerDatabases(
+export async function createWorkerDatabases(
   dialect: ServerDialect["dialect"],
   url: string,
-  workers: number
+  workers: number,
+  open: typeof openAdmin = openAdmin
 ): Promise<() => Promise<void>> {
   const base = baseDatabase(new URL(url));
   const names = Array.from({ length: workers }, (_, i) =>
     workerDatabaseName(base, i + 1)
   );
-  const admin = await openAdmin(dialect, url);
-  try {
-    for (const name of names) {
-      await admin.query(dropDatabaseStatement(dialect, name));
-      await admin.query(createDatabaseStatement(dialect, name));
-    }
-  } catch (error) {
-    await admin.end();
-    throw error;
-  }
+  const admin = await open(dialect, url);
   // A worker's connection can outlive its process by a moment, and a database
-  // with a session attached cannot be dropped. A drop that fails here is only
+  // with a session attached cannot be dropped. A drop that fails is only
   // reported: the next run drops what this one left before creating its own.
-  return async () => {
-    for (const name of names) {
+  const dropAndClose = async (made: string[]) => {
+    for (const name of made) {
       await admin
         .query(dropDatabaseStatement(dialect, name))
         .catch((error: unknown) =>
@@ -208,6 +200,20 @@ async function createWorkerDatabases(
     }
     await admin.end();
   };
+  const made: string[] = [];
+  try {
+    for (const name of names) {
+      await admin.query(dropDatabaseStatement(dialect, name));
+      await admin.query(createDatabaseStatement(dialect, name));
+      made.push(name);
+    }
+  } catch (error) {
+    // A setup that throws returns no teardown, so the databases made before
+    // the failure are dropped here.
+    await dropAndClose(made);
+    throw error;
+  }
+  return () => dropAndClose(names);
 }
 
 /** Whether a process is running, by the signal-0 probe. */
