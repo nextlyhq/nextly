@@ -32,7 +32,7 @@ import type {
 } from "../../collections/fields/types";
 import { defineSingle } from "../../singles/config/define-single";
 
-import type { CollectionAccessControl } from "./access";
+import type { AccessControlFunction, CollectionAccessControl } from "./access";
 import type {
   CollectionFilterRule,
   CollectionRuleFilter,
@@ -97,6 +97,18 @@ defineCollection({
 expectTypeOf<
   CollectionFilterRule<[ReturnType<typeof text<"team">>]>
 >().toExtend<Extract<CollectionAccessControl["read"], CollectionFilterRule>>();
+
+// A rule of either form every operation accepts is still a create, update,
+// delete and read rule: the type to use for "any rule", now that the read
+// rule's own type also holds a rule answering a filter.
+declare const anyRule: AccessControlFunction | boolean;
+const everyOperation: CollectionAccessControl = {
+  create: anyRule,
+  read: anyRule,
+  update: anyRule,
+  delete: anyRule,
+};
+expectTypeOf(everyOperation).toEqualTypeOf<CollectionAccessControl>();
 
 // ---------------------------------------------------------------------------
 // The filter is typed by the collection's fields
