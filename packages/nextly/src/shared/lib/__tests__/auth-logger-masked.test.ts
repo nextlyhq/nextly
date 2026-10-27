@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getAuthLogger } from "../logger";
+import { type AuthLogEvent, getAuthLogger, setAuthLogger } from "../logger";
 
 const ADDRESS = "john@example.com";
 
@@ -62,4 +62,28 @@ describe("the default auth logger and credentials", () => {
       expect(output).not.toContain("refresh-c2hvdWxkTmV2ZXI");
     }
   );
+});
+
+describe("an auth logger an app installs", () => {
+  it("receives events with the credentials taken out", () => {
+    const installed = getAuthLogger();
+    const received: AuthLogEvent[] = [];
+    setAuthLogger({ log: (_, event) => received.push(event) });
+    try {
+      getAuthLogger().log("error", {
+        category: "auth",
+        op: "permissions",
+        error: "Could not read: Bearer nx_live_aW5zdGFsbGVkTG9nZ2Vy",
+        sessionToken: "session-aW5zdGFsbGVk",
+      });
+    } finally {
+      setAuthLogger(installed);
+    }
+
+    const output = JSON.stringify(received);
+    // The control: the event arrived, with its words.
+    expect(output).toContain("Could not read: Bearer");
+    expect(output).not.toContain("nx_live_aW5zdGFsbGVkTG9nZ2Vy");
+    expect(output).not.toContain("session-aW5zdGFsbGVk");
+  });
 });

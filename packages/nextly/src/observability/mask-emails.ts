@@ -67,7 +67,8 @@ function copyForLog<T>(value: T, rules: LogCopyRules): T {
 function walk(
   value: unknown,
   rules: LogCopyRules,
-  seen: WeakMap<object, unknown>
+  seen: WeakMap<object, unknown>,
+  serialised = false
 ): unknown {
   if (typeof value === "string") return rules.text(value);
   if (value === null || typeof value !== "object") return value;
@@ -75,6 +76,12 @@ function walk(
   if (known !== undefined) return known;
   if (value instanceof Error) return copyError(value, rules, seen);
   if (Array.isArray(value)) return copyList(value, rules, seen);
+  // As JSON does, a value's `toJSON` is called once, and its result is not
+  // asked again, so a method returning a fresh object each time still ends.
+  if (!serialised) {
+    const form = serialisedForm(value);
+    if (form !== value) return walk(form, rules, seen, true);
+  }
   if (isPlainObject(value)) return copyRecord(value, rules, seen);
   if (value instanceof Map) return copyMap(value, rules, seen);
   if (value instanceof Set) return copySet(value, rules, seen);
@@ -84,6 +91,25 @@ function walk(
     return rules.text(value.toString());
   }
   return rules.other?.(value) ?? value;
+}
+
+/**
+ * What a JSON writer would write for `value`: the result of its `toJSON`, or
+ * `value` itself when it has none. A logger serialising the copy calls
+ * `toJSON`, so a copy that kept the method would let it write whatever it
+ * returns, past every rule. A `Date` keeps its own, which writes only the
+ * time. A `toJSON` that throws leaves the unreadable marker.
+ */
+function serialisedForm(value: object): unknown {
+  if (value instanceof Date) return value;
+  try {
+    const toJSON: unknown = Reflect.get(value, "toJSON");
+    return typeof toJSON === "function"
+      ? Reflect.apply(toJSON, value, [""])
+      : value;
+  } catch {
+    return UNREADABLE;
+  }
 }
 
 /** A map copied entry by entry, a string key judged as a field name is. */
@@ -407,15 +433,22 @@ const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi;
 
 /**
- * A named value in text, in each form an upstream message quotes one: a URL's
- * `name=value`, a header's `Name: value`, JSON's `"name":"value"` (escaped
- * too, when a body sits inside a message) and `name="value"`. Groups: the
- * quote around the name, the name, the separator, the value, quoted or bare,
- * and a bare value's `Bearer` or `Basic` scheme. A quoted value is taken
- * whole, so a quote is never read as an empty value with the secret after it.
+ * The name of a named value in text, in each form an upstream message quotes
+ * one: a URL's `name=value`, a header's `Name: value`, JSON's
+ * `"name":"value"` (escaped too, when a body sits inside a message) and
+ * `name="value"`. Groups: the quote around the name, the name, and the
+ * separator. The value is read only after a credential's name
+ * (`TEXT_PARAMETER_VALUE`), so any other value is searched as ordinary text.
  */
-const TEXT_PARAMETER =
-  /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/g;
+const TEXT_PARAMETER = /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)/g;
+
+/**
+ * A credential's value, read where its name ends: quoted, and then taken
+ * whole so a quote is never read as an empty value with the secret after it,
+ * or bare, with any `Bearer` or `Basic` scheme as the second group.
+ */
+const TEXT_PARAMETER_VALUE =
+  /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
 
 /** A value's quotes, kept around its redaction so JSON still reads as JSON. */
 const VALUE_QUOTES = /^(\\?["']?)[\s\S]*?(\1)$/;
@@ -441,30 +474,35 @@ const CREDENTIAL_PARAMETER_ONLY_NAMES: ReadonlySet<string> = new Set([
  * must still be found.
  */
 export function redactCredentialParameters(text: string): string {
-  return text.replace(
-    TEXT_PARAMETER,
-    (
-      _,
-      quote: string,
-      name: string,
-      separator: string,
-      value: string,
-      scheme: string | undefined
-    ) => {
-      const prefix = `${quote}${name}${quote}${separator}`;
-      if (
-        !isCredentialName(name) &&
-        !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
-      ) {
-        return `${prefix}${redactCredentialParameters(value)}`;
-      }
-      // The scheme says how a caller authenticated, which an operator needs;
-      // only what follows it is the credential.
-      if (scheme) return `${prefix}${scheme}${REDACTED}`;
-      const [, open = "", close = ""] = VALUE_QUOTES.exec(value) ?? [];
-      return `${prefix}${open}${REDACTED}${close}`;
+  // One pass over the text, never recursing: a value after any other name is
+  // searched as the text it is part of, so a chain like `a:a:a:…` costs one
+  // step per name rather than one stack frame.
+  const names = new RegExp(TEXT_PARAMETER.source, "g");
+  const values = new RegExp(TEXT_PARAMETER_VALUE.source, "y");
+  let out = "";
+  let from = 0;
+  for (let match = names.exec(text); match; match = names.exec(text)) {
+    const [prefix, , name] = match;
+    if (
+      !isCredentialName(name) &&
+      !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
+    ) {
+      continue;
     }
-  );
+    const valueStart = match.index + prefix.length;
+    values.lastIndex = valueStart;
+    const [value = "", , scheme] = values.exec(text) ?? [];
+    const [, open = "", close = ""] = VALUE_QUOTES.exec(value) ?? [];
+    // The scheme says how a caller authenticated, which an operator needs;
+    // only what follows it is the credential.
+    const redacted = scheme
+      ? `${scheme}${REDACTED}`
+      : `${open}${REDACTED}${close}`;
+    out += `${text.slice(from, valueStart)}${redacted}`;
+    from = valueStart + value.length;
+    names.lastIndex = from;
+  }
+  return out + text.slice(from);
 }
 
 /**

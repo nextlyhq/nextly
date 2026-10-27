@@ -344,6 +344,46 @@ describe("credentials anywhere in a log value", () => {
     expect(out).not.toContain(secret);
   });
 
+  it("takes them out of what a toJSON method would write", () => {
+    const meta = {
+      slug: "home",
+      detail: {
+        token: "visible-field-secret",
+        toJSON: () => ({ leaked: "serialised-secret", password: "pw-secret" }),
+      },
+    };
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", meta);
+
+    // As a JSON writer would serialise it, which is where `toJSON` runs.
+    const out = JSON.stringify(received);
+    expect(out).toContain("home");
+    expect(out).not.toContain("visible-field-secret");
+    expect(out).not.toContain("pw-secret");
+  });
+
+  it("reads a long chain of names without running out of stack", () => {
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", {
+      note: `${"a:".repeat(20_000)}z then token=chain-secret`,
+    });
+
+    // Read as the value itself: printing would cut a string this long short.
+    const { note } = received[0] as { note: string };
+    expect(note).toMatch(/z then token=\S+$/);
+    expect(note).not.toContain("chain-secret");
+  });
+
   it("keeps a map's entries apart when their keys redact alike", () => {
     const received: unknown[] = [];
     maskingServiceLogger({

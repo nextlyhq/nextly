@@ -188,19 +188,28 @@ export interface AuthLogger {
 class DefaultAuthLogger implements AuthLogger {
   log(level: AuthLogLevel, event: AuthLogEvent): void {
     const timeIso = new Date().toISOString();
-    // Made safe before it is written: an auth failure's message can name the
-    // address that was signing in, or quote the credential it refused.
-    const payload = safeToLog({ time: timeIso, level, ...event });
+    // The event arrives already made safe (`redacting`).
+    const payload = { time: timeIso, level, ...event };
     if (level === "error") console.error("[auth]", JSON.stringify(payload));
     else if (level === "warn") console.warn("[auth]", JSON.stringify(payload));
     else console.log("[auth]", JSON.stringify(payload));
   }
 }
 
-let activeAuthLogger: AuthLogger = new DefaultAuthLogger();
+/**
+ * `logger`, handed every event made safe first: an auth failure's message can
+ * name the address that was signing in, or quote the credential it refused.
+ * Applied to whichever logger is installed, the default or an app's own, so
+ * no caller of `getAuthLogger()` can reach one without it.
+ */
+function redacting(logger: AuthLogger): AuthLogger {
+  return { log: (level, event) => logger.log(level, safeToLog(event)) };
+}
+
+let activeAuthLogger: AuthLogger = redacting(new DefaultAuthLogger());
 
 export function setAuthLogger(logger: AuthLogger): void {
-  activeAuthLogger = logger;
+  activeAuthLogger = redacting(logger);
 }
 
 export function getAuthLogger(): AuthLogger {
