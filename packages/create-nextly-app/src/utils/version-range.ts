@@ -97,3 +97,41 @@ export function lowestVersionIn(spec: string): string | undefined {
   }
   return lowest ? lowest.join(".") : undefined;
 }
+
+/**
+ * The highest major a package.json dependency spec admits, `Infinity` when it
+ * has no upper bound (`>=16.4.1`, `*`, `x`), or `undefined` when no
+ * alternative names one this can read (a dist-tag, a protocol). Across `||`
+ * the highest alternative wins, since an install resolves the newest version
+ * any of them admits. Within one alternative an upper bound (`<17`, `<=17.2`)
+ * decides; otherwise the version a `^`, `~`, `=` or bare spec names.
+ */
+export function highestMajorIn(spec: string): number | undefined {
+  let highest: number | undefined;
+  for (const part of spec.split("||")) {
+    const found = majorReachedBy(part.trim());
+    if (found !== undefined && (highest === undefined || found > highest)) {
+      highest = found;
+    }
+  }
+  return highest;
+}
+
+/** The highest major one `||` alternative reaches, as `highestMajorIn` reads it. */
+function majorReachedBy(part: string): number | undefined {
+  const upper = /<(=)?\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(part);
+  if (upper) {
+    const [, inclusive, major, minor, patch] = upper;
+    // `<17` and `<17.0.0` stop below 17; `<17.2` and `<=17` reach into it.
+    const reachesInto =
+      inclusive !== undefined ||
+      Number(minor ?? 0) > 0 ||
+      Number(patch ?? 0) > 0;
+    return reachesInto ? Number(major) : Number(major) - 1;
+  }
+  if (part === "" || /^(\*|[xX])$/.test(part) || part.startsWith(">")) {
+    return Infinity;
+  }
+  const named = /^(?:\^|~|=)?\s*v?(\d+)/.exec(part);
+  return named ? Number(named[1]) : undefined;
+}

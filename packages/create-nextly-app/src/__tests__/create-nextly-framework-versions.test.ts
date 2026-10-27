@@ -246,7 +246,68 @@ describe("an existing app that declares a newer major than it has installed", ()
   });
 });
 
+describe("an existing app whose declaration admits a later major, with nothing installed", () => {
+  // A fresh install resolves the newest version the declaration admits.
+  it.each([">=16.4.1", "^16.4.1 || ^17.0.0"])(
+    "stops on next %s, naming the later major it admits",
+    async spec => {
+      await declare({ ...IN_RANGE, next: spec });
+      await install({
+        react: IN_RANGE.react,
+        "react-dom": IN_RANGE["react-dom"],
+      });
+
+      const message = await refusal();
+
+      expect(message).toContain(`next: declared ${spec}`);
+      expect(message).toContain("supports Next.js 17");
+    }
+  );
+
+  // npm lets optionalDependencies override the same name in dependencies.
+  it("reads an optionalDependencies entry over dependencies, as npm does", async () => {
+    await writeFile(
+      path.join(app, "package.json"),
+      JSON.stringify({
+        name: "app",
+        dependencies: { ...IN_RANGE },
+        optionalDependencies: { next: "^17.0.0" },
+      })
+    );
+    await install({
+      react: IN_RANGE.react,
+      "react-dom": IN_RANGE["react-dom"],
+    });
+
+    const message = await refusal();
+
+    expect(message).toContain("next: declared ^17.0.0");
+  });
+});
+
 describe("an existing app on the supported versions", () => {
+  it("proceeds when nothing is installed and the declaration stays within the major", async () => {
+    await declare({ ...IN_RANGE, next: "^16.4.2" });
+    await install({
+      react: IN_RANGE.react,
+      "react-dom": IN_RANGE["react-dom"],
+    });
+
+    await createNextly({ cwd: app, defaults: true, skills: false });
+
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  // An installed copy in range stays: adding Nextly does not move it.
+  it("proceeds on an open declaration when the installed copy is in range", async () => {
+    await declare({ ...IN_RANGE, next: ">=16.4.1" });
+    await install(IN_RANGE);
+
+    await createNextly({ cwd: app, defaults: true, skills: false });
+
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
   // A declaration that merely starts lower changes nothing the install keeps.
   it("proceeds when the declaration starts below the floor but the installed copy is in range", async () => {
     await declare({ ...IN_RANGE, next: "^16.0.0" });
