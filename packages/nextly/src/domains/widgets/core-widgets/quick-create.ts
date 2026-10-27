@@ -7,8 +7,10 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const quickCreateWidget = {
-  id: "core/quick-create",
+  id: CORE_WIDGET_ID.quickCreate,
   title: "Create",
   description:
     "One click to an empty entry form, for the collections this reader may create in.",

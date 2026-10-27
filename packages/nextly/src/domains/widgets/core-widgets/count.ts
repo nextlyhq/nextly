@@ -8,8 +8,10 @@
 import { IN_RELEASE_KEY } from "../../collections/query/reserved-filter-keys";
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const countWidget = {
-  id: "core/count",
+  id: CORE_WIDGET_ID.count,
   title: "Count",
   description:
     "How many entries a collection holds, published and draft, and how that is changing.",
