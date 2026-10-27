@@ -236,6 +236,22 @@ function hiddenWhileEmpty(
 }
 
 /**
+ * How many cards are on show: every one while customising, where a hidden card is shown marked;
+ * at rest, those not taken off the dashboard (`hiddenWhileEmpty`), so a dashboard whose every
+ * card is hidden says it is empty rather than drawing nothing.
+ */
+function shownCount(
+  rows: readonly ArrangedWidget[],
+  isEditing: boolean,
+  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+): number {
+  if (isEditing) return rows.length;
+  return rows.filter(
+    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
+  ).length;
+}
+
+/**
  * When the OLDEST answer on show arrived, or `undefined` before any has: the time the page's one
  * freshness line is true of, since every card on show is at least that fresh. Only a card that
  * asked and is drawn counts: a card hidden while its answer is empty is not on show.
@@ -312,7 +328,10 @@ export function ArrangedGrid({
         >
           {announcement}
         </span>
-        <EmptyArrangement count={rows.length} isEditing={isEditing} />
+        <EmptyArrangement
+          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          isEditing={isEditing}
+        />
         <DropLineMark line={drag?.line} />
         {rows.map(row => (
           <ArrangedCell
