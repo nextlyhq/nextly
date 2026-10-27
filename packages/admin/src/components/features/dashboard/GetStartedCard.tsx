@@ -8,8 +8,8 @@
  * - when setup could not be checked, saying so with Retry, and never a step shown as waiting on
  *   that basis;
  * - the steps, with "x of y done" (a skipped step counts as done), each waiting step linking to
- *   where it is done, Skip on the steps a site can do without, and the first five Singles with
- *   a control for the rest;
+ *   where it is done, and Skip on the steps a site can do without. Only whole steps are drawn,
+ *   as many as the card holds, then "Show N more", which grows the card in place (`fold`);
  * - "You're all set" once every step is done or skipped, with the steps a click away.
  *
  * The frame draws the card's title, its one heading, and its Remove control, which records the
@@ -34,18 +34,12 @@ import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
 
-import {
-  isSkippable,
-  stepPresentation,
-  stepRuns,
-} from "./get-started/step-presentation";
+import { useStepFold } from "./get-started/fold";
+import { isSkippable, stepPresentation } from "./get-started/step-presentation";
 import {
   useGetStartedWrite,
   type GetStartedWrite,
 } from "./get-started/useGetStartedWrite";
-
-/** The Singles listed before the rest are folded behind a control. */
-const SINGLES_SHOWN = 5;
 
 /** The sidebar's own Singles request, so the card shares its answer for their labels. */
 const SINGLES_PARAMS = {
@@ -227,46 +221,13 @@ function StepRow({
 }) {
   const { label, href } = stepPresentation(step, singleLabels);
   return (
-    <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+    <li
+      data-step-row
+      className="flex flex-wrap items-center justify-between gap-2 py-2.5"
+    >
       <StepMark step={step} label={label} />
       <StepActions step={step} label={label} href={href} write={write} />
     </li>
-  );
-}
-
-/**
- * A run of consecutive Single steps: the first five, then a control for the
- * rest (with `aria-expanded`), so a site with many Singles does not bury the
- * steps after them.
- */
-function SinglesRun({
-  steps,
-  row,
-}: {
-  steps: GetStartedStep[];
-  row: (step: GetStartedStep) => React.ReactNode;
-}) {
-  const [all, setAll] = useState(false);
-  const restId = useId();
-  const folded = steps.length - SINGLES_SHOWN;
-  return (
-    <>
-      <ul id={restId} className="grid divide-y divide-border">
-        {(all ? steps : steps.slice(0, SINGLES_SHOWN)).map(row)}
-      </ul>
-      {folded > 0 && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="justify-self-start"
-          aria-expanded={all}
-          aria-controls={restId}
-          onClick={() => setAll(open => !open)}
-        >
-          {all ? "Show fewer Singles" : `Show ${folded} more`}
-        </Button>
-      )}
-    </>
   );
 }
 
@@ -278,16 +239,11 @@ function StepList({
   write: GetStartedWrite;
 }) {
   const singleLabels = useSingleLabels();
-  const row = (step: GetStartedStep) => (
-    <StepRow
-      key={step.key}
-      step={step}
-      singleLabels={singleLabels}
-      write={write}
-    />
-  );
+  const steps = answer.steps;
+  const fold = useStepFold(steps.length);
+  const listId = useId();
   return (
-    <div className="grid gap-3">
+    <div ref={fold.listRef} className="grid gap-3">
       <div>
         {/* The bar is the picture; the line under it is the answer, announced once. */}
         <div
@@ -308,16 +264,32 @@ function StepList({
           {answer.done} of {answer.total} done
         </p>
       </div>
-      {/* The server's list in its own order, every step drawn: only runs of
-          Singles fold. */}
-      {stepRuns(answer.steps).map(run =>
-        run.kind === "singles" ? (
-          <SinglesRun key={run.steps[0].key} steps={run.steps} row={row} />
-        ) : (
-          <ul key={run.steps[0].key} className="grid divide-y divide-border">
-            {run.steps.map(row)}
-          </ul>
-        )
+      {/* The server's list in its own order. Only whole steps are drawn, as many as the card
+          holds (`useStepFold`); the rest are one click away, and that click grows the card. */}
+      <ul id={listId} className="grid divide-y divide-border">
+        {steps.slice(0, fold.shown).map(step => (
+          <StepRow
+            key={step.key}
+            step={step}
+            singleLabels={singleLabels}
+            write={write}
+          />
+        ))}
+      </ul>
+      {fold.hasControl && (
+        <Button
+          ref={fold.controlRef}
+          variant="ghost"
+          size="sm"
+          className="justify-self-start"
+          aria-expanded={fold.expanded}
+          aria-controls={listId}
+          onClick={fold.toggle}
+        >
+          {fold.expanded
+            ? "Show less"
+            : `Show ${steps.length - fold.shown} more`}
+        </Button>
       )}
     </div>
   );

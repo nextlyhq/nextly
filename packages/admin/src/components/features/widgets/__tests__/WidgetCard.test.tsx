@@ -19,6 +19,33 @@ const STATES: readonly CardState[] = [
 ];
 
 describe("WidgetCard", () => {
+  it("centres a state that says something in the body, and leaves the skeleton at the top", () => {
+    // A card keeps its rows whatever it shows: empty, error and no access are centred in the
+    // body both ways rather than left at its top-left with the rest of a tall card blank.
+    for (const [state, drawn] of [
+      [{ kind: "empty", empty: { title: "No posts yet" } }, "card-empty"],
+      [{ kind: "error", message: "Source unavailable." }, "widget-card-error"],
+      [{ kind: "no-access" }, "card-unavailable"],
+    ] as const) {
+      const { unmount } = render(
+        <WidgetCard title="Published posts" state={state}>
+          <p>42</p>
+        </WidgetCard>
+      );
+      const centred = screen.getByTestId("card-state-centred");
+      expect(centred).toHaveClass("items-center", "justify-center");
+      expect(centred).toContainElement(screen.getByTestId(drawn));
+      unmount();
+    }
+    // The must-differ half: the loading skeleton is not centred.
+    render(
+      <WidgetCard title="Published posts" state={{ kind: "loading" }}>
+        <p>42</p>
+      </WidgetCard>
+    );
+    expect(screen.queryByTestId("card-state-centred")).toBeNull();
+  });
+
   it("renders the title and the body it was given", () => {
     render(
       <WidgetCard title="Published posts">

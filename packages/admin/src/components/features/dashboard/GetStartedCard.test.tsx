@@ -6,6 +6,7 @@ import type { GetStartedAnswer, GetStartedStep } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 import {
   AtRestSettingsWriteProvider,
@@ -253,20 +254,96 @@ describe("the Get started card", () => {
     expect(skip).toHaveAttribute("title", expect.stringMatching(/customising/));
   });
 
-  it("lists five Singles, then a control for the rest", () => {
+  it("draws every step, with no control, when every step fits", () => {
+    // jsdom lays nothing out, so every step measures as fitting: the steps are all drawn, in
+    // the server's order, and there is nothing to show more of.
     const singles = Array.from({ length: 7 }, (_, i) =>
       step(`single:s${i}`, "single", "open", `s${i}`)
     );
     read = readOf({ answer: answerOf(singles) });
     draw();
-    expect(screen.getAllByText(/^Fill in s\d$/)).toHaveLength(5);
-    const more = screen.getByRole("button", { name: "Show 2 more" });
-    expect(more).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(more);
     expect(screen.getAllByText(/^Fill in s\d$/)).toHaveLength(7);
-    expect(
-      screen.getByRole("button", { name: "Show fewer Singles" })
-    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+  });
+
+  it("draws only the whole steps its body holds, and grows in place to show the rest", () => {
+    // A body that ends 300 px down, steps 50 px tall from 60 px, and the control 44 px below
+    // the last step: three whole steps fit above the control, the fourth would be cut.
+    const rect = (top: number, bottom: number) =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 600,
+        width: 600,
+        height: bottom - top,
+      }) as DOMRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.getAttribute("data-testid") === "widget-card-body") {
+          return rect(0, 300);
+        }
+        if (this.hasAttribute("data-step-row")) {
+          const index = [
+            ...(this.parentElement?.querySelectorAll("[data-step-row]") ?? []),
+          ].indexOf(this);
+          return rect(60 + 50 * index, 60 + 50 * (index + 1));
+        }
+        if (this.hasAttribute("aria-controls")) {
+          const rows = this.parentElement?.querySelectorAll("[data-step-row]");
+          const last = 60 + 50 * (rows?.length ?? 0);
+          return rect(last + 12, last + 44);
+        }
+        return rect(12, 12);
+      }
+    );
+    const steps = [
+      step("collection", "collection", "done"),
+      step("entry", "entry", "open"),
+      ...Array.from({ length: 4 }, (_, i) =>
+        step(`single:s${i}`, "single", "open", `s${i}`)
+      ),
+      step("invite", "invite", "open"),
+    ];
+    read = readOf({ answer: answerOf(steps) });
+    const reports: (number | undefined)[] = [];
+    render(
+      <AtRestSettingsWriteProvider value={atRest}>
+        <CardGrowContext.Provider value={px => reports.push(px)}>
+          {inFrame(
+            <GetStartedCard
+              widgetId="core/get-started"
+              placementId="started"
+              settings={{}}
+              slot={undefined}
+              isFetching={false}
+            />
+          )}
+        </CardGrowContext.Provider>
+      </AtRestSettingsWriteProvider>
+    );
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    const control = screen.getByRole("button", { name: "Show 4 more" });
+    expect(control).toHaveAttribute("aria-expanded", "false");
+    expect(reports.at(-1)).toBeUndefined();
+
+    // Unfolded: every step, the control now folds them, and the card asks for more rows.
+    control.focus();
+    fireEvent.click(control);
+    expect(screen.getAllByRole("listitem")).toHaveLength(7);
+    expect(control).toHaveAccessibleName("Show less");
+    expect(control).toHaveAttribute("aria-expanded", "true");
+    expect(typeof reports.at(-1)).toBe("number");
+    // The same control, so focus stays on it.
+    expect(control).toHaveFocus();
+
+    // Folded again: the same three steps, and the card back to its own rows.
+    fireEvent.click(control);
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    expect(control).toHaveAccessibleName("Show 4 more");
+    expect(reports.at(-1)).toBeUndefined();
+    expect(control).toHaveFocus();
   });
 
   it('says "You\'re all set" once every step is done or skipped, with the steps a click away', () => {
