@@ -7,7 +7,8 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -36,12 +37,17 @@ const fromPlayground = createRequire(new URL("../apps/playground/package.json", 
 const detector = readFileSync(join(dirname(fromPlayground.resolve("next/package.json")), "dist/compiled/@vercel/detect-agent/index.js"), "utf8");
 const { names: AGENT_VARIABLES, unnamed } = readsOf(detector);
 
-const files = [
-  ...readdirSync(new URL("../.github/workflows/", import.meta.url))
-    .filter(name => /\.ya?ml$/.test(name))
-    .map(name => `.github/workflows/${name}`),
-  ...readdirSync(new URL("../.github/actions/", import.meta.url)).map(name => `.github/actions/${name}/action.yml`),
-];
+// Everything CI runs: every file under `.github` (workflows, local actions
+// and whatever they hold, its scripts) and every script under `scripts`,
+// where a step or an action's implementation could set one through
+// `GITHUB_ENV` without the workflow naming it. Not this file, which names them.
+const SCANNED = [".github", "scripts"];
+const files = SCANNED.flatMap(root =>
+  readdirSync(new URL(`../${root}/`, import.meta.url), { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => `${relative(fileURLToPath(new URL("../", import.meta.url)), join(entry.parentPath, entry.name))}`)
+    .filter(path => path !== "scripts/workflows-set-no-agent-env.test.mjs")
+);
 
 describe("the variables that tell Next.js a coding agent is building", () => {
   it("are every one Next.js's own detector reads", () => {
@@ -63,8 +69,10 @@ describe("the variables that tell Next.js a coding agent is building", () => {
     expect(mentioned("env:\n  MY_CODEX_CI_FLAG: 1", names)).toEqual([]);
   });
 
-  it("are named by no workflow or local action", () => {
-    expect(files.length).toBeGreaterThan(20);
+  it("are named by no workflow, local action or script CI runs", () => {
+    expect(files.filter(path => path.startsWith(".github/workflows/")).length).toBeGreaterThan(20);
+    expect(files.filter(path => path.startsWith(".github/actions/")).length).toBeGreaterThan(4);
+    expect(files.filter(path => path.startsWith("scripts/")).length).toBeGreaterThan(100);
     const named = files.flatMap(path =>
       mentioned(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"), AGENT_VARIABLES).map(name => `${path} ${name}`)
     );
