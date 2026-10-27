@@ -281,17 +281,33 @@ describe("registerReleaseServices lifecycle grants", () => {
     action: "publish",
   };
 
-  it("refuses a key holding the lifecycle verb but not the base update grant", async () => {
-    // An ordinary lifecycle write requires `update-posts` as well as
-    // `publish-posts`. Asking only about the verb admits a key that may publish
-    // but may not write the document — and the drain then executes as the
-    // owner, turning a release into a way around the missing grant.
+  /** How an add ended: added, or the code it was refused with. */
+  const outcomeOf = (added: Promise<unknown>) =>
+    added.then(
+      () => "added",
+      (error: { code?: string }) => error.code
+    );
+
+  it("admits a key holding the lifecycle verb without update, as the run's write needs", async () => {
+    // A release writes the status alone, a publish judged by `publish-posts`
+    // and not `update-posts`, so the key that write admits is the one the
+    // release admits. The add may still fail later, on the document: not on
+    // the caller's authority.
     const { svc, actor } = await build({
       scopePermissions: ["create-content-releases", "publish-posts"],
     });
-    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
-      code: "FORBIDDEN",
+    expect(await outcomeOf(svc.addMember("r1", MEMBER, actor))).not.toBe(
+      "FORBIDDEN"
+    );
+  });
+
+  it("refuses a key holding update but not the lifecycle verb", async () => {
+    const { svc, actor } = await build({
+      scopePermissions: ["create-content-releases", "update-posts"],
     });
+    expect(await outcomeOf(svc.addMember("r1", MEMBER, actor))).toBe(
+      "FORBIDDEN"
+    );
   });
 
   it("refuses when the AUTHOR cannot perform the action, however scoped the key", async () => {
@@ -312,15 +328,24 @@ describe("registerReleaseServices lifecycle grants", () => {
     });
   });
 
-  it("refuses a session caller who lacks the base update grant", async () => {
-    // Not a key-only rule: an ordinary user scheduling a publish must be able
-    // to write the document too.
+  it("admits a session caller who may publish and not update", async () => {
+    // Not a key-only rule: an ordinary user scheduling a publish is judged by
+    // the publish, as the run's status write is.
     const { svc, actor } = await build({
       ownerAllows: operation => operation !== "update",
     });
-    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
-      code: "FORBIDDEN",
+    expect(await outcomeOf(svc.addMember("r1", MEMBER, actor))).not.toBe(
+      "FORBIDDEN"
+    );
+  });
+
+  it("refuses a session caller who may update and not publish", async () => {
+    const { svc, actor } = await build({
+      ownerAllows: operation => operation !== "publish",
     });
+    expect(await outcomeOf(svc.addMember("r1", MEMBER, actor))).toBe(
+      "FORBIDDEN"
+    );
   });
 });
 
