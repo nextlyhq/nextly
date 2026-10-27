@@ -16,6 +16,11 @@
 
 import type { Logger } from "../shared/types";
 
+import {
+  redactCredentials,
+  redactCredentialsInText,
+} from "./redact-credentials";
+
 /**
  * An email address in running text. The local part is either quoted
  * (`"john.doe"@example.com`) or made of every character an unquoted one may
@@ -89,8 +94,19 @@ export function maskEmails<T>(value: T): T {
  * it was given otherwise. The one place a writer asks both questions, so no
  * two writers can come to answer "is this masked?" differently.
  */
-export function maskEmailsWhenActive<T>(value: T): T {
+function maskEmailsWhenActive<T>(value: T): T {
   return emailMaskingActive() ? maskEmails(value) : value;
+}
+
+/**
+ * `value` as a log writer may write it: credentials taken out in every
+ * environment, then addresses masked outside development and test. Every
+ * writer goes through this one function, so none can come to log a request's
+ * headers that another would have redacted. Credentials go first: the email
+ * masker keeps a `Request` as it is, headers and all.
+ */
+export function safeToLog<T>(value: T): T {
+  return maskEmailsWhenActive(redactCredentials(value));
 }
 
 function maskValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
@@ -241,8 +257,9 @@ function defineOwn(
 }
 
 /**
- * A service logger that masks every message and field it is handed, outside
- * development and test, before passing them on. Each method of the wrapped
+ * A service logger that takes credentials out of every message and field it is
+ * handed, and masks addresses outside development and test, before passing
+ * them on. Each method of the wrapped
  * logger is looked up as it is called, so one replaced after wrapping, as a
  * test or an app may do, is the one that receives the line.
  */
@@ -250,15 +267,17 @@ export function maskingServiceLogger(logger: Logger): Logger {
   const pass =
     (level: keyof Logger): Logger["info"] =>
     (message, meta) => {
-      const masking = emailMaskingActive();
-      const text = masking ? maskEmailsInText(message) : message;
+      // Credentials come out of the message and fields in every environment;
+      // addresses are masked outside development and test.
+      const redacted = redactCredentialsInText(message);
+      const text = emailMaskingActive() ? maskEmailsInText(redacted) : redacted;
       // A line logged without fields reaches the logger without them, as it
       // would unwrapped, rather than with a trailing `undefined`.
       if (meta === undefined) {
         logger[level](text);
         return;
       }
-      logger[level](text, masking ? maskEmails(meta) : meta);
+      logger[level](text, safeToLog(meta));
     };
   return {
     debug: pass("debug"),

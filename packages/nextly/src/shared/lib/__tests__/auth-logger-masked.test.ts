@@ -42,3 +42,24 @@ describe("the default auth logger", () => {
     expect(written("development")).toContain(ADDRESS);
   });
 });
+
+describe("the default auth logger and credentials", () => {
+  it.each(["production", "development"])(
+    "writes no token or key in %s, in a field or in text",
+    nodeEnv => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      getAuthLogger().log("warn", {
+        category: "auth",
+        op: "sign-in",
+        errorMessage: "Rejected Bearer nx_live_c2hvdWxkTmV2ZXJCZUxvZ2dlZA",
+        refreshToken: "refresh-c2hvdWxkTmV2ZXI",
+      });
+      const output = JSON.stringify(warn.mock.calls);
+      // The control: the event was written, with its message.
+      expect(output).toContain("Rejected Bearer");
+      expect(output).not.toContain("nx_live_c2hvdWxkTmV2ZXJCZUxvZ2dlZA");
+      expect(output).not.toContain("refresh-c2hvdWxkTmV2ZXI");
+    }
+  );
+});
