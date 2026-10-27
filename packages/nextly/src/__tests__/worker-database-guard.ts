@@ -27,6 +27,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { TestProjectInlineConfiguration } from "vitest/config";
+
 import {
   createDatabaseStatement,
   dropDatabaseStatement,
@@ -170,7 +172,14 @@ async function openAdmin(
   const connection = await createConnection({ uri: url });
   // MySQL's metadata-lock wait defaults to a year, so a drop behind a session
   // still holding a lock would hang the run's end rather than fail and report.
-  await connection.query("SET SESSION lock_wait_timeout = 10");
+  // The connection is open by now, so a refusal closes it before going on:
+  // the caller never gets it to close, and its socket would keep the run alive.
+  try {
+    await connection.query("SET SESSION lock_wait_timeout = 10");
+  } catch (error) {
+    await connection.end().catch(() => {});
+    throw error;
+  }
   return { query: sql => connection.query(sql), end: () => connection.end() };
 }
 
@@ -338,6 +347,52 @@ export async function provisionServers(
     throw error;
   }
   return drops;
+}
+
+/**
+ * Files that take a lock MySQL keeps for the whole server rather than per
+ * database: the migrate lock's old, shared name. A database per worker does not
+ * isolate it, and a migration on another worker checks that name too and,
+ * failing fast, would find it busy. `integration-config.test.ts` finds them by
+ * their source and holds this list to it.
+ */
+export const SERVER_WIDE_LOCK_FILES = [
+  "src/domains/schema/pipeline/__tests__/migrate-lock-mysql-pins-connection.integration.test.ts",
+];
+
+/**
+ * The integration run's projects over `include`, every integration file.
+ * Inline projects inherit the config around
+ * them and merge their arrays into it, so `include` is per project and
+ * `exclude` is shared. Projects run at the same time unless ordered: every
+ * other file runs in the first group, and the files that take a server-wide
+ * lock in a second, one at a time, once nothing else is running.
+ */
+export function integrationProjects({
+  include,
+}: {
+  include: string[];
+}): TestProjectInlineConfiguration[] {
+  return [
+    {
+      extends: true,
+      test: {
+        name: "nextly-integration",
+        include,
+        exclude: SERVER_WIDE_LOCK_FILES,
+        sequence: { groupOrder: 0 },
+      },
+    },
+    {
+      extends: true,
+      test: {
+        name: "nextly-integration (server-wide locks)",
+        include: SERVER_WIDE_LOCK_FILES,
+        fileParallelism: false,
+        sequence: { groupOrder: 1 },
+      },
+    },
+  ];
 }
 
 /**

@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   claimWorker,
@@ -20,6 +20,16 @@ import {
   workerPoolId,
   pointAtWorkerDatabases,
 } from "./worker-database-guard";
+
+// The MySQL driver, as the admin connection opens it: one connection whose
+// queries and close a case can watch.
+const mysqlConnection = vi.hoisted(() => ({
+  query: vi.fn(async () => []),
+  end: vi.fn(async () => {}),
+}));
+vi.mock("mysql2/promise", () => ({
+  createConnection: async () => mysqlConnection,
+}));
 
 describe("integrationWorkers", () => {
   it("runs one worker unless asked for more", () => {
@@ -195,13 +205,27 @@ describe("claimWorker", () => {
 });
 
 describe("createWorkerDatabases", () => {
+  it("closes a MySQL connection whose session setting is refused, then fails", async () => {
+    // The connection opened, so it is closed before the error goes on;
+    // otherwise its socket keeps the run's process alive.
+    mysqlConnection.query.mockRejectedValueOnce(new Error("setting refused"));
+    mysqlConnection.end.mockClear();
+    await expect(
+      createWorkerDatabases("mysql", "mysql://u@localhost/nextly_test", 2)
+    ).rejects.toThrow("setting refused");
+    expect(mysqlConnection.end).toHaveBeenCalledTimes(1);
+  });
+
   it("drops the worker databases it made when a later one fails, closes, then fails", async () => {
     // A setup that throws returns no teardown, so nothing else would drop
-    // pool 1's database when pool 2's cannot be created.
+    // pool 1's database when pool 2's cannot be created. Like a real driver,
+    // the connection refuses a query once closed, and only the statements it
+    // ran are recorded: a drop issued after the close goes unrecorded.
     const statements: string[] = [];
     let ended = false;
     const open = async () => ({
       query: async (sql: string) => {
+        if (ended) throw new Error("connection closed");
         statements.push(sql);
         if (/CREATE DATABASE/i.test(sql) && sql.includes("_pool2")) {
           throw new Error("no room for pool 2");
