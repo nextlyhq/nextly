@@ -128,6 +128,42 @@ function containerRows(
 }
 
 /**
+ * Each row of a container before redaction, paired with its redacted copy by
+ * its key, which the redaction leaves in place: it removes fields, not rows.
+ */
+function pairedRows(
+  beforeValue: unknown,
+  afterValue: unknown
+): {
+  key: string | null;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}[] {
+  const afterRows = new Map(
+    containerRows(afterValue).map(({ key, row }) => [key, row])
+  );
+  return containerRows(beforeValue).flatMap(({ key, row }) => {
+    const after = afterRows.get(key);
+    return after ? [{ key, before: row, after }] : [];
+  });
+}
+
+/**
+ * The fields one row of a container declares: a component instance's own
+ * type's, or its field's single one; a group's or repeater's own fields.
+ */
+function rowFields(
+  field: FieldConfig,
+  row: Record<string, unknown>,
+  componentFields: ComponentFieldMap
+): readonly FieldConfig[] | undefined {
+  if (!isFieldGroupField(field)) return subFieldsOf(field);
+  return componentFields.get(
+    readFieldGroupType(row) ?? extractFieldGroupReferences(field).single ?? ""
+  );
+}
+
+/**
  * The dotted paths of the fields a redaction removed below the top level
  * (`banner.secret`, `meta.secret`), by comparing a copy taken before it with
  * the redacted entry. A field removed from a row of a list is named by that
@@ -153,40 +189,36 @@ export function nestedWithheldPaths(
     at: string,
     open: WeakSet<object> = new WeakSet()
   ): void => {
-    for (const field of level) {
-      const name = nameOf(field);
+    for (const field of level) visit(field, beforeObj, afterObj, at, open);
+  };
+  // One field at this level: a nameless layout container lays its fields out
+  // on this same value; a named field is either gone, or holds rows to walk.
+  const visit = (
+    field: FieldConfig,
+    beforeObj: Record<string, unknown>,
+    afterObj: Record<string, unknown>,
+    at: string,
+    open: WeakSet<object>
+  ): void => {
+    const name = nameOf(field);
+    if (name === undefined) {
       const sub = subFieldsOf(field);
-      if (name === undefined) {
-        if (sub && !open.has(field)) {
-          open.add(field);
-          walk(beforeObj, afterObj, sub, at, open);
-          open.delete(field);
-        }
-        continue;
-      }
-      const path = at === "" ? name : `${at}.${name}`;
-      if (at !== "" && name in beforeObj && !(name in afterObj)) {
-        paths.add(path);
-        continue;
-      }
-      // A row is paired with the redacted copy of itself by its key, which
-      // the redaction leaves in place: it removes fields, not rows.
-      const afterRows = new Map(
-        containerRows(afterObj[name]).map(({ key, row }) => [key, row])
-      );
-      for (const { key, row } of containerRows(beforeObj[name])) {
-        const afterRow = afterRows.get(key);
-        if (!afterRow) continue;
-        const inner = isFieldGroupField(field)
-          ? componentFields.get(
-              readFieldGroupType(row) ??
-                extractFieldGroupReferences(field).single ??
-                ""
-            )
-          : sub;
-        if (inner)
-          walk(row, afterRow, inner, key === null ? path : `${path}.${key}`);
-      }
+      if (!sub || open.has(field)) return;
+      open.add(field);
+      walk(beforeObj, afterObj, sub, at, open);
+      open.delete(field);
+      return;
+    }
+    const path = at === "" ? name : `${at}.${name}`;
+    if (at !== "" && name in beforeObj && !(name in afterObj)) {
+      paths.add(path);
+      return;
+    }
+    for (const row of pairedRows(beforeObj[name], afterObj[name])) {
+      const inner = rowFields(field, row.before, componentFields);
+      // A list row is named by its key; a single group or instance by none.
+      const rowPath = row.key === null ? path : `${path}.${row.key}`;
+      if (inner) walk(row.before, row.after, inner, rowPath);
     }
   };
   walk(before, after, fields, prefix);
