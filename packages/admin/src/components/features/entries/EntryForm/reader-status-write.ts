@@ -26,3 +26,24 @@ export function readerStatusWrite(
   if (intent === "unpublish") return "draft";
   return undefined;
 }
+
+/**
+ * Whether a write of the status alone is held: wherever the editor's edits
+ * are, except for a reader whose refusal is settled and whose document
+ * nothing else holds. What `readerStatusWrite` sends, a surface offering a
+ * status write (publishing every language) offers.
+ */
+export function statusWritesHeld({
+  editsHeld,
+  refused,
+  writesHeld,
+}: {
+  editsHeld: boolean;
+  refused: boolean;
+  writesHeld: boolean;
+}): boolean {
+  return (
+    editsHeld &&
+    readerStatusWrite("publish", { refused, writesHeld }) === undefined
+  );
+}

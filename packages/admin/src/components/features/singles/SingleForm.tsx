@@ -51,7 +51,10 @@ import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/E
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
-import { readerStatusWrite } from "@admin/components/features/entries/EntryForm/reader-status-write";
+import {
+  readerStatusWrite,
+  statusWritesHeld,
+} from "@admin/components/features/entries/EntryForm/reader-status-write";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
@@ -639,6 +642,13 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // Publishing every language changes only each language's status, so a
+  // reader whose document nothing else holds is still offered it.
+  const publishAllHeld = statusWritesHeld({
+    editsHeld,
+    refused: readOnlyForReader,
+    writesHeld,
+  });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || updatesHeld;
@@ -1250,6 +1260,7 @@ export function SingleForm({
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
                                   actionsDisabled={editsHeld}
+                                  publishAllDisabled={publishAllHeld}
                                   // A reader may still open the other languages.
                                   navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
@@ -1284,6 +1295,7 @@ export function SingleForm({
                               {/* Rail (collapsible). */}
                               <SingleFormRail
                                 actionsDisabled={editsHeld}
+                                publishAllDisabled={publishAllHeld}
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
