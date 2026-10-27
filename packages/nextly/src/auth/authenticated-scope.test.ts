@@ -3,7 +3,7 @@
  * everyone else; `readAuthenticatedScope` reads the scope the request caller
  * was authenticated with.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import {
   asCaller,
@@ -11,6 +11,8 @@ import {
   sessionCaller,
 } from "../dispatcher/__tests__/request-caller";
 import { readAuthenticatedScope } from "../dispatcher/helpers/authenticated-actor";
+
+import { runWithAccessMemo } from "./access/request-memo";
 
 import {
   apiKeyScope,
@@ -20,6 +22,7 @@ import {
   scopeGrants,
   scopeHoldsSuperAdmin,
 } from "./authenticated-scope";
+import { SESSION_CUTOFF_SECONDS } from "./session/session-standing";
 
 describe("apiKeyScopeAllows", () => {
   it("allows when the API key holds the `{operation}-{resource}` grant", () => {
@@ -189,5 +192,30 @@ describe("a key's super-admin authority on its scope", () => {
     expect(scopeHoldsSuperAdmin(apiKeyScope(grants))).toBe(false);
     expect(scopeHoldsSuperAdmin(apiKeyScopeFrom({ grants }))).toBe(false);
     expect(scopeHoldsSuperAdmin(undefined)).toBe(false);
+  });
+});
+
+describe("a key's super-admin authority over time", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stands as first answered for the rest of a request, and is asked afresh in a later one", () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+    });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(true);
+      vi.advanceTimersByTime(SESSION_CUTOFF_SECONDS * 1000 + 1);
+      // Every door this request asks gives the answer its first door got.
+      expect(scopeHoldsSuperAdmin(scope)).toBe(true);
+    });
+    // A later request asks again, once the bound has passed.
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
   });
 });
