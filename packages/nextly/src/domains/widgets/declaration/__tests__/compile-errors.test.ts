@@ -166,8 +166,8 @@ const CASES: Case[] = [
       `{ query: () => ({ collection: "orders", op: "count" }) }`,
       `async ({ services, settings }) => ({ total: await services.count(settings.collection) })`
     ),
-    code: 2322,
-    message: "is not assignable to type",
+    code: 2353,
+    message: "'query' does not exist in type",
   },
   {
     name: "the package root no longer publishes the query a widget handed core",
