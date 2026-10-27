@@ -12,7 +12,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
@@ -66,6 +66,7 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
   services = undefined;
+  vi.restoreAllMocks();
   handedToHooks = [];
   ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
   // Single hooks register into the global registry.
@@ -732,6 +733,74 @@ describe.each(getConfiguredTestDialects())(
 
       expect(published.success).toBe(true);
       expect(ruleAsks.homePublish).toBe(1);
+    });
+
+    it("reads a status-only body once, so its gate and its write agree", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      // A body whose status is computed on each read: published twice, then
+      // a draft. Read more than once, the gate would judge one status and
+      // the write store another.
+      let reads = 0;
+      const body = {
+        get status() {
+          reads += 1;
+          return reads <= 2 ? "published" : "draft";
+        },
+      };
+
+      await as(PUBLISHER).update({
+        collection: POSTS,
+        id,
+        data: body,
+      } as never);
+
+      expect(reads).toBe(1);
+      expect((await stored(POSTS, id)).status).toBe("published");
+    });
+
+    it("locks no row of a batch the caller's gate refuses", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      // Every row read under a lock inside a transaction, by table.
+      const locked: string[] = [];
+      const adapter = current!.adapter as unknown as {
+        transaction: (
+          work: (tx: Record<string, unknown>) => Promise<unknown>,
+          ...rest: unknown[]
+        ) => Promise<unknown>;
+      };
+      const open = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) =>
+        open(
+          async tx => {
+            const select = (tx.selectOne as (...a: unknown[]) => unknown).bind(
+              tx
+            );
+            tx.selectOne = (
+              table: string,
+              options?: { forUpdate?: boolean }
+            ) => {
+              if (options?.forUpdate) locked.push(table);
+              return select(table, options);
+            };
+            return work(tx);
+          },
+          ...rest
+        )
+      );
+
+      // The editor may update and not publish: the status-only row is refused
+      // by the publish gate, before its row is locked.
+      const result = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: { status: "published" } }],
+        asPlugin(EDITOR)
+      );
+
+      expect(result.failed).toBe(1);
+      expect(locked).toEqual([]);
+      expect((await stored(POSTS, id)).status).toBe("draft");
     });
   }
 );
