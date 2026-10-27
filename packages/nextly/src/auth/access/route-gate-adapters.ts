@@ -178,6 +178,40 @@ export function routeGrantVerdict(
   return permissionVerdict(callerOf(auth), action, resource, rules);
 }
 
+const UNAUTHENTICATED: GateVerdict = Object.freeze({
+  allowed: false,
+  refusal: "unauthenticated",
+});
+
+/**
+ * The verdict for a visitor, a request carrying no credential, on an action
+ * of the collection or Single a route names: the one decision with the
+ * Public role's grants, exactly as a checked call with no user is judged
+ * (`collectionGateVerdict` with no user). Anything that is not an entity's
+ * operation needs a signed-in caller: a visitor holds no permission but what
+ * the Public role grants on entities.
+ */
+export function routeVisitorVerdict(
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<GateVerdict> {
+  const registered =
+    resource === "" ? undefined : rules?.getRegisteredTarget(resource);
+  if (!asksTheEntity(action, resource, registered)) {
+    return Promise.resolve(UNAUTHENTICATED);
+  }
+  return collectionGateVerdict({
+    slug: resource,
+    action: action as AccessOperation,
+    principal: null,
+    rules,
+    // Never read for a caller with no user: the visitor's answer is the
+    // Public role's grants, read whether or not the service is there.
+    permissionWithoutService: () => Promise.resolve(false),
+  });
+}
+
 /**
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.

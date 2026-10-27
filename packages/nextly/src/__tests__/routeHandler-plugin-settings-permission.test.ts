@@ -114,7 +114,8 @@ async function admits(
     { plugin },
     httpMethod
   );
-  return !("statusCode" in result);
+  // `null` is a visitor admitted, which a signed-in request never is.
+  return result !== null && !("statusCode" in result);
 }
 
 const declared = (): unknown[] => [

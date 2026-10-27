@@ -94,7 +94,8 @@ export async function requireRouteCollectionAccess(
     request,
     action,
     collectionSlug,
-    operation
+    // This route requires a caller, so it never admits a visitor.
+    operation && { ...operation, admitsVisitor: false }
   );
   if (isErrorResponse(result)) throwAuthError(result);
   return result;

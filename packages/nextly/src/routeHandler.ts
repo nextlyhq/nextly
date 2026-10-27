@@ -891,6 +891,24 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   publishAllSingleLocales: "publish",
 };
 
+/**
+ * The collection entry and Single document methods a visitor, a request
+ * carrying no credential, may reach: reading, counting and the plain writes of
+ * one entry or document, judged by the Public role. A version, an event, an
+ * autosave, a bulk write and every lifecycle route still need a signed-in
+ * caller: a visitor reads published content only and never publishes.
+ */
+const VISITOR_METHODS: ReadonlySet<string> = new Set([
+  "listEntries",
+  "countEntries",
+  "getEntry",
+  "createEntry",
+  "updateEntry",
+  "deleteEntry",
+  "getSingleDocument",
+  "updateSingleDocument",
+]);
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -900,7 +918,7 @@ async function resolveAuthorization(
   httpMethod: string,
   // Whether the request's path names one entry; see the caller.
   entryInPath = false
-): Promise<AuthContext | ErrorResponse> {
+): Promise<AuthContext | ErrorResponse | null> {
   // --- Collection endpoints ---
   if (service === "collections") {
     if (COLLECTION_ENTRY_METHODS.has(method)) {
@@ -910,6 +928,7 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
+        admitsVisitor: VISITOR_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(req, slug, route);
@@ -965,6 +984,7 @@ async function resolveAuthorization(
         params: routeParams ?? {},
         // A Single is its one document, named by its slug.
         namesOne: true,
+        admitsVisitor: VISITOR_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(req, slug, route);
@@ -1674,7 +1694,9 @@ async function serveServiceRequest(
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
       }
-      authorizedUser = authResult;
+      // `null` is a visitor the gate admitted: dispatched with no caller, so
+      // the service judges it as the visitor it is.
+      authorizedUser = authResult ?? undefined;
     }
   }
 

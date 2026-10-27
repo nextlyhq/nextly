@@ -51,7 +51,8 @@ async function admits(grants: string[]): Promise<boolean> {
     route.routeParams,
     "PATCH"
   );
-  return !("statusCode" in result);
+  // `null` is a visitor admitted, which a signed-in request never is.
+  return result !== null && !("statusCode" in result);
 }
 
 describe("the removed email send routes", () => {
