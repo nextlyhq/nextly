@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  rangedLimitSettingProblem,
   validateWidgetDefinition,
   widgetValueProblem,
   MAX_TEXT_CONTENT,
 } from "../definition";
+import { applyWidgetSettings } from "../settings";
 
 const valid = {
   id: "core/recent-entries",
@@ -400,7 +402,7 @@ describe("defaultOrder places a widget without depending on which channel it cam
   });
 });
 
-describe("chrome decides whether the HOST frames the widget", () => {
+describe("every widget is framed", () => {
   const custom = {
     id: "core/team",
     title: "Team",
@@ -409,60 +411,46 @@ describe("chrome decides whether the HOST frames the widget", () => {
     component: "core#TeamSummary",
   };
 
-  it("defaults to being framed by leaving it unstated", () => {
-    // The compatibility bound: every widget shipping today states nothing and
-    // must keep the card it has.
+  it("accepts a widget that says nothing about its frame", () => {
     expect(() => validateWidgetDefinition(custom)).not.toThrow();
   });
 
-  it("lets a CUSTOM widget decline the frame", () => {
-    // A `custom` widget supplies its own component, so it can already be a
-    // designed surface -- a section with its own heading and rules. Framing one
-    // draws a second heading around the first.
+  it("refuses a widget that names chrome, whatever its value", () => {
+    // The frame draws every card's header and every state, so no widget may
+    // decline it; a plain-JavaScript declaration that still names the field
+    // learns so at startup. Cast, because the field is no longer typed.
+    for (const chrome of ["none", "card", 42]) {
+      expect(() =>
+        validateWidgetDefinition({ ...custom, chrome } as never)
+      ).toThrow(/chrome is not a widget field/);
+    }
+  });
+});
+
+describe("hidesWhenEmpty", () => {
+  const custom = {
+    id: "core/team",
+    title: "Team",
+    archetype: "custom" as const,
+    defaultSize: "lg" as const,
+    component: "core#TeamSummary",
+  };
+
+  it("accepts true and false", () => {
     expect(() =>
-      validateWidgetDefinition({ ...custom, chrome: "none" })
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: true })
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: false })
     ).not.toThrow();
   });
 
-  it("refuses to unframe an archetype CORE draws", () => {
-    // Core fills a metric/list/table/actions/text body and the card IS that
-    // body's surface -- its title, its footer, its busy state. Unframed, the
-    // content has no heading and nothing owning its states.
-    //
-    // The fixture deliberately omits `component`: spreading the custom one in
-    // made every case throw on `component is only valid for archetype "custom"`
-    // instead, so the assertion passed with no chrome rule present at all. The
-    // MESSAGE is asserted for the same reason -- `toThrow()` alone cannot tell
-    // which rule refused.
-    for (const [archetype, extra] of [
-      ["metric", { query: { source: "collection:posts", op: "count" } }],
-      // `list`, not `find`: these two archetypes draw a list result, and the
-      // op was never validated against the archetype until now, so the wrong
-      // spelling sat here harmlessly. It refuses on the op before reaching the
-      // chrome rule this case is about.
-      ["list", { query: { source: "collection:posts", op: "list" } }],
-      ["table", { query: { source: "collection:posts", op: "list" } }],
-      ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
-      // Carries its prose for the same reason `actions` carries its shortcuts.
-      ["text", { content: "Prose." }],
-    ] as const) {
-      expect(() =>
-        validateWidgetDefinition({
-          id: "core/x",
-          title: "X",
-          defaultSize: "lg",
-          archetype,
-          chrome: "none",
-          ...extra,
-        })
-      ).toThrow(/chrome/i);
-    }
-  });
-
-  it("refuses a chrome value outside the vocabulary", () => {
+  it("refuses anything that is not a boolean", () => {
+    // A truthy "false" would take a card off every reader's dashboard that
+    // its author meant to keep.
     expect(() =>
-      validateWidgetDefinition({ ...custom, chrome: "borderless" })
-    ).toThrow();
+      validateWidgetDefinition({ ...custom, hidesWhenEmpty: "false" } as never)
+    ).toThrow(/hidesWhenEmpty, when given, must be a boolean/);
   });
 });
 
@@ -708,5 +696,335 @@ describe("an archetype draws one kind of result", () => {
         query: { source: "collection:posts", op: "groupBy", groupBy: "status" },
       })
     ).not.toThrow();
+  });
+});
+
+describe("a widget whose data core builds on the server", () => {
+  const { query: _query, ...noQuery } = valid;
+  const built = { ...noQuery, serverData: true as const };
+
+  it("carries no query, which its data archetype would otherwise require", () => {
+    expect(() => validateWidgetDefinition(built)).not.toThrow();
+    // The control: the same definition without the mark still needs its query.
+    expect(() => validateWidgetDefinition(noQuery)).toThrow(/requires a query/);
+  });
+
+  it("is refused beside a query, which would be a second answer to what the card shows", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...built, query: valid.query })
+    ).toThrow(/built on the server takes no query/);
+  });
+
+  it("is a mark, and only true marks it", () => {
+    for (const value of [false, "yes", 1]) {
+      expect(() =>
+        validateWidgetDefinition({ ...built, serverData: value })
+      ).toThrow(/serverData may only be true/);
+    }
+  });
+
+  it("alone may carry an empty state's words and action, which core publishes from its declaration", () => {
+    const empty = {
+      message: "No orders yet",
+      action: { label: "Add", link: "collections/orders" },
+    };
+    expect(() => validateWidgetDefinition({ ...built, empty })).not.toThrow();
+    expect(() => validateWidgetDefinition({ ...valid, empty })).toThrow(
+      /empty is published by core for a declared widget only/
+    );
+    expect(() =>
+      validateWidgetDefinition({ ...built, empty: { message: "  " } })
+    ).toThrow(/not text/);
+  });
+
+  it("may hold a content setting, which a widget with its own query may not", () => {
+    const collection = {
+      name: "collection",
+      label: "Collection",
+      type: "collection",
+    };
+    const filter = {
+      name: "filter",
+      label: "Filter",
+      type: "filter",
+      of: "collection",
+    };
+    // The widget whose data core builds holds them. One with its own query
+    // over a source no content knob drives, a system source, may not: there
+    // they would change nothing its card asks.
+    expect(() =>
+      validateWidgetDefinition({ ...built, settings: [collection, filter] })
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        query: { ...valid.query, source: "system:releases" },
+        settings: [collection, filter],
+      })
+    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
+  });
+});
+
+describe("a widget's width terms", () => {
+  it("states its widths in the arrangement's words, gaps allowed", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        allowedWidths: ["quarter", "full"],
+        defaultWidth: "full",
+        allowsSeveral: true,
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses a width the arrangement does not have, an empty list and a repeated width", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: ["1/4"] })
+    ).toThrow(/allowedWidths must hold only/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: [] })
+    ).toThrow(/at least one width/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowedWidths: ["full", "full"] })
+    ).toThrow(/names a width twice/);
+  });
+
+  it("starts a card at one of its widths, never outside them", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        allowedWidths: ["quarter", "half"],
+        defaultWidth: "full",
+      })
+    ).toThrow(/is not one of its allowedWidths/);
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultWidth: "wide" })
+    ).toThrow(/defaultWidth must be one of/);
+  });
+
+  it("sketches its row with one of core's displays, or not at all", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, sketch: "bars" })
+    ).not.toThrow();
+    expect(() => validateWidgetDefinition({ ...valid, sketch: "pie" })).toThrow(
+      /sketch must be one of/
+    );
+  });
+
+  it("says whether a dashboard may hold several only as true or false", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, allowsSeveral: "yes" })
+    ).toThrow(/allowsSeveral must be true or false/);
+  });
+});
+
+describe("a query whose source a Collection setting supplies", () => {
+  const { source: _declared, ...sourceless } = valid.query;
+  const collection = { name: "collection", type: "collection" as const };
+
+  it("registers with no source of its own beside a Collection setting", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        offered: "per-collection",
+        settings: [collection],
+        query: sourceless,
+      })
+    ).not.toThrow();
+  });
+
+  it("is refused with no source and nothing to supply one", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, query: sourceless })
+    ).toThrow(/names no source, and no Collection setting supplies one/);
+  });
+
+  it("reads its declared source until the Collection setting is set", () => {
+    // The declared source is the card's collection until its reader picks one,
+    // so a definition may state both.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, settings: [collection] })
+    ).not.toThrow();
+  });
+});
+
+describe("a custom card's cells", () => {
+  const collection = { name: "collection", type: "collection" as const };
+  const card = {
+    id: "core/count",
+    title: "Count",
+    archetype: "custom" as const,
+    component: "core#Count",
+    defaultSize: "sm" as const,
+  };
+  const split = {
+    key: "split",
+    query: {
+      op: "groupBy" as const,
+      groupBy: "status",
+      status: "all" as const,
+    },
+  };
+  const trend = {
+    key: "trend",
+    query: {
+      op: "timeseries" as const,
+      dateField: "createdAt",
+      interval: "day" as const,
+    },
+  };
+
+  it("registers keyed reads whose source the Collection setting supplies", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-collection",
+        settings: [collection],
+        cells: [split, trend],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses two cells under one key", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection],
+        cells: [split, { ...trend, key: "split" }],
+      })
+    ).toThrow(/declare the key "split" more than once/);
+  });
+
+  it("refuses a custom card asking through both a query and cells", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection],
+        query: { op: "count" as const },
+        cells: [split],
+      })
+    ).toThrow(/asks through its query or its cells, not both/);
+  });
+
+  it("refuses a widget offered per collection that declares no Collection setting", () => {
+    // Its add-panel rows each start a card set to a collection; with no such
+    // setting it could be added nowhere.
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-collection",
+        cells: [
+          { ...split, query: { ...split.query, source: "collection:posts" } },
+        ],
+      })
+    ).toThrow(/offered per collection needs a Collection setting/);
+  });
+
+  it("refuses a content setting no cell's source lets a knob drive", () => {
+    // 🔴 Judged as a query a Collection setting supplies, these would be drawn
+    // and saved while every cell reads releases, which no content knob drives.
+    const filter = {
+      name: "filter",
+      type: "filter" as const,
+      of: "collection",
+    };
+    const releases = {
+      key: "releases",
+      query: { source: "system:releases", op: "count" as const },
+    };
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection, filter],
+        cells: [releases, { ...releases, key: "more" }],
+      })
+    ).toThrow(/WIDGET_CONTENT_SETTING_NOT_DRAWN/);
+  });
+
+  it("admits a content setting one cell's source lets a knob drive", () => {
+    const filter = {
+      name: "filter",
+      type: "filter" as const,
+      of: "collection",
+    };
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        settings: [collection, filter],
+        cells: [
+          split,
+          {
+            key: "releases",
+            query: { source: "system:releases", op: "count" as const },
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses an offered mode it does not know", () => {
+    // 🔴 Read as an ordinary widget, a misspelt mode is placed by default with
+    // no collection to read.
+    expect(() =>
+      validateWidgetDefinition({
+        ...card,
+        offered: "per-colletion" as "per-collection",
+        cells: [
+          { ...split, query: { ...split.query, source: "collection:posts" } },
+        ],
+      })
+    ).toThrow(
+      /has offered "per-colletion", which is not one of per-collection, on-request/
+    );
+  });
+
+  it("refuses a cell with no source and nothing to supply one", () => {
+    expect(() => validateWidgetDefinition({ ...card, cells: [split] })).toThrow(
+      /its cell "split" names no source, and no Collection setting supplies one/
+    );
+  });
+});
+
+describe("a limit setting beside a ranged query", () => {
+  // The rule refuses exactly the setting the limit knob would apply: one test
+  // of what a limit setting is, read by both, so the two cannot part.
+  it.each([
+    [{ name: "limit", type: "number" as const, label: "Limit" }, 3],
+    [{ name: "limit", type: "text" as const, label: "Limit" }, "3"],
+    [{ name: "items", type: "number" as const, label: "Items" }, 3],
+  ])("refuses %o exactly when the limit knob applies it", (setting, value) => {
+    const applied = applyWidgetSettings(
+      { source: "collection:posts", op: "list" as const },
+      [setting],
+      { [setting.name]: value }
+    );
+    const refused = rangedLimitSettingProblem({
+      query: {
+        source: "collection:posts",
+        op: "timeseries",
+        dateField: "createdAt",
+        range: "30d",
+      },
+      settings: [setting],
+    });
+    expect(refused !== undefined).toBe("limit" in applied);
+  });
+
+  it("is refused at registration, naming the widget", () => {
+    expect(() =>
+      validateWidgetDefinition({
+        id: "acme/over-time",
+        title: "Over time",
+        archetype: "timeseries",
+        defaultSize: "md",
+        query: {
+          source: "collection:posts",
+          op: "timeseries",
+          dateField: "createdAt",
+          range: "30d",
+        },
+        settings: [{ name: "limit", type: "number", label: "Limit" }],
+      })
+    ).toThrow(/acme\/over-time: declares a "limit" setting/);
   });
 });

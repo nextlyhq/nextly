@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 /**
@@ -15,7 +17,7 @@ export function StatChip({
   count: number | string;
   label: string;
   tone?: "neutral" | "warning";
-}) {
+}): JSX.Element {
   return (
     <span
       className={cn(

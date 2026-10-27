@@ -18,7 +18,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/site-style-storage
  */
-import { defineSingle, json } from "nextly/config";
+import { defineSingle, json, type SingleConfig } from "nextly/config";
 
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
@@ -66,7 +66,7 @@ const refusing =
  *   whole sections at a time; a field-per-property schema here would be a
  *   third statement of shapes two packages already agree on.
  */
-export function siteStyleSingle(policy: SectionPolicy = {}) {
+export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
   return defineSingle({
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },

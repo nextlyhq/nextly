@@ -30,7 +30,17 @@ export const currentUserKey = ["auth", "me"] as const;
  * return <UserDisplay user={user} />;
  * ```
  */
-export function useDashboardUser() {
+export function useDashboardUser(): {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    // API uses `image` for avatar URL in the admin types
+    avatar: string | undefined;
+  } | null;
+  isLoading: boolean;
+  error: Error | null;
+} {
   const { api } = useApi();
 
   const { data, isLoading, error } = useQuery({

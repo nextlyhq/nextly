@@ -7,6 +7,7 @@ import {
   SheetClose,
   SheetTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Laptop, X } from "@admin/components/icons";
 import { SidebarContent, SidebarGroup } from "@admin/components/layout/sidebar";
@@ -106,7 +107,7 @@ export function MobileSidebarDrawer({
   onOpenChange,
   navigationItems,
   isActive,
-}: MobileSidebarDrawerProps) {
+}: MobileSidebarDrawerProps): JSX.Element {
   const branding = useBranding();
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

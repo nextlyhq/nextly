@@ -9,6 +9,8 @@ import { verifyPassword } from "../../../auth/password";
 import {
   hashPasswordFieldValues,
   hasPasswordField,
+  NO_FIELD_GROUPS,
+  reachesPasswordField,
   stripPasswordFieldValues,
 } from "../password-fields";
 
@@ -21,7 +23,7 @@ const FIELDS = [
 describe("hashPasswordFieldValues", () => {
   it("replaces a submitted password with a verifiable bcrypt hash", async () => {
     const data: Record<string, unknown> = { title: "t", secret: "hunter2!" };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
 
     expect(data.secret).not.toBe("hunter2!");
     expect(typeof data.secret).toBe("string");
@@ -34,7 +36,7 @@ describe("hashPasswordFieldValues", () => {
   it("always re-hashes, even bcrypt-looking input (no pre-hash detection)", async () => {
     const bcryptLooking = "$2a$12$abcdefghijklmnopqrstuvwxyz012345678901234";
     const data: Record<string, unknown> = { secret: bcryptLooking };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
     expect(data.secret).not.toBe(bcryptLooking);
     await expect(
       verifyPassword(bcryptLooking, data.secret as string)
@@ -43,26 +45,26 @@ describe("hashPasswordFieldValues", () => {
 
   it("strips empty strings so update keeps the stored hash", async () => {
     const data: Record<string, unknown> = { secret: "", title: "t" };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
     expect("secret" in data).toBe(false);
     expect(data.title).toBe("t");
   });
 
   it("keeps an explicit null (clears the stored value)", async () => {
     const data: Record<string, unknown> = { secret: null };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
     expect(data.secret).toBeNull();
   });
 
   it("strips non-string values instead of storing them raw", async () => {
     const data: Record<string, unknown> = { secret: 12345 };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
     expect("secret" in data).toBe(false);
   });
 
   it("leaves data untouched when no password value is provided", async () => {
     const data: Record<string, unknown> = { title: "only" };
-    await hashPasswordFieldValues(data, FIELDS);
+    await hashPasswordFieldValues(data, FIELDS, NO_FIELD_GROUPS);
     expect(data).toEqual({ title: "only" });
   });
 });
@@ -75,7 +77,7 @@ describe("stripPasswordFieldValues", () => {
       secret: "$2a$12$hash",
       pin: "$2a$12$hash2",
     };
-    stripPasswordFieldValues(entry, FIELDS);
+    stripPasswordFieldValues(entry, FIELDS, NO_FIELD_GROUPS);
     expect(entry).toEqual({ id: "1", title: "t" });
   });
 });
@@ -108,6 +110,31 @@ describe("hasPasswordField", () => {
   });
 });
 
+describe("reachesPasswordField", () => {
+  const HELD = [
+    {
+      name: "box",
+      type: "group",
+      fields: [{ name: "held", type: "component", component: "pin" }],
+    },
+  ];
+  const PIN = [{ name: "pin", type: "password" }];
+
+  it("follows a field group held inline to its password", () => {
+    expect(reachesPasswordField(HELD, { fieldsOf: () => PIN })).toBe(true);
+    expect(
+      reachesPasswordField(HELD, {
+        fieldsOf: () => [{ name: "title", type: "text" }],
+      })
+    ).toBe(false);
+  });
+
+  it("counts a field group held inline that it has no fields for", () => {
+    // The strip withholds such an instance, so the read has to run it.
+    expect(reachesPasswordField(HELD, NO_FIELD_GROUPS)).toBe(true);
+  });
+});
+
 describe("nested password fields", () => {
   const NESTED = [
     {
@@ -127,7 +154,7 @@ describe("nested password fields", () => {
       creds: { token: "groupsecret" },
       keys: [{ secret: "row1secret" }, { secret: "row2secret" }],
     };
-    await hashPasswordFieldValues(data, NESTED);
+    await hashPasswordFieldValues(data, NESTED, NO_FIELD_GROUPS);
 
     const creds = data.creds as { token: string };
     expect(creds.token).not.toBe("groupsecret");
@@ -143,12 +170,29 @@ describe("nested password fields", () => {
     );
   });
 
+  it("hashes each occurrence of one password with its own salt", async () => {
+    const data: Record<string, unknown> = {
+      creds: { token: "samesecret" },
+      keys: [{ secret: "samesecret" }, { secret: "samesecret" }],
+    };
+    await hashPasswordFieldValues(data, NESTED, NO_FIELD_GROUPS);
+
+    const stored = [
+      (data.creds as { token: string }).token,
+      ...(data.keys as Array<{ secret: string }>).map(row => row.secret),
+    ];
+    expect(new Set(stored).size).toBe(3);
+    for (const hash of stored) {
+      await expect(verifyPassword("samesecret", hash)).resolves.toBe(true);
+    }
+  });
+
   it("strips nested password values from responses", () => {
     const entry: Record<string, unknown> = {
       creds: { token: "$2a$hash", label: "kept" },
       keys: [{ secret: "$2a$hash", note: "kept" }],
     };
-    stripPasswordFieldValues(entry, NESTED);
+    stripPasswordFieldValues(entry, NESTED, NO_FIELD_GROUPS);
     expect(entry.creds).toEqual({ label: "kept" });
     expect(entry.keys).toEqual([{ note: "kept" }]);
   });

@@ -16,7 +16,7 @@ import {
 } from "../../../../constants/permissions";
 
 /** Resources that are built-in to Nextly (not dynamic collections). */
-export const SYSTEM_RESOURCES = SYSTEM_RESOURCE_SET;
+export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
 
 /** Display order for the system group; collections follow alphabetically. */
 export const SYSTEM_ORDER: readonly string[] =

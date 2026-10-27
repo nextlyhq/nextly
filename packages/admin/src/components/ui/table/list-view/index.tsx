@@ -19,7 +19,7 @@
  * @module components/ui/table/list-view
  */
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -92,7 +92,7 @@ export function ListView<Row extends object>({
   slots,
   className,
   ...table
-}: ListViewProps<Row>) {
+}: ListViewProps<Row>): JSX.Element {
   const toolbar = {
     search,
     filters,

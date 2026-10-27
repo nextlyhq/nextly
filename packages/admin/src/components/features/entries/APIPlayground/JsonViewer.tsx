@@ -11,6 +11,8 @@
  * @module components/entries/APIPlayground/JsonViewer
  */
 
+import type { JSX } from "react";
+
 import { CodeBlock } from "./CodeBlock";
 
 export interface JsonViewerProps {
@@ -18,6 +20,6 @@ export interface JsonViewerProps {
   value: string;
 }
 
-export function JsonViewer({ value }: JsonViewerProps) {
+export function JsonViewer({ value }: JsonViewerProps): JSX.Element {
   return <CodeBlock value={value} language="json" showGutter />;
 }

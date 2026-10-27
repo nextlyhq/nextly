@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { CheckCircle2, Loader2 } from "@admin/components/icons";
 
@@ -93,7 +94,17 @@ function Confirm({
 
 /** What each confirmation says, by act. */
 const CONFIRM_COPY = {
-  override: (name: string, owner: string) => ({
+  override: (
+    name: string,
+    owner: string
+  ): {
+    title: string;
+    description: string;
+    bullets: string[];
+    confirmLabel: string;
+    pendingLabel: string;
+    destructive: boolean;
+  } => ({
     title: `Override ${name}?`,
     description: `Your site will have its own version of ${owner}'s email.`,
     bullets: [
@@ -105,7 +116,18 @@ const CONFIRM_COPY = {
     pendingLabel: "Overriding…",
     destructive: false,
   }),
-  reset: (name: string, owner: string, undoable: boolean) => ({
+  reset: (
+    name: string,
+    owner: string,
+    undoable: boolean
+  ): {
+    title: string;
+    description: string;
+    bullets: string[];
+    confirmLabel: string;
+    pendingLabel: string;
+    destructive: boolean;
+  } => ({
     title: `Reset ${name} to ${owner}'s version?`,
     description: `Your site's version is replaced by ${owner}'s current one.`,
     bullets: [
@@ -138,7 +160,7 @@ export function OwnershipConfirm({
   owner: string;
   isPending: boolean;
   onConfirm: () => void;
-}) {
+}): JSX.Element {
   return <Confirm {...rest} {...CONFIRM_COPY[act](name, owner, undoable)} />;
 }
 
@@ -154,7 +176,7 @@ export function UnsavedBeforeActDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDiscard: () => void;
-}) {
+}): JSX.Element {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">

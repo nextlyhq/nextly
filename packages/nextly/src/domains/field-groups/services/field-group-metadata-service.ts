@@ -352,7 +352,9 @@ export class FieldGroupMetadataService {
       assertNotDiverged(input.slug, existing);
     }
     if (existing.locked && input.source !== "code") {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "component",
+        change: "change",
         logContext: {
           reason: "component-locked",
           slug: input.slug,

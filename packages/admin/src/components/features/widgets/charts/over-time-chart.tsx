@@ -14,6 +14,8 @@
  * @module components/features/widgets/charts/over-time-chart
  */
 
+import type { JSX } from "react";
+
 import { ChartFrame, type ChartRow } from "../archetypes/chart-frame";
 import {
   linePath,
@@ -67,6 +69,11 @@ export interface OverTimeChartProps {
   series: readonly OverTimeSeries[];
   /** Heads the table's first column. */
   labelHeading?: string;
+  /**
+   * How a single series is drawn: a line, or one bar per interval. Several series are always
+   * lines, since bars side by side in one interval would no longer read as a sequence.
+   */
+  chartStyle?: "line" | "bars";
 }
 
 /**
@@ -88,7 +95,8 @@ export function OverTimeChart({
   intervals,
   series: given,
   labelHeading = "Interval",
-}: OverTimeChartProps) {
+  chartStyle = "line",
+}: OverTimeChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   // One range for every series, so a point is drawn at its interval whatever else its series
@@ -103,7 +111,12 @@ export function OverTimeChart({
     0,
     ...series.flatMap(line => line.points.map(point => point.value))
   );
-  const plots = series.map(line => placed(line.points, domain, highest));
+  // One series drawn as bars stands each bar in its interval's own band, so the first and last
+  // bars are as wide as the rest; lines run edge to edge.
+  const banded = chartStyle === "bars" && series.length === 1;
+  const plots = series.map(line =>
+    placed(line.points, domain, highest, banded)
+  );
   const description = series
     .map(line =>
       overTimeSummary({
@@ -173,14 +186,12 @@ export function OverTimeChart({
                 >
                   <desc id={descId}>{text}</desc>
                   {tier === "small" ? null : <Gridlines />}
-                  {series.map((line, index) => (
-                    <SeriesLine
-                      key={line.key}
-                      plotted={plots[index] ?? []}
-                      slot={seriesSlot(index)}
-                      filled={series.length === 1}
-                    />
-                  ))}
+                  <SeriesMarks
+                    series={series}
+                    plots={plots}
+                    size={domain.labels.length}
+                    bars={banded}
+                  />
                 </svg>
                 {series.map((line, index) => (
                   <LatestPoint
@@ -195,12 +206,14 @@ export function OverTimeChart({
                 ))}
                 <IntervalStrips
                   count={domain.labels.length}
+                  banded={banded}
                   onHover={index => reach.hover({ series: 0, index })}
                 />
                 {reach.shown && shownAt ? (
                   <IntervalInView
                     index={reach.shown.index}
                     size={domain.labels.length}
+                    banded={banded}
                     title={shownAt.label}
                     marks={series.map((line, index) => ({
                       key: line.key,
@@ -250,17 +263,21 @@ function valueAt(line: OverTimeSeries, key: string | undefined): string {
 
 /**
  * Where the interval at `index` of `size` is drawn across the box, in its user units. The ONE
- * horizontal scale: the lines are plotted by it and the pointer's targets, the rule and the
- * tooltip are placed by it, so they cannot drift onto different intervals.
+ * horizontal scale: the marks are plotted by it and the pointer's targets, the rule and the
+ * tooltip are placed by it, so they cannot drift onto different intervals. A line's points run
+ * from edge to edge; `banded`, each interval is drawn in the middle of its own equal band, which
+ * leaves a bar at either end room for its whole width.
  */
-function xAt(index: number, size: number): number {
-  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
+function xAt(index: number, size: number, banded: boolean): number {
+  const span = BOX.width - BOX.padding * 2;
+  if (banded) return BOX.padding + (span * (index + 0.5)) / Math.max(1, size);
+  const step = size > 1 ? span / (size - 1) : 0;
   return BOX.padding + step * index;
 }
 
 /** How far across the box the interval at `index` of `size` is drawn, as a percentage. */
-function acrossOf(index: number, size: number): number {
-  return (xAt(index, size) / BOX.width) * 100;
+function acrossOf(index: number, size: number, banded: boolean): number {
+  return (xAt(index, size, banded) / BOX.width) * 100;
 }
 
 /**
@@ -270,13 +287,15 @@ function acrossOf(index: number, size: number): number {
  */
 function IntervalStrips({
   count,
+  banded,
   onHover,
 }: {
   count: number;
+  banded: boolean;
   onHover: (index: number) => void;
 }) {
   const across = Array.from({ length: count }, (_, index) =>
-    acrossOf(index, count)
+    acrossOf(index, count, banded)
   );
   return (
     <>
@@ -308,11 +327,13 @@ function IntervalStrips({
 function IntervalInView({
   index,
   size,
+  banded,
   title,
   marks,
 }: {
   index: number;
   size: number;
+  banded: boolean;
   title: string;
   marks: ReadonlyArray<{
     key: string;
@@ -322,7 +343,7 @@ function IntervalInView({
     y: number | undefined;
   }>;
 }) {
-  const across = acrossOf(index, size);
+  const across = acrossOf(index, size, banded);
   const left = `${across}%`;
   return (
     <>
@@ -412,7 +433,8 @@ function domainOf(intervals: readonly OverTimeInterval[]): Domain {
 function placed(
   points: readonly OverTimePoint[],
   domain: Domain,
-  highest: number
+  highest: number,
+  banded: boolean
 ): Array<{ x: number; y: number }> {
   const heights = linePoints(
     points.map(point => point.value),
@@ -421,7 +443,7 @@ function placed(
   );
   const size = domain.labels.length;
   return points.map((point, position) => ({
-    x: xAt(domain.index.get(point.key) ?? position, size),
+    x: xAt(domain.index.get(point.key) ?? position, size, banded),
     y: heights[position]?.y ?? BOX.height - BOX.padding,
   }));
 }
@@ -455,6 +477,75 @@ function SeriesLine({
           vectorEffect="non-scaling-stroke"
         />
       ) : null}
+    </g>
+  );
+}
+
+/** Every series' marks: bars for a single series drawn as bars, lines otherwise. */
+function SeriesMarks({
+  series,
+  plots,
+  size,
+  bars,
+}: {
+  series: readonly OverTimeSeries[];
+  plots: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>;
+  size: number;
+  bars: boolean;
+}) {
+  if (bars) {
+    return (
+      <SeriesBars plotted={plots[0] ?? []} slot={seriesSlot(0)} size={size} />
+    );
+  }
+  return (
+    <>
+      {series.map((line, index) => (
+        <SeriesLine
+          key={line.key}
+          plotted={plots[index] ?? []}
+          slot={seriesSlot(index)}
+          filled={series.length === 1}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One series as bars, in its chart colour: one per interval, standing on the zero line in the
+ * middle of its interval's band (`xAt`, banded), where the latest point, the pointer's strip and
+ * the rule are placed too.
+ */
+function SeriesBars({
+  plotted,
+  slot,
+  size,
+}: {
+  plotted: ReadonlyArray<{ x: number; y: number }>;
+  slot: ChartSlot;
+  size: number;
+}) {
+  const base = BOX.height - BOX.padding;
+  const span = BOX.width - BOX.padding * 2;
+  // Six tenths of an interval's band, so neighbouring bars keep a gap between them.
+  const width = Math.max(1, (span / Math.max(1, size)) * 0.6);
+  return (
+    <g
+      data-testid="chart-series"
+      data-chart-style="bars"
+      style={{ color: chartColour(slot) }}
+    >
+      {plotted.map(point => (
+        <rect
+          key={point.x}
+          x={point.x - width / 2}
+          y={point.y}
+          width={width}
+          height={Math.max(0, base - point.y)}
+          fill="currentColor"
+        />
+      ))}
     </g>
   );
 }

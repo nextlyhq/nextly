@@ -10,6 +10,9 @@
  * @module domains/widgets/get-started-steps
  */
 
+/** The Get started card's widget id: the one card the steps are drawn on. */
+export const GET_STARTED_WIDGET_ID = "core/get-started";
+
 /** The kinds of step, in the order the card offers them. */
 export const GET_STARTED_STEP_KINDS = [
   "collection",
@@ -18,6 +21,16 @@ export const GET_STARTED_STEP_KINDS = [
   "invite",
 ] as const;
 export type GetStartedStepKind = (typeof GET_STARTED_STEP_KINDS)[number];
+
+/**
+ * The kinds a reader may skip: the ones that ask for something a site can do
+ * without. Creating a collection and a first entry are what a site is for.
+ * Published so the card offers Skip on exactly the steps the host honours one on.
+ */
+export const GET_STARTED_SKIPPABLE_KINDS: readonly GetStartedStepKind[] = [
+  "single",
+  "invite",
+];
 
 /**
  * What a step can say.

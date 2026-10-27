@@ -125,7 +125,20 @@ export async function testEndpoint(id: string): Promise<WebhookTestResult> {
   };
 }
 
-export const webhookApi = {
+/** The type of {@link webhookApi}. */
+type WebhookApiType = {
+  readonly listWebhooks: typeof listWebhooks;
+  readonly getWebhook: typeof getWebhook;
+  readonly createWebhook: typeof createWebhook;
+  readonly updateWebhook: typeof updateWebhook;
+  readonly deleteWebhook: typeof deleteWebhook;
+  readonly rotateSecret: typeof rotateSecret;
+  readonly expireOldSecrets: typeof expireOldSecrets;
+  readonly revealSecret: typeof revealSecret;
+  readonly testEndpoint: typeof testEndpoint;
+};
+
+export const webhookApi: WebhookApiType = {
   listWebhooks,
   getWebhook,
   createWebhook,

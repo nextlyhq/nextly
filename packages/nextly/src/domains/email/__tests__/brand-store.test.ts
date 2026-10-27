@@ -20,11 +20,13 @@ import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { STARTING_BRAND, type BrandSettings } from "../brand-settings";
 import { EmailBrandStore } from "../services/email-brand-store";
 import { EmailTemplateService } from "../services/email-template-service";
+import { SNAPSHOT_MAX_AGE_MS } from "../transaction-flow";
 
 import { silentLogger } from "./template-ownership-fixture";
 
 let adapter: DrizzleAdapter;
 let transactionOpen = false;
+let clock = 1_000_000;
 
 beforeEach(async () => {
   adapter = createSqliteAdapter({ memory: true }) as unknown as DrizzleAdapter;
@@ -41,6 +43,8 @@ beforeEach(async () => {
     await adapter.executeQuery(statement);
   }
   transactionOpen = false;
+  clock = 1_000_000;
+  vi.spyOn(Date, "now").mockImplementation(() => clock);
   // Whether the calling flow holds a transaction, as the adapter says.
   Object.assign(adapter, { transactionOpenInFlow: () => transactionOpen });
 });
@@ -70,6 +74,8 @@ describe("the copy of the settings a render inside a transaction reads", () => {
       .spyOn(reader, "readTable")
       .mockImplementationOnce(() => slow)
       .mockImplementation(original);
+    // Past the window, so the read goes to the table.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
     const pending = store.read();
 
     await store.update({ accentColor: "#ff0066" });
@@ -82,12 +88,12 @@ describe("the copy of the settings a render inside a transaction reads", () => {
     expect((await store.read()).accentColor).toBe("#ff0066");
   });
 
-  it("holds the later of two saves made at once", async () => {
+  it("runs two saves made at once one after the other, and holds the later", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();
 
-    // The first save's read-back comes back only after the second save has
-    // landed, carrying the settings as the first save left them.
+    // The first save's read-back is held back; the second save waits for it
+    // rather than writing in between.
     let release: (settings: BrandSettings) => void = () => {};
     const slow = new Promise<BrandSettings>(resolve => {
       release = resolve;
@@ -99,30 +105,110 @@ describe("the copy of the settings a render inside a transaction reads", () => {
       .mockImplementation(original);
 
     const first = store.update({ accentColor: "#111111" });
+    const second = store.update({ accentColor: "#222222" });
     await new Promise(resolve => setTimeout(resolve, 0));
-    await store.update({ accentColor: "#222222" });
+    expect((await store.readCurrent()).accentColor).toBe("#111111");
+
     release({ ...STARTING_BRAND, footerLinks: [], accentColor: "#111111" });
     await first;
+    await second;
 
+    // The table and the copy agree, on the save that started last.
+    expect((await store.readCurrent()).accentColor).toBe("#222222");
     transactionOpen = true;
     expect((await store.read()).accentColor).toBe("#222222");
   });
 
-  it("is what a read outside a transaction last found", async () => {
+  it("makes one read of the table for a burst of sends after the copy expires", async () => {
     const store = new EmailBrandStore(adapter, silentLogger);
     await store.load();
-    // Another instance saves; this one sees it at its next outside read.
+    const spy = vi.spyOn(store as unknown as TableReader, "readTable");
+
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    await Promise.all(Array.from({ length: 5 }, () => store.read()));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives an editor reading after a save the saved settings, not a read from before it", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    let release: (settings: BrandSettings) => void = () => {};
+    const slow = new Promise<BrandSettings>(resolve => {
+      release = resolve;
+    });
+    const reader = store as unknown as TableReader;
+    const original = reader.readTable.bind(store);
+    vi.spyOn(reader, "readTable")
+      .mockImplementationOnce(() => slow)
+      .mockImplementation(original);
+
+    // A render past the window starts a read, still in flight when a save lands.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
+    const pending = store.read();
+    await store.update({ accentColor: "#ff0066" });
+
+    expect((await store.readCurrent()).accentColor).toBe("#ff0066");
+    release({ ...STARTING_BRAND, footerLinks: [] });
+    await pending;
+  });
+
+  it("reads the table for an editor, whatever the copy's age", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
     await new EmailBrandStore(adapter, silentLogger).update({
       backgroundColor: "#102030",
     });
+    // A render still answers from the copy; the editor sees the save.
+    expect((await store.read()).backgroundColor).toBe(
+      STARTING_BRAND.backgroundColor
+    );
+    expect((await store.readCurrent()).backgroundColor).toBe("#102030");
+  });
+
+  it("is answered on every send within the window, with no read of the table", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    const reader = store as unknown as TableReader;
+    const spy = vi.spyOn(reader, "readTable");
+
+    for (let i = 0; i < 3; i++) await store.read();
+    clock += SNAPSHOT_MAX_AGE_MS;
+    await store.read();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("sees another instance's save once older than the window, outside a transaction only", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    await new EmailBrandStore(adapter, silentLogger).update({
+      backgroundColor: "#102030",
+    });
+
+    // Within the window the copy answers.
+    expect((await store.read()).backgroundColor).toBe(
+      STARTING_BRAND.backgroundColor
+    );
+    // Past it, inside a transaction, the copy still answers: a read there
+    // would run on another connection.
+    clock += SNAPSHOT_MAX_AGE_MS + 1;
     transactionOpen = true;
     expect((await store.read()).backgroundColor).toBe(
       STARTING_BRAND.backgroundColor
     );
+    // Outside one, the table is read again, and the copy follows it.
     transactionOpen = false;
     expect((await store.read()).backgroundColor).toBe("#102030");
     transactionOpen = true;
     expect((await store.read()).backgroundColor).toBe("#102030");
+  });
+
+  it("follows this instance's own save at once", async () => {
+    const store = new EmailBrandStore(adapter, silentLogger);
+    await store.load();
+    await store.update({ accentColor: "#ff0066" });
+    expect((await store.read()).accentColor).toBe("#ff0066");
   });
 });
 

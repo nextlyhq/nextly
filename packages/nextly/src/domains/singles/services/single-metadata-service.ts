@@ -512,7 +512,9 @@ export class SingleMetadataService {
     // against the caller's table name so a half-finished delete can be completed.
     const current = await this.registry.getSingleBySlug(slug);
     if (current?.locked === true) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "delete",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug,
@@ -768,7 +770,9 @@ export class SingleMetadataService {
       });
     }
     if (current.locked) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug: input.slug,

@@ -107,7 +107,7 @@ const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
 // Page
 // ============================================================
 
-export default function EditApiKeyPage() {
+export default function EditApiKeyPage(): React.JSX.Element {
   const { route } = useRouter();
   const rawId =
     route?.params?.id && typeof route.params.id === "string"

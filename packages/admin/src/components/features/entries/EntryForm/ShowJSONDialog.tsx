@@ -28,6 +28,7 @@ import {
   toast,
 } from "@nextlyhq/ui";
 import { useState, useEffect } from "react";
+import type { JSX } from "react";
 
 import {
   ArrowRight,
@@ -109,7 +110,7 @@ export function ShowJSONDialog({
   entryId,
   trigger,
   initialDepth = 1,
-}: ShowJSONDialogProps) {
+}: ShowJSONDialogProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 

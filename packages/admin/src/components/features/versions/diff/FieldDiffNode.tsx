@@ -22,7 +22,13 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { createContext, useContext, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  type ReactNode,
+  type Provider,
+  type JSX,
+} from "react";
 
 import { Badge } from "@admin/components/ui";
 import type {
@@ -97,7 +103,8 @@ function AbsentSide() {
 const SystemFieldsContext = createContext(false);
 
 /** Shows or keeps back the system fields below it. */
-export const SystemFieldsProvider = SystemFieldsContext.Provider;
+export const SystemFieldsProvider: Provider<boolean> =
+  SystemFieldsContext.Provider;
 
 /**
  * The two sides of a change inline: the earlier one struck through, the later
@@ -506,7 +513,7 @@ function UnknownFieldDiff({
  * A registered renderer wins, so the structural kinds — and any a plugin
  * contributes — are drawn without the built-in switch growing an arm for each.
  */
-export function FieldDiffNode({ node }: { node: FieldDiff }) {
+export function FieldDiffNode({ node }: { node: FieldDiff }): JSX.Element {
   const registered = resolveFieldDiff(node.kind);
   if (registered) return <>{registered(node)}</>;
   return <BuiltInFieldDiff node={node} />;

@@ -18,6 +18,7 @@ import {
 } from "@nextlyhq/ui";
 import { USER_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { useEffect, useCallback, useRef, useMemo } from "react";
+import type { JSX } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
 import {
@@ -79,7 +80,7 @@ export function UserFieldForm({
   userField,
   isPending,
   onSubmit,
-}: UserFieldFormProps) {
+}: UserFieldFormProps): JSX.Element {
   const isEdit = mode === "edit";
   const isCodeSourced = isEdit && userField?.source === "code";
   // Name, type, and the multi-value flag identify the backing database

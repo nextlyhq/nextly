@@ -565,8 +565,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       getInitializedPluginContext,
       clearServices,
       destroyRegisteredPlugins,
-      isServicesRegistered,
     } = await import("../../di/register");
+    const { isServicesRegistered } = await import("../../di/service-access");
     const { buildServiceConfig } = await import(
       "../../init/build-service-config"
     );

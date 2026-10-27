@@ -445,6 +445,14 @@ export class CollectionsHandler {
     this.fileManager.refreshSchema(tableName, freshTable);
   }
 
+  // Drop the FileManager's cached Drizzle table for `slug`, so the next read
+  // builds it from the registry row as it is now. A rename calls this for
+  // both slugs: the old one's entry still points at the renamed collection's
+  // table.
+  invalidateCollectionSchema(slug: string): void {
+    this.fileManager.invalidateSchemaForSlug(slug);
+  }
+
   /**
    * Register dynamic schemas with the file manager.
    * @param schemas - Map of schema names to schema objects
@@ -914,6 +922,17 @@ export class CollectionsHandler {
     params: Parameters<CollectionEntryService["groupEntries"]>[0]
   ): ReturnType<CollectionEntryService["groupEntries"]> {
     return this.entryService.groupEntries(params);
+  }
+
+  /**
+   * How many entries a count would find, read no further than a cap.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: Parameters<CollectionEntryService["countEntriesUpTo"]>[0]
+  ): ReturnType<CollectionEntryService["countEntriesUpTo"]> {
+    return this.entryService.countEntriesUpTo(params);
   }
 
   /** How many rows fall in each interval of a recent window. */

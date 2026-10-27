@@ -20,6 +20,8 @@
  * @module components/features/entries/EntryList/LanguageDots
  */
 
+import type { JSX } from "react";
+
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
@@ -54,7 +56,7 @@ export function LanguageDots({
   translations,
   onOpenLocale,
   className,
-}: LanguageDotsProps) {
+}: LanguageDotsProps): JSX.Element | null {
   const { enabled, locales, defaultLocale } = useLocalization();
   if (!enabled || locales.length < 2) return null;
 

@@ -81,3 +81,33 @@ describe("a batch's shared work", () => {
     );
   });
 });
+
+describe("a batch's shared work for a widget owner's data functions", () => {
+  it("never meets a source's, even under the same name and the same key", async () => {
+    // The owner's name and the source's id are both an author's choice, so they can be the same
+    // string; the two views are separate maps, so nothing either computes reaches the other.
+    const batch = createBatchScope();
+    const source = await batch
+      .forSource("acme")
+      .getOrCompute("orders", async () => "the source's scan");
+    const owner = await batch
+      .forOwner("acme")
+      .getOrCompute("orders", async () => "the data function's scan");
+    expect([source, owner]).toEqual([
+      "the source's scan",
+      "the data function's scan",
+    ]);
+  });
+
+  it("is shared by every card of one owner, and kept apart from another owner's", async () => {
+    const batch = createBatchScope();
+    const compute = vi.fn(async () => 7);
+    await batch.forOwner("plugin @acme/shop").getOrCompute("count", compute);
+    await batch.forOwner("plugin @acme/shop").getOrCompute("count", compute);
+    expect(compute).toHaveBeenCalledTimes(1);
+    const other = await batch
+      .forOwner("plugin @acme/blog")
+      .getOrCompute("count", async () => 99);
+    expect(other).toBe(99);
+  });
+});

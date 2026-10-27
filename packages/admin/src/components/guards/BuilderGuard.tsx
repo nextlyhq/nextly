@@ -31,7 +31,9 @@ interface BuilderGuardProps {
  * the session has not settled so the request has not started, and the request
  * failed. None of them says the builder is on, so none of them shows it.
  */
-export function BuilderGuard({ children }: BuilderGuardProps) {
+export function BuilderGuard({
+  children,
+}: BuilderGuardProps): React.JSX.Element | null {
   const { showBuilder } = useBranding();
   const { isPending } = useBrandingStatus();
   const isDisabled = showBuilder === false;

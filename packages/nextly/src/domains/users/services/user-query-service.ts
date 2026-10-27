@@ -38,7 +38,8 @@ import { container } from "../../../di/container";
 // or throw a NextlyError on failure (no more `{ success, data, ... }`).
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
-import { ServiceContainer } from "../../../services/index";
+// Built per call, and loaded then: the container imports every core service.
+import { serviceContainerFor } from "../../../services/service-container-for";
 import type { Logger } from "../../../services/shared";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 
@@ -782,7 +783,7 @@ export class UserQueryService extends BaseService {
     try {
       const svcAdapter =
         this.adapter ?? container.get<DrizzleAdapter>("adapter");
-      const services = new ServiceContainer(svcAdapter);
+      const services = await serviceContainerFor(svcAdapter);
       roles = await services.userRoles.listUserRoles(String(row.id));
     } catch {
       roles = null;

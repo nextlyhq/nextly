@@ -38,6 +38,7 @@ import {
   type NodeKey,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { MousePointerClick } from "@admin/components/icons";
 
@@ -189,7 +190,7 @@ function ButtonLinkPreview({
 
 export function RichTextButtonLinkPlugin({
   disabled = false,
-}: RichTextButtonLinkPluginProps) {
+}: RichTextButtonLinkPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");

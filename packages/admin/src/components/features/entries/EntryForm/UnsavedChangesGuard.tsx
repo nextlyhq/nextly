@@ -28,6 +28,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import { useUnsavedChanges } from "@admin/hooks/useUnsavedChanges";
@@ -219,7 +220,7 @@ export function UnsavedChangesGuard({
   disabled = false,
   fields,
   children,
-}: UnsavedChangesGuardProps) {
+}: UnsavedChangesGuardProps): JSX.Element {
   /*
    * Set only while a save chosen from the prompt lets the held navigation go
    * ahead. The hook reports every confirmed leave to `onConfirmLeave`, and a

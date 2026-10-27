@@ -13,6 +13,8 @@ import { type EmailDeliveryRecipientKind, mailboxOf } from "../delivery-record";
 import { type EmailFailure, failureOf, unclassifiedFailure } from "../failure";
 import type { EmailProviderAdapter } from "../types";
 
+import type { RecipientOutcome } from "./recipient-outcomes";
+
 type AdapterResult = Awaited<ReturnType<EmailProviderAdapter["send"]>>;
 
 /**
@@ -178,7 +180,13 @@ export function combinedFailure(
   const present = failures.filter(
     (failure): failure is EmailFailure => failure !== undefined
   );
-  return present.find(failure => failure.retryable) ?? present[0];
+  // A failure whose delivery cannot be known first: a message may have been
+  // delivered, and a caller must not read the send as definitely not sent.
+  return (
+    present.find(failure => failure.unknown) ??
+    present.find(failure => failure.retryable) ??
+    present[0]
+  );
 }
 
 /**
@@ -198,6 +206,16 @@ export interface EmailSendOutcome {
    * idempotency key, and nothing was sent this time.
    */
   repeat?: true;
+  /**
+   * @experimental Some recipients were accepted and the send still did not
+   * succeed. Present only then, beside `recipients`.
+   */
+  partlyDelivered?: true;
+  /**
+   * @experimental Each recipient's outcome by line and position, listed only
+   * for a partly delivered send.
+   */
+  recipients?: RecipientOutcome[];
 }
 
 /**

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type SetStateAction, type Dispatch } from "react";
 
 import type { NavigationItem } from "../constants/navigation";
 import { isUnder } from "../lib/routing";
@@ -28,7 +28,11 @@ import { isUnder } from "../lib/routing";
 export function useSidebarNavigation(
   items: NavigationItem[],
   pathname: string
-) {
+): {
+  openAccordion: string | undefined;
+  setOpenAccordion: Dispatch<SetStateAction<string | undefined>>;
+  isActive: (href?: string, exactMatch?: boolean) => boolean;
+} {
   // Initialize accordion state based on current pathname
   const [openAccordion, setOpenAccordion] = useState<string | undefined>(() => {
     return items.find(item =>

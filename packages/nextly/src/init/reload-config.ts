@@ -23,10 +23,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { type SQL } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
-import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
   publishCollectionDbOptions,
@@ -97,6 +97,12 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { setAdminComponentPlugins } from "../domains/widgets/declaration/component-map-store";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import {
+  buildWorkflowRegistry,
+  publishedWorkflows,
+  publishWorkflows,
+  type RegisteredWorkflow,
+} from "../domains/workflows/registry";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
 import { getActiveHookRegistry } from "../hooks/hook-registry";
@@ -463,7 +469,7 @@ interface MinimalField {
 
 // Default resolver: lazy-imports DI to avoid a circular import with init.ts.
 async function defaultResolver(name: string): Promise<unknown> {
-  const { getService } = await import("../di/register");
+  const { getService } = await import("../di/service-access");
   // The DI key types are a fixed map; we cast through the resolver edge.
   return getService(name as Parameters<typeof getService>[0]);
 }
@@ -1515,6 +1521,12 @@ async function applyReloadHolding(
    */
   let commitFieldFunctions: (() => void) | undefined;
   /**
+   * The workflows the reloaded config attaches, built and checked as it is
+   * read, so a definition the reload must refuse refuses it before anything
+   * lands, and published only at commit.
+   */
+  let stagedWorkflows: ReadonlyMap<string, RegisteredWorkflow> | undefined;
+  /**
    * Put the field-type registry and the config's hooks back when a reload does
    * not take effect.
    *
@@ -1569,6 +1581,14 @@ async function applyReloadHolding(
     // refusal is another save of one of these same files.
     const { watchLoadedConfig } = await import("../runtime/hmr-listener");
     watchLoadedConfig(result);
+    // Judged against the components this reload defines, which the registry
+    // does not hold yet, and the registry's for any other, such as one made
+    // in the admin.
+    stagedWorkflows = await buildWorkflowRegistry(
+      result.config,
+      result.configPath ?? null,
+      { components: result.config.fieldGroups ?? [] }
+    );
     newConfig = (
       result as {
         config?: {
@@ -1678,6 +1698,10 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The workflows in force when the reload started, put back if it does not
+  // land, as the db options are.
+  const previousWorkflows = publishedWorkflows();
+  reloadUndo.push(() => publishWorkflows(previousWorkflows));
   let committed = false;
   const commitReload = (): void => {
     if (committed) return;
@@ -1707,6 +1731,7 @@ async function applyReloadHolding(
     // nothing accepted. The runners read the published value at run time, so
     // committing it here is what makes a saved change take effect.
     publishRetentionPolicies(newConfig);
+    if (stagedWorkflows !== undefined) publishWorkflows(stagedWorkflows);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any

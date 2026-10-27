@@ -32,6 +32,7 @@ import { parseRestRoute } from "../../../route-handler/route-parser";
 import { defineEmailProvider } from "../provider-definition";
 import type { EmailTemplateService } from "../services/email-template-service";
 import { interpolateTemplate } from "../services/template-engine";
+import { SNAPSHOT_MAX_AGE_MS } from "../transaction-flow";
 
 const sent: Array<{ to: string; subject: string; html: string }> = [];
 let current: TestNextly | undefined;
@@ -1027,18 +1028,26 @@ for (const dialect of getConfiguredTestDialects()) {
           htmlContent: FILTER,
         },
       });
+      // A render answers from the instance's copy of the engine state, so the
+      // failure that matters is the read once the copy is older than the
+      // window: it must be raised, never read as "not switched yet".
       const meta = (
         templates(t) as unknown as {
-          meta: { getEntry: () => Promise<unknown> };
+          meta: { getAll: () => Promise<unknown> };
         }
       ).meta;
+      const now = Date.now();
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(now + SNAPSHOT_MAX_AGE_MS + 1);
       const spy = vi
-        .spyOn(meta, "getEntry")
+        .spyOn(meta, "getAll")
         .mockRejectedValue(new Error("connection reset"));
       await expect(
         t.nextly.emailTemplates.preview({ id: created.item.id, data: DATA })
       ).rejects.toThrow();
       spy.mockRestore();
+      clock.mockRestore();
     });
 
     it("refuses to save text Liquid can't read, naming the field and the line, on the route and the Direct API", async () => {

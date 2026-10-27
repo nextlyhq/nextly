@@ -63,7 +63,15 @@ export async function acceptInvite(
   });
 }
 
-export const authApi = {
+/** The type of {@link authApi}. */
+type AuthApiType = {
+  readonly requestPasswordReset: typeof requestPasswordReset;
+  readonly resetPassword: typeof resetPassword;
+  readonly verifyEmail: typeof verifyEmail;
+  readonly acceptInvite: typeof acceptInvite;
+};
+
+export const authApi: AuthApiType = {
   requestPasswordReset,
   resetPassword,
   verifyEmail,

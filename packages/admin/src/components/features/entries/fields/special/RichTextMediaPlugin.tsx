@@ -23,6 +23,7 @@ import {
   type LexicalCommand,
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
+import type { JSX } from "react";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import type { Media } from "@admin/types/media";
@@ -83,7 +84,7 @@ export interface RichTextMediaPluginProps {
  */
 export function RichTextMediaPlugin({
   disabled = false,
-}: RichTextMediaPluginProps) {
+}: RichTextMediaPluginProps): JSX.Element {
   const [editor] = useLexicalComposerContext();
   const [isOpen, setIsOpen] = useState(false);
 

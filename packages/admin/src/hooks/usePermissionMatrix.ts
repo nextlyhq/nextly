@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import {
+  useState,
+  useMemo,
+  useCallback,
+  type SetStateAction,
+  type Dispatch,
+} from "react";
 
 import {
   organizePermissions,
@@ -19,6 +25,39 @@ import type {
   ContentTypePermissions,
 } from "../types/ui/form";
 
+/** What {@link usePermissionMatrix} returns. */
+type PermissionMatrixState = {
+  searchTerm: string;
+  setSearchTerm: Dispatch<SetStateAction<string>>;
+  activeTab: string;
+  setActiveTab: Dispatch<SetStateAction<string>>;
+  organizedPermissions: Record<string, ContentTypePermissions[]>;
+  filteredContentTypes: Record<string, ContentTypePermissions[]>;
+  togglePermission: (
+    permissionId: string | undefined,
+    checked: boolean
+  ) => void;
+  toggleAllForContentType: (
+    contentType: ContentTypePermissions,
+    checked: boolean
+  ) => void;
+  toggleAllForAction: (
+    contentTypes: ContentTypePermissions[],
+    action: string,
+    checked: boolean
+  ) => void;
+  isAllSelected: (contentType: ContentTypePermissions) => boolean;
+  isPartiallySelected: (contentType: ContentTypePermissions) => boolean;
+  isAllSelectedForAction: (
+    contentTypes: ContentTypePermissions[],
+    action: string
+  ) => boolean;
+  isPartiallySelectedForAction: (
+    contentTypes: ContentTypePermissions[],
+    action: string
+  ) => boolean;
+};
+
 /**
  * Custom hook for PermissionMatrix component
  * Extracts all state management and complex logic for better testability
@@ -28,7 +67,7 @@ export function usePermissionMatrix({
   value = [],
   onChange,
   lockedIds = [],
-}: PermissionMatrixProps) {
+}: PermissionMatrixProps): PermissionMatrixState {
   // State for filtering and UI
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<string>(PERMISSION_CATEGORIES[0]);
@@ -47,7 +86,7 @@ export function usePermissionMatrix({
 
   // Function to toggle a single permission
   const togglePermission = useCallback(
-    (permissionId: string | undefined, checked: boolean) => {
+    (permissionId: string | undefined, checked: boolean): void => {
       if (!permissionId) return;
       if (lockedIds.includes(permissionId)) return;
 
@@ -68,7 +107,7 @@ export function usePermissionMatrix({
 
   // Function to toggle all permissions in a row (for a content type)
   const toggleAllForContentType = useCallback(
-    (contentType: ContentTypePermissions, checked: boolean) => {
+    (contentType: ContentTypePermissions, checked: boolean): void => {
       const permissionIds = permissionIdsForContentType(contentType);
 
       let newValue = [...value];
@@ -98,7 +137,7 @@ export function usePermissionMatrix({
       contentTypes: ContentTypePermissions[],
       action: string,
       checked: boolean
-    ) => {
+    ): void => {
       const permissionIds = permissionIdsForAction(contentTypes, action);
 
       let newValue = [...value];
@@ -124,24 +163,25 @@ export function usePermissionMatrix({
 
   // Helper functions with value baked in
   const checkIsAllSelected = useCallback(
-    (contentType: ContentTypePermissions) => isAllSelected(contentType, value),
+    (contentType: ContentTypePermissions): boolean =>
+      isAllSelected(contentType, value),
     [value]
   );
 
   const checkIsPartiallySelected = useCallback(
-    (contentType: ContentTypePermissions) =>
+    (contentType: ContentTypePermissions): boolean =>
       isPartiallySelected(contentType, value),
     [value]
   );
 
   const checkIsAllSelectedForAction = useCallback(
-    (contentTypes: ContentTypePermissions[], action: string) =>
+    (contentTypes: ContentTypePermissions[], action: string): boolean =>
       isAllSelectedForAction(contentTypes, action, value),
     [value]
   );
 
   const checkIsPartiallySelectedForAction = useCallback(
-    (contentTypes: ContentTypePermissions[], action: string) =>
+    (contentTypes: ContentTypePermissions[], action: string): boolean =>
       isPartiallySelectedForAction(contentTypes, action, value),
     [value]
   );

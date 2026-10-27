@@ -27,6 +27,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { CopyFromLanguage } from "./useCopyFromLanguage";
 
@@ -49,7 +50,7 @@ export function CopyFromLanguageMenu({
   /** The language being filled, for an accessible name that says what it acts on. */
   targetLabel: string;
   disabled: boolean;
-}) {
+}): JSX.Element | null {
   if (!copy.available) return null;
 
   return (

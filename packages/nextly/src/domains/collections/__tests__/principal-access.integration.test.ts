@@ -237,6 +237,25 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ statusCode: 403 });
     });
 
+    it("is answered as missing about one entry it may not read, existing or not", async () => {
+      // A person is an identity of its own: refused one entry, it is told the
+      // entry is missing, exactly as it is told about an id that matches
+      // nothing, so the refusal confirms nothing.
+      const t = await boot(dialect);
+      const id = await seed(t, "verified_only");
+      const unverified = await person(t, "m2");
+      for (const entryId of [id, "00000000-0000-0000-0000-000000000000"]) {
+        await expect(
+          t.nextly.update({
+            collection: "verified_only",
+            id: entryId,
+            data: { title: "changed" },
+            principal: unverified,
+          })
+        ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+      }
+    });
+
     it("is refused by a rule written for any signed-in staff user", async () => {
       const t = await boot(dialect);
       await seed(t, "staff_rule");

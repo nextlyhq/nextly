@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
   LOCALIZATION_INTENT_HEADER,
@@ -143,6 +144,11 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import {
+  storedPasswordsNotice,
+  storedPasswordsOn,
+  storedPasswordTotal,
+} from "./upgrade-steps/stored-passwords";
 
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
@@ -505,6 +511,23 @@ export async function runMigrate(
     } catch (err) {
       logger.warn(
         `Could not check for passwords stored as given: ${describeError(err)}`
+      );
+    }
+
+    // Read-only too: passwords an earlier release kept as given inside a
+    // container are counted, and `nextly upgrade`, which hashes them, is named.
+    try {
+      const notice = storedPasswordsNotice(
+        storedPasswordTotal(
+          await countPasswordsStoredAsGiven(
+            storedPasswordsOn(adapter as unknown as DrizzleAdapter)
+          )
+        )
+      );
+      if (notice) logger.warn(notice);
+    } catch (err) {
+      logger.warn(
+        `Could not check for passwords stored before this release: ${describeError(err)}`
       );
     }
 

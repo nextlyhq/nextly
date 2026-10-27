@@ -1,6 +1,7 @@
 import { Skeleton } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
-export function LoginLoading() {
+export function LoginLoading(): JSX.Element {
   return (
     <div className="w-full max-w-[420px] mx-auto">
       <div className="space-y-8">

@@ -12,7 +12,11 @@
  *
  * @module blocks/image
  */
-import { blockTypeClassName, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  blockTypeClassName,
+  defineBlock,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -197,7 +201,7 @@ const IMAGE_PARTS = {
   },
 } as const;
 
-export const image = defineBlock<ImageProps, PageContext>({
+export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   name: IMAGE_BLOCK,
   version: 1,
   description:

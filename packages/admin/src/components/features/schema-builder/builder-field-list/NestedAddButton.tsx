@@ -3,13 +3,16 @@
 // +Add (centered, dashed, bordered, muted) but at a smaller scale -- the
 // size difference doubles as a hierarchy hint: smaller = inside, bigger
 // = top-level. Style stays consistent so users learn one affordance for
+
 // both contexts.
+import type { JSX } from "react";
+
 type Props = {
   parentLabel: string;
   onClick: () => void;
 };
 
-export function NestedAddButton({ parentLabel, onClick }: Props) {
+export function NestedAddButton({ parentLabel, onClick }: Props): JSX.Element {
   return (
     <button
       type="button"

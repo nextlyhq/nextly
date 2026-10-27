@@ -18,6 +18,10 @@ import {
 
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CARD = "style-fixture/recent";
 const TITLE = "Fixture recent posts";

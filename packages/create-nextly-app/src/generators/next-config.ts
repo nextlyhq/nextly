@@ -22,6 +22,13 @@ import type { DatabaseConfig } from "../types";
 import type { GeneratedFiles } from "./generated-files";
 
 /**
+ * Where Nextly explains why Cache Components is off and when it will be
+ * supported: the same page `nextly` links from the error it stops with.
+ */
+export const CACHE_COMPONENTS_DOCS_URL =
+  "https://nextlyhq.com/docs/getting-started/installation#cache-components";
+
+/**
  * Packages that are always externalized by the scaffolded Next.js config.
  *
  * These packages are used by Nextly at runtime and should stay out of the
@@ -69,12 +76,22 @@ function packageListLiteral(database: DatabaseConfig): string {
 }
 
 /**
+ * The setting every config this writes carries, with its reason in the file:
+ * the developer who finds it is the one deciding whether to change it.
+ */
+const CACHE_COMPONENTS_OFF = `  // Nextly does not support Cache Components yet: it caches with
+  // unstable_cache, and Cache Components refuses \`runtime\` route exports.
+  // ${CACHE_COMPONENTS_DOCS_URL}
+  cacheComponents: false,`;
+
+/**
  * Render a complete next.config.ts file for the selected database.
  */
 export function buildNextConfigTemplate(database: DatabaseConfig): string {
   return `import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+${CACHE_COMPONENTS_OFF}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -86,6 +103,7 @@ export default nextConfig;
 function buildNextConfigModule(database: DatabaseConfig): string {
   return `/** @type {import("next").NextConfig} */
 const nextConfig = {
+${CACHE_COMPONENTS_OFF}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -943,6 +961,178 @@ export async function patchNextConfig(
   if (edited.added.length === 0) return { kind: "unchanged", file };
   await fs.writeFile(path.join(cwd, file), edited.text, "utf-8");
   return { kind: "written", file, added: edited.added };
+}
+
+/** The setting Nextly needs off, and the one Next.js accepts only with it on. */
+const CACHE_COMPONENTS = "cacheComponents";
+const PARTIAL_PREFETCHING = "partialPrefetching";
+
+/**
+ * What turning Cache Components off in an existing app's config did.
+ *
+ * - `turned-off`: `cacheComponents: true` became `false`, and the settings in
+ *   `removed`, which Next.js accepts only with it on, were taken out.
+ * - `unchanged`: it was already off, or the app has no config, which leaves
+ *   Next.js's default, off.
+ * - `manual`: the setting could not be read or changed safely, so the file was
+ *   left as it was.
+ */
+export type CacheComponentsPatch =
+  | { kind: "turned-off"; file: string; removed: string[] }
+  | { kind: "unchanged" }
+  | { kind: "manual"; file: string; reason: string };
+
+/**
+ * Remove a property with the comma that separates it: the whole line when it
+ * has one of its own, else the property and the comma after it, or before it
+ * when it is the last one.
+ */
+function removeProperty(source: string, property: ObjectProperty): Edit {
+  const start = property.start ?? 0;
+  const end = property.end ?? 0;
+  const ownLine = /^\s*$/.test(source.slice(lineStart(source, start), start));
+  const rest = /^[ \t]*,?[ \t]*\n/.exec(source.slice(end));
+  if (ownLine && rest) {
+    const from = lineStart(source, start);
+    return { at: from, remove: end + rest[0].length - from, text: "" };
+  }
+  const after = /^\s*,\s*/.exec(source.slice(end));
+  if (after)
+    return { at: start, remove: end - start + after[0].length, text: "" };
+  const before = /,\s*$/.exec(source.slice(0, start));
+  const from = before ? start - before[0].length : start;
+  return { at: from, remove: end - from, text: "" };
+}
+
+/** The exported config object, when both settings in it can be read; else why not. */
+function cacheComponentsObject(
+  source: string,
+  file: string
+): ObjectExpression | string {
+  const body = parseBody(source, file);
+  if (!body) return "it could not be parsed";
+  // Not through a wrapper call: Next.js receives what the wrapper returns, which
+  // may set the option again, so the literal passed in says nothing final.
+  const object = exportedConfig(body, false);
+  if (typeof object === "string") return object;
+  return (
+    hiddenSettings(object, [CACHE_COMPONENTS, PARTIAL_PREFETCHING], "it") ??
+    object
+  );
+}
+
+/** The `true` to flip, null when Cache Components is off or unset, or why the value cannot be read. */
+function enabledValue(object: ObjectExpression): Node | null | string {
+  const value = propertyValue(object, CACHE_COMPONENTS);
+  if (!value) return null;
+  if (value.type !== "BooleanLiteral") {
+    return `its ${CACHE_COMPONENTS} is not true or false written in place`;
+  }
+  return value.value ? value : null;
+}
+
+/** The edits that turn Cache Components off in a config, none when it is off, or why it cannot be changed. */
+function cacheComponentsPlan(
+  source: string,
+  file: string
+): { edits: Edit[]; removed: string[] } | { reason: string } {
+  const object = cacheComponentsObject(source, file);
+  if (typeof object === "string") return { reason: object };
+  const value = enabledValue(object);
+  if (typeof value === "string") return { reason: value };
+  if (!value) return { edits: [], removed: [] };
+  const flip: Edit = {
+    at: value.start ?? 0,
+    remove: (value.end ?? 0) - (value.start ?? 0),
+    text: "false",
+  };
+  // Every definition, under any spelling of its key: the last one wins at run
+  // time, so removing only the first can leave the one Next.js reads.
+  const prefetching = object.properties.filter(
+    (property): property is ObjectProperty =>
+      isPropertyNamed(property, PARTIAL_PREFETCHING)
+  );
+  return {
+    edits: [
+      flip,
+      ...prefetching.map(property => removeProperty(source, property)),
+    ],
+    removed: prefetching.length > 0 ? [PARTIAL_PREFETCHING] : [],
+  };
+}
+
+/** Whether a config, read as code, still defines `partialPrefetching` anywhere in its exported object. */
+function definesPartialPrefetching(source: string, file: string): boolean {
+  const object = cacheComponentsObject(source, file);
+  return (
+    typeof object !== "string" &&
+    object.properties.some(property =>
+      isPropertyNamed(property, PARTIAL_PREFETCHING)
+    )
+  );
+}
+
+/**
+ * Turn Next.js Cache Components off in an existing app's config, which
+ * Nextly does not support yet; `create-next-app` 16.4 turns it on by default.
+ *
+ * Only `cacheComponents: true` written in place is changed, and
+ * `partialPrefetching` goes with it, since Next.js refuses that option once
+ * Cache Components is off. The edit is trusted only once the result parses
+ * and reads as off; anything else is left as it was, with what to change.
+ */
+export async function turnOffCacheComponents(
+  cwd: string
+): Promise<CacheComponentsPatch> {
+  const file = await findConfigFile(cwd);
+  if (!file) return { kind: "unchanged" };
+  const source = await fs.readFile(path.join(cwd, file), "utf-8");
+  // Read structurally even when the file never names the setting: a spread or
+  // a wrapper can still turn it on, and only the parser can say it cannot tell.
+  const plan = cacheComponentsPlan(source, file);
+  if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
+  if (plan.edits.length === 0) return { kind: "unchanged" };
+  const text = applyEdits(source, plan.edits);
+  const recheck = cacheComponentsPlan(text, file);
+  if (
+    "reason" in recheck ||
+    recheck.edits.length > 0 ||
+    definesPartialPrefetching(text, file)
+  ) {
+    return { kind: "manual", file, reason: "the edit could not be confirmed" };
+  }
+  await fs.writeFile(path.join(cwd, file), text, "utf-8");
+  return { kind: "turned-off", file, removed: plan.removed };
+}
+
+/**
+ * What turning Cache Components off did, for the run's report: the change and
+ * a notice saying why, or, for a config it could not change, what to change.
+ */
+export function cacheComponentsFiles(
+  patch: CacheComponentsPatch
+): GeneratedFiles {
+  const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
+  if (patch.kind === "turned-off") {
+    files.changed.push({
+      path: patch.file,
+      added: [`${CACHE_COMPONENTS}: false`],
+    });
+    const removed = patch.removed.length
+      ? `, and removed ${patch.removed.join(", ")}, which Next.js accepts only with it on`
+      : "";
+    files.notices = [
+      `Turned Cache Components off in ${patch.file}: Nextly does not support it yet${removed}. ` +
+        `Why, and the plan to support it: ${CACHE_COMPONENTS_DOCS_URL}`,
+    ];
+  } else if (patch.kind === "manual") {
+    files.skipped.push({
+      path: patch.file,
+      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly does not support it yet (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
+      toAdd: `  ${CACHE_COMPONENTS}: false,`,
+    });
+  }
+  return files;
 }
 
 /**

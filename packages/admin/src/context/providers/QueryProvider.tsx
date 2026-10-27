@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { useState } from "react";
+import { useState, type JSX } from "react";
 
 import {
   QUERY_GC_TIME,
@@ -75,7 +75,11 @@ import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
  * @see https://tanstack.com/query/v5/docs/react/reference/QueryClient - QueryClient docs
  * @see https://tanstack.com/query/v5/docs/react/guides/important-defaults - Important defaults
  */
-export function QueryProvider({ children }: { children: React.ReactNode }) {
+export function QueryProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}): JSX.Element {
   // Use useState with lazy initializer to ensure stable QueryClient instance
   // This prevents QueryClient recreation on re-renders (TanStack Query best practice)
   const [queryClient] = useState(

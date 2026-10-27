@@ -11,12 +11,20 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
 import { declaredWidgets } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 import { clearWidgets, registerWidget } from "../registry";
+import { clearSources } from "../sources";
+import { clearSystemResolvers } from "../system-sources";
 
 beforeEach(() => {
   clearWidgets();
+  // As boot orders it: the sources first, since a card's settings are admitted
+  // against the filters its source declares.
+  clearSources();
+  clearSystemResolvers();
+  registerRecentEditsWidgetSource();
   for (const definition of CORE_WIDGETS) registerWidget(definition);
 });
 
@@ -30,24 +38,27 @@ describe("what the admin is told about dismissal", () => {
   it("carries the flag for a card that declares it", () => {
     // Without this the admin cannot draw the control at all: the card would be
     // declared dismissible and no reader could dismiss it.
-    expect(summaryFor("core/onboarding-checklist").dismissible).toBe(true);
+    expect(summaryFor("core/get-started").dismissible).toBe(true);
   });
 
   it("says nothing for a card that does not", () => {
     // Absent rather than `false`, matching how every other optional field on
     // the summary travels -- a reader of the payload sees which cards made a
     // claim instead of inferring it from a default.
-    expect(summaryFor("core/collections")).not.toHaveProperty("dismissible");
+    expect(summaryFor("core/content")).not.toHaveProperty("dismissible");
   });
 
   it("travels beside a lifecycle without being implied by it", () => {
-    // 🔴 The onboarding card is BOTH. A summary carrying one and dropping the
-    // other would take the card away for the wrong reason: gone when the work
-    // finished but unremovable before that, or removable but permanent.
-    const summary = summaryFor("core/onboarding-checklist");
+    // 🔴 Neither implies the other, in either direction. A summary that tied
+    // them would take a card away for the wrong reason: Get started is
+    // dismissible with no condition, and Content is conditional and not
+    // dismissible.
+    const started = summaryFor("core/get-started");
+    expect(started).not.toHaveProperty("visibleWhen");
+    expect(started.dismissible).toBe(true);
 
-    expect(summary.lifecycle).toBe("conditional");
-    expect(summary.visibleWhen).toBe("onboarding:incomplete");
-    expect(summary.dismissible).toBe(true);
+    const content = summaryFor("core/content");
+    expect(content.lifecycle).toBe("conditional");
+    expect(content).not.toHaveProperty("dismissible");
   });
 });

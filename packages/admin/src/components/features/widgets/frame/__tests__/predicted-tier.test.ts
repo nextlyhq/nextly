@@ -62,14 +62,14 @@ describe("a card's tier before it is drawn", () => {
   });
 
   it("predicts each card's outer width from its tracks and the grid's gaps", () => {
-    // Twelve tracks with 24 px between them: a card spanning n tracks is n twelfths of the
-    // dashboard plus its share of one gap, less the gap after it.
-    expect(WIDTHS.map(width => cardOuterWidth(width, 1200))).toEqual([
-      282, 384, 588, 792, 1200,
-    ]);
-    expect(WIDTHS.map(width => cardOuterWidth(width, 900))).toEqual([
-      438, 438, 438, 900, 900,
-    ]);
+    // Twelve tracks with a gap between them: a card spanning n tracks is n twelfths of the
+    // dashboard plus its share of one gap, less the gap after it. The gap across is 16 px below
+    // 1,280 px and 24 px from it.
+    const at = (dashboard: number) =>
+      WIDTHS.map(width => Math.round(cardOuterWidth(width, dashboard)));
+    expect(at(1200)).toEqual([288, 389, 592, 795, 1200]);
+    expect(at(900)).toEqual([442, 442, 442, 900, 900]);
+    expect(at(1440)).toEqual([342, 464, 708, 952, 1440]);
   });
 
   it("has no tier before the dashboard has a width", () => {

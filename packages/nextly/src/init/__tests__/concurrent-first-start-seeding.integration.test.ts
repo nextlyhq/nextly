@@ -72,7 +72,6 @@ const DEFAULT_ROW_TABLES = [
   "role_permissions",
   "role_inherits",
   "user_roles",
-  "user_permission_cache",
   "roles",
   "permissions",
   "user_field_definitions",

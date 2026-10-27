@@ -54,7 +54,8 @@ import {
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -65,6 +66,7 @@ import {
   withFieldGroupEvidence,
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -3048,6 +3050,27 @@ export class CollectionRelationshipService extends BaseService {
    * never describes a related collection's fields.
    */
   /**
+   * {@link redactWalkedRow} for a row the nested walk resolved, by its own
+   * collection's fields and table as the walk cached them.
+   */
+  private async redactNestedRow(
+    resolved: { collection: string; row: Record<string, unknown> },
+    state: NestedHookState
+  ): Promise<void> {
+    const targetFields = await this.fieldsForNestedWalk(
+      resolved.collection,
+      state
+    );
+    this.redactWalkedRow(
+      resolved.collection,
+      resolved.row,
+      targetFields,
+      await this.tableForNestedWalk(resolved.collection, state),
+      await this.passwordReach(targetFields)
+    );
+  }
+
+  /**
    * Redact one row the relationship walk has just populated.
    *
    * Both walks do the same three things and did them in two copies; a
@@ -3063,10 +3086,12 @@ export class CollectionRelationshipService extends BaseService {
     row: Record<string, unknown>,
     targetFields: FieldDefinition[],
     /** The physical table `collection` reads from; see `tableForNestedWalk`. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    if (hasPasswordField(targetFields)) {
-      stripPasswordFieldValues(row, targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
+      stripPasswordFieldValues(row, targetFields, reach);
     }
     if (isSystemEntity(collection)) {
       for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
@@ -3118,9 +3143,10 @@ export class CollectionRelationshipService extends BaseService {
     }
     // Secrets first, and for every caller: a trusted read has no more use for a
     // password hash than an anonymous one.
-    if (hasPasswordField(targetFields)) {
+    const reach = await this.passwordReach(targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
       for (const row of rows) {
-        stripPasswordFieldValues(row, targetFields);
+        stripPasswordFieldValues(row, targetFields, reach);
       }
     }
     // Secrets above are unconditional and stay here. The target's FIELD rules
@@ -3624,16 +3650,7 @@ export class CollectionRelationshipService extends BaseService {
       );
       // Secrets a hook could reintroduce, stripped for the same reason the walk
       // strips them: unconditional, override included.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
       // Rebuild the label from what survived, as the walk does before returning to a
       // parent: a field hook can mutate an existing child so its label field flips
       // from allowed to denied, and this access pass removes the field but leaves the
@@ -3850,16 +3867,7 @@ export class CollectionRelationshipService extends BaseService {
       // using the source collection's schema, so they would never look at this
       // one. Stripped again here for the same reason a direct read strips after
       // its own hooks.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
     }
   }
 
@@ -4011,6 +4019,30 @@ export class CollectionRelationshipService extends BaseService {
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
     return liveFieldGroupReadPass(target.fields as FieldConfig[], source);
+  }
+
+  /**
+   * Where the password strip follows the field groups a target's fields hold
+   * inline, once per field list: a walk caches each target's fields for the
+   * batch, so a target read many times resolves them once.
+   */
+  private readonly passwordReaches = new WeakMap<
+    readonly unknown[],
+    Promise<FieldGroupReach>
+  >();
+
+  private passwordReach(fields: readonly unknown[]): Promise<FieldGroupReach> {
+    let reach = this.passwordReaches.get(fields);
+    if (!reach) {
+      reach = passwordReachOf(
+        fields,
+        container.has("fieldGroupDataService")
+          ? container.get<FieldGroupDataService>("fieldGroupDataService")
+          : undefined
+      );
+      this.passwordReaches.set(fields, reach);
+    }
+    return reach;
   }
 
   /**
