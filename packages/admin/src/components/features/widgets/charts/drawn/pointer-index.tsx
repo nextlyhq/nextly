@@ -6,7 +6,12 @@
  * the pointer, away from a reader reaching for it, and once it had seen the pointer it would keep
  * that point whatever the keys said. The keys and the pointer together decide the point in view
  * (`useChartReach`), and a drawing asks the engine's inverse scale which category a pixel is
- * nearest, mapping that category to its index. The marks, the rule and this reading are on one
+ * nearest, mapping that category to its index.
+ *
+ * Across, a point over time is at its data's position, so the nearest data point is the one in
+ * view. Down, a group's row is a band, and the engine's data snap measures from each band's START:
+ * the lower half of a row would read as the next group. Its tick snap measures from the rendered
+ * ticks, which a category axis draws at each band's middle, so it names the row the pointer is in. The marks, the rule and this reading are on one
  * scale, the engine's.
  *
  * @module components/features/widgets/charts/drawn/pointer-index
@@ -21,7 +26,7 @@ import {
 } from "react";
 import {
   useXAxisInverseDataSnapScale,
-  useYAxisInverseDataSnapScale,
+  useYAxisInverseTickSnapScale,
 } from "recharts";
 
 /** The index of the mark at a point in the drawing, or `undefined` off every mark. */
@@ -43,7 +48,8 @@ export function PointerIndex({
   into: MutableRefObject<IndexAt | undefined>;
 }): null {
   const across = useXAxisInverseDataSnapScale(axisId);
-  const down = useYAxisInverseDataSnapScale(axisId);
+  // Every row's tick must be drawn for this to name every row (`interval={0}`).
+  const down = useYAxisInverseTickSnapScale(axisId);
   const invert = axis === "x" ? across : down;
   useEffect(() => {
     into.current = invert

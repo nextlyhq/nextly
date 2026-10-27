@@ -25,7 +25,12 @@ import { CardTierContext } from "../../frame/tier";
 import { GroupsChart, type GroupsChartGroup } from "../groups-chart";
 import { OverTimeChart, type OverTimeSeries } from "../over-time-chart";
 
-import { pointAtInterval, pointAtRow, sizeChartsInTests } from "./chart-env";
+import {
+  pointAt,
+  pointAtInterval,
+  pointAtRow,
+  sizeChartsInTests,
+} from "./chart-env";
 
 sizeChartsInTests();
 afterEach(() => cleanup());
@@ -176,6 +181,18 @@ describe("a chart of groups, by pointer", () => {
     // which leaves only what it saw the pointer enter, has nothing to leave.
     fireEvent.pointerLeave(chart(/Use the arrow keys to read each bar/));
     expect(tooltip()).toBeNull();
+  });
+
+  it("names the row the pointer is in, at its top edge and at its bottom edge", async () => {
+    // Rows share the drawing evenly: three groups, each a row of 22 px here. A row is a band,
+    // and the edge of one is never read as its neighbour.
+    const { drawing } = await drawGroups();
+    await pointAt(drawing, 150, 20);
+    expect(tooltip()).toHaveTextContent(/Published/);
+    await pointAt(drawing, 150, 24);
+    expect(tooltip()).toHaveTextContent(/Draft/);
+    await pointAt(drawing, 150, 42);
+    expect(tooltip()).toHaveTextContent(/Draft/);
   });
 
   it("dismisses a hovered tooltip on Escape", async () => {

@@ -296,7 +296,9 @@ describe("a group's name where its field names no option for it", () => {
       op: "groupBy",
       buckets,
       field: {
+        name: "status",
         label: "Status",
+        type: "string",
         choices: [{ value: "draft", label: "Draft" }],
       },
     }) as WidgetResult;

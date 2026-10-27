@@ -10,12 +10,16 @@
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
 import { GroupsChart, type GroupsChartGroup } from "../groups-chart";
 
-import { prefersReducedMotion, sizeChartsInTests } from "./chart-env";
+import {
+  CHART_WIDTH,
+  prefersReducedMotion,
+  sizeChartsInTests,
+} from "./chart-env";
 
 sizeChartsInTests();
 afterEach(() => cleanup());
@@ -65,6 +69,34 @@ const fills = (drawing: HTMLElement) =>
     const name = /^var\((--color-g\d+)\)$/.exec(bar.getAttribute("fill") ?? "");
     return name ? drawing.style.getPropertyValue(name[1] as string) : null;
   });
+
+/** Each bar's thickness, as the engine draws it. */
+const thicknesses = (drawing: HTMLElement) =>
+  [...drawing.querySelectorAll(".recharts-bar-rectangle path")].map(bar =>
+    Number(bar.getAttribute("height"))
+  );
+
+describe("a bar's thickness", () => {
+  const three = () => [group("a", 3), group("b", 2), group("c", 1)];
+
+  it("is under half its row, so rows stay apart", async () => {
+    // Drawn at its least height here, a row of 22 px: a bar of 45% of it.
+    const drawing = await drawAt("medium", three());
+    expect(thicknesses(drawing)).toEqual([10, 10, 10]);
+  });
+
+  it("stops at 16 px however tall a card makes its rows", async () => {
+    const measured = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    const measure = measured.getMockImplementation();
+    measured.mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("recharts-responsive-container")
+        ? DOMRect.fromRect({ width: CHART_WIDTH, height: 300 })
+        : (measure?.call(this) ?? DOMRect.fromRect());
+    });
+    const drawing = await drawAt("medium", three());
+    expect(thicknesses(drawing)).toEqual([16, 16, 16]);
+  });
+});
 
 describe("the order groups are drawn in", () => {
   it("is by count, highest first, ties by label, whatever order they arrive in", async () => {

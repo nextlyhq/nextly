@@ -107,4 +107,20 @@ test("the Breakdown card divides a collection with a lifecycle by status", async
       String(await listed(page, `status=${status}`))
     );
   }
+
+  // 🔴 The pointer at the bottom edge of the first bar names the first group, not the next: a
+  // row is a band, and its lower half once read as the row below.
+  const first = Object.keys(rows)[0] ?? "";
+  const bar = await drawing
+    .locator(".recharts-bar-rectangle path")
+    .first()
+    .boundingBox();
+  expect(bar, "the first bar is drawn").not.toBeNull();
+  if (bar) {
+    await page.mouse.move(bar.x + bar.width / 2, bar.y - 40);
+    await page.mouse.move(bar.x + bar.width / 2, bar.y + bar.height - 1, {
+      steps: 4,
+    });
+  }
+  await expect(card.getByTestId("chart-tooltip")).toContainText(first);
 });

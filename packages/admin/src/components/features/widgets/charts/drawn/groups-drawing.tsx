@@ -20,6 +20,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type ReactNode,
 } from "react";
@@ -79,8 +80,11 @@ const COUNT_WIDTH = 36;
 const NAME_GAP = 8;
 /** A bar is never thicker than this, however tall its row: past it, rows only move apart. */
 const MAX_BAR = 16;
-/** The share of a row the gap around its bar takes, so a bar is under half its row's height. */
-const ROW_GAP = "55%";
+/**
+ * The share of a row left free on EACH side of its bar, as the engine applies it, so a bar is 45%
+ * of its row's height. Above 50% the two sides overlap and the engine draws a sliver.
+ */
+const ROW_GAP = "27.5%";
 /** How far the engine sets an axis's tick from the axis line. */
 const TICK_MARGIN = 8;
 /** The tooltip's room from the bar's end. */
@@ -260,7 +264,7 @@ function GroupName({
 function tooltipPlace(
   index: number,
   rows: readonly GroupsDrawnRow[]
-): Record<string, string> {
+): CSSProperties {
   const count = Math.max(1, rows.length);
   const fraction = rows[index]?.fraction ?? 0;
   const track = `(100% - ${NAME_WIDTH + COUNT_WIDTH}px)`;
