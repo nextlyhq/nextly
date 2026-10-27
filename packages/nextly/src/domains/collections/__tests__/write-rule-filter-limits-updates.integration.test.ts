@@ -335,6 +335,34 @@ describe("a publish or unpublish rule that answers a filter", () => {
     expect(await stored(t, POSTS, others)).toEqual(othersBefore);
   });
 
+  it("shows its author an edit held on an entry the update filter matches, and not another's", async () => {
+    // A held edit is shown to a caller who may edit the entry: here, one the
+    // update rule's filter matches. Another's entry, whose edit a trusted
+    // write held, is outside that filter, so its live row is what is read.
+    const t = await boot();
+    const { own, others } = await seed(t, DRAFTED, "published");
+    await update(t, DRAFTED, own, { title: "edited" });
+    await t.nextly.update({
+      collection: DRAFTED,
+      id: others,
+      data: { title: "their edit" },
+    } as never);
+    // POPULATION CONTROL: both edits were held, not written to the live rows.
+    expect((await stored(t, DRAFTED, own))?.title).toBe("mine");
+    expect((await stored(t, DRAFTED, others))?.title).toBe("theirs");
+
+    const read = (id: string) =>
+      t.nextly.findByID({
+        collection: DRAFTED,
+        id,
+        draft: true,
+        ...asAuthor,
+      } as never) as Promise<{ title?: string } | null>;
+
+    expect((await read(own))?.title).toBe("edited");
+    expect((await read(others))?.title).toBe("theirs");
+  });
+
   it("refuses a publish that would promote a held edit taking the entry out of the filter", async () => {
     // A published post whose edit is held as a pending change: the save
     // leaves the live row as it was, so it is judged on that row. Publishing

@@ -192,6 +192,7 @@ import {
   componentTableNamesFor,
   localizedFilterContext,
   prepareFilterCondition,
+  prepareRuleFilter,
   ruleFilterCondition,
   type FilterConditionSources,
 } from "../query/filter-condition";
@@ -1849,6 +1850,51 @@ export class CollectionQueryService extends BaseService {
   }
 
   /** Where the filter builder reads its facts about a collection. */
+  /**
+   * Whether a signed-in caller may edit `entryId`, which a held edit is shown
+   * only to: the update gate's answer and, where the update rule answers a
+   * filter, whether the entry's live row matches it, as the save that held
+   * the edit was matched.
+   */
+  private async mayEditEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    schema: DynamicSchema & { id: SQLWrapper },
+    localizedCtx: LocalizedQueryContext | null
+  ): Promise<boolean> {
+    const update = await this.accessService.checkCollectionWrite({
+      ...params,
+      operation: "update",
+      // The route attested a read, never an update, so the update grant is
+      // checked rather than assumed from `routeAuthorized`.
+      routeAuthorized: false,
+    });
+    if (update.denied) return false;
+    if (!update.filter) return true;
+    const prepared = await prepareRuleFilter(
+      {
+        collectionName: params.collectionName,
+        filter: update.filter,
+        action: "update",
+      },
+      this.filterSources(),
+      this.logger
+    );
+    const condition = prepared.condition(schema, localizedCtx);
+    const idCondition = eq(schema.id, params.entryId);
+    const [row] = await this.db
+      .select({ id: schema.id })
+      .from(schema)
+      .where(condition ? and(idCondition, condition) : idCondition)
+      .limit(1);
+    return row !== undefined;
+  }
+
   private filterSources(): FilterConditionSources {
     const fieldGroups = this.fieldGroupDataService;
     return {
@@ -4708,7 +4754,8 @@ export class CollectionQueryService extends BaseService {
       // update — trusting it would leak drafts to a read-only authenticated
       // caller. Every non-override authenticated caller is instead judged by an
       // actual update-capability check, so a reader the collection's update
-      // rule refuses is not treated as an editor.
+      // rule refuses is not treated as an editor, and one its filter limits
+      // is an editor of the entries it matches.
       let draftView = false;
       // Set once a working draft is actually surfaced. When the draft predicate
       // was suppressed but nothing is overlaid, the loaded row is the published
@@ -4718,17 +4765,22 @@ export class CollectionQueryService extends BaseService {
         if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
-          const updateDenied = await this.accessService.checkCollectionAccess({
-            collectionName: params.collectionName,
-            operation: "update",
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // The route attested a read, never an update, so the update grant is
-            // checked rather than assumed from `routeAuthorized`.
-            routeAuthorized: false,
-            authenticatedScope: params.authenticatedScope,
-          });
-          draftView = !updateDenied;
+          draftView = await this.mayEditEntry(
+            {
+              collectionName: params.collectionName,
+              entryId: resolvedEntryId,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
+            },
+            schema,
+            localizedFilterContext(
+              companion,
+              localeChain,
+              schema,
+              statusFilter?.values
+            )
+          );
         }
       }
       if (draftView) {
