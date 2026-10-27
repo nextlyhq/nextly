@@ -259,19 +259,45 @@ export interface CardEmptyContent {
 /** The frame's own empty state, for a card whose body says nothing more particular. */
 export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
 
+/**
+ * The height an empty state with an action takes stacked: its title's line (`text-sm`, 20 px),
+ * the gap under it (4 px), the action's margin (8 px) and the action (32 px). A body shorter than
+ * this, such as a two-row card's, lays the title and the action in one row instead, so the action
+ * stays inside the body rather than running under the footer's room.
+ */
+export const EMPTY_STACKED_WITH_ACTION_PX = 20 + 4 + 8 + 32;
+
 export function CardEmpty({
   title,
   detail,
   action,
-}: CardEmptyContent): JSX.Element {
+  inline = false,
+}: CardEmptyContent & {
+  /** The title and the action in one row, for a body too short to stack them. */
+  inline?: boolean;
+}): JSX.Element {
   return (
-    <div className="grid justify-items-center gap-1" data-testid="card-empty">
+    <div
+      className={
+        inline
+          ? "flex flex-wrap items-center justify-center gap-x-3 gap-y-1"
+          : "grid justify-items-center gap-1"
+      }
+      data-testid="card-empty"
+      data-layout={inline ? "inline" : "stacked"}
+    >
       <p className="text-sm font-semibold text-foreground">{title}</p>
-      {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+      {/* A one-row state has no room for a second line; its title says what is missing. */}
+      {detail && !inline && (
+        <p className="text-xs text-muted-foreground">{detail}</p>
+      )}
       {action && "href" in action && (
         <Link
           href={action.href}
-          className="mt-2 inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5"
+          className={cn(
+            "inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5",
+            !inline && "mt-2"
+          )}
         >
           {action.label}
         </Link>
@@ -281,7 +307,7 @@ export function CardEmpty({
         <Button
           variant="outline"
           size="sm"
-          className="mt-2"
+          className={inline ? undefined : "mt-2"}
           onClick={action.onSelect}
           data-testid="card-empty-action"
         >

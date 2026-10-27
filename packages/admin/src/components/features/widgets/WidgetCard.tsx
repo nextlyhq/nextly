@@ -79,9 +79,11 @@ import {
   FRAME_FOOTER_GAP,
   FRAME_HEADER,
   FRAME_PADDING,
+  cardBodyHeightPx,
 } from "./frame/measures";
 import {
   CardEmpty,
+  EMPTY_STACKED_WITH_ACTION_PX,
   CardError,
   CardSkeleton,
   CardUnavailable,
@@ -400,12 +402,30 @@ function StateBody({
     case "empty":
       return (
         <CentredState>
-          <CardEmpty {...state.empty} />
+          <EmptyBody empty={state.empty} />
         </CentredState>
       );
     default:
       return null;
   }
+}
+
+/**
+ * The empty state, laid in one row where the card's body is too short to stack its title over its
+ * action (a two-row card's body is 46 px; stacked, they take 64). A card drawn with no height is
+ * stacked, as it was.
+ */
+function EmptyBody({
+  empty,
+}: {
+  empty: Extract<CardState, { kind: "empty" }>["empty"];
+}) {
+  const h = useContext(CardHeightContext);
+  const inline =
+    empty.action !== undefined &&
+    h !== undefined &&
+    cardBodyHeightPx(h) < EMPTY_STACKED_WITH_ACTION_PX;
+  return <CardEmpty {...empty} inline={inline} />;
 }
 
 /**
