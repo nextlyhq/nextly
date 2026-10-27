@@ -190,8 +190,14 @@ function bodyClassName(refreshing: boolean, customizing: boolean): string {
 function frameFlags(
   props: Pick<WidgetCardProps, "hidesWhenEmpty" | "link">,
   state: CardState,
-  customizing: boolean
+  modes: {
+    customizing: boolean;
+    /** A new answer is on the way, whatever the body reported from the last one. */
+    refreshing: boolean;
+  }
 ) {
+  const { customizing } = modes;
+  const refreshing = modes.refreshing || state.kind === "refreshing";
   const hidden = props.hidesWhenEmpty === true && state.kind === "empty";
   return {
     hiddenEmpty: hidden && !customizing,
@@ -199,8 +205,8 @@ function frameFlags(
     // A quick control changes the question; before the first answer there is no question on
     // show to change, and in customise mode the card's menu stands there.
     quickInert: state.kind === "loading" || customizing,
-    busy: state.kind === "loading" || state.kind === "refreshing",
-    refreshing: state.kind === "refreshing",
+    busy: state.kind === "loading" || refreshing,
+    refreshing,
     // Beside a drawn body and under an empty one; never while loading, failed or not available.
     footer:
       props.link !== undefined && (showsBody(state) || state.kind === "empty"),
@@ -211,6 +217,10 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const { title, cardId } = props;
   const generatedId = useId();
   const titleId = cardId ? frameIds(cardId).titleId : generatedId;
+  // The region is named by its title and, where there is one, the widget's own name beneath it, so
+  // two cards about one subject ("Posts", "Count" and "Posts", "Recent entries") are told apart.
+  const subtitleId = `${titleId}-subtitle`;
+  const labelledBy = props.subtitle ? `${titleId} ${subtitleId}` : titleId;
   const customizing = props.customizing === true;
   // What the body reported, while it is drawn. Withdrawn by the body itself when it unmounts.
   const [reported, setReported] = useState<CardState | null>(null);
@@ -218,7 +228,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
-  const flags = frameFlags(props, state, customizing);
+  // A refetch marks the card busy even while its body reports a state from the last answer.
+  const flags = frameFlags(props, state, {
+    customizing,
+    refreshing: given.kind === "refreshing",
+  });
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
@@ -231,7 +245,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
           // `region` + the title as its name is what lets a screen-reader user jump
           // between widgets and know which one they landed on.
           role="region"
-          aria-labelledby={titleId}
+          aria-labelledby={labelledBy}
           data-card-id={cardId}
           data-width={props.width}
           data-tier={tier}
@@ -243,6 +257,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
         >
           <WidgetCardHeader
             titleId={titleId}
+            subtitleId={subtitleId}
             title={title}
             subtitle={props.subtitle}
             leading={props.leading}
@@ -371,6 +386,7 @@ function heldLayout(
  */
 function WidgetCardHeader({
   titleId,
+  subtitleId,
   title,
   subtitle,
   leading,
@@ -379,6 +395,7 @@ function WidgetCardHeader({
   headerAction,
 }: {
   titleId: string;
+  subtitleId: string;
   title: string;
   subtitle?: string | undefined;
   leading?: ReactNode;
@@ -406,6 +423,7 @@ function WidgetCardHeader({
         </h2>
         {subtitle && (
           <p
+            id={subtitleId}
             className="truncate text-xs leading-4 text-muted-foreground"
             data-testid="widget-card-subtitle"
           >
@@ -442,7 +460,11 @@ function WidgetCardFooter({
       inert={inert || undefined}
       // No top rule and no tint: `CardFooter` defaults to both, which reads as a separate element
       // attached to the card rather than as part of it.
-      className="flex items-center justify-end border-0 bg-transparent p-0 pt-3"
+      className={cn(
+        "flex items-center justify-end border-0 bg-transparent p-0 pt-3",
+        // Out of reach in customise mode, and dimmed with the body so it does not look usable.
+        inert && "opacity-55"
+      )}
     >
       {/* Foreground, with the brand on the underline: a brand primary is any colour its owner
           picked, and small text in it can fall under AA contrast. */}

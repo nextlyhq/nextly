@@ -418,19 +418,8 @@ and an error that keeps the title and offers Retry for that card only. Figures g
 
 A component whose own data says the card is not ready (the answer holds nothing it can show, or
 something it cannot read) returns `FrameState` from `@nextlyhq/plugin-sdk/admin` with that state,
-and the frame draws it:
-
-```tsx
-import { FrameState } from "@nextlyhq/plugin-sdk/admin";
-
-if (orders.length === 0) {
-  return (
-    <FrameState
-      state={{ kind: "empty", empty: { title: "No orders yet" } }}
-    />
-  );
-}
-```
+and the frame draws it in the body's place: for an empty answer, for example,
+`<FrameState state={{ kind: "empty", empty: { title: "No orders yet" } }} />`.
 
 A widget that should leave the dashboard while it has nothing to show, rather than say so,
 declares `hidesWhenEmpty: true`. A card that failed, or whose source the reader cannot see, is

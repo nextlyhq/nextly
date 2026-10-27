@@ -34,6 +34,7 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
+import { resolveWidgetOutcome } from "../outcome";
 import { GRID_GAP_CLASS } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
@@ -211,19 +212,42 @@ function cellSettingsWrite(
 }
 
 /**
- * When the OLDEST answer drawn on the dashboard arrived, or `undefined` before any has: the time
- * the page's one freshness line is true of, since every card on show is at least that fresh. Only
- * a card that asked counts, as only it has an answer to be stale.
+ * Whether a card is off the dashboard because its widget hides when empty and its answer is, by
+ * the outcome the renderer draws from (`resolveWidgetOutcome`), so the two cannot disagree.
+ */
+function hiddenWhileEmpty(
+  row: ArrangedWidget,
+  slots: Record<string, WidgetSlot>,
+  cellSlots: CellSlots
+): boolean {
+  if (row.widget.hidesWhenEmpty !== true) return false;
+  const outcome = resolveWidgetOutcome(
+    row.widget,
+    slots[row.placementId],
+    key => cellSlots[row.placementId]?.[key]
+  );
+  return outcome.state === "empty";
+}
+
+/**
+ * When the OLDEST answer on show arrived, or `undefined` before any has: the time the page's one
+ * freshness line is true of, since every card on show is at least that fresh. Only a card that
+ * asked and is drawn counts: a card hidden while its answer is empty is not on show.
  */
 function oldestAnswer(
   rows: readonly ArrangedWidget[],
-  requested: ReadonlySet<string>,
-  updatedAtFor: (placementId: string) => Date | null
+  answers: {
+    requested: ReadonlySet<string>;
+    slots: Record<string, WidgetSlot>;
+    cellSlots: CellSlots;
+    updatedAtFor: (placementId: string) => Date | null;
+  }
 ): Date | undefined {
   let oldest: Date | undefined;
   for (const row of rows) {
-    if (!requested.has(row.placementId)) continue;
-    const at = updatedAtFor(row.placementId);
+    if (!answers.requested.has(row.placementId)) continue;
+    if (hiddenWhileEmpty(row, answers.slots, answers.cellSlots)) continue;
+    const at = answers.updatedAtFor(row.placementId);
     if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
   }
   return oldest;
@@ -249,7 +273,12 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
-  const answeredAt = oldestAnswer(rows, requested, updatedAtFor);
+  const answeredAt = oldestAnswer(rows, {
+    requested,
+    slots,
+    cellSlots,
+    updatedAtFor,
+  });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.

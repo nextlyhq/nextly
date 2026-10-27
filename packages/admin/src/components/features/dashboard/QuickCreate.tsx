@@ -86,10 +86,15 @@ export function QuickCreate(): JSX.Element | null {
     data,
     isLoading: collectionsLoading,
     error: collectionsError,
+    refetch: refetchCollections,
   } = useCollections({
     pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
   });
-  const { canAccessCollection, content } = useCurrentUserPermissions();
+  const {
+    canAccessCollection,
+    content,
+    retry: retryPermissions,
+  } = useCurrentUserPermissions();
   const tier = useCardTier();
 
   const creatable = useMemo(() => {
@@ -126,6 +131,11 @@ export function QuickCreate(): JSX.Element | null {
         state={{
           kind: "error",
           message: "What you can create could not be read just now.",
+          // Asks both again: the card needs the collections and the answer about them.
+          retry: () => {
+            void refetchCollections();
+            retryPermissions();
+          },
         }}
       />
     );

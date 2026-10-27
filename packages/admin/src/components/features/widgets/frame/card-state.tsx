@@ -129,10 +129,30 @@ export function FrameState({
   latest.current = state;
   const key = stateKey(state);
   useLayoutEffect(() => {
-    report?.(latest.current);
+    report?.(withCurrentRetry(latest.current, latest));
     return () => report?.(null);
   }, [report, key]);
   return null;
+}
+
+/**
+ * A reported error whose Retry always calls the body's CURRENT callback. The report is kept until
+ * what the state says changes, so a callback captured with it would go stale when the body's
+ * settings change with the same message; reading it through the ref keeps Retry asking the card's
+ * question as it is now.
+ */
+function withCurrentRetry(
+  state: ReportedState,
+  latest: { readonly current: ReportedState }
+): ReportedState {
+  if (state.kind !== "error" || state.retry === undefined) return state;
+  return {
+    ...state,
+    retry: () => {
+      const now = latest.current;
+      if (now.kind === "error") now.retry?.();
+    },
+  };
 }
 
 /** What makes two reports of a state the same report. */

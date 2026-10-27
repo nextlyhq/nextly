@@ -5,7 +5,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
@@ -278,6 +278,25 @@ describe("the quick-create card", () => {
     render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+  });
+
+  it("offers Retry when a read failed, asking both reads again", () => {
+    const refetch = vi.fn();
+    const retry = vi.fn();
+    mockCollections.mockReturnValue({
+      ...listing([collection({ name: "posts" })], { error: new Error("boom") }),
+      refetch,
+    } as unknown as ReturnType<typeof useCollections>);
+    mockPermissions.mockReturnValue({
+      ...granting(["create-posts"]),
+      retry,
+    } as unknown as ReturnType<typeof useCurrentUserPermissions>);
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("makes no claim when either request FAILED, and says it could not be read", () => {

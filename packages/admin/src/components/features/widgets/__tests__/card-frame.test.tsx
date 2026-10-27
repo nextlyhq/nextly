@@ -82,6 +82,8 @@ describe("the card frame", () => {
     );
     expect(screen.getByText("An entry").closest("[inert]")).not.toBeNull();
     expect(screen.getByText("View all").closest("[inert]")).not.toBeNull();
+    // The footer dims with the body, so its link does not look usable.
+    expect(screen.getByTestId("widget-card-footer")).toHaveClass("opacity-55");
     // The quick setting is for using the card, not arranging it: it keeps its
     // place, so the header keeps its shape, and is out of reach.
     expect(screen.getByText("30 days").closest("[inert]")).not.toBeNull();

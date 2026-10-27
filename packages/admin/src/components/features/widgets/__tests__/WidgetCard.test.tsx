@@ -2,8 +2,8 @@
  * The card is the one anatomy every widget wears, so these assert what a user
  * or a screen reader can observe about it, not which props were forwarded.
  */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
 import { WidgetCard } from "../WidgetCard";
@@ -178,8 +178,10 @@ describe("the header", () => {
     expect(screen.getByTestId("widget-card-subtitle")).toHaveTextContent(
       "Count"
     );
-    // The region is named by its subject alone, as the reader scans it.
-    expect(screen.getByRole("region", { name: "Posts" })).toBeInTheDocument();
+    // The region is named by both, so two cards about one subject are told apart aloud.
+    expect(
+      screen.getByRole("region", { name: "Posts Count" })
+    ).toBeInTheDocument();
   });
 
   it("draws no subtitle when the title is the widget's own name", () => {
@@ -279,6 +281,44 @@ describe("the frame's spacing", () => {
 });
 
 describe("a state the body reports", () => {
+  it("stays marked busy while a new answer is on the way", () => {
+    // The body reports the empty state it read from the last answer; the refetch is the frame's.
+    render(
+      <WidgetCard title="Posts" state={{ kind: "refreshing" }}>
+        <FrameState
+          state={{ kind: "empty", empty: { title: "No posts yet" } }}
+        />
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("card-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "true"
+    );
+  });
+
+  it("retries with the body's current callback, though its message has not changed", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender } = render(
+      <WidgetCard title="Posts">
+        <FrameState
+          state={{ kind: "error", message: "Unreadable.", retry: first }}
+        />
+      </WidgetCard>
+    );
+    rerender(
+      <WidgetCard title="Posts">
+        <FrameState
+          state={{ kind: "error", message: "Unreadable.", retry: second }}
+        />
+      </WidgetCard>
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  });
+
   it("is drawn by the frame in the body's place, and named on the card", () => {
     render(
       <WidgetCard title="Posts">

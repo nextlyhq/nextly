@@ -265,6 +265,11 @@ interface PluginAdminWidgetBase {
    */
   dismissible?: boolean;
   /**
+   * @experimental Whether the dashboard takes this card out of the grid while its answer is
+   * empty, rather than drawing the empty state; see `WidgetDefinition.hidesWhenEmpty`.
+   */
+  hidesWhenEmpty?: boolean;
+  /**
    * What a reader may change about this card, drawn by the settings panel.
    *
    * On the BASE for the same reason `defaultOrder` is: any widget may offer
