@@ -33,7 +33,7 @@ interface PreconditionAdapter {
  * A language's English name ("English" for `en`), for a message about its values. The code itself
  * when the runtime cannot name it.
  */
-export function languageName(code: string): string {
+function languageName(code: string): string {
   try {
     return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
   } catch {
