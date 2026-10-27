@@ -13,7 +13,7 @@ import type { Logger } from "../../../services/shared";
 import {
   permissionIdsBySlug,
   seedPublicReadGrants,
-  withdrawDisabledPluginGrants,
+  withdrawUndeclaredPluginGrants,
 } from "./public-read-grant";
 
 const quiet = {
@@ -134,7 +134,7 @@ function site(
           ["read-posts", "p-posts"],
         ]),
       publicHolds: async () => new Set<string>(),
-      declared: () => ({ grants: [], withheld: [], refused: [] }),
+      declared: () => ({ grants: [], refused: [] }),
       addOnce,
       withdraw: async () => [],
       meta,
@@ -188,6 +188,7 @@ describe("seedPublicReadGrants", () => {
     expect(JSON.parse(meta.rows.get("public-role-granted") ?? "{}")).toEqual({
       role: "public",
       granted: ["p-media", "p-posts"],
+      declared: {},
     });
   });
 
@@ -290,27 +291,42 @@ describe("seedPublicReadGrants timing", () => {
   });
 });
 
-describe("withdrawDisabledPluginGrants", () => {
+describe("withdrawUndeclaredPluginGrants", () => {
+  const tickets = { action: "create", resource: "tickets", owner: "tickets" };
+
   /**
-   * Public holding `create-tickets`, recorded as boot seeding's grant, and
-   * what a withdrawal took back and logged.
+   * Public holding `create-tickets`, recorded as boot seeding's grant, with
+   * `declared` the plugin grants the record names and `declaring` those an
+   * enabled plugin declares now; and what a withdrawal took back and logged.
    */
-  function withdrawal(granted: string[]) {
+  function withdrawal({
+    granted = ["p-tickets"],
+    declared = { "p-tickets": tickets } as Record<string, typeof tickets>,
+    declaring = [] as Array<typeof tickets>,
+    readRule = false,
+  } = {}) {
     const meta = memoryMeta();
     meta.rows.set(
       "public-role-granted",
-      JSON.stringify({ role: "public", granted })
+      JSON.stringify({ role: "public", granted, declared })
     );
     const held = new Set(["p-tickets"]);
     const warned: string[] = [];
     const deps = {
-      publicRoleId: async () => "public",
-      permissionIds: async () => new Map([["create-tickets", "p-tickets"]]),
-      declared: () => ({
-        grants: [],
-        withheld: [{ action: "create", resource: "tickets", owner: "tickets" }],
-        refused: [],
-      }),
+      ...site(meta).seeding,
+      targets: async () => [
+        {
+          kind: "collection" as const,
+          slug: "tickets",
+          access: { read: readRule },
+        },
+      ],
+      permissionIds: async () =>
+        new Map([
+          ["create-tickets", "p-tickets"],
+          ["read-tickets", "p-tickets"],
+        ]),
+      declared: () => ({ grants: declaring, refused: [] }),
       withdraw: async (
         _roleId: string,
         unwanted: ReadonlyArray<{ id: string }>,
@@ -326,7 +342,6 @@ describe("withdrawDisabledPluginGrants", () => {
         for (const id of removed) held.delete(id);
         return removed;
       },
-      meta,
       logger: {
         ...quiet,
         warn: (message: unknown) => warned.push(String(message)),
@@ -335,25 +350,58 @@ describe("withdrawDisabledPluginGrants", () => {
     return { deps, held, meta, warned };
   }
 
-  it("takes back and forgets a grant boot seeding recorded, and logs it", async () => {
-    const { deps, held, meta, warned } = withdrawal(["p-tickets"]);
+  it("takes back and forgets a plugin grant no enabled plugin declares, and logs it", async () => {
+    const { deps, held, meta, warned } = withdrawal();
 
-    await withdrawDisabledPluginGrants(deps);
+    await withdrawUndeclaredPluginGrants(deps);
 
     expect(held.has("p-tickets")).toBe(false);
-    expect(JSON.parse(meta.rows.get("public-role-granted")!).granted).toEqual(
-      []
-    );
+    expect(JSON.parse(meta.rows.get("public-role-granted")!)).toMatchObject({
+      granted: [],
+      declared: {},
+    });
     expect(warned).toEqual([expect.stringContaining('"create-tickets"')]);
   });
 
-  it("leaves a grant no boot recorded, as an owner gave it", async () => {
-    const { deps, held, warned } = withdrawal([]);
+  it("keeps a plugin grant an enabled plugin still declares", async () => {
+    const { deps, held } = withdrawal({ declaring: [tickets] });
 
-    await withdrawDisabledPluginGrants(deps);
+    await withdrawUndeclaredPluginGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(true);
+  });
+
+  it("keeps a grant this boot also makes, for a read its rule opens", async () => {
+    const read = { ...tickets, action: "read" };
+    const { deps, held } = withdrawal({
+      declared: { "p-tickets": read },
+      readRule: true,
+    });
+
+    await withdrawUndeclaredPluginGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(true);
+  });
+
+  it("leaves a grant no plugin was recorded for, as an owner gave it", async () => {
+    const { deps, held, warned } = withdrawal({ declared: {} });
+
+    await withdrawUndeclaredPluginGrants(deps);
 
     expect(held.has("p-tickets")).toBe(true);
     expect(warned).toEqual([]);
+  });
+
+  it("reads a record written before plugin grants as naming none", async () => {
+    const { deps, held, meta } = withdrawal();
+    meta.rows.set(
+      "public-role-granted",
+      JSON.stringify({ role: "public", granted: ["p-tickets"] })
+    );
+
+    await withdrawUndeclaredPluginGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(true);
   });
 });
 

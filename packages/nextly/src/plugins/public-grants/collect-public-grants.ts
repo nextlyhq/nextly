@@ -3,9 +3,9 @@
  * collections (`contributes.publicGrants`), resolved to the slugs the host
  * installed those collections under.
  *
- * Pure: no database access. A disabled plugin's grants are returned apart, as
- * withheld, so the caller can take back one it made while the plugin was
- * enabled. A plugin may only open its own collections to visitors, so a grant
+ * Pure: no database access. A disabled plugin's grants are not collected, so
+ * the caller takes back one it made while enabled, as it does one a plugin no
+ * longer declares. A plugin may only open its own collections to visitors, so a grant
  * naming a collection it does not contribute, or an action other than `read`
  * and `create`, is refused here and returned for the caller to log rather
  * than granted.
@@ -33,25 +33,22 @@ export interface RefusedPublicGrant {
 }
 
 /**
- * Every plugin's declared Public grants, split into those to make, those
- * withheld because their plugin is disabled, and those refused. A grant names
+ * Every enabled plugin's declared Public grants, split into those to make and
+ * those refused. A grant names
  * its collection by the slug the plugin declares; a host's rename of that
  * collection is followed, as `ctx.self` follows it.
  */
 export function collectPublicGrants(plugins: readonly PluginDefinition[]): {
   grants: CollectedPublicGrant[];
-  withheld: CollectedPublicGrant[];
   refused: RefusedPublicGrant[];
 } {
   const grants: CollectedPublicGrant[] = [];
-  const withheld: CollectedPublicGrant[] = [];
   const refused: RefusedPublicGrant[] = [];
   for (const plugin of plugins) {
     // A plugin the host disabled keeps its collections but opens nothing:
     // its routes and behaviour are off, so visitors get no grant from it, and
-    // one it made while enabled is withheld for the caller to take back. Its
-    // refusals are not reported, since nothing it declares is acted on.
-    const enabled = plugin.enabled !== false;
+    // nothing it declares is acted on or reported.
+    if (plugin.enabled === false) continue;
     // Its own collections, declared slug to the slug the host installed it
     // under: the map `ctx.self` reads, so a grant lands on the collection the
     // plugin's own code works on.
@@ -59,15 +56,15 @@ export function collectPublicGrants(plugins: readonly PluginDefinition[]): {
     for (const { collection, action } of plugin.contributes?.publicGrants ??
       []) {
       if (!Object.hasOwn(own, collection) || !GRANTABLE.has(action)) {
-        if (enabled) refused.push({ action, collection, owner: plugin.name });
+        refused.push({ action, collection, owner: plugin.name });
         continue;
       }
-      (enabled ? grants : withheld).push({
+      grants.push({
         action,
         resource: own[collection],
         owner: plugin.name,
       });
     }
   }
-  return { grants, withheld, refused };
+  return { grants, refused };
 }

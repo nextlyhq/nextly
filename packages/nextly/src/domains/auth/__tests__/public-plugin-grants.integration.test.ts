@@ -8,9 +8,10 @@
  * permission before the plugin declared it is granted it once. A host's rename
  * of the collection is followed. A grant on a collection the plugin does not
  * contribute, or of an action other than read or create, is refused and
- * logged, and nothing is granted for it. Disabling the plugin takes back a
- * grant it made, once and logged, and enabling it again grants it again,
- * unless the owner had taken it away first.
+ * logged, and nothing is granted for it. A grant lasts only while an enabled
+ * plugin declares it: disabling the plugin, removing it or no longer
+ * declaring the grant takes it back, once and logged, and declaring it again
+ * grants it again, unless the owner had taken it away first.
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
@@ -152,6 +153,29 @@ function setEnabled(nextly: TestNextly, enabled: boolean) {
   }
 }
 
+/**
+ * The Public grants the plugin declares, as the next boot finds them: an
+ * upgrade that drops one, or brings it back.
+ */
+function setDeclared(
+  nextly: TestNextly,
+  publicGrants: Array<{ collection: string; action: "read" | "create" }>
+) {
+  for (const plugin of nextly.getService("config").plugins ?? []) {
+    plugin.contributes = { ...plugin.contributes, publicGrants };
+  }
+}
+
+/**
+ * The plugin gone from the host's config, as the next boot finds it. Its
+ * collection stays registered here; on a real boot it would be gone too, and
+ * its permissions orphaned, which takes nothing from what is checked: whether
+ * Public still holds the grant.
+ */
+function removePlugin(nextly: TestNextly) {
+  nextly.getService("config").plugins?.splice(0);
+}
+
 /** The removals logged for `permission`. */
 const removals = (permission: string) =>
   logged.warn.filter(m => m.includes(`Removed "${permission}"`));
@@ -252,6 +276,45 @@ describe.each(getConfiguredTestDialects())(
       await seedPermissionsAndRolePresets();
 
       expect(await publicHolds(nextly)).not.toContain("create-tickets");
+    });
+
+    it("takes a grant back once the plugin no longer declares it, and grants it again when it does", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+
+      setDeclared(nextly, []);
+      await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+      expect(removals("create-tickets")).toHaveLength(1);
+
+      setDeclared(nextly, [{ collection: "tickets", action: "create" }]);
+      await seedPermissionsAndRolePresets();
+      expect(await publicHolds(nextly)).toContain("create-tickets");
+    });
+
+    it("takes a removed plugin's grant back", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+
+      removePlugin(nextly);
+      await seedPermissionsAndRolePresets();
+
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+      expect(removals("create-tickets")).toHaveLength(1);
+    });
+
+    it("does not grant back on declaring again what an owner took away before it was dropped", async () => {
+      const nextly = await boot(dialect);
+      await seedPermissionsAndRolePresets();
+      await takeAway(nextly, "create-tickets");
+
+      setDeclared(nextly, []);
+      await seedPermissionsAndRolePresets();
+      setDeclared(nextly, [{ collection: "tickets", action: "create" }]);
+      await seedPermissionsAndRolePresets();
+
+      expect(await publicHolds(nextly)).not.toContain("create-tickets");
+      expect(removals("create-tickets")).toHaveLength(0);
     });
 
     it("keeps what an owner gave by hand while the plugin is disabled", async () => {

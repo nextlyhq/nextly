@@ -20,7 +20,7 @@ import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
   seedPublicReadGrants,
-  withdrawDisabledPluginGrants,
+  withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
@@ -272,10 +272,10 @@ async function seedEverything(): Promise<void> {
       seedPublicReadGrants(publicGrantSeeding())
     );
   } else if (publicRoleSeeded) {
-    // Taking back what a disabled plugin had Public granted needs no
-    // permission made, so it is not left for a later boot.
-    await seedingStep("disabled plugins' public grants", () =>
-      withdrawDisabledPluginGrants(publicGrantSeeding())
+    // Taking back a plugin grant no enabled plugin declares any longer needs
+    // no permission made, so it is not left for a later boot.
+    await seedingStep("public role's undeclared plugin grants", () =>
+      withdrawUndeclaredPluginGrants(publicGrantSeeding())
     );
   }
   // A plugin role is created once and never revisited: a later boot skips a
