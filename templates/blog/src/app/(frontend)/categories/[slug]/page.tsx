@@ -19,14 +19,16 @@ import {
   getPostsByCategory,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { archiveStaticParams } from "@/lib/static-params";
 
 // Pre-render known category pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so a
 // category or post change busts the tag and this page regenerates on the
 // next request — no time-based `revalidate`. New categories render on demand.
 export async function generateStaticParams() {
-  const slugs = await getAllCategorySlugs();
-  return slugs.map(slug => ({ slug }));
+  // Never empty, so the build learns this page reads the request: see
+  // archiveStaticParams.
+  return archiveStaticParams(await getAllCategorySlugs());
 }
 
 export async function generateMetadata({
