@@ -270,13 +270,17 @@ async function visitorVerdict(
     // The Public role's grants could not be read: refused, never guessed.
     return { allowed: false, refusal: "failed", error };
   }
-  const outcome = await askRule(visitor, q.action, target);
-  // A rule that answers `false` or fails refuses a visitor outright, and a
-  // publish or an unpublish needs a signed-in user whatever the rule says.
+  // Asked in the decision's order, the permission before the rule: a
+  // visitor never publishes or unpublishes, and one the Public role does not
+  // grant the action is refused as needing a signed-in caller before its
+  // rule, application code, is run.
+  const outcomes = await askRules(visitor, q.action, target);
+  if (outcomes === null) return UNAUTHENTICATED;
+  const outcome = outcomes.action;
+  // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
   }
-  if (isLifecycle(q.action)) return UNAUTHENTICATED;
   // Otherwise a declared rule lets a visitor through only by answering
   // `true`.
   if (!outcomeAllows(outcome)) {
