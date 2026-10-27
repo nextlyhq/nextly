@@ -342,9 +342,17 @@ function instanceFields(
   { single, many }: { single?: string; many?: string[] },
   { reach, untypedZoneRows }: Pick<PasswordWalk, "reach" | "untypedZoneRows">
 ): readonly NamedField[] | undefined {
+  const typed = readFieldGroupType(instance);
+  // A snapshot (`direct`) is the server's own record of an instance, and
+  // tags it with the field group it held when captured, which the field
+  // may have been pointed away from since: it is read by that one. A live
+  // value's tag is the writer's to set, so there it names only one of the
+  // field's own field groups.
+  if (reach.direct === true && typed !== undefined) {
+    return reach.fieldsOf(typed);
+  }
   if (single !== undefined) return reach.fieldsOf(single);
   const candidates = many ?? [];
-  const typed = readFieldGroupType(instance);
   if (typed !== undefined) {
     return candidates.includes(typed) ? reach.fieldsOf(typed) : undefined;
   }
@@ -713,6 +721,35 @@ function forEachPairedRow(
 }
 
 /**
+ * Read a stored value's passwords for {@link storedPlainPasswords} and
+ * {@link hashStoredPlainPasswords}: each one `isHashed` doesn't recognise, in
+ * the order the walk meets them. A blank value is not a password, as a write
+ * reads one. An instance of a field group `reach` has no fields for, or an
+ * untyped zone row, is left as it is, since its passwords cannot be told
+ * from its other values.
+ */
+function visitStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean,
+  visit: (level: Record<string, unknown>, name: string, value: string) => void
+): void {
+  walkPasswordLevels(data, fields, {
+    reach,
+    onUnknown: () => false,
+    untypedZoneRows: "unknown",
+    level: (level, levelFields) => {
+      for (const name of passwordNames(levelFields)) {
+        const value = level[name];
+        if (typeof value !== "string" || value.trim() === "") continue;
+        if (!isHashed(value)) visit(level, name, value);
+      }
+    },
+  });
+}
+
+/**
  * Whether a single instance is the stored one: the same id, or none on
  * either side. One with another id replaces it and takes none of its values.
  */
@@ -741,6 +778,53 @@ function parsedValue(value: unknown): unknown {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The passwords `data` holds as given, at every depth: one entry for each
+ * value `isHashed` does not recognise as a hash. What
+ * {@link hashStoredPlainPasswords} would hash, without changing anything.
+ */
+export function storedPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): string[] {
+  const found: string[] = [];
+  visitStoredPlainPasswords(
+    detachForReading(data),
+    fields,
+    reach,
+    isHashed,
+    (_level, _name, value) => found.push(value)
+  );
+  return found;
+}
+
+/**
+ * Hash in place each password {@link storedPlainPasswords} finds in `data`, so
+ * it still verifies, and return how many. Each occurrence gets a hash, and a
+ * salt, of its own. A container held as JSON text is written back as text.
+ */
+export async function hashStoredPlainPasswords(
+  data: Record<string, unknown>,
+  fields: readonly NamedField[],
+  reach: FieldGroupReach,
+  isHashed: (value: string) => boolean
+): Promise<number> {
+  // Hashing is asynchronous and the walk is not, so the values are read
+  // first and hashed, then put in place by a second walk, as
+  // `hashPasswordFieldValues` does.
+  const plain = storedPlainPasswords(data, fields, reach, isHashed);
+  if (plain.length === 0) return 0;
+  const hashes: string[] = [];
+  for (const value of plain) hashes.push(await hashPassword(value));
+  let next = 0;
+  visitStoredPlainPasswords(data, fields, reach, isHashed, (level, name) => {
+    level[name] = hashes[next++];
+  });
+  return plain.length;
 }
 
 /** A copy to walk, so reading what a value holds never rewrites it. */

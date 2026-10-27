@@ -37,6 +37,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
+  allWidgets,
   declaredWidgets,
   placedByDefault,
   widthFacts,
@@ -51,9 +52,10 @@ import {
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
-  COUNT_WIDGET_ID,
-  countCardConversion,
-} from "../domains/widgets/count-conversion";
+  conversionFacts,
+  generatedCardConversion,
+  registeredWidths,
+} from "../domains/widgets/generated-card-conversion";
 import {
   getStartedDrawn,
   getStartedPlacement,
@@ -78,7 +80,6 @@ import {
   type WidgetPlacement,
   type WidgetRetirements,
 } from "../domains/widgets/layout";
-import { readableCollectionsOf } from "../domains/widgets/publish";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -181,8 +182,8 @@ function wholeArrangement(
   stored: StoredLayout | undefined,
   conversion: WidgetRetirements
 ): WidgetPlacement[] {
-  // The saved count and health cards as Count cards, for THIS reader
-  // (`countCardConversion`): applied here, so what a reader is shown, what a
+  // The saved generated cards as the widgets offered per collection, for THIS
+  // reader (`generatedCardConversion`): applied here, so what a reader is shown, what a
   // writer carries back and what a query may ask for are one converted
   // arrangement.
   return applyRetirements(
@@ -312,20 +313,30 @@ async function visibleWidgets(auth: AuthContext) {
   // collection the install holds, both from the refresh the audience pass
   // just ran: the one answer the conversion, the withheld cards and the scope
   // are all taken from.
-  const readable = readableCollectionsOf(audience.visible);
+  const readable = audience.readableCollections;
   const registered = audience.registeredCollections;
-  const count = audience.visible.find(widget => widget.id === COUNT_WIDGET_ID);
+  // The generated cards from the audience's own snapshot, taken in the same
+  // span as the visible widgets and the registered collections: a re-read of
+  // the global set could hold another request's refresh.
+  const generatedById = new Map(
+    audience.generated.map(widget => [widget.id, widget])
+  );
   return {
     caller,
     audience,
     probe,
     widgets,
     visibleIds: new Set(widgets.map(widget => widget.id)),
-    conversion: countCardConversion(
+    conversion: generatedCardConversion(
       readable,
       registered,
       new Set(declaredWidgets().map(widget => widget.id)),
-      count === undefined ? undefined : widthFacts(count).allowedWidths
+      // Each successor's widths as registered for the install, whether or not
+      // this reader may see the successor.
+      registeredWidths(allWidgets()),
+      // The cards core generates today, by id: only one of them is a retired
+      // core card, and a timeline converts only while it counts as Over time.
+      widgetId => generatedById.get(widgetId)
     ),
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the
@@ -338,7 +349,8 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets)
+      collectionSettingsToken(widgets),
+      conversionFacts(audience.generated)
     ),
   };
 }
@@ -411,17 +423,22 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // own settings, which is why this is decided here, after the row is read,
   // and not by a condition before it. `?getStarted=1` asks for the answer of a
   // removed card, which the admin needs as it restores one.
+  const askedForSteps = new URL(req.url).searchParams.get("getStarted") === "1";
   const getStarted = await getStartedView(
     view.probe,
     getStartedPlacement(arrangement),
-    new URL(req.url).searchParams.get("getStarted") === "1"
+    askedForSteps
   );
   const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
   // The default as a reader following it would be handed it: their card has
-  // no settings yet, so it is drawn from the answer alone. With no answer
-  // worked out, the card is left out; a reset reads it afresh.
+  // no settings yet, so it is drawn from the answer alone. The steps are
+  // worked out when this read worked them out, or when the admin asks
+  // (`?getStarted=1`), as it does before staging a reset: an arrangement with
+  // no card of its own still resets onto a default that may draw one.
   const steps =
-    getStarted.answer === null ? null : await view.probe.getStarted();
+    getStarted.answer === null && !askedForSteps
+      ? null
+      : await view.probe.getStarted();
   const defaults = withoutDormantCard(
     visibleArrangement(undefined, view),
     card => steps !== null && getStartedDrawn(steps, card.config)
