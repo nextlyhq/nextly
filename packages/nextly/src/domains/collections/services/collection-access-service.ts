@@ -17,6 +17,7 @@ import {
   collectionGateVerdict,
 } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
+import { actorForVisitor } from "../../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
@@ -30,6 +31,7 @@ import type { AccessOperation } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { MetaService } from "../../meta/services/meta-service";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 
@@ -134,6 +136,16 @@ export class CollectionAccessService extends BaseService {
             executor ?? this.db,
             this.dialect
           ),
+        // A visitor likewise: the Public role as this database records it,
+        // its `nextly_meta` read through a reader on this service's adapter.
+        visitorWithoutService: () =>
+          actorForVisitor({
+            executor: executor ?? this.db,
+            own: {
+              meta: new MetaService(this.adapter, this.logger),
+              dialect: this.dialect,
+            },
+          }),
       });
     const verdict = await ask(operation);
     if (verdict.allowed) return null;

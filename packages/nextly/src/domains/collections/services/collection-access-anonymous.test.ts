@@ -219,7 +219,8 @@ describe("checkCollectionAccess with no user", () => {
 
   it("refuses publish with no user even when the inline rule would admit", async () => {
     // Publishing has no identity to stamp, so a rule that admits the anonymous
-    // caller does not lift the refusal: the rule is asked, and then overruled.
+    // caller does not lift the refusal: a visitor never publishes, which is
+    // decided before the rule, application code, is run.
     const rule = vi.fn(() => true);
     const { service } = buildService(rule);
 
@@ -229,7 +230,7 @@ describe("checkCollectionAccess with no user", () => {
       user: undefined,
     });
 
-    expect(rule).toHaveBeenCalled();
+    expect(rule).not.toHaveBeenCalled();
     expect(result?.success).toBe(false);
     // A caller with no identity is asked to sign in (401).
     expect(result?.statusCode).toBe(401);

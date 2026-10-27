@@ -150,13 +150,25 @@ export interface GateQuestion {
    * collection, the permission read from the gate's own database.
    */
   readonly permissionWithoutService: () => Promise<boolean>;
+  /**
+   * Without the access-control service, the visitor as the gate's own
+   * database holds it: the Public role read there, as a signed-in user's
+   * permission is. Absent, the Public role is read on the pool.
+   */
+  readonly visitorWithoutService?: () => Promise<VisitorActor>;
 }
 
 /** What the collection gate is asked. */
 export type CollectionQuestion = GateQuestion;
 
-/** What the Single gate is asked. */
-export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
+/**
+ * What the Single gate is asked. It reads a signed-in user's permission on
+ * the pool, and so a visitor's Public role too.
+ */
+export type SingleQuestion = Omit<
+  GateQuestion,
+  "permissionWithoutService" | "visitorWithoutService"
+>;
 
 /**
  * The decision's answer, for a deviation to compare today's against: with the
@@ -265,18 +277,22 @@ async function visitorVerdict(
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
   let visitor: VisitorActor;
   try {
-    visitor = await actorForVisitor({ executor: q.executor });
+    visitor = await visitorOf(q);
   } catch (error) {
     // The Public role's grants could not be read: refused, never guessed.
     return { allowed: false, refusal: "failed", error };
   }
-  const outcome = await askRule(visitor, q.action, target);
-  // A rule that answers `false` or fails refuses a visitor outright, and a
-  // publish or an unpublish needs a signed-in user whatever the rule says.
+  // Asked in the decision's order, the permission before the rule: a
+  // visitor never publishes or unpublishes, and one the Public role does not
+  // grant the action is refused as needing a signed-in caller before its
+  // rule, application code, is run.
+  const outcomes = await askRules(visitor, q.action, target);
+  if (outcomes === null) return UNAUTHENTICATED;
+  const outcome = outcomes.action;
+  // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
   }
-  if (isLifecycle(q.action)) return UNAUTHENTICATED;
   // Otherwise a declared rule lets a visitor through only by answering
   // `true`.
   if (!outcomeAllows(outcome)) {
@@ -284,6 +300,17 @@ async function visitorVerdict(
     return INSUFFICIENT;
   }
   return visitorPassVerdict(visitor, q, target, outcome);
+}
+
+/**
+ * The visitor a gate judges. Without the service, as the gate's own database
+ * holds it where it has one, as a signed-in user's permission is read there;
+ * otherwise on the pool, or the caller's transaction.
+ */
+function visitorOf(q: GateQuestion): Promise<VisitorActor> {
+  return !q.rules && q.visitorWithoutService
+    ? q.visitorWithoutService()
+    : actorForVisitor({ executor: q.executor });
 }
 
 /**

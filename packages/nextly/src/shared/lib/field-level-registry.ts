@@ -26,6 +26,7 @@
  * @module shared/lib/field-level-registry
  */
 
+import { actorForVisitor } from "../../auth/access/resolve-actor";
 import {
   buildRuleContext,
   type HeldPermission,
@@ -118,7 +119,18 @@ function grantsResolver(
       return pending;
     }
     if (!userId) {
-      pending = Promise.resolve({ permissions: [], roles: [] });
+      // A plugin's person holds no role and no permission. A visitor (no
+      // user, no person) holds what the Public role grants, read through the
+      // same actor the collection and Single rules are handed, so a field
+      // rule and the rule above it answer a visitor alike. A read of Public
+      // that fails rejects, and the rule is denied as a user's would be.
+      pending =
+        currentPrincipal() !== null
+          ? Promise.resolve({ permissions: [], roles: [] })
+          : actorForVisitor({ executor }).then(visitor => ({
+              permissions: visitor.permissions,
+              roles: [],
+            }));
       return pending;
     }
     pending = Promise.all([
@@ -767,10 +779,10 @@ export async function applyFieldWriteAccess(opts: {
       user: opts.user,
       id: opts.id,
       target: fieldRuleTarget(opts.kind, opts.slug),
-      // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
-      // answers `{ permissions: [], roles: [] }` — so a rule written as
-      // `({ permissions }) => permissions.includes(...)` refuses it, which is
-      // the correct answer rather than an accident of the shape.
+      // An anonymous writer holds what the Public role grants, and no role
+      // (see `grantsResolver`), so a rule written as
+      // `({ permissions }) => permissions.includes(...)` answers it as the
+      // collection rule does, and refuses it what Public does not grant.
       grants:
         opts.grants ??
         grantsResolver(
@@ -1086,7 +1098,7 @@ export async function applyFieldReadAccess(
       target: fieldRuleTarget(opts.kind, opts.slug),
       // An unauthenticated read still runs the rules — this path, unlike the
       // write one, does not bail without a user — so the resolver is handed the
-      // same absent id and answers with no grants rather than not being called.
+      // same absent id and answers with what the Public role grants.
       grants:
         opts.grants ??
         grantsResolver(

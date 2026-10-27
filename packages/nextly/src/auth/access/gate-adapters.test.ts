@@ -238,6 +238,35 @@ describe("a visitor's write", () => {
   });
 });
 
+describe("a visitor the Public role does not grant the action", () => {
+  it("is refused as needing a signed-in caller, and its rule is not asked", async () => {
+    // The permission comes before the rule, as for a signed-in user: a rule
+    // is application code, and one that refuses or throws must not turn the
+    // permission's refusal into the rule's.
+    for (const rule of [
+      vi.fn(() => true),
+      vi.fn(() => false),
+      vi.fn(() => {
+        throw new Error("the rule ran");
+      }),
+    ]) {
+      const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
+      expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+      expect(rule).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is refused by the rule once Public holds the action", async () => {
+    // The control: with the permission held, the same rule is asked and its
+    // refusal is the rule's.
+    publicHolds("read");
+    const rule = vi.fn(() => false);
+    const verdict = await collectionGateVerdict(asked({ read: rule }, {}));
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+    expect(rule).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a signed-in user without the permission", () => {
   it("is refused whatever the rule says, and a rule function is not asked", async () => {
     callerMayNot("read");
