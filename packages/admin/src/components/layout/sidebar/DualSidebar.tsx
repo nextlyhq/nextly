@@ -28,6 +28,12 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
+import {
+  CONTENT_RAIL_ID,
+  isContentSection,
+  panelSectionIds,
+  railItemOf,
+} from "./lib/content-rail";
 import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
 import {
   hasPluginsSection,
@@ -45,7 +51,11 @@ import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
-import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
+import type {
+  MainMenuCategory,
+  MainMenuItem,
+  RailItemId,
+} from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
@@ -218,10 +228,10 @@ export function DualSidebar({
           if (!needed.some(slug => hasPermission(slug))) return false;
         }
         switch (item.id) {
-          case "collections":
-            return hasCollectionsSection;
-          case "singles":
-            return hasSinglesSection;
+          case CONTENT_RAIL_ID:
+            // Shown while either kind has something to list; the panel shows
+            // only the kinds that do.
+            return hasCollectionsSection || hasSinglesSection;
           case "plugins":
             return pluginsSectionVisible;
           case "media":
@@ -270,9 +280,23 @@ export function DualSidebar({
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
 
-  const [collectionSearch, setCollectionSearch] = useState("");
-  const [singleSearch, setSingleSearch] = useState("");
+  // One search for both content kinds: it carries over when the Content panel
+  // switches between Collections and Singles.
+  const [contentSearch, setContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState("");
+
+  /**
+   * Open a rail item's panel. Content opens on the part already showing, or
+   * on Collections, or on Singles when the reader has no collections to list.
+   */
+  const selectRailItem = (id: RailItemId) => {
+    if (id !== CONTENT_RAIL_ID) {
+      setSelectedMain(id);
+      return;
+    }
+    if (isContentSection(selectedMain)) return;
+    setSelectedMain(hasCollectionsSection ? "collections" : "singles");
+  };
 
   // Sync selectedMain when activeCategory changes (e.g. on navigation)
   useEffect(() => {
@@ -370,7 +394,7 @@ export function DualSidebar({
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
           {visibleMenuItems.map(item => {
             const Icon = item.icon;
-            const isSelected = selectedMain === item.id;
+            const isSelected = railItemOf(selectedMain) === item.id;
             const href = resolveItemHref(item);
             /*
              * On mobile a category normally stays put and opens the panel
@@ -411,7 +435,7 @@ export function DualSidebar({
                   {renderAsLink ? (
                     <Link
                       href={href}
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
                     >
@@ -419,7 +443,7 @@ export function DualSidebar({
                     </Link>
                   ) : (
                     <button
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
                     >
@@ -443,16 +467,19 @@ export function DualSidebar({
       <SubSidebarPanel
         isMobile={Boolean(isMobile)}
         selectedMain={selectedMain}
-        visibleMenuItemIds={visibleMenuItems.map(item => item.id)}
+        visibleMenuItemIds={panelSectionIds(
+          visibleMenuItems.map(item => item.id),
+          { collections: hasCollectionsSection, singles: hasSinglesSection }
+        )}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel={standaloneLabel}
         content={{
           selectedMain,
           standaloneLabel,
-          collectionSearch,
-          onCollectionSearchChange: setCollectionSearch,
-          singleSearch,
-          onSingleSearchChange: setSingleSearch,
+          contentSearch,
+          onContentSearchChange: setContentSearch,
+          hasCollectionsSection,
+          hasSinglesSection,
           pluginSearch,
           onPluginSearchChange: setPluginSearch,
           isActive,
