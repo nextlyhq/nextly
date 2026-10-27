@@ -316,6 +316,15 @@ export function currentRuleLanguage(): RuleLanguage {
 }
 
 /**
+ * The languages rules are told now, as one key: the language judged and every
+ * one involved. Two questions with the same key tell a rule the same language.
+ */
+export function ruleLanguageKey(): string {
+  const language = currentRuleLanguage();
+  return `${language.locale ?? ""}|${language.locales.join(",")}`;
+}
+
+/**
  * Asks `ask` about a read as a plain read is asked, in the default language
  * and its fallbacks: whether the caller can see an entry at all. A gate that
  * refused another action on one entry asks this to choose between telling the
