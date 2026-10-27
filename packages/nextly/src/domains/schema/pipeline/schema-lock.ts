@@ -516,7 +516,7 @@ async function openRenewalConnection(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<RenewalConnection | undefined> {
-  const client = adapter.getDrizzle().$client;
+  const client = adapter.getDrizzle<{ $client?: unknown }>().$client;
   return dialect === "postgresql" ? openPostgresRenewal(client) : undefined;
 }
 
