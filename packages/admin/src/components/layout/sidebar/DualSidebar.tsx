@@ -458,14 +458,21 @@ export function DualSidebar({
                       onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named for assistive technology: it draws an icon alone, and its tooltip
+                      // is shown on hover and does not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </Link>
                   ) : (
                     <button
+                      type="button"
                       onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named as the link beside it is: an icon alone, with a tooltip that does
+                      // not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </button>
