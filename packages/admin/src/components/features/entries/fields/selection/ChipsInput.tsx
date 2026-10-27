@@ -19,7 +19,7 @@
 import { Badge } from "@nextlyhq/ui";
 import { X } from "lucide-react";
 import type { ChipsFieldConfig } from "nextly/config";
-import { useState, useRef, type KeyboardEvent } from "react";
+import { useState, useRef, type KeyboardEvent, type JSX } from "react";
 import {
   useController,
   type Control,
@@ -55,7 +55,7 @@ export function ChipsInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: ChipsInputProps<TFieldValues>) {
+}: ChipsInputProps<TFieldValues>): JSX.Element {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 

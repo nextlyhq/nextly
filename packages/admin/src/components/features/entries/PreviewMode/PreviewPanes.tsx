@@ -37,7 +37,7 @@
  * @module components/features/entries/PreviewMode/PreviewPanes
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type JSX } from "react";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import type {
@@ -92,7 +92,7 @@ export function PreviewPanes({
   label,
   revision,
   children,
-}: PreviewPanesProps) {
+}: PreviewPanesProps): JSX.Element {
   /*
    * ONE component in both states, and the editor at ONE position in the tree.
    *

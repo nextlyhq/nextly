@@ -11,7 +11,13 @@
  * @since 1.0.0
  */
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { useOptionalEntryLocale } from "../EntryLocaleContext";
 
@@ -253,7 +259,7 @@ export function EntryFormContextProvider({
   documentStatus,
   renderEntryFields,
   children,
-}: EntryFormContextProviderProps) {
+}: EntryFormContextProviderProps): JSX.Element {
   /*
    * Split into its own fields so the memo compares values rather than an object
    * the caller rebuilds each render — which is what every existing provider

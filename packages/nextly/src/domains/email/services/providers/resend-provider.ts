@@ -173,6 +173,8 @@ export function createResendProvider(
           method: "POST",
           headers,
           body: JSON.stringify(body),
+          // Stops the request at the call deadline.
+          ...(options.signal ? { signal: options.signal } : {}),
         });
         answered = true;
 

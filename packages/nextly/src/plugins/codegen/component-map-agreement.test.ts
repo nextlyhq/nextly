@@ -8,11 +8,17 @@
  * - At load: the same comparison throws, with a stable code, for `next dev`,
  *   which does not type-check.
  *
- * Both are proved on the generated text itself: compiled by TypeScript over
- * virtual files, and run with its imports stubbed.
+ * Both are proved on the generated text itself: compiled by the TypeScript
+ * command line in a directory of its own, and run with its imports stubbed.
  */
-import ts from "typescript";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { transformSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
+
+import { compile } from "../../../../../scripts/tsc-cli.mjs";
 
 import type { PluginDefinition } from "../plugin-context";
 
@@ -36,9 +42,9 @@ const shop = {
   },
 } as unknown as PluginDefinition;
 
-const MAP = "/app/plugin-admin-imports.generated.ts";
-const LIST = "/app/plugin-admin-components.generated.ts";
-const STUBS = "/app/stubs.d.ts";
+const MAP = "plugin-admin-imports.generated.ts";
+const LIST = "plugin-admin-components.generated.ts";
+const STUBS = "stubs.d.ts";
 const STUB_SOURCE = `
 declare module "@nextlyhq/admin" {
   export function registerComponents(map: Record<string, unknown>): void;
@@ -49,47 +55,39 @@ declare module "@acme/shop/admin" {
 }
 `;
 
-/** The errors TypeScript reports on the pair, as their message text. */
+/**
+ * The errors TypeScript reports on the pair, as their message text: the three
+ * files and a config are written to a directory of their own and checked by
+ * the compiler's command line, which answers the same on every TypeScript
+ * version. Errors in anything else the program reads are not the pair's.
+ */
 function compileErrors(map: string, list: string): string[] {
-  const files = new Map([
-    [MAP, map],
-    [LIST, list],
-    [STUBS, STUB_SOURCE],
-  ]);
-  const options: ts.CompilerOptions = {
-    strict: true,
-    noEmit: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    skipLibCheck: true,
-    types: [],
-  };
-  const host = ts.createCompilerHost(options);
-  const realGet = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, version) =>
-    files.has(name)
-      ? ts.createSourceFile(name, files.get(name)!, version)
-      : realGet(name, version);
-  const realExists = host.fileExists.bind(host);
-  host.fileExists = name => files.has(name) || realExists(name);
-  const realRead = host.readFile.bind(host);
-  host.readFile = name => files.get(name) ?? realRead(name);
-  // Module resolution asks whether the importing file's directory exists
-  // before it looks for the file, so the virtual one has to exist too, or
-  // the map's import of its list resolves to nothing.
-  const realDirectoryExists = host.directoryExists?.bind(host);
-  host.directoryExists = dir =>
-    dir === "/app" || (realDirectoryExists?.(dir) ?? false);
-  const program = ts.createProgram([MAP, LIST, STUBS], options, host);
-  return ts
-    .getPreEmitDiagnostics(program)
-    .filter(
-      diagnostic => diagnostic.file && files.has(diagnostic.file.fileName)
-    )
-    .map(diagnostic =>
-      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+  const dir = mkdtempSync(join(tmpdir(), "component-map-"));
+  try {
+    const files = { [MAP]: map, [LIST]: list, [STUBS]: STUB_SOURCE };
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+    }
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "es2022",
+          module: "esnext",
+          moduleResolution: "bundler",
+          skipLibCheck: true,
+          types: [],
+        },
+        files: Object.keys(files),
+      })
     );
+    return compile(["-p", "tsconfig.json"], dir)
+      .filter(diagnostic => diagnostic.file && diagnostic.file in files)
+      .map(diagnostic => diagnostic.message);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Runs the map as the admin's bundle would, its imports stubbed. */
@@ -105,14 +103,16 @@ function load(
       registeredComponentPaths: listed,
     },
   };
-  const { outputText } = ts.transpileModule(map, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
+  // Its types stripped and its imports made `require` calls, as a bundler
+  // would before running it.
+  const { code } = transformSync(map, {
+    loader: "ts",
+    format: "cjs",
+    target: "es2022",
   });
-  const run = new Function("require", "exports", outputText);
-  run((name: string) => modules[name], {});
+  const run = new Function("require", "module", "exports", code);
+  const module = { exports: {} };
+  run((name: string) => modules[name], module, module.exports);
   return registerComponents;
 }
 

@@ -51,7 +51,14 @@ import {
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
@@ -1914,7 +1921,7 @@ export function Canvas({
   onDoubleClick,
   overlay,
   preview,
-}: CanvasProps) {
+}: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
 
   /*

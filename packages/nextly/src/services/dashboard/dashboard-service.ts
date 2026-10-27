@@ -92,6 +92,36 @@ export interface DashboardStatsResponse {
   apiKeys?: number;
 }
 
+/**
+ * One collection's entries as this caller may read them: its total, and how
+ * many are published and how many are drafts.
+ *
+ * The one per-collection reading the dashboard makes. `/stats` derives its
+ * counts and its overall breakdown from these rows, and `system:content`
+ * answers them, so the Content card and the summary cannot come to disagree.
+ * A collection without the Draft/Published lifecycle has no drafts: every entry
+ * the caller may read is published.
+ */
+export interface CollectionContent extends CollectionCount {
+  published: number;
+  draft: number;
+}
+
+/**
+ * The overall draft/published breakdown, DERIVED from the per-collection rows
+ * rather than read beside them, so the summary always equals the sum of what the
+ * Content card shows.
+ */
+function contentStatusOf(content: readonly CollectionContent[]): ContentStatus {
+  return content.reduce(
+    (sum, row) => ({
+      published: sum.published + row.published,
+      draft: sum.draft + row.draft,
+    }),
+    { published: 0, draft: 0 }
+  );
+}
+
 /** A recently edited entry across any collection. */
 export interface RecentEntry {
   id: string;
@@ -152,6 +182,21 @@ function leftOut(
   return true;
 }
 
+/**
+ * The page of collections a content answer counts: all of them in slug order,
+ * cut to `limit` when there is one. A stated order, so the same install gives
+ * the same page on every read, whatever order the registry returns.
+ */
+function contentPage<T extends { slug: string }>(
+  collections: readonly T[],
+  limit: number | undefined
+): T[] {
+  const ordered = [...collections].sort((a, b) =>
+    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0
+  );
+  return limit === undefined ? ordered : ordered.slice(0, limit);
+}
+
 export class DashboardService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -210,13 +255,20 @@ export class DashboardService extends BaseService {
     );
     const singles = await this.getRegisteredSingles(scope, keptOffSingles);
 
-    // Computed first, rather than folded into the `Promise.all` below: the
-    // status breakdown reuses these numbers for every collection without the
-    // Draft/Published lifecycle (see `getContentStatusBreakdown`), which
-    // needs the totals in hand before it can decide whether to ask for more.
-    const collectionCounts = await this.getCollectionCounts(
+    // Each collection's total and its published/draft split, read once: the
+    // per-collection counts and the overall breakdown below are both derived
+    // from these rows rather than read beside them.
+    const content = await this.getCollectionContent(
       collections,
       options.caller
+    );
+    const collectionCounts = content.map(
+      ({ slug, label, group, count }): CollectionCount => ({
+        slug,
+        label,
+        group,
+        count,
+      })
     );
 
     // A count the caller may not be given is not run at all, rather than run
@@ -252,11 +304,7 @@ export class DashboardService extends BaseService {
       apiKeysOf === undefined
         ? Promise.resolve(undefined)
         : ifAllowed("apiKeys", () => this.countActiveApiKeys(apiKeysOf)),
-      this.getContentStatusBreakdown(
-        collections,
-        collectionCounts,
-        options.caller
-      ),
+      Promise.resolve(contentStatusOf(content)),
     ]);
 
     const totalEntries = collectionCounts.reduce((sum, c) => sum + c.count, 0);
@@ -442,10 +490,12 @@ export class DashboardService extends BaseService {
     scope: ReadableResources,
     /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
     keptOff?: KeptOffRead
-  ): Promise<Array<{ slug: string }>> {
+  ): Promise<Array<{ slug: string; label?: string }>> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<Array<{ slug: string; admin?: unknown }>>;
+        getAllSingles: () => Promise<
+          Array<{ slug: string; label?: string; admin?: unknown }>
+        >;
       }>("singleRegistryService");
 
       // Kept off the dashboard, for the reason the collections above are.
@@ -505,6 +555,15 @@ export class DashboardService extends BaseService {
       });
       return 0;
     }
+  }
+
+  /**
+   * How many people or roles exist: the Team card's figures, by the same count
+   * `/stats` gives a reader who may read them. The caller decides which figures
+   * a reader may be given before asking, so a refused figure is never counted.
+   */
+  countTeamFigure(figure: "users" | "roles"): Promise<number> {
+    return this.countTable(figure);
   }
 
   /**
@@ -657,7 +716,7 @@ export class DashboardService extends BaseService {
    * status condition is built at all, for the main row or a localized
    * collection's per-locale `_status` companion.
    *
-   * `getContentStatusBreakdown` calls this same method with `"published"` and
+   * `getCollectionContent` calls this same method with `"published"` and
    * `"draft"` explicitly, rather than a second implementation of "how many
    * rows of this collection can this caller read": one question, one
    * implementation, so the total and the breakdown cannot silently drift
@@ -700,65 +759,93 @@ export class DashboardService extends BaseService {
   }
 
   /**
-   * Draft vs published content breakdown, read through the SAME
-   * access-enforced path as the per-collection totals beside it.
+   * Each collection's total, and its draft/published split, read through the
+   * SAME access-enforced path as the total.
    *
-   * This used to be a raw `SELECT ... GROUP BY status` over the physical
+   * The split used to be a raw `SELECT ... GROUP BY status` over the physical
    * table -- ignoring the collection's access gate entirely, so it reported
    * every row split by lifecycle to a reader who could see only a fraction of
-   * them. That number both disclosed rows the read access
-   * withholds and disagreed with `content.totalEntries`, computed beside it
-   * from the access-controlled count.
+   * them. That number both disclosed rows the read access withholds and
+   * disagreed with the per-collection total computed beside it.
    *
    * A collection WITHOUT the Draft/Published lifecycle has no split to make:
-   * every row this caller may read counts as published. That total is
-   * already sitting in `collectionCounts` -- computed one step before this
-   * call, with the identical access rules -- so it is looked up rather than
-   * asked for again.
+   * every row this caller may read counts as published, so its total is used
+   * rather than asked for again.
    *
-   * A lifecycle collection's total CANNOT be split into `published` and
-   * `draft` by subtracting one from the other. A due RELEASE adjusts the
-   * `"published"` read alone -- revealing a draft whose scheduled publish has
-   * arrived, or hiding a published row whose scheduled unpublish has arrived
-   * (see `collection-query-service.ts`'s `releaseDecisions`, which only fires
-   * for `status: "published"`) -- while `"draft"` and `"all"` apply no such
+   * A lifecycle collection's total CANNOT be split into `published` and `draft`
+   * by subtracting one from the other. A due RELEASE adjusts the `"published"`
+   * read alone -- revealing a draft whose scheduled publish has arrived, or
+   * hiding a published row whose scheduled unpublish has arrived (see
+   * `collection-query-service.ts`'s `releaseDecisions`, which only fires for
+   * `status: "published"`) -- while `"draft"` and `"all"` apply no such
    * adjustment. So the three numbers are not guaranteed to sum, and each is
    * asked for explicitly rather than derived.
    */
-  private async getContentStatusBreakdown(
+  private async getCollectionContent(
     collections: CollectionInfo[],
-    collectionCounts: CollectionCount[],
     caller: ReadCaller
-  ): Promise<ContentStatus> {
-    const totalsBySlug = new Map(
-      collectionCounts.map(c => [c.slug, c.count] as const)
-    );
-    let published = 0;
-    let draft = 0;
-
-    const results = await Promise.all(
-      collections.map(async coll => {
+  ): Promise<CollectionContent[]> {
+    const counts = await this.getCollectionCounts(collections, caller);
+    return Promise.all(
+      collections.map(async (coll, index) => {
+        const total = counts[index];
         if (!coll.hasStatus) {
-          // Same access rules, same rows, already counted for the total
-          // above -- asking again would be a second implementation of the
-          // same question.
-          return { published: totalsBySlug.get(coll.slug) ?? 0, draft: 0 };
+          return { ...total, published: total.count, draft: 0 };
         }
-
-        const [publishedCount, draftCount] = await Promise.all([
+        const [published, draft] = await Promise.all([
           this.countReadableEntries(coll, caller, "published"),
           this.countReadableEntries(coll, caller, "draft"),
         ]);
-        return { published: publishedCount, draft: draftCount };
+        return { ...total, published, draft };
       })
     );
+  }
 
-    for (const result of results) {
-      published += result.published;
-      draft += result.draft;
-    }
+  /**
+   * The collections this caller may see on the dashboard, each with its total
+   * and its published/draft split: what `system:content` answers.
+   *
+   * The same registry read and the same per-collection reading `/stats` makes,
+   * so a collection kept off the dashboard is absent here as it is there, and
+   * every number is the caller's own.
+   *
+   * With a `limit`, the page is chosen before anything is counted: the
+   * collections in slug order, the first `limit` of them. Each collection
+   * costs up to three counts, so counting every one and then keeping a page
+   * would grow the dashboard's work with the install rather than the card.
+   */
+  async getContentByCollection(options: {
+    scope: ReadableResources;
+    caller: ReadCaller;
+    limit?: number;
+  }): Promise<CollectionContent[]> {
+    const collections = await this.getRegisteredCollections(options.scope, {
+      slugs: new Set(),
+      complete: false,
+    });
+    return this.getCollectionContent(
+      contentPage(collections, options.limit),
+      options.caller
+    );
+  }
 
-    return { published, draft };
+  /**
+   * The Singles this caller may see on the dashboard, in slug order, at most
+   * `limit` of them: the Singles half of what `system:content` answers.
+   *
+   * The same registry read `/stats` makes, so a Single kept off the dashboard
+   * is absent here as it is there. Nothing is counted: a Single has one
+   * document, not entries.
+   */
+  async getContentSingles(options: {
+    scope: ReadableResources;
+    limit?: number;
+  }): Promise<Array<{ slug: string; label: string }>> {
+    const singles = await this.getRegisteredSingles(options.scope);
+    return contentPage(singles, options.limit).map(single => ({
+      slug: single.slug,
+      label: single.label ?? single.slug,
+    }));
   }
 
   /**

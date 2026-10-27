@@ -48,7 +48,7 @@ export function ProviderTypePicker({
   value: string;
   disabled?: boolean;
   onChange: (type: string) => void;
-}) {
+}): React.JSX.Element {
   return (
     <div className="flex flex-wrap gap-3">
       {descriptors.map(descriptor => {

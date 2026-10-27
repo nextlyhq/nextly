@@ -5,7 +5,7 @@
  *
  * @module plugins/principals/api
  */
-import { getService } from "../../di/register";
+import { getService } from "../../di/service-access";
 import { reportPrincipalDeleted } from "../../domains/audit/erase-principal";
 import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import { NextlyError } from "../../errors/nextly-error";

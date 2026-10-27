@@ -18,14 +18,35 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { aboutSubject } from "../../auth/access/deviations";
+import {
+  routeGateCapabilities,
+  type GateCaller,
+} from "../../auth/access/route-gate-adapters";
+import {
+  currentCallerScope,
+  currentRequestCaller,
+} from "../../auth/caller-scope";
+import { getRBACService } from "../../auth/code-access";
+import {
+  authorizationGroups,
+  readableEntities,
+} from "../../auth/entity-read-access";
+import { requestLanguage } from "../../auth/middleware";
+import { container } from "../../di/container";
+import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
 import {
   isSuperAdmin,
   listEffectivePermissions,
   listRoleSlugsForUser,
+  resolveUserRoles,
 } from "../../services/lib/permissions";
+import { registeredContentSnapshot } from "../../services/lib/registered-content-slugs";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { toPaginationMeta } from "../helpers/service-envelope";
 import {
   requireBodyField,
@@ -36,7 +57,86 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { readAccessCallerForDispatch } from "./read-access-caller";
+
+/**
+ * The collections and Singles the caller may read, of those registered: the
+ * entities the capabilities answer may name.
+ *
+ * Decided by `readableEntities`, the decision the collection and Single lists
+ * are scoped by (their allowlist is that decision over the same registries),
+ * so the answer names exactly what those lists show the same caller and no
+ * entity the caller may not know exists. Each entity is asked as its own
+ * subject, so a deviation that shapes the answer is said of the entity it
+ * shaped, and in the order `readableEntities` takes a set — one, then
+ * bounded groups at once — so an install's rules are not waited on one
+ * after another. The route admits only an authenticated caller; were none
+ * read here, nothing is named rather than everything.
+ */
+async function readableEntityKinds(
+  kinds: ReadonlyMap<string, "collection" | "single">
+): Promise<Map<string, "collection" | "single">> {
+  const reader = readAuthenticatedUser();
+  if (!reader) return new Map();
+  const caller = readAccessCallerForDispatch(reader);
+  const allowed = new Set<string>();
+  for (const group of authorizationGroups([...kinds.keys()])) {
+    const decided = await Promise.all(
+      group.map(slug =>
+        aboutSubject(permissionSlug("read", slug), () =>
+          readableEntities([slug], caller)
+        )
+      )
+    );
+    for (const readable of decided) {
+      for (const slug of readable) allowed.add(slug);
+    }
+  }
+  return new Map([...kinds].filter(([slug]) => allowed.has(slug)));
+}
+
 type UsersService = ServiceContainer["users"];
+
+/**
+ * Who the capabilities answer is about, as the route gates judge the request
+ * it arrived on: a key on its own scope, pinned for the dispatch, and a
+ * session as the user the route authenticated.
+ */
+function capabilitiesCaller(userId: string): GateCaller {
+  const scope = currentCallerScope();
+  if (scope?.actorType !== "apiKey") return { userId };
+  const actor = currentRequestCaller()?.actor;
+  const keyId = actor?.type === "apiKey" ? actor.id : undefined;
+  return { userId, key: scope, ...(keyId === undefined ? {} : { keyId }) };
+}
+
+/**
+ * When the capabilities answer stops holding, in epoch ms, or null.
+ *
+ * A session's answer holds until its soonest role assignment ends. A key's
+ * holds until the key expires; a read-only or full-access key follows its
+ * owner's roles, so it also ends when the owner's soonest assignment does,
+ * while a role-based key carries a role of its own, which no assignment of
+ * the owner's bounds.
+ */
+async function capabilitiesValidUntil(
+  caller: GateCaller
+): Promise<number | null> {
+  const ownerUntil = async (): Promise<number | undefined> =>
+    (await resolveUserRoles(caller.userId)).validUntil;
+  if (!caller.key) return (await ownerUntil()) ?? null;
+  const key =
+    caller.keyId === undefined
+      ? null
+      : await container
+          .get<ApiKeyService>("apiKeyService")
+          .getApiKeyById(caller.keyId, caller.userId);
+  const ends = [
+    key?.expiresAt ? Date.parse(key.expiresAt) : undefined,
+    key?.tokenType === "role-based" ? undefined : await ownerUntil(),
+  ].filter((end): end is number => end !== undefined && Number.isFinite(end));
+  return ends.length > 0 ? Math.min(...ends) : null;
+}
 
 const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
@@ -178,6 +278,61 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         isSuperAdmin: superAdmin,
         roles: roleSlugs,
       });
+    },
+  },
+  /**
+   * What the caller may do with each collection, Single and system resource,
+   * for the admin to offer only what the server allows.
+   *
+   * @experimental The shape may change until the admin's access screens
+   * settle.
+   */
+  getCurrentUserCapabilities: {
+    execute: async (_svc, p) => {
+      const userId = requireParam(p, "userId", "UserId");
+      const caller = capabilitiesCaller(userId);
+      const [{ kinds, degraded }, validUntil] = await Promise.all([
+        registeredContentSnapshot(),
+        capabilitiesValidUntil(caller),
+      ]);
+      // The answer states what the caller may do with EVERY entity, so a
+      // registry that could not be enumerated leaves a floor rather than the
+      // whole list. Handing that over as the answer would have the admin hide
+      // collections the caller may in fact use, with nothing saying so.
+      // Refusing leaves the admin on the answer it already holds.
+      if (degraded) {
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "A content registry could not be enumerated, so capabilities would name only some entities.",
+        });
+      }
+      // A rule is told the languages the REST operation behind an action
+      // involves, framed by the same function that frames a REST request, so
+      // a rule answering by language answers here as it would at that door.
+      // Only `locale` is read from the query: the other language controls
+      // belong to operations that carry an entry, and reading them would let
+      // a caller widen the framing through a parameter this route does not
+      // offer.
+      const asked = { locale: p.locale ?? "" };
+      const capabilities = await routeGateCapabilities(
+        caller,
+        // Only the entities the caller may read are named: the answer is
+        // sent to every signed-in caller, and naming the rest would tell
+        // each one every collection and Single the install has.
+        await readableEntityKinds(kinds),
+        getRBACService(),
+        operation => requestLanguage({ method: operation, params: asked })
+      );
+      return respondData(
+        {
+          // From the read the cells were answered from, so the flag and the
+          // cells cannot describe two different moments.
+          isSuperAdmin: capabilities.isSuperAdmin,
+          validUntil,
+          entities: capabilities.entities,
+        },
+        { headers: { "Cache-Control": "private, no-store" } }
+      );
     },
   },
 };

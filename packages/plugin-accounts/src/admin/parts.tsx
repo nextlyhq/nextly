@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import type { StaffAccountSummary } from "../admin-contract";
 
@@ -41,7 +41,7 @@ export function AccountStates({
   account,
 }: {
   account: Pick<StaffAccountSummary, "verified" | "active" | "resetRequired">;
-}) {
+}): JSX.Element {
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
       <Tag>{account.verified ? "Verified" : "Unverified"}</Tag>

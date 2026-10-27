@@ -81,10 +81,13 @@
   // every one of the ~200 root scripts (CI checks, release tooling, gates, and
   // their tests) a global input, so editing any of them re-ran every build,
   // lint, type-check and test in the workspace, about seven minutes cold on a
-  // local machine, to protect seven files. Five are every root script
-  // read from a package, an app or `e2e/`, plus the two root scripts they import
+  // local machine, to protect eleven files. Eight are every root script
+  // read from a package, an app or `e2e/` (`tsc-cli.mjs` counted with the
+  // declarations its importers compile), plus the three root scripts they import
   // (`agent-skills` imports `agent-instructions`, which imports
-  // `check-instruction-size`), traced through every relative import. The guard in
+  // `check-instruction-size`; `tsc`, which every package's `check-types` runs,
+  // imports `local-limits` and `tsc-cli`), traced through every relative
+  // import. The guard in
   // `scripts/turbo-inputs.test.mjs` reports any tracked program input that no
   // hash covers, so a sixth read of a root script fails CI rather than passing
   // quietly.
@@ -95,7 +98,11 @@
     "scripts/check-instruction-size.mjs",
     "scripts/cli-entry.mjs",
     "scripts/dev-doctor.mjs",
+    "scripts/local-limits.mjs",
     "scripts/pnpm-invocation.mjs",
+    "scripts/tsc-cli.d.mts",
+    "scripts/tsc-cli.mjs",
+    "scripts/tsc.mjs",
     "scripts/vitest-dom-setup.ts"
   ],
 
@@ -152,7 +159,6 @@
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
     "DEBUG",
-    "DEBUG_CACHE",
     "DEBUG_RBAC",
     "DEBUG_SCHEMA", // nextly schema apply: verbose pipeline + drizzle-kit output
     "FORCE_PATH_STYLE",
@@ -613,7 +619,11 @@
       ],
       "outputs": [],
       "cache": false,
-      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"]
+      "env": ["TEST_POSTGRES_URL", "TEST_MYSQL_URL", "TEST_SQLITE_URL"],
+      // How many workers run nextly's integration files. Passed through
+      // rather than hashed: the worker count changes how long a run takes,
+      // not its results, and strict environment mode would otherwise drop it.
+      "passThroughEnv": ["NEXTLY_INTEGRATION_WORKERS"]
     },
 
     // test:e2e - Drive the admin in a real browser (see e2e/README.md)
@@ -636,10 +646,16 @@
       // it changes no result — but it is still an input turbo must know about.
       // E2E_SETUP_PORT: where the empty install the first-run setup specs use
       // is served, beside the servers E2E_PORT and E2E_PROD_PORT place.
+      // E2E_SERVER and E2E_PRODUCTION_PREBUILT choose the server the suite
+      // runs against (dev or production) and whether that build is reused;
+      // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
       "env": [
         "CI",
+        "E2E_DEV_SPECS_ONLY",
         "E2E_PORT",
         "E2E_PROD_PORT",
+        "E2E_PRODUCTION_PREBUILT",
+        "E2E_SERVER",
         "E2E_SETUP_PORT",
         "GITHUB_STEP_SUMMARY"
       ]

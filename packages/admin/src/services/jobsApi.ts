@@ -44,4 +44,6 @@ export function listJobs(
   );
 }
 
-export const jobsApi = { listJobs };
+export const jobsApi: {
+  listJobs: typeof listJobs;
+} = { listJobs };

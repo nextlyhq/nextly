@@ -41,7 +41,9 @@ function RedirectNotice({ destination }: { destination: string }) {
   );
 }
 
-export function PrivateRoute({ children }: PrivateRouteProps) {
+export function PrivateRoute({
+  children,
+}: PrivateRouteProps): React.JSX.Element {
   // The shared session query, not a second verification of the same fact. The
   // data providers read this same key, so a session is fetched once and every
   // reader of it agrees.

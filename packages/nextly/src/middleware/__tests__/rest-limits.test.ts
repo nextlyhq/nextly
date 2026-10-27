@@ -166,7 +166,11 @@ describe("REST limit: classified as authentication does", () => {
         10
       )
     ).toBe(KEY_BUDGET);
-    expect(readers.debitKey).toHaveBeenCalledWith("valid-k1");
+    // Handed the request too, so the key's refusal carries its request id.
+    expect(readers.debitKey).toHaveBeenCalledWith(
+      "valid-k1",
+      expect.any(Request)
+    );
     // The address's own budget is untouched by a resolving key.
     expect(await admitted(check, { address: "203.0.113.7" }, 5)).toBe(2);
   });
@@ -562,5 +566,60 @@ describe("REST limit: where it counts", () => {
     expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
     expect(startServices).toHaveBeenCalled();
     expect(counted.length).toBeGreaterThan(0);
+  });
+});
+
+describe("REST limit: a key that does not resolve", () => {
+  it("remembers why, so authentication's log can say it without a second lookup", async () => {
+    const readers = testReaders();
+    readers.lookupKey.mockImplementation(
+      async (_rawKey: string, onRefused?: (cause: "revoked") => void) => {
+        onRefused?.("revoked");
+        return null;
+      }
+    );
+    const limits = createRestLimits(
+      {
+        enabled: true,
+        readLimit: 2,
+        writeLimit: 1,
+        windowMs: 60_000,
+        trustProxy: true,
+        store: new InMemoryRateLimitStore(),
+      },
+      readers
+    );
+    const gate = openRestLimitGate(
+      limits,
+      request({ key: "revoked-k1", address: "203.0.113.7" })
+    );
+    await gate.settle("core");
+    expect(gate.knownKey("revoked-k1")).toMatchObject({
+      resolved: null,
+      cause: "revoked",
+    });
+  });
+});
+
+describe("REST limit: a refused request is recorded", () => {
+  afterEach(() => {
+    container.clear();
+  });
+
+  it("writes the refusal's line, as every answered refusal does", async () => {
+    const info = vi.fn();
+    container.register("logger", () => ({
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }));
+    const check = limiter();
+    // Two reads a window from one address, so the third is refused.
+    expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.objectContaining({ status: 429, code: "RATE_LIMITED" })
+    );
   });
 });

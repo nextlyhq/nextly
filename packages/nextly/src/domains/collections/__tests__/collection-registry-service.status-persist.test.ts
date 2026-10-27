@@ -363,3 +363,53 @@ describe("CollectionRegistryService — revalidate persistence", () => {
     expect("revalidate" in ctx.updateCalls[0].data).toBe(false);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// A collection defined in code
+// ────────────────────────────────────────────────────────────────────────
+
+describe("CollectionRegistryService — a collection defined in code", () => {
+  let ctx: ReturnType<typeof createCtx>;
+
+  beforeEach(() => {
+    ctx = createCtx();
+    ctx.adapter.selectOne.mockImplementation(async (table: string) =>
+      table === "dynamic_collections"
+        ? {
+            id: "1",
+            slug: "posts",
+            labels: { singular: "Post", plural: "Posts" },
+            table_name: "dc_posts",
+            fields: "[]",
+            source: "code",
+            locked: 1,
+            status: 0,
+            schema_hash: "h",
+            schema_version: 1,
+            migration_status: "applied",
+            created_at: "2026-01-01",
+            updated_at: "2026-01-01",
+          }
+        : null
+    );
+  });
+
+  it("is refused a change from the admin, and told why", async () => {
+    await expect(
+      ctx.service.updateCollection("posts", { status: true }, { source: "ui" })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage:
+        "This collection is defined in code, so it can't be changed here.",
+    });
+    expect(ctx.updateCalls).toHaveLength(0);
+  });
+
+  it("is refused a delete without force, and told why", async () => {
+    await expect(ctx.service.deleteCollection("posts")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage:
+        "This collection is defined in code, so it can't be deleted here.",
+    });
+  });
+});

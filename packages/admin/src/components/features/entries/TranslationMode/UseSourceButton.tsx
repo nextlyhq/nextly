@@ -22,6 +22,7 @@
  * @module components/features/entries/TranslationMode/UseSourceButton
  */
 
+import type { JSX } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { isFieldTranslated } from "../translation-meta";
@@ -36,7 +37,7 @@ export function UseSourceButton({
   fieldName: string;
   /** For the accessible name, so several of these are told apart. */
   fieldLabel: string;
-}) {
+}): JSX.Element | null {
   const { sourceValues, sourceLabel } = useTranslationField();
   // Reads the TARGET form, because this renders inside the target pane. The
   // source pane is outside this context entirely, so there is no arrangement in

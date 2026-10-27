@@ -14,7 +14,7 @@ const ready = vi.hoisted(() => ({
   registered: false,
   migrations: Promise.resolve() as Promise<void>,
 }));
-vi.mock("../../../di/register", () => ({
+vi.mock("../../../di/service-access", () => ({
   isServicesRegistered: () => ready.registered,
 }));
 vi.mock("../../../init/boot-migrations-gate", () => ({

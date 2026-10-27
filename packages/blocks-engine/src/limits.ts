@@ -118,7 +118,7 @@ export const DEFAULT_LIMITS: DocumentLimits = {
  * that list. The op is already in memory by then, so this doubles a cost the
  * caller has paid rather than admitting an unbounded new one.
  */
-export const MAX_VALUE_PARTS = 4 * 1024 * 1024;
+export const MAX_VALUE_PARTS: number = 4 * 1024 * 1024;
 
 /**
  * How many values {@link documentBytes} may serialize before it refuses.
@@ -140,7 +140,8 @@ export const MAX_VALUE_PARTS = 4 * 1024 * 1024;
  * editor will edit, which is the stance {@link MAX_VALUE_PARTS} already takes
  * for the same reason.
  */
-export const MAX_SERIALIZED_VALUES = DEFAULT_MAX_DOCUMENT_BYTES;
+export const MAX_SERIALIZED_VALUES: typeof DEFAULT_MAX_DOCUMENT_BYTES =
+  DEFAULT_MAX_DOCUMENT_BYTES;
 
 /**
  * A structure with more parts than {@link MAX_VALUE_PARTS}.

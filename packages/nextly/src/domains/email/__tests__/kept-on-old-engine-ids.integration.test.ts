@@ -132,9 +132,10 @@ for (const dialect of getConfiguredTestDialects()) {
 
       await service.keptOnOldEngineIds(list);
 
+      // One read of the whole state answers whether the switch is recorded
+      // and which templates it kept; none per template.
       expect(getAll).toHaveBeenCalledTimes(1);
-      // The one read of whether the switch is recorded; none per template.
-      expect(getEntry).toHaveBeenCalledTimes(1);
+      expect(getEntry).not.toHaveBeenCalled();
     }, 120_000);
 
     it("reads nothing for an empty list", async () => {

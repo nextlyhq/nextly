@@ -10,6 +10,8 @@
  * @module pages/dashboard/entries/[slug]/[id]/versions
  */
 
+import type { JSX } from "react";
+
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -19,7 +21,10 @@ import { VersionComparePage } from "@admin/components/features/versions/VersionC
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { PageProps } from "@admin/lib/routing";
 
-export default function EntryVersionsPage({ params, searchParams }: PageProps) {
+export default function EntryVersionsPage({
+  params,
+  searchParams,
+}: PageProps): JSX.Element {
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const id = typeof params?.id === "string" ? params.id : "";
   // Without this the page announces itself only as "Version history", while the

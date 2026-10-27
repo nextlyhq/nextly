@@ -22,6 +22,8 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -47,15 +49,27 @@ import {
 
 export const emailProviderKeys = {
   all: () => ["emailProviders"] as const,
-  lists: () => [...emailProviderKeys.all(), "list"] as const,
+  lists: (): readonly ["emailProviders", "list"] =>
+    [...emailProviderKeys.all(), "list"] as const,
   list: (params: {
     page: number;
     pageSize: number;
     search: string;
     type?: string;
-  }) => [...emailProviderKeys.lists(), params] as const,
-  details: () => [...emailProviderKeys.all(), "detail"] as const,
-  detail: (id: string) => [...emailProviderKeys.details(), id] as const,
+  }): readonly [
+    "emailProviders",
+    "list",
+    {
+      page: number;
+      pageSize: number;
+      search: string;
+      type?: string;
+    },
+  ] => [...emailProviderKeys.lists(), params] as const,
+  details: (): readonly ["emailProviders", "detail"] =>
+    [...emailProviderKeys.all(), "detail"] as const,
+  detail: (id: string): readonly ["emailProviders", "detail", string] =>
+    [...emailProviderKeys.details(), id] as const,
   // The registry catalog sits OUTSIDE the record keys on purpose: every
   // mutation invalidates `all()`, and the set of registered provider types
   // cannot change because someone saved a provider. Nesting it there would
@@ -76,7 +90,7 @@ export function useEmailProviders(
     UseQueryOptions<EmailProviderListResponse, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<EmailProviderListResponse, Error> {
   return useQuery<EmailProviderListResponse, Error>({
     queryKey: emailProviderKeys.list(params),
     // Admin-internal field name `pageSize` maps to canonical wire
@@ -104,7 +118,7 @@ export function useEmailProvider(
     UseQueryOptions<EmailProviderRecord, Error>,
     "queryKey" | "queryFn" | "enabled"
   >
-) {
+): UseQueryResult<EmailProviderRecord, Error> {
   return useQuery<EmailProviderRecord, Error>({
     queryKey: emailProviderKeys.detail(id!),
     queryFn: () => {
@@ -132,7 +146,7 @@ export function useEmailProviderTypes(
     UseQueryOptions<EmailProviderDescriptor[], Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<EmailProviderDescriptor[], Error> {
   return useQuery<EmailProviderDescriptor[], Error>({
     queryKey: emailProviderKeys.types(),
     queryFn: () => listProviderTypes(),
@@ -159,7 +173,12 @@ export function useEmailProviderTypes(
  * useCreateEmailProvider — Create a new email provider.
  * Invalidates all provider queries on success.
  */
-export function useCreateEmailProvider() {
+export function useCreateEmailProvider(): UseMutationResult<
+  EmailProviderRecord,
+  Error,
+  CreateEmailProviderPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<EmailProviderRecord, Error, CreateEmailProviderPayload>({
@@ -174,7 +193,15 @@ export function useCreateEmailProvider() {
  * useUpdateEmailProvider — Update an existing email provider.
  * Invalidates all provider queries on success.
  */
-export function useUpdateEmailProvider() {
+export function useUpdateEmailProvider(): UseMutationResult<
+  EmailProviderRecord,
+  Error,
+  {
+    id: string;
+    data: UpdateEmailProviderPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -193,7 +220,14 @@ export function useUpdateEmailProvider() {
  * useDeleteEmailProvider — Delete an email provider.
  * Uses optimistic updates to immediately remove the provider from the UI.
  */
-export function useDeleteEmailProvider() {
+export function useDeleteEmailProvider(): UseMutationResult<
+  void,
+  Error,
+  string,
+  {
+    previousProviders?: EmailProviderRecord[];
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -244,7 +278,12 @@ export function useDeleteEmailProvider() {
  * useSetDefaultProvider — Set a provider as the default.
  * Invalidates all provider queries on success.
  */
-export function useSetDefaultProvider() {
+export function useSetDefaultProvider(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -259,7 +298,15 @@ export function useSetDefaultProvider() {
  * useTestProvider — Send a test email via the specified provider.
  * Mutation variable: `{ id, email? }` — email is the destination address.
  */
-export function useTestProvider() {
+export function useTestProvider(): UseMutationResult<
+  TestProviderResult,
+  Error,
+  {
+    id: string;
+    email?: string;
+  },
+  unknown
+> {
   return useMutation<TestProviderResult, Error, { id: string; email?: string }>(
     {
       mutationFn: ({ id, email }) => testProvider(id, email),

@@ -38,9 +38,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+
+import { exportedNames as declarationExports } from "@nextlyhq/module-specifiers/declaration-exports";
+import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
+
+import { topLevelOnly } from "./top-level-text.mjs";
+import { deprecatedPropertiesOf } from "./deprecated-properties.mjs";
+import { compile as compileWithTsc } from "./tsc-cli.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -211,6 +217,18 @@ export const extensionFor = sample => {
 };
 
 /**
+ * The start of the diagnostic for a module that does not resolve. TS2307 is an
+ * import that binds something; TS2882 is a side-effect import, `import "./x"`,
+ * which TypeScript 7 checks by default (`noUncheckedSideEffectImports`) and
+ * TypeScript 5 let through silently. One unresolved module either way, and
+ * either leaves the sample unchecked: a side-effect import binds no names but
+ * can load global or module augmentations, so the rest of the sample was
+ * checked against types it never received.
+ */
+const CANNOT_FIND_MODULE =
+  "error TS(?:2307: Cannot find module|2882: Cannot find module or type declarations for side-effect import of) ";
+
+/**
  * A file the sample quotes and the reader writes: ./collections/Posts, or the
  * same reached through the `@/` alias a Next.js app sets up.
  *
@@ -221,8 +239,9 @@ export const extensionFor = sample => {
  * produces no diagnostic and the sample reads as clean while never having been
  * read at all — which is what the audit already says about unresolved packages.
  */
-export const READER_OWNED_FILE =
-  /error TS2307: Cannot find module '(?:\.{1,2}|@)\//;
+export const READER_OWNED_FILE = new RegExp(
+  `${CANNOT_FIND_MODULE}'(?:\\.{1,2}|@)/`
+);
 
 /**
  * A callback parameter left implicit because the value it maps over is untyped.
@@ -277,15 +296,13 @@ export const SUPPLIED_BY_THE_READER = [
  */
 export const isModule = (code, extension = "tsx") => {
   const parsed = parseSample(code, extension);
-  // The compiler's own answer, rather than a list of the node kinds that count.
-  // `externalModuleIndicator` is what TypeScript itself sets when it decides a
-  // file is a module, and it is the answer that governs how this fence would be
-  // compiled. Listing the kinds instead left the list one short in both
-  // directions: `import.meta.url` alone is a module to TypeScript and was read
-  // here as a fragment, and `import A = N.M` is an alias for a namespace rather
-  // than a load and was read here as a module. A list has a next omission and
-  // this does not.
-  if (ts.isExternalModule(parsed)) return true;
+  // What makes TypeScript compile a file as a module: an import or export
+  // declaration, `import.meta`, `import x = require("…")` or `export =`. Top-level
+  // `await` alone does not, so the parser's own "has module syntax", which
+  // counts it, is not this question: it called sixty Direct API fragments
+  // modules. `import A = N.M` aliases a namespace rather than loading anything,
+  // and is not one either.
+  if (hasModuleIndicator(parsed)) return true;
 
   // A call to `require` or to `import`, anywhere in the tree. Both load a
   // package exactly as a declaration does, and a fence opening
@@ -300,20 +317,19 @@ export const isModule = (code, extension = "tsx") => {
   // audit compile a block it deliberately excludes. A property access named
   // `require` or `import` is not a load either, and is not an identifier call.
   let loads = false;
-  const walk = node => {
-    if (loads) return;
+  walk(parsed.program, node => {
+    if (loads) return false;
     if (
-      ts.isCallExpression(node) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) &&
-          node.expression.text === "require"))
+      node.type === "ImportExpression" ||
+      (node.type === "CallExpression" &&
+        node.callee.type === "Identifier" &&
+        node.callee.name === "require")
     ) {
       loads = true;
-      return;
+      return false;
     }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(parsed, walk);
+    return true;
+  });
   if (loads) return true;
 
   // A fence whose only module syntax is `export as namespace X` stays a
@@ -610,12 +626,116 @@ function linkResolutionTree(dir) {
   }
 }
 
+/**
+ * The compiler options the samples are checked under, as a tsconfig spells
+ * them: the command line reads them from a written tsconfig, and the program
+ * the deprecation audit asks is converted from the same object.
+ */
+function samplesCompilerOptions(dir) {
+  return {
+    noEmit: true,
+    strict: true,
+    target: "es2022",
+    jsx: "react-jsx",
+    module: "esnext",
+    moduleResolution: "bundler",
+    skipLibCheck: true,
+    lib: ["es2022", "dom"],
+    // Named explicitly, because `typeRoots` otherwise resolves by walking up
+    // from the process's directory rather than from the files being
+    // compiled, and this workspace keeps type packages under `.pnpm/` with
+    // no `@types` at the root. Without it every run reported "Cannot find
+    // type definition file for 'node'" as a finding against the docs.
+    typeRoots: [join(dir, "node_modules", "@types")],
+    // Node's globals, and nothing else. These samples are Next.js and Node
+    // files: they read `process.env.DATABASE_URL`, which every reader's
+    // project types and this harness did not, so the audit reported `process`
+    // as an error a reader would hit when the reader is the one person who
+    // never sees it. Named rather than left open, because `types` with no
+    // entry pulls in every @types package this site happens to install and
+    // would start excusing globals a reader's project does not have.
+    types: ["node"],
+  };
+}
+
+/**
+ * A file compiled beside the samples with one error only type-checking finds,
+ * so a run says whether it type-checked at all.
+ */
+const SEMANTIC_PROBE = {
+  file: "__semantic_probe__.ts",
+  source: 'const probe: number = "";\nexport {};\n',
+  code: "TS2322",
+};
+
+/**
+ * A file audited beside the samples that writes one property its own type
+ * deprecates, so a run says whether the deprecated-property audit could answer
+ * at all: an audit that answered nothing reads exactly like a corpus with no
+ * deprecated property in it.
+ */
+const DEPRECATION_PROBE = {
+  file: "__deprecation_probe__.ts",
+  source:
+    "export interface Probe {\n  /** @deprecated probe */\n  old?: number;\n}\nexport const probe: Probe = { old: 1 };\n",
+  name: "old",
+};
+
+/**
+ * `{ file, found }` for each of `files`: the deprecated properties it writes,
+ * from the compiler's language server through `audit`. The probe is audited
+ * with them, and a run that did not report it, or left a file unanswered, is
+ * refused.
+ */
+export function deprecationsIn(
+  dir,
+  files,
+  probe,
+  audit = deprecatedPropertiesOf
+) {
+  const found = audit(dir, [...files, probe]);
+  const answered = [...files, probe].every(file => Array.isArray(found[file]));
+  if (!answered || !found[probe].some(d => d.name === DEPRECATION_PROBE.name)) {
+    throw new Error(
+      "doc samples: the deprecated-property audit did not answer for every file and its probe, so its silence proves nothing"
+    );
+  }
+  return files.map(file => ({ file, found: found[file] }));
+}
+
+/**
+ * Whether a run type-checked, and the diagnostics that are not the probe's.
+ *
+ * tsc stops before type-checking when any file fails to parse, and reports the
+ * parse errors alone. Which of the two happened is read off the probe: its one
+ * type error appears exactly when type-checking ran. Asked of the run rather
+ * than guessed from the codes, as the compiler API's own split into syntactic
+ * and semantic diagnostics was. A run that did neither is refused.
+ */
+function readProbe(reported, isProbe) {
+  const inProbe = d => d.file !== undefined && isProbe(d.file);
+  const checked = reported.some(
+    d => inProbe(d) && d.code === SEMANTIC_PROBE.code
+  );
+  const ownDiagnostics = reported.filter(d => !inProbe(d));
+  if (!checked && !ownDiagnostics.some(d => d.file !== undefined)) {
+    throw new Error(
+      `doc samples: tsc neither type-checked the samples nor reported a parse error:\n` +
+        reported.map(d => `${d.code} ${d.message}`).join("\n")
+    );
+  }
+  return { checked, ownDiagnostics };
+}
+
 function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
   const dir = mkdtempSync(join(tmpdir(), `nextly-${label}-`));
   // Flattened temp names are unreadable in a diagnostic, so keep the way back
   // to the file a person can open.
   const origin = new Map();
   const fileNames = [];
+  // The samples the deprecated-property audit can read: it parses each one, and
+  // a sample that does not parse has its parse error reported by the compile.
+  const parsed = [];
   try {
     // A counter, not the path with its punctuation replaced. That mapping is
     // not injective — `guides/foo-bar.mdx` and `guides/foo/bar.mdx` both become
@@ -639,44 +759,40 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       // harness artefacts. Appended, so no diagnostic's line number moves.
       writeFileSync(full, `${s.code}\n\nexport {};\n`);
       fileNames.push(full);
+      if (parseSample(s.code, extensionFor(s)) !== UNPARSED) parsed.push(full);
     }
     linkResolutionTree(dir);
 
-    const program = ts.createProgram(fileNames, {
-      noEmit: true,
-      strict: true,
-      target: ts.ScriptTarget.ES2022,
-      jsx: ts.JsxEmit.ReactJSX,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      skipLibCheck: true,
-      lib: ["lib.es2022.d.ts", "lib.dom.d.ts"],
-      // Named explicitly, because `typeRoots` otherwise resolves by walking up
-      // from the process's directory rather than from the files being
-      // compiled, and this workspace keeps type packages under `.pnpm/` with
-      // no `@types` at the root. Without it every run reported "Cannot find
-      // type definition file for 'node'" as a finding against the docs.
-      typeRoots: [join(dir, "node_modules", "@types")],
-      // Node's globals, and nothing else. These samples are Next.js and Node
-      // files: they read `process.env.DATABASE_URL`, which every reader's
-      // project types and this harness did not, so the audit reported `process`
-      // as an error a reader would hit when the reader is the one person who
-      // never sees it. Named rather than left open, because `types` with no
-      // entry pulls in every @types package this site happens to install and
-      // would start excusing globals a reader's project does not have.
-      types: ["node"],
-    });
+    const options = samplesCompilerOptions(dir);
+    const probe = join(dir, SEMANTIC_PROBE.file);
+    writeFileSync(probe, SEMANTIC_PROBE.source);
+    const deprecationProbe = join(dir, DEPRECATION_PROBE.file);
+    writeFileSync(deprecationProbe, DEPRECATION_PROBE.source);
+    const config = join(dir, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        compilerOptions: options,
+        files: [...fileNames, probe, deprecationProbe],
+      })
+    );
+    // The compiler's command line, which every TypeScript version answers the
+    // same way, rather than its JavaScript API.
+    const { checked, ownDiagnostics } = readProbe(
+      compileWithTsc(["-p", config], dir),
+      file => resolve(dir, file) === probe
+    );
 
     const render = d => {
-      const where = origin.get(d.file?.fileName) ?? d.file?.fileName ?? "?";
-      const line =
-        d.file && d.start !== undefined
-          ? d.file.getLineAndCharacterOfPosition(d.start).line + 1
-          : 0;
-      const message = ts.flattenDiagnosticMessageText(d.messageText, " ");
+      const file = d.file === undefined ? undefined : resolve(dir, d.file);
+      const where = file === undefined ? "?" : (origin.get(file) ?? file);
+      // The chain on one line, each step after the first keeping its depth,
+      // as the compiler API's `flattenDiagnosticMessageText(text, " ")` wrote
+      // it: identities in the baseline are read from this text.
+      const message = [d.message.split("\n")[0], ...d.chain].join(" ");
       return {
         origin: where,
-        text: `${where}:${String(line)}  error TS${String(d.code)}: ${message}`,
+        text: `${where}:${String(d.line ?? 0)}  error ${d.code}: ${message}`,
       };
     };
 
@@ -695,214 +811,49 @@ function compileOnce(samples, label, ignore = SUPPLIED_BY_THE_READER) {
       return false;
     };
 
-    // The compiler's own complaints about its setup, which neither of the two
-    // collections below carries. A production-only install without @types/node
-    // reports TS2688 here and nothing anywhere else, so an otherwise simple
-    // sample would compile to an empty diagnostics list and the gate would
-    // report success having loaded neither the Node types it asked for nor the
-    // standard library.
-    const setup = [
-      ...program.getOptionsDiagnostics(),
-      ...program.getGlobalDiagnostics(),
-    ]
+    // The compiler's own complaints about its setup, which name no file. A
+    // production-only install without @types/node reports TS2688 here and
+    // nothing anywhere else, so an otherwise simple sample would compile to an
+    // empty diagnostics list and the gate would report success having loaded
+    // neither the Node types it asked for nor the standard library.
+    const setup = ownDiagnostics
+      .filter(d => d.file === undefined)
       .map(render)
       .filter(keep);
-
-    // The API's own split. Nothing here guesses from the error code.
-    const unparsed = program.getSyntacticDiagnostics().map(render).filter(keep);
-    // Deprecations, asked of the checker rather than read off the diagnostics,
-    // for the reason written on `deprecatedPropertiesIn`. Rendered in the same
-    // shape as everything else and put in the same list, so the classifier
-    // charges the page and the conservation count downstream sees it without a
-    // bucket of its own. TS6385 is TypeScript's own code for this sentence,
-    // used rather than an invented one so a reader can look it up.
-    const checker = program.getTypeChecker();
-    const deprecated = fileNames.flatMap(file => {
-      const sourceFile = program.getSourceFile(file);
-      if (!sourceFile) return [];
-      const where = origin.get(file) ?? file;
-      return deprecatedPropertiesIn(sourceFile, checker).map(d => ({
-        origin: where,
-        text:
-          `${where}:${String(sourceFile.getLineAndCharacterOfPosition(d.start).line + 1)}  ` +
-          `error TS6385: '${d.name}' is deprecated.` +
-          (d.note ? ` ${d.note}` : ""),
-      }));
-    });
+    const inFiles = ownDiagnostics
+      .filter(d => d.file !== undefined)
+      .map(render)
+      .filter(keep);
+    // A run that never reached type-checking reported parse errors only.
+    const unparsed = checked ? [] : inFiles;
+    // Deprecations, asked of the compiler's language server rather than read
+    // off the diagnostics: the compiler reports none for a deprecated property
+    // written in an object literal (`deprecated-properties.mjs` says why).
+    // Rendered in the same shape as everything else and put in the same list,
+    // so the classifier charges the page and the conservation count downstream
+    // sees it without a bucket of its own. TS6385 is TypeScript's own code for
+    // this sentence, used rather than an invented one so a reader can look it
+    // up.
+    const deprecated = deprecationsIn(dir, parsed, deprecationProbe).flatMap(
+      ({ file, found }) => {
+        const where = origin.get(file) ?? file;
+        return found.map(d => ({
+          origin: where,
+          text:
+            `${where}:${String(d.line)}  error TS6385: '${d.name}' is deprecated.` +
+            (d.note ? ` ${d.note}` : ""),
+        }));
+      }
+    );
     const diagnostics = [
       ...setup.map(d => d.text),
-      ...unparsed.map(d => d.text),
-      ...program
-        .getSemanticDiagnostics()
-        .map(render)
-        .filter(keep)
-        .map(d => d.text),
+      ...inFiles.map(d => d.text),
       ...deprecated.filter(keep).map(d => d.text),
     ];
     return { unparsed, diagnostics };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}
-
-/**
- * Properties a sample writes that the API it is writing them for has deprecated.
- *
- * TypeScript reports a deprecated FUNCTION as a suggestion diagnostic, and this
- * audit reads semantic ones, so adding suggestions was the obvious answer. It
- * was measured and it was wrong twice over: the corpus's suggestions are 24
- * "declared but never read" and a handful of others, all of them expected in a
- * sample that shows a shape rather than a program, and TypeScript does not
- * report this class at all. `{ collections: [...] }` written against a type
- * whose `collections` carries `@deprecated` produces no suggestion, no error and
- * no warning. A documented example taught the deprecated spelling of a plugin's
- * collections for as long as anyone had been reading it, and the gate compiled
- * it clean every time.
- *
- * So it is asked of the checker rather than read off the diagnostics. Every
- * object literal that has a contextual type is one the reader is filling in for
- * a declared API, and the property they wrote either exists on that type
- * carrying a `@deprecated` tag or it does not.
- *
- * The contextual type is what makes this narrow. A bare literal with no
- * declared shape has nothing to be deprecated against and is skipped, and a
- * nested literal is judged against its own property's type, so the `collections`
- * inside `contributes` is a different property from the one beside it.
- */
-export function deprecatedPropertiesIn(sourceFile, checker) {
-  const found = [];
-  const walk = node => {
-    if (ts.isObjectLiteralExpression(node)) {
-      const contextual = checker.getContextualType(node);
-      if (contextual) {
-        for (const property of node.properties) {
-          const name = writtenPropertyName(property);
-          if (name === null) continue;
-          const tag = deprecationOf(contextual, name, checker, node);
-          if (!tag) continue;
-          found.push({
-            name,
-            start: property.getStart(sourceFile),
-            note: (tag.text ?? [])
-              .map(part => part.text)
-              .join("")
-              .trim(),
-          });
-        }
-      }
-    }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(sourceFile, walk);
-  return found;
-}
-
-/**
- * The property name a literal member writes, when it can be known from the text.
- *
- * `{ collections: [] }` and `{ "collections": [] }` name the same member, and
- * reading only identifiers meant the quoted spelling walked past the check. The
- * test is `.text`, which every static property name carries, rather than a list
- * of the node kinds that have one.
- *
- * Null for a computed name and for a spread, which writes no name here at all:
- * neither can be resolved against a declared property without evaluating
- * something, and a guess is worse than the silence.
- */
-function writtenPropertyName(property) {
-  const name = property.name;
-  if (!name) return null;
-  // `{ ["collections"]: [] }` names the same member as the other two
-  // spellings, and TypeScript resolves it the same way. Only the expression
-  // inside decides: a literal is read, anything that has to be evaluated is
-  // not.
-  if (ts.isComputedPropertyName(name)) {
-    const inner = name.expression;
-    return ts.isStringLiteralLike(inner) || ts.isNumericLiteral(inner)
-      ? inner.text
-      : null;
-  }
-  return typeof name.text === "string" ? name.text : null;
-}
-
-/**
- * The union constituents a literal could still be, after its own discriminants.
- *
- * `{ kind: "legacy", old: "x" }` against `Legacy | Current` is not ambiguous:
- * the literal says which arm it is. Asking every arm and requiring them to
- * agree gave that up, so a key deprecated on the arm actually being written
- * passed whenever the other arm still offered it.
- *
- * A constituent is dropped when the literal writes a literal value for a
- * property that constituent declares as a different literal type. Nothing else
- * narrows: a property whose value is computed, or whose declared type is not a
- * literal, says nothing about which arm this is and is left alone.
- */
-function applicableConstituents(constituents, literal, checker) {
-  const discriminants = [];
-  for (const property of literal.properties) {
-    if (!ts.isPropertyAssignment(property)) continue;
-    const name = writtenPropertyName(property);
-    if (name === null) continue;
-    const written = checker.getTypeAtLocation(property.initializer);
-    if (
-      !written.isLiteral() &&
-      !(written.flags & ts.TypeFlags.BooleanLiteral)
-    ) {
-      continue;
-    }
-    discriminants.push({ name, written });
-  }
-  if (discriminants.length === 0) return constituents;
-
-  const applicable = constituents.filter(constituent =>
-    discriminants.every(({ name, written }) => {
-      const declared = constituent.getProperty(name);
-      if (!declared) return true;
-      const type = checker.getTypeOfSymbolAtLocation(
-        declared,
-        declared.valueDeclaration ?? literal
-      );
-      if (!type.isLiteral() && !(type.flags & ts.TypeFlags.BooleanLiteral)) {
-        return true;
-      }
-      return checker.typeToString(type) === checker.typeToString(written);
-    })
-  );
-  // Every arm ruled out means the discriminants describe none of them, which is
-  // the compiler's complaint to make rather than this one's.
-  return applicable.length === 0 ? constituents : applicable;
-}
-
-/**
- * The `@deprecated` tag on a property, across everything the literal might be.
- *
- * A contextual type is often a union, and `getProperty` on one answers for the
- * union rather than for its parts: a property present on a single constituent
- * comes back `undefined`, so a deprecated option in a union-shaped API passed
- * unread. The constituents are asked one at a time instead.
- *
- * The constituents are narrowed by the literal's own discriminants first, so a
- * literal that says which arm it is gets answered by that arm. Where the
- * discriminants leave more than one arm standing, it reports only when every
- * remaining arm that declares the property deprecates it: charging a page for
- * writing the current spelling of a name that is merely obsolete on some other
- * arm would be claiming to know something this does not.
- */
-function deprecationOf(contextual, name, checker, literal) {
-  const constituents = applicableConstituents(
-    contextual.isUnion() ? contextual.types : [contextual],
-    literal,
-    checker
-  );
-  const declared = constituents
-    .map(type => type.getProperty(name))
-    .filter(symbol => symbol !== undefined);
-  if (declared.length === 0) return undefined;
-  const tags = declared.map(symbol =>
-    symbol.getJsDocTags(checker).find(tag => tag.name === "deprecated")
-  );
-  return tags.every(tag => tag !== undefined) ? tags[0] : undefined;
 }
 
 /**
@@ -915,10 +866,16 @@ function deprecationOf(contextual, name, checker, literal) {
 export const suppressedByTheReaderRule = [];
 
 /** An import this compilation could not resolve. */
-export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
+export const UNRESOLVED_IMPORT = new RegExp(`${CANNOT_FIND_MODULE}'([^']+)'`);
 
-/** An undefined name, which may or may not be a defect. */
-export const MISSING_NAME = /error TS2304: Cannot find name '([^']+)'/;
+/**
+ * An undefined name, which may or may not be a defect. TS2552 is the same
+ * diagnostic with a spelling suggestion added, so it is read the same way:
+ * TypeScript 7 finds a lookalike far more often (`MyCollection` gets "Did you
+ * mean 'HTMLCollection'?"), and reading TS2304 alone set a reader's own name
+ * aside or charged it by whether the compiler found one.
+ */
+export const MISSING_NAME = /error TS(?:2304|2552): Cannot find name '([^']+)'/;
 
 /**
  * A shorthand property with nothing in scope to fill it.
@@ -1090,10 +1047,10 @@ export function exportsMapAnswers(exports, subpath) {
  * PERMISSIVE direction, not the strict one it was described as: a constructed
  * name and a misspelled export would both have been set aside there.
  */
-export function mentionIsReaderOwned(name, file, index, samples) {
+export function mentionIsReaderOwned(name, file, index, samples, exported) {
   const sample = samples.find(s => s.file === file && s.index === index);
   if (!sample) return false;
-  return readerOwnedMention(name, sample.code, extensionFor(sample));
+  return readerOwnedMention(name, sample.code, extensionFor(sample), exported);
 }
 
 export function declaredEarlier(name, file, index, samples) {
@@ -1155,145 +1112,44 @@ export function declaresName(code, name, extension = "tsx") {
  * rebuild, which is reported rather than swallowed.
  */
 /**
- * The lines of a fence that are at the top level, with deeper ones blanked.
+ * A sample parsed under the grammar its extension names: the parser's whole
+ * result, `program` and `module` (its import and export record).
  *
- * The declaration patterns below anchor at a line start, which a declaration
- * nested inside a function also has. The comment on `declaredNamesIn` said it
- * was deliberately shallow and the code never enforced it: `init(ctx) { const
- * handler = ... }` recorded `handler` as though the next fence could see it,
- * and an undefined reference in that fence was then filed as merely unchecked
- * rather than reported.
- *
- * Depth is counted rather than parsed, so a brace inside a string or a comment
- * misleads it. That mistake blanks a line that was really top level, which
- * turns a name the page does define into one it appears not to — loud, and
- * caught by the continuation pass — rather than excusing one it does not.
- */
-const OPENS = new Set([
-  ts.SyntaxKind.OpenBraceToken,
-  ts.SyntaxKind.OpenParenToken,
-  ts.SyntaxKind.OpenBracketToken,
-]);
-const CLOSES = new Set([
-  ts.SyntaxKind.CloseBraceToken,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-]);
-
-/**
- * Tokens after which a `/` is division, so everything else means a regex can
- * start there. The scanner returns `SlashToken` either way and only rescans
- * when asked, so without this `const re = /}/` contributes a closing brace and
- * the rest of the enclosing block reads as top level.
- */
-const DIVISION_FOLLOWS = new Set([
-  ts.SyntaxKind.Identifier,
-  ts.SyntaxKind.NumericLiteral,
-  ts.SyntaxKind.BigIntLiteral,
-  ts.SyntaxKind.StringLiteral,
-  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-  ts.SyntaxKind.TemplateTail,
-  ts.SyntaxKind.RegularExpressionLiteral,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-  ts.SyntaxKind.CloseBraceToken,
-  ts.SyntaxKind.ThisKeyword,
-  ts.SyntaxKind.SuperKeyword,
-  ts.SyntaxKind.TrueKeyword,
-  ts.SyntaxKind.FalseKeyword,
-  ts.SyntaxKind.NullKeyword,
-  ts.SyntaxKind.PlusPlusToken,
-  ts.SyntaxKind.MinusMinusToken,
-]);
-
-/**
- * Brackets that are really brackets, from the TypeScript scanner rather than
- * from counting characters.
- *
- * Counting characters read a closing brace inside a string or a comment as a
- * real one. The comment here used to argue that the mistake was safe because it
- * fires loudly: over-closing blanks a line that was top level, so a name the
- * page defines looks undefined and becomes a finding. That is only one
- * direction. `function setup() { const marker = "}"; const hidden = {}; }`
- * closes early on the string, which leaves `hidden` looking page-scoped, and a
- * later import-free fence calling `hidden.nonexistent()` is then treated as a
- * continuation and filed as unchecked instead of as a finding. The quiet
- * direction was the one that mattered.
- *
- * Trivia is skipped, so comments contribute nothing. A template literal's text
- * is inside its own token, and `${`/`}` are part of the head/middle/tail
- * tokens, so template expressions balance without special handling. A regex
- * literal still needs `reScanSlashToken` to be recognised and does not get it,
- * so a `}` inside one is read as a brace; that is the same hazard the character
- * count had, narrowed from every string and comment to regex literals alone.
- */
-function topLevelOnly(code) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    true,
-    ts.LanguageVariant.JSX,
-    code
-  );
-  // UTF-16 units, because that is what the scanner's offsets count. Splitting
-  // by code point desynchronises on the first non-ASCII character, and these
-  // pages have plenty.
-  const chars = code.split("");
-  const blank = (from, to) => {
-    for (let i = from; i < to && i < chars.length; i += 1) {
-      if (chars[i] !== "\n") chars[i] = " ";
-    }
-  };
-
-  // Per token, not per line. Blanking whole lines cannot see
-  // `function setup() { const hidden = {}; }`, where the nesting opens and
-  // closes within one line and the line therefore starts at depth 0.
-  let depth = 0;
-  let prevEnd = 0;
-  let previous = ts.SyntaxKind.Unknown;
-  for (
-    let kind = scanner.scan();
-    kind !== ts.SyntaxKind.EndOfFileToken;
-    kind = scanner.scan()
-  ) {
-    // A regex literal is one token or several, depending on whether anybody
-    // asks. Unasked, `/}/ ` scans as slash, brace, slash, and the brace closes a
-    // block it was never in.
-    if (
-      (kind === ts.SyntaxKind.SlashToken ||
-        kind === ts.SyntaxKind.SlashEqualsToken) &&
-      !DIVISION_FOLLOWS.has(previous)
-    ) {
-      kind = scanner.reScanSlashToken();
-    }
-    previous = kind;
-    const end = scanner.getTokenEnd();
-    // A closing bracket belongs to the depth it returns to, and an opening one
-    // to the depth it leaves, so both stay visible while their contents do not.
-    if (CLOSES.has(kind)) depth = Math.max(0, depth - 1);
-    if (depth > 0) blank(prevEnd, end);
-    if (OPENS.has(kind)) depth += 1;
-    prevEnd = end;
-  }
-  return chars.join("");
-}
-
-/**
- * The import declarations a source actually has.
- *
- * Parsed as TSX, because these samples are, and a parse never throws here: on
- * malformed input TypeScript produces a tree with diagnostics rather than an
- * exception, and a statement list that is short of a broken import is the right
- * answer anyway.
+ * A sample that does not parse is a program with no statements. Documentation
+ * holds fragments that are not programs, a `{ ... }` placeholder or a partial
+ * snippet, and the parser answers those with nothing at all rather than a
+ * partial tree. Nothing is lost by it here: across the 72 fences of the docs
+ * that do not parse, the compiler's recovering parser found no import and no
+ * module syntax either. The one place a sample is parsed.
  */
 export function parseSample(source, extension = "tsx") {
-  return ts.createSourceFile(
-    `sample.${extension}`,
-    source,
-    ts.ScriptTarget.Latest,
-    // Parents, because asking whether a mention sits in a type position means
-    // walking up from it. Still the one place a sample is parsed.
-    true,
-    extension === "tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  try {
+    return parseSource(source, `sample.${extension}`);
+  } catch {
+    return UNPARSED;
+  }
+}
+
+/** What a sample that does not parse declares, imports and loads: nothing. */
+const UNPARSED = Object.freeze({
+  program: { type: "Program", body: [] },
+  module: { staticImports: [], staticExports: [], importMetas: [] },
+});
+
+/** Whether a parsed sample has what makes TypeScript compile it as a module. */
+function hasModuleIndicator({ program, module }) {
+  if (
+    module.staticImports.length > 0 ||
+    module.staticExports.length > 0 ||
+    module.importMetas.length > 0
+  ) {
+    return true;
+  }
+  return program.body.some(
+    statement =>
+      (statement.type === "TSImportEqualsDeclaration" &&
+        statement.moduleReference.type === "TSExternalModuleReference") ||
+      statement.type === "TSExportAssignment"
   );
 }
 
@@ -1309,48 +1165,21 @@ export function parseSample(source, extension = "tsx") {
  * undefined rather than rebuilt with its context.
  */
 function importsIn(source, extension) {
-  return parseSample(source, extension).statements.filter(
-    ts.isImportDeclaration
+  return parseSample(source, extension).program.body.filter(
+    statement => statement.type === "ImportDeclaration"
   );
 }
 
 export function declaredNamesIn(source, extension = "tsx") {
-  const code = topLevelOnly(source);
-  const names = new Set();
-  const add = n => {
-    if (n) names.add(n);
-  };
-  // Modifiers are a run, in any order and any number: `export default async
-  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
-  // `export` and `declare` lost every one of those, and the lookup this replaced
-  // had found them, so unifying the two turned working pages into findings. The
-  // separator after the keyword takes an asterisk so `function* gen` and
-  // `function *gen` are both read.
-  // Anchored at a line start OR after a semicolon, because
-  // `const first = 1; const second = 2;` declares both and reading only the
-  // first turned a page that was correct into a finding.
-  for (const m of code.matchAll(
-    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class|interface|type|enum)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-  )) {
-    add(m[1]);
-  }
-  // Binding patterns: `const { nextly } = await createClient()` and
-  // `const [first] = rows` declare names too. Requiring an identifier straight
-  // after the keyword recorded neither, so a later fence using the value looked
-  // like it inherited nothing and was never compiled.
-  for (const m of code.matchAll(
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-  )) {
-    const pattern = m[1];
-    // `{ a, b: c, d = 1, ...rest }` binds a, c, d and rest; the key in `b: c`
-    // is not a binding, so only what follows a colon counts.
-    for (const part of pattern.replace(/^[[{]|[\]}]$/g, "").split(",")) {
-      const piece = part.trim().replace(/^\.\.\./, "");
-      if (!piece) continue;
-      const renamed = piece.match(/:\s*([A-Za-z_$][\w$]*)/);
-      add(renamed ? renamed[1] : piece.match(/^[A-Za-z_$][\w$]*/)?.[0]);
-    }
-  }
+  const parsed = parseSample(source, extension);
+  // From the program's own top-level statements when the sample parses, which
+  // is exact: what reading the text has to infer about strings, regular
+  // expressions, JSX text and comments, the parse has already decided. Only a
+  // fence that is not a program falls back to the text.
+  const declared =
+    parsed === UNPARSED
+      ? namesInText(source, NAME_KEYWORDS)
+      : programDeclarations(parsed.program).flatMap(entry => entry.names);
   // Imports come from the PARSE, not from a pattern over the text. They cannot
   // be read from the top-level view either: an import clause opens a brace, so
   // masking by depth erases the middle of `import {\n  defineConfig,\n} from
@@ -1360,17 +1189,100 @@ export function declaredNamesIn(source, extension = "tsx") {
   // fence that used `ghost` as a continuation of a page that never bound it. A
   // parser has neither problem: a comment produces no statement, and a wrapped
   // clause is one statement however it is laid out.
-  for (const statement of importsIn(source, extension)) {
-    const clause = statement.importClause;
-    if (!clause) continue;
-    if (clause.name) add(clause.name.text);
-    const bindings = clause.namedBindings;
-    if (!bindings) continue;
-    if (ts.isNamespaceImport(bindings)) add(bindings.name.text);
-    else for (const element of bindings.elements) add(element.name.text);
-  }
-  return [...names];
+  // Default, namespace and named bindings alike: each specifier's local name.
+  const imported = importsIn(source, extension).flatMap(statement =>
+    statement.specifiers.map(specifier => specifier.local.name)
+  );
+  return [...new Set([...declared, ...imported].filter(Boolean))];
 }
+
+/**
+ * What each top-level statement of a parsed sample declares: `{ names, value }`,
+ * `value` saying whether those names can supply a value. An `export` is read
+ * through to the declaration it carries. The kinds are the ones a declaration
+ * keyword introduces: `const`, `let`, `var`, `function` and `class` declare
+ * values, and `interface`, `type` and `enum` declare names only.
+ */
+function programDeclarations(program) {
+  return program.body
+    .map(statement =>
+      statement.type.startsWith("Export") ? statement.declaration : statement
+    )
+    .map(
+      declaration => declaration && DECLARES[declaration.type]?.(declaration)
+    )
+    .filter(Boolean);
+}
+
+/** A declaration with one `id`, which a default export can leave out. */
+function namedDeclaration(value) {
+  return declaration => ({
+    names: declaration.id ? [declaration.id.name] : [],
+    value,
+  });
+}
+
+const DECLARES = {
+  VariableDeclaration: declaration => ({
+    names: declaration.declarations.flatMap(declarator =>
+      boundNames(declarator.id)
+    ),
+    value: true,
+  }),
+  FunctionDeclaration: namedDeclaration(true),
+  TSDeclareFunction: namedDeclaration(true),
+  ClassDeclaration: namedDeclaration(true),
+  TSInterfaceDeclaration: namedDeclaration(false),
+  TSTypeAliasDeclaration: namedDeclaration(false),
+  TSEnumDeclaration: namedDeclaration(false),
+};
+
+/**
+ * The names a binding binds, through any depth of pattern: `{ a, b: c, d = 1,
+ * ...rest }` binds a, c, d and rest, the key in `b: c` being no binding.
+ */
+function boundNames(binding) {
+  const children = PATTERN_CHILDREN[binding.type];
+  return children ? children(binding).flatMap(boundNames) : [binding.name];
+}
+
+const PATTERN_CHILDREN = {
+  ObjectPattern: pattern =>
+    pattern.properties.map(property =>
+      property.type === "RestElement" ? property : property.value
+    ),
+  ArrayPattern: pattern => pattern.elements.filter(Boolean),
+  AssignmentPattern: pattern => [pattern.left],
+  RestElement: pattern => [pattern.argument],
+};
+
+/**
+ * The names a fence that does not parse declares with one of `keywords`, read
+ * from its top-level text. No reading of a fragment is exact, since it is not a
+ * program: this one sees through brackets, strings, comments and template
+ * literals by tokenising, and so sees no name a destructuring pattern binds,
+ * which are inside its brackets.
+ */
+function namesInText(source, keywords) {
+  // Modifiers are a run, in any order and any number: `export default async
+  // function Foo`, `export abstract class Bar`, `declare const baz`. Naming only
+  // `export` and `declare` lost every one of those, and the lookup this replaced
+  // had found them, so unifying the two turned working pages into findings. The
+  // separator after the keyword takes an asterisk so `function* gen` and
+  // `function *gen` are both read.
+  // Anchored at a line start OR after a semicolon, because
+  // `const first = 1; const second = 2;` declares both and reading only the
+  // first turned a page that was correct into a finding.
+  const declaration = new RegExp(
+    `(?:^|;)[ \\t]*(?:(?:export|default|declare|abstract|async)[ \\t]+)*(?:${keywords})\\b[\\s*]+([A-Za-z_$][\\w$]*)`,
+    "gm"
+  );
+  return [...topLevelOnly(source).matchAll(declaration)].map(m => m[1]);
+}
+
+/** The declaration keywords that introduce a name, and those that introduce a value. */
+const NAME_KEYWORDS = "const|let|var|function|class|interface|type|enum";
+const VALUE_KEYWORDS = "const|let|var|function|class";
 
 /**
  * Which of an earlier fence's names does this one use?
@@ -1391,25 +1303,16 @@ export function declaredNamesIn(source, extension = "tsx") {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source, _extension = "tsx") {
-  const code = topLevelOnly(source);
-  const names = new Set();
-  for (const m of code.matchAll(
-    /(?:^|;)[ \t]*(?:(?:export|default|declare|abstract|async)[ \t]+)*(?:const|let|var|function|class)\b[\s*]+([A-Za-z_$][\w$]*)/gm
-  )) {
-    names.add(m[1]);
-  }
-  for (const m of code.matchAll(
-    /^\s*(?:export\s+)?(?:const|let|var)\s+([[{][^=]*?[\]}])\s*=/gm
-  )) {
-    for (const part of m[1].replace(/^[[{]|[\]}]$/g, "").split(",")) {
-      const piece = part.trim().replace(/^\.\.\./, "");
-      const bound = piece.includes(":") ? piece.split(":").pop() : piece;
-      const name = bound?.trim().match(/^[A-Za-z_$][\w$]*/)?.[0];
-      if (name) names.add(name);
-    }
-  }
-  return [...names];
+export function declaredValuesIn(source, extension = "tsx") {
+  const parsed = parseSample(source, extension);
+  // From the parse when there is one, as `declaredNamesIn` reads it.
+  const values =
+    parsed === UNPARSED
+      ? namesInText(source, VALUE_KEYWORDS)
+      : programDeclarations(parsed.program)
+          .filter(entry => entry.value)
+          .flatMap(entry => entry.names);
+  return [...new Set(values)];
 }
 
 export function inheritedNames(sample, samples) {
@@ -1607,31 +1510,19 @@ function workspaceManifest(pkg) {
  * Measured rather than assumed, which is the whole point of asking the exports:
  * a rule keyed on the shape alone would have silenced those two.
  *
- * From `src`, never from `dist`, so the answer cannot depend on whether a build
- * has run. CI runs the script suite BEFORE the build step, and reading the built
- * types there returned an empty set: every name read as the reader's, and the
- * unit tests failed on a clean checkout while passing on a laptop.
+ * From the published declarations, the files a consumer's import resolves, so
+ * only names a reader can actually import count. Reading `src` instead took its
+ * entries from every `src/…` string in a build config as well, and so counted
+ * two names no package publishes: `loadEnv`, built for nextly's CLI, and
+ * `useSyncExternalStore`, the target of an alias. This needs the packages
+ * built, which every run of this gate already requires, and the names whose
+ * answer is known are checked inside that run (`workspaceSetProblems`) rather
+ * than in the script suite, which CI runs before the build.
  *
  * EVERY typed entry a package declares, not only `"."`. A symbol published from
  * a subpath is still published: `@nextlyhq/builder` exports `BuilderShell` from
  * `./shell` and keeps it out of the root barrel, and reading the barrel alone
  * called it the reader's.
- *
- * An entry is found in one of two ways, because neither alone is enough.
- * `dist/shell.d.ts` names `src/shell.ts` and that mirror covers most of them,
- * but not `nextly/document-lock`, which is built from
- * `src/domains/document-lock/contract.ts`. Guessing the source from the output
- * name left six entries unresolved, and with them went `DocumentLockHolder`,
- * `FieldTypeCatalogEntry` and `Hsv`: reader-owned on a clean checkout and ours
- * after a build, which is the build-state dependence this was supposed to end.
- *
- * So the build's own configuration is asked as well, by PARSING it for the
- * source paths it names. Parsed rather than imported, because most of these
- * configs are TypeScript and this gate runs under plain `node`, and because a
- * gate that must not consult the network should not be executing build scripts
- * either. An import chain inside the package is followed, since `@nextlyhq/ui`
- * declares which barrel each subpath is built from in a module beside its
- * config rather than in the config.
  */
 const exportedNames = new Set();
 /**
@@ -1648,191 +1539,246 @@ const exportedNames = new Set();
  */
 const exportedValues = new Set();
 
-/** `./dist/shell.d.ts` as its source, since that is what is always present. */
-function sourceCandidatesFor(typesPath) {
-  const built = typesPath.replace(/^\.\//, "").match(/^dist\/(.+)\.d\.[cm]?ts$/);
-  return built ? [`src/${built[1]}.ts`, `src/${built[1]}.tsx`] : [];
+/** Every workspace package anyone can install, with its manifest. */
+function publishedPackages() {
+  return readdirSync(join(ROOT, "packages"), { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => join(ROOT, "packages", dirent.name))
+    .map(packageDir => ({ packageDir, manifest: readManifest(packageDir) }))
+    .filter(({ manifest }) => Boolean(manifest?.name) && !manifest.private);
 }
 
-/** A relative import specifier, as the files it could mean. */
-function localModuleCandidates(base) {
-  const withoutJs = base.replace(/\.js$/, "");
-  return [
-    `${withoutJs}.ts`,
-    `${withoutJs}.tsx`,
-    base,
-    `${withoutJs}.mjs`,
-    join(withoutJs, "index.ts"),
-  ];
-}
-
-/**
- * The source files a package's build configuration names.
- *
- * Read by parsing, so nothing here runs a build script or needs a TypeScript
- * loader to read a `.ts` config. Relative imports are followed within the
- * package, because a config may keep its entry map in a module beside it.
- */
-function buildConfigEntries(packageDir) {
-  let names;
+/** A package's manifest, or null for a directory that holds none it can read. */
+function readManifest(packageDir) {
   try {
-    names = readdirSync(packageDir);
+    return JSON.parse(readFileSync(join(packageDir, "package.json"), "utf-8"));
   } catch {
-    return [];
+    return null;
   }
-  const queue = names
-    .filter(name => /^tsdown(\..+)?\.config\.[cm]?[jt]s$/.test(name))
-    .map(name => join(packageDir, name));
-  const seen = new Set();
-  const found = new Set();
-  while (queue.length > 0) {
-    const file = queue.pop();
-    if (seen.has(file) || !existsSync(file)) continue;
-    seen.add(file);
-    const source = ts.createSourceFile(
-      file,
-      readFileSync(file, "utf-8"),
-      ts.ScriptTarget.ES2022,
-      false,
-      ts.ScriptKind.TS
-    );
-    const visit = node => {
-      if (ts.isStringLiteral(node) && /^src\/.+\.tsx?$/.test(node.text)) {
-        const full = join(packageDir, node.text);
-        if (existsSync(full)) found.add(full);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
-    for (const statement of source.statements) {
-      if (!ts.isImportDeclaration(statement)) continue;
-      const specifier = statement.moduleSpecifier;
-      if (!ts.isStringLiteral(specifier)) continue;
-      if (!specifier.text.startsWith(".")) continue;
-      for (const candidate of localModuleCandidates(
-        join(dirname(file), specifier.text)
-      )) {
-        if (existsSync(candidate)) {
-          queue.push(candidate);
-          break;
-        }
-      }
-    }
-  }
-  return [...found];
 }
 
-/** Every typed entry a package declares, resolved to a file that exists. *
- * The export set is a parameter with the workspace as its default, so the rule
- * can be stated as a test without a build having run. That mattered: reading it
- * unconditionally made the unit tests depend on build state, and they failed on
- * a clean CI checkout while passing on a laptop.
- */
-function typedEntriesOf(packageDir, manifest) {
-  const declared = [];
-  const map = manifest.exports;
-  if (map && typeof map === "object") {
-    for (const target of Object.values(map)) {
-      if (!target || typeof target !== "object") continue;
-      const types =
-        target.types ?? target.import?.types ?? target.default?.types;
-      if (typeof types === "string") declared.push(types);
-    }
-  }
-  const root = manifest.types ?? manifest.typings;
-  if (typeof root === "string") declared.push(root);
-  if (declared.length === 0) declared.push("dist/index.d.ts");
+/** The declaration file one exports-map target names, if it names one. */
+function typesOf(target) {
+  const conditions =
+    target && typeof target === "object"
+      ? [target, target.import, target.default]
+      : [];
+  return conditions.map(condition => condition?.types).find(Boolean);
+}
 
-  const resolved = new Set(buildConfigEntries(packageDir));
-  for (const entry of new Set(declared)) {
-    for (const candidate of sourceCandidatesFor(entry)) {
-      const full = join(packageDir, candidate.replace(/^\.\//, ""));
-      if (existsSync(full)) {
-        resolved.add(full);
-        break;
-      }
-    }
-  }
-  return [...resolved];
+/** Every declaration file a manifest publishes, its root `types` included. */
+function declaredTypes(manifest) {
+  const targets =
+    manifest.exports && typeof manifest.exports === "object"
+      ? Object.values(manifest.exports)
+      : [];
+  const declared = [
+    ...targets.map(typesOf),
+    manifest.types ?? manifest.typings,
+  ];
+  // A package that declares none publishes no declarations, CSS and plain
+  // JavaScript packages among them.
+  return [...new Set(declared.filter(types => typeof types === "string"))];
 }
 
 /**
- * Whether an export is declared type-only, whatever it points at.
- *
- * Both spellings say it: `export type { X }` marks the declaration and
- * `export { type X }` marks the specifier. A symbol exported by several
- * specifiers is type-only only when every one of them is.
+ * Every declaration file the workspace publishes. One that is declared and not
+ * built is refused: its names would otherwise read as the reader's.
  */
-function exportedAsTypeOnly(symbol) {
-  const specifiers = (symbol.declarations ?? []).filter(ts.isExportSpecifier);
-  if (specifiers.length === 0) return false;
-  return specifiers.every(
-    specifier => specifier.isTypeOnly || specifier.parent.parent.isTypeOnly
+function publishedDeclarations() {
+  const files = publishedPackages().flatMap(({ packageDir, manifest }) =>
+    declaredTypes(manifest).map(types => join(packageDir, types))
   );
+  const missing = files.filter(file => !existsSync(file));
+  if (missing.length > 0) {
+    throw new Error(
+      `doc samples: published declarations are not built: ${missing.join(", ")}`
+    );
+  }
+  return files;
+}
+
+/**
+ * The names the published declarations export as VALUES, as the compiler
+ * answers it.
+ *
+ * A namespace import's type holds exactly an entry's value exports: a type-only
+ * export is not on it, whatever it points at (`export type { QueryClient }`
+ * names TanStack's runtime class and supplies no value), and an alias resolves
+ * to what it binds. So each entry is imported and `keyof typeof` it is asked to
+ * hold a name it cannot, which makes the compiler print the names it does hold,
+ * in full under `--noErrorTruncation`. An entry whose probe says anything else
+ * stops the run rather than reading as exporting no value.
+ */
+function valueExportsOf(files) {
+  const dir = mkdtempSync(join(tmpdir(), "nextly-exports-"));
+  try {
+    writeFileSync(join(dir, "probe.ts"), probeSource(files));
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: PROBE_OPTIONS, files: ["probe.ts"] })
+    );
+    const reported = compileWithTsc(["-p", join(dir, "tsconfig.json")], dir);
+    if (reported.length !== files.length) {
+      throw new Error(
+        `doc samples: asked ${String(files.length)} entries for their values and was answered ${String(reported.length)} times`
+      );
+    }
+    return new Set(reported.flatMap(probedValues));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const PROBE_OPTIONS = {
+  strict: true,
+  skipLibCheck: true,
+  target: "es2022",
+  jsx: "react-jsx",
+  module: "esnext",
+  moduleResolution: "bundler",
+  noErrorTruncation: true,
+  types: [],
+};
+
+/** One line per entry, each asking `keyof` its namespace to hold `__probe__`. */
+function probeSource(files) {
+  const lines = files.map((file, index) => {
+    // Imported by the runtime file it declares, as a consumer imports it.
+    const specifier = file.replace(/\.d\.([mc]?)ts$/, ".$1js");
+    return `import * as n${String(index)} from ${JSON.stringify(specifier)}; const k${String(index)}: keyof typeof n${String(index)} = "__probe__";`;
+  });
+  return `${lines.join("\n")}\nexport {};\n`;
+}
+
+const PROBED = /^Type '"__probe__"' is not assignable to type '(.*)'\.$/;
+
+/** The value names one probe's diagnostic lists; anything else is refused. */
+function probedValues(diagnostic) {
+  const firstLine = diagnostic.message.split("\n")[0];
+  const listed =
+    diagnostic.code === "TS2322" ? PROBED.exec(firstLine)?.[1] : undefined;
+  if (listed === undefined) {
+    throw new Error(
+      `doc samples: could not ask line ${String(diagnostic.line)} for its values: ${diagnostic.code} ${diagnostic.message}`
+    );
+  }
+  return [...listed.matchAll(/"([^"]+)"/g)].map(match => match[1]);
 }
 
 function workspaceExports() {
   if (exportedNames.size > 0) return exportedNames;
-  const entries = [];
-  for (const dirent of readdirSync(join(ROOT, "packages"), {
-    withFileTypes: true,
-  })) {
-    if (!dirent.isDirectory()) continue;
-    const packageDir = join(ROOT, "packages", dirent.name);
-    const manifestPath = join(packageDir, "package.json");
-    if (!existsSync(manifestPath)) continue;
-    let manifest;
-    try {
-      manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-    } catch {
-      continue;
-    }
-    if (!manifest.name || manifest.private) continue;
-    entries.push(...typedEntriesOf(packageDir, manifest));
-  }
-  if (entries.length === 0) return exportedNames;
-  // One program over every entry, because the same question asked twenty times
-  // costs twenty type-checker startups.
-  const program = ts.createProgram(entries, {
-    noEmit: true,
-    skipLibCheck: true,
-    target: ts.ScriptTarget.ES2022,
-    jsx: ts.JsxEmit.ReactJSX,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-  });
-  const checker = program.getTypeChecker();
-  for (const entry of entries) {
-    const sourceFile = program.getSourceFile(entry);
-    if (!sourceFile) continue;
-    const symbol = checker.getSymbolAtLocation(sourceFile);
-    if (!symbol) continue;
-    for (const exported of checker.getExportsOfModule(symbol)) {
-      exportedNames.add(exported.getName());
-      // A re-export is an alias, and an alias carries no namespace of its own:
-      // asking the alias whether it is a value answers for the thing bound
-      // rather than for the binding. Both questions matter, and in this order.
-      //
-      // `export type { QueryClient } from "./types/query"` points at TanStack's
-      // runtime class, so the target is a value while the export is not: an
-      // importer of `@nextlyhq/admin` cannot get that class from it. Reading
-      // only the target put `QueryClient` among the values and kept `new
-      // QueryClient()` reported as a name the workspace could have supplied.
-      if (exportedAsTypeOnly(exported)) continue;
-      const target =
-        exported.flags & ts.SymbolFlags.Alias
-          ? checker.getAliasedSymbol(exported)
-          : exported;
-      if (target.flags & ts.SymbolFlags.Value) {
-        exportedValues.add(exported.getName());
-      }
-    }
-  }
+  const files = publishedDeclarations();
+  files
+    .flatMap(file => [...declarationExports(file)])
+    .forEach(name => exportedNames.add(name));
+  valueExportsOf(files).forEach(name => exportedValues.add(name));
   return exportedNames;
 }
 
 export const readerOwnedName = (name, exported = workspaceExports()) =>
   /^[A-Z][A-Za-z0-9]*$/.test(name) && !exported.has(name);
+
+/**
+ * The export sets held to names whose answer is known, before any page is
+ * judged. Each wrong answer is named.
+ *
+ * Here rather than in the script suite, because the sets are read from the
+ * published declarations and CI runs that suite before the build; this gate
+ * already refuses to start without one. A set that answered "exported" to
+ * everything, or to nothing, fails a line below either way.
+ */
+export function workspaceSetProblems() {
+  const published = [
+    "Media",
+    "Skeleton",
+    // From a subpath, and kept out of the root barrel.
+    "BuilderShell",
+    // Entries whose output name does not mirror their source.
+    "DocumentLockHolder",
+    "FieldTypeCatalogEntry",
+    "Hsv",
+    "FIELD_TYPE_CATALOG",
+    "WidgetResult",
+  ];
+  // The reader's own: `Users` is also an icon barrel's export, which a scan of
+  // all source rather than the published entries picked up.
+  const readers = ["Posts", "MyCollection", "Users"];
+  const checks = [
+    ...published.map(name => [`${name} is published`, !readerOwnedName(name)]),
+    ...readers.map(name => [`${name} is the reader's`, readerOwnedName(name)]),
+    // A type, and an interface, but no value.
+    ["Media supplies no value", !workspaceValueExports().has("Media")],
+    // Exported type-only over TanStack's runtime class.
+    [
+      "QueryClient supplies no value",
+      !workspaceValueExports().has("QueryClient"),
+    ],
+    ["Skeleton supplies a value", workspaceValueExports().has("Skeleton")],
+    [
+      "BuilderShell supplies a value",
+      workspaceValueExports().has("BuilderShell"),
+    ],
+    ...mentionChecks(),
+  ];
+  return checks.filter(([, holds]) => !holds).map(([what]) => what);
+}
+
+/** How a block's use of a name decides whose it is, against the real sets. */
+function mentionChecks() {
+  const owned = (name, code, extension = "ts") =>
+    readerOwnedMention(name, code, extension);
+  return [
+    // A class the sample forgot to import, one of ours misspelled twice, and a
+    // type-only export constructed: none is the reader's.
+    [
+      "new S3Client is a finding",
+      !owned("S3Client", "const s = new S3Client({});"),
+    ],
+    [
+      "NextlyEror is a finding",
+      !owned("NextlyEror", "const e: NextlyEror = x;"),
+    ],
+    [
+      "<Skelton /> is a finding",
+      !owned("Skelton", "const s = <Skelton />;", "tsx"),
+    ],
+    [
+      "new QueryClient is a finding",
+      !owned("QueryClient", "const q = new QueryClient();"),
+    ],
+    ...["Posts", "Users", "Page", "Chart", "MyCollection"].map(name => [
+      `${name} in collections is the reader's`,
+      owned(name, `const c = { collections: [${name}] };`),
+    ]),
+    // `Media` needs a value no import here supplies, so as a value it is the
+    // reader's collection; as a type it is importable, and a finding.
+    [
+      "Media in collections is the reader's",
+      owned("Media", "const config = { collections: [Posts, Users, Media] };"),
+    ],
+    [
+      "Media as a type is a finding",
+      !owned("Media", "declare const m: Media;"),
+    ],
+    ["typeof Media is the reader's", owned("Media", "type X = typeof Media;")],
+    [
+      "<Skeleton /> is a finding",
+      !owned("Skeleton", "const el = <Skeleton />;", "tsx"),
+    ],
+  ];
+}
+
+/**
+ * The workspace's export sets as the reader-ownership questions take them:
+ * every published name, and the value half. Read only when a question is not
+ * handed its own sets, so those questions can be asked of a fixture without a
+ * build.
+ */
+const workspaceSets = () => ({
+  names: workspaceExports(),
+  values: workspaceValueExports(),
+});
 
 /** The value half of {@link workspaceExports}, built by the same pass. */
 export function workspaceValueExports() {
@@ -1852,25 +1798,53 @@ export function workspaceValueExports() {
 export function usedOnlyAsValue(code, name, extension = "tsx") {
   let mentioned = false;
   let asType = false;
-  const visit = node => {
-    if (ts.isIdentifier(node) && node.text === name) {
-      mentioned = true;
-      for (let at = node.parent; at; at = at.parent) {
-        // `typeof X` is written in a type position and reads X out of the
-        // VALUE namespace, so it is a value use however it looks. Asked before
-        // the general test below, because a type query is itself a type node.
-        if (ts.isTypeQueryNode(at)) break;
-        if (ts.isTypeNode(at)) {
-          asType = true;
-          break;
-        }
-        if (ts.isExpression(at) || ts.isStatement(at)) break;
+  walk(parseSample(code, extension).program, (node, ancestors) => {
+    const isName =
+      (node.type === "Identifier" || node.type === "JSXIdentifier") &&
+      node.name === name;
+    if (!isName) return true;
+    mentioned = true;
+    for (const at of [...ancestors].reverse()) {
+      // `typeof X` is written in a type position and reads X out of the
+      // VALUE namespace, so it is a value use however it looks. Asked before
+      // the general test below, because a type query is itself a type node.
+      if (at.type === "TSTypeQuery") break;
+      if (isTypeNode(at)) {
+        asType = true;
+        break;
       }
+      if (isExpressionOrStatement(at)) break;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(parseSample(code, extension));
+    return true;
+  });
   return mentioned && !asType;
+}
+
+/**
+ * Whether a node is written in a type position.
+ *
+ * Every TypeScript type node, and the two heritage clauses that name a type
+ * where an interface extends or a class implements one. Expressions that carry
+ * a type (`as`, `satisfies`, `!`) and the declarations that hold one are not
+ * types themselves.
+ */
+function isTypeNode(node) {
+  return (
+    TYPE_POSITIONS.has(node.type) || /^TS\w*(?:Type|Keyword)$/.test(node.type)
+  );
+}
+
+const TYPE_POSITIONS = new Set([
+  "TSTypeReference",
+  "TSInterfaceHeritage",
+  "TSClassImplements",
+]);
+
+/** Whether a node is an expression or a statement, declarations included. */
+function isExpressionOrStatement(node) {
+  return /(?:Expression|Statement|Declaration|Literal)$|^JSX(?:Element|Fragment)$/.test(
+    node.type
+  );
 }
 
 /** Whether a block ever constructs this name. */
@@ -1887,29 +1861,33 @@ function constructorRoot(expression) {
   // a property or element access reaches through its object, and parentheses,
   // `as`, `satisfies`, a non-null `!` and an angle-bracket assertion all wrap an
   // expression without changing which binding it needs.
-  while (
-    ts.isPropertyAccessExpression(at) ||
-    ts.isElementAccessExpression(at) ||
-    ts.isParenthesizedExpression(at) ||
-    ts.isAsExpression(at) ||
-    ts.isSatisfiesExpression(at) ||
-    ts.isNonNullExpression(at) ||
-    ts.isTypeAssertionExpression(at)
-  ) {
-    at = at.expression;
+  for (;;) {
+    if (at.type === "MemberExpression") at = at.object;
+    else if (TRANSPARENT.has(at.type)) at = at.expression;
+    else break;
   }
-  return ts.isIdentifier(at) ? at.text : undefined;
+  return at.type === "Identifier" ? at.name : undefined;
 }
+
+const TRANSPARENT = new Set([
+  "ParenthesizedExpression",
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+]);
 
 export function constructedInBlock(code, name, extension = "tsx") {
   let constructed = false;
-  const visit = node => {
-    if (ts.isNewExpression(node) && constructorRoot(node.expression) === name) {
+  walk(parseSample(code, extension).program, node => {
+    if (
+      node.type === "NewExpression" &&
+      constructorRoot(node.callee) === name
+    ) {
       constructed = true;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(parseSample(code, extension));
+    return !constructed;
+  });
   return constructed;
 }
 
@@ -2029,23 +2007,27 @@ function differsOnlyAtTheEnd(a, b) {
  * well. A report that treats three names in one array differently is not one
  * anyone can act on.
  */
-export function readerOwnedMention(name, code, extension) {
+export function readerOwnedMention(name, code, extension, exported) {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return false;
   // Asked before anything else, because it settles the question on its own:
   // whatever the workspace does or does not export, a constructed name has to
   // be a runtime class, and neither a generated type nor an authored component
   // is one.
   if (constructedInBlock(code, name, extension)) return false;
-  if (workspaceExports().has(name)) {
-    return (
-      !workspaceValueExports().has(name) &&
-      usedOnlyAsValue(code, name, extension)
-    );
+  // The workspace's sets only when none were given, and only here: the
+  // question above settles a constructed name without them.
+  const sets = exported ?? workspaceSets();
+  if (sets.names.has(name)) {
+    return !sets.values.has(name) && usedOnlyAsValue(code, name, extension);
   }
-  return !misspelledExport(name);
+  return !misspelledExport(name, sets.names);
 }
 
-export async function classifyDocDiagnostics({ diagnostics, samples }) {
+export async function classifyDocDiagnostics({
+  diagnostics,
+  samples,
+  exported,
+}) {
   const uninstalled = [];
   const continued = [];
   const real = [];
@@ -2120,7 +2102,7 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
       if (declaredEarlier(name, file, index, samples)) continued.push(line);
-      else if (mentionIsReaderOwned(name, file, index, samples))
+      else if (mentionIsReaderOwned(name, file, index, samples, exported))
         readerNames.push(line);
       else real.push(line);
       continue;
@@ -3120,6 +3102,16 @@ async function main() {
   // checkout does not, is not something a reader meets, and counting those
   // would fill the baseline with the harness's own artefacts.
   requireBuiltPackages();
+  // The export sets every reader-ownership answer comes from, held to the
+  // names whose answer is known; a wrong set would misfile every page.
+  const setProblems = workspaceSetProblems();
+  if (setProblems.length > 0) {
+    console.error(
+      "doc samples: the workspace's export sets answer wrongly, so no page was judged:"
+    );
+    for (const problem of setProblems) console.error(`  ${problem}`);
+    process.exit(1);
+  }
   // `auditDocs` returns nothing on the two paths it treats as graceful: a
   // partial tree, and no docs/ at all. Both print why and stop. Destructuring
   // the result unconditionally turned each of those into a TypeError one line

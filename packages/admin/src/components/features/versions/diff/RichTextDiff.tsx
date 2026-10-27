@@ -16,6 +16,8 @@
  * @module components/features/versions/diff/RichTextDiff
  */
 
+import type { JSX } from "react";
+
 import type {
   RichTextAttrChange,
   RichTextBlockDiff,
@@ -124,7 +126,11 @@ function BlockRow({ block }: { block: RichTextBlockDiff }) {
   );
 }
 
-export function RichTextDiff({ node }: { node: RichTextFieldDiff }) {
+export function RichTextDiff({
+  node,
+}: {
+  node: RichTextFieldDiff;
+}): JSX.Element {
   return (
     <FieldRow node={node} status={node.status}>
       {node.blocks.length === 0 ? (

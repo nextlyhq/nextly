@@ -8,6 +8,7 @@ import {
   allWidgets,
   canonicalWidgets,
   declaredWidgets,
+  placedByDefault,
   widthFacts,
   type CanonicalWidget,
 } from "../canonical";
@@ -194,6 +195,69 @@ describe("the canonical widget set", () => {
     ]);
     expect(merged[0]).toHaveProperty("lifecycle", "always");
     expect(merged[0]).not.toHaveProperty("visibleWhen");
+  });
+
+  it("takes a Collection setting only from the declaration whose settings win", () => {
+    // 🔴 The admin draws the registration's whole settings list wherever it
+    // states one, so a registration stating settings without a Collection
+    // setting draws a widget with none -- and its cards must not be judged by
+    // the contribution's.
+    const contributed: CanonicalWidget = {
+      id: "dup/one",
+      textBounds: [],
+      collectionSetting: { name: "source", type: "collection" },
+    };
+    registerWidget(
+      registered({
+        id: "dup/one",
+        settings: [{ name: "limit", type: "number", defaultValue: 5 }],
+      })
+    );
+    const merged = canonicalWidgets([contributed])[0];
+    expect(merged.collectionSetting).toBeUndefined();
+    expect(merged.textBounds).toEqual([]);
+
+    // The must-differ half: a registration stating no settings keeps the
+    // contribution's, as the admin draws them.
+    clearWidgets();
+    registerWidget(registered({ id: "dup/one" }));
+    expect(canonicalWidgets([contributed])[0].collectionSetting?.name).toBe(
+      "source"
+    );
+  });
+
+  it("takes the registration's queries on a collision, as the admin draws its query", () => {
+    registerWidget(
+      registered({
+        id: "dup/one",
+        archetype: "metric",
+        component: undefined,
+        query: { source: "single:homepage", op: "count" },
+      })
+    );
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([
+      { source: "single:homepage", op: "count" },
+    ]);
+  });
+
+  it("asks nothing on a collision whose registration declares no query, as the admin draws it", () => {
+    // 🔴 The admin's merge takes the registration's query, here none: the
+    // contribution's query is not asked, so its Collection setting names no
+    // collection the card reads.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        knobQueries: [{ source: "collection:posts", op: "count" }],
+      },
+    ])[0];
+    expect(merged.knobQueries).toEqual([]);
   });
 
   it("does NOT inherit a contributed permission, matching the admin", () => {
@@ -493,5 +557,25 @@ describe("a widget's widths", () => {
       allowedWidths: ["half"],
       allowsSeveral: true,
     });
+  });
+});
+
+describe("a widget offered per collection", () => {
+  const perCollection = {
+    id: "core/count",
+    offered: "per-collection" as const,
+  };
+
+  it("stays off the default dashboard, where every other widget is placed", () => {
+    expect(placedByDefault(perCollection)).toBe(false);
+    expect(placedByDefault({ id: "core/team" })).toBe(true);
+  });
+
+  it("allows several cards, one per collection, unless it says otherwise", () => {
+    expect(widthFacts(perCollection).allowsSeveral).toBe(true);
+    expect(widthFacts({ id: "core/team" }).allowsSeveral).toBe(false);
+    expect(
+      widthFacts({ ...perCollection, allowsSeveral: false }).allowsSeveral
+    ).toBe(false);
   });
 });

@@ -2,7 +2,12 @@
 
 import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import { ChevronDown } from "lucide-react";
-import { forwardRef } from "react";
+import {
+  forwardRef,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
 import type {
@@ -108,7 +113,7 @@ import type {
  * @see https://www.radix-ui.com/primitives/docs/components/accordion
  * @experimental
  */
-const Accordion = AccordionPrimitive.Root;
+const Accordion: typeof AccordionPrimitive.Root = AccordionPrimitive.Root;
 
 /**
  * AccordionItem - Container for trigger and content
@@ -122,7 +127,9 @@ const Accordion = AccordionPrimitive.Root;
  * - Disabled state can be set via disabled prop
  * @experimental
  */
-const AccordionItem = forwardRef<AccordionItemRef, AccordionItemProps>(
+const AccordionItem: ForwardRefExoticComponent<
+  PropsWithoutRef<AccordionItemProps> & RefAttributes<AccordionItemRef>
+> = forwardRef<AccordionItemRef, AccordionItemProps>(
   ({ className, ...props }, ref) => (
     <AccordionPrimitive.Item
       ref={ref}
@@ -158,7 +165,9 @@ AccordionItem.displayName = "AccordionItem";
  * - Trigger includes AccordionPrimitive.Header wrapper for proper semantics
  * @experimental
  */
-const AccordionTrigger = forwardRef<AccordionTriggerRef, AccordionTriggerProps>(
+const AccordionTrigger: ForwardRefExoticComponent<
+  PropsWithoutRef<AccordionTriggerProps> & RefAttributes<AccordionTriggerRef>
+> = forwardRef<AccordionTriggerRef, AccordionTriggerProps>(
   ({ className, children, ...props }, ref) => (
     <AccordionPrimitive.Header className="flex" data-slot="accordion-header">
       <AccordionPrimitive.Trigger
@@ -199,7 +208,9 @@ AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName;
  * - Height transitions smoothly from 0 to auto
  * @experimental
  */
-const AccordionContent = forwardRef<AccordionContentRef, AccordionContentProps>(
+const AccordionContent: ForwardRefExoticComponent<
+  PropsWithoutRef<AccordionContentProps> & RefAttributes<AccordionContentRef>
+> = forwardRef<AccordionContentRef, AccordionContentProps>(
   ({ className, children, ...props }, ref) => (
     <AccordionPrimitive.Content
       ref={ref}

@@ -1,5 +1,6 @@
 "use client";
 
+import type { JSX } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { cn } from "@admin/lib/utils";
@@ -52,7 +53,7 @@ export function PublicUrlChangeNotice({
   slugName,
   active,
   className,
-}: PublicUrlChangeNoticeProps) {
+}: PublicUrlChangeNoticeProps): JSX.Element | null {
   const willChange = usePublicUrlWillChange(slugName, active);
   if (!willChange) return null;
   return (

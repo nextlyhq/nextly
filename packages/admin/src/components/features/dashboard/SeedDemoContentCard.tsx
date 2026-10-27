@@ -2,6 +2,7 @@
 
 import { Card, CardContent, CardHeader } from "@nextlyhq/ui";
 import { Check, RotateCcw, X } from "lucide-react";
+import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { useSeedStatus } from "@admin/hooks/queries/useSeedStatus";
@@ -25,7 +26,7 @@ import { StatChip } from "./seed-card/StatChip";
 
 const AUTO_HIDE_MS = 5000;
 
-export function SeedDemoContentCard() {
+export function SeedDemoContentCard(): JSX.Element | null {
   const { status, startSeed, skip } = useSeedStatus();
   const [autoHidden, setAutoHidden] = useState(false);
 

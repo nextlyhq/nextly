@@ -13,6 +13,7 @@
  */
 
 import { Label, Switch } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
@@ -27,7 +28,7 @@ import type { GroupFieldEditorProps } from "./types";
 export function GroupFieldEditor({
   hideGutter,
   onHideGutterChange,
-}: GroupFieldEditorProps) {
+}: GroupFieldEditorProps): JSX.Element {
   return (
     <div className="space-y-4">
       {/* Section Header */}

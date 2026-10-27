@@ -68,6 +68,17 @@ export function widthFromSize(size: unknown): WidgetWidth {
   );
 }
 
+/**
+ * The size of the same span as a width: the other direction of the one table
+ * above, so the two can never disagree. Every width has one.
+ */
+export function sizeFromWidth(width: WidgetWidth): WidgetSize {
+  for (const [size, spans] of WIDTH_BY_SIZE) {
+    if (spans === width) return size;
+  }
+  return "full";
+}
+
 /** A declared bound's rank among the widths, or `undefined` when it is not one. */
 function boundRank(size: unknown): number | undefined {
   if (typeof size !== "string") return undefined;

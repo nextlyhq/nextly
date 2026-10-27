@@ -10,6 +10,7 @@
 
 import { Input } from "@nextlyhq/ui";
 import type { NumberFieldConfig } from "nextly/config";
+import type { JSX } from "react";
 import {
   useController,
   type Control,
@@ -143,7 +144,7 @@ export function NumberInput<TFieldValues extends FieldValues = FieldValues>({
   disabled = false,
   readOnly = false,
   className,
-}: NumberInputProps<TFieldValues>) {
+}: NumberInputProps<TFieldValues>): JSX.Element {
   // Get default value - handle function default values
   const getDefaultValue = () => {
     if (typeof field.defaultValue === "function") {

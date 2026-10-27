@@ -15,14 +15,16 @@ import type {
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
+  SourcelessWidgetQuery,
   WidgetQuery,
+  WidgetQueryCell,
   WidgetSize,
   WidgetStatCell,
-  WidgetChrome,
   AnyWidgetSetting,
 } from "nextly/config";
-import { widgetGateHolds } from "nextly/widget-gate";
+import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
 
+import { adminHref } from "@admin/constants/routes";
 import type {
   PluginMetadata,
   RegisteredWidgetMeta,
@@ -87,7 +89,7 @@ export interface ReadableWidgetDeclaration {
   settings?: AnyWidgetSetting[];
   id: string;
   size?: "full" | "half";
-  requiredPermission?: string | readonly string[];
+  requiredPermission?: WidgetPermissionGate;
   title?: string;
   description?: string;
   icon?: string;
@@ -97,20 +99,30 @@ export interface ReadableWidgetDeclaration {
   defaultHeight?: WidgetHeight;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
-  query?: WidgetQuery;
+  /**
+   * Sourceless for a widget offered per collection. Such a query is never
+   * asked as it stands: a card is asked only once its Collection setting has
+   * given the query a source, and is answered "not available" until then.
+   */
+  query?: WidgetQuery | SourcelessWidgetQuery;
   component?: string;
   actions?: WidgetAction[];
   /** Present for `text`: the markdown the host draws. */
   content?: string;
-  /** Present for `stats`: the numbers the card draws, each with its own query. */
-  cells?: WidgetStatCell[];
+  /**
+   * Present for `stats`: the numbers the card draws, each with its own query.
+   * For `custom`: the keyed reads its component is handed.
+   */
+  cells?: WidgetStatCell[] | WidgetQueryCell[];
   link?: { label: string; href: string };
   defaultOrder?: number;
-  chrome?: WidgetChrome;
+  hidesWhenEmpty?: boolean;
   /** Whether the reader may send this card away; see `DashboardWidget`. */
   dismissible?: boolean;
   /** Whether the host sizes this custom widget's list query; see `DashboardWidget`. */
   sizedQuery?: boolean;
+  /** The filters the widget's source narrows by; see `DashboardWidget`. */
+  sourceFilters?: DashboardWidget["sourceFilters"];
 }
 
 /**
@@ -238,9 +250,14 @@ function resolveOne(
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
-    chrome: meta.chrome,
+    hidesWhenEmpty: meta.hidesWhenEmpty,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
+    // Only a registration carries it (`mergeCollision`), so a contributed card
+    // that collides with a registered one keeps its source's filters.
+    ...(meta.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: meta.sourceFilters }),
   };
 }
 
@@ -280,6 +297,8 @@ function resolveRegistered(
     size: meta.defaultSize,
     ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
+    ...(meta.serverData === true ? { serverData: true as const } : {}),
+    ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -287,9 +306,12 @@ function resolveRegistered(
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
-    chrome: meta.chrome,
+    hidesWhenEmpty: meta.hidesWhenEmpty,
     dismissible: meta.dismissible,
     sizedQuery: meta.sizedQuery,
+    ...(meta.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: meta.sourceFilters }),
   };
 }
 
@@ -350,7 +372,7 @@ function mergeCollision(
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
     // The registry wins where it states one, exactly as `defaultOrder` and
-    // `chrome` do below. Named in this list rather than left out because the
+    // `hidesWhenEmpty` do below. Named in this list rather than left out because the
     // list IS the contract: a field missing from it is dropped silently, and a
     // merged widget would lose the height its contribution declared.
     defaultHeight: preferRegistered(
@@ -380,8 +402,11 @@ function mergeCollision(
     // its cells to a widget drawn from one query -- and the batch prefers cells
     // over that query, so no answer is ever filed under the widget's own id and
     // the card loads forever. Cells travel only with the archetype that draws
-    // them.
-    cells: registration.archetype === "stats" ? registration.cells : undefined,
+    // them: a stats card's numbers, or a custom card's keyed reads.
+    cells:
+      registration.archetype === "stats" || registration.archetype === "custom"
+        ? registration.cells
+        : undefined,
     // The same rule for prose: it travels only with the archetype that draws
     // it, and both channels passed the non-blank check at boot, so a text
     // registration colliding with a text contribution keeps its prose rather
@@ -391,13 +416,15 @@ function mergeCollision(
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
-    // silently: the merged widget loses its declared position, and an unframed
-    // custom widget is wrapped in the card it asked not to have.
+    // silently: the merged widget loses its declared position.
     defaultOrder: preferRegistered(
       registration.defaultOrder,
       contribution.defaultOrder
     ),
-    chrome: preferRegistered(registration.chrome, contribution.chrome),
+    hidesWhenEmpty: preferRegistered(
+      registration.hidesWhenEmpty,
+      contribution.hidesWhenEmpty
+    ),
     // Named here like every other field, because this list IS the contract: a
     // field the merge does not name is dropped, and a merged card would lose
     // the dismiss control its contribution declared.
@@ -411,6 +438,11 @@ function mergeCollision(
       registration.sizedQuery,
       contribution.sizedQuery
     ),
+    // The registration's alone: core sets it when it publishes a registered
+    // widget, from the source the query names, and no contribution carries it.
+    ...(registration.sourceFilters === undefined
+      ? {}
+      : { sourceFilters: registration.sourceFilters }),
   };
 }
 
@@ -541,4 +573,24 @@ export function resolveDashboardWidgets(
       (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
       (b.defaultOrder ?? Number.POSITIVE_INFINITY)
   );
+}
+
+/**
+ * A declared widget's empty state as its card draws it: the declared message as
+ * the empty state's title, and its action with its link made an href. An action
+ * whose link is not a path relative to the admin is not drawn.
+ */
+function declaredEmptyOf(
+  empty: RegisteredWidgetMeta["empty"]
+): Pick<DashboardWidget, "declaredEmpty"> {
+  if (empty === undefined) return {};
+  const href =
+    empty.action === undefined ? undefined : adminHref(empty.action.link);
+  const declared = {
+    ...(empty.message === undefined ? {} : { title: empty.message }),
+    ...(empty.action === undefined || href === undefined
+      ? {}
+      : { action: { label: empty.action.label, href } }),
+  };
+  return Object.keys(declared).length === 0 ? {} : { declaredEmpty: declared };
 }

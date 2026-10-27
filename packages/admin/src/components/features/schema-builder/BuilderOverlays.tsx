@@ -8,6 +8,8 @@
  * One overlay is open at a time, so the page holds a single `ActiveOverlay`
  * value rather than four booleans that could disagree.
  */
+import type { JSX } from "react";
+
 import { findFieldById, findParentContainerId } from "@admin/lib/builder";
 import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
 
@@ -110,7 +112,7 @@ export function BuilderOverlays({
   settings,
   onSettingsChange,
   readOnly,
-}: Props) {
+}: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
   /** Commit a configured field to its parent, or to the top level. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useTheme } from "@admin/context/providers/ThemeProvider";
@@ -47,7 +47,7 @@ export function ThemeAwareLogo({
   defaultDarkSrc,
   forceTheme,
   boxed = false,
-}: ThemeAwareLogoProps) {
+}: ThemeAwareLogoProps): JSX.Element {
   const branding = useBranding();
   const { resolvedTheme } = useTheme();
 

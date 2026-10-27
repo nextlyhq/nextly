@@ -17,6 +17,10 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { entryKeys } from "@admin/services/entryApi";
@@ -75,11 +79,15 @@ function isAddressable(scope: VersionScope): boolean {
 
 export const versionKeys = {
   all: () => ["versions"] as const,
-  lists: () => [...versionKeys.all(), "list"] as const,
+  lists: (): readonly ["versions", "list"] =>
+    [...versionKeys.all(), "list"] as const,
   // The optional locale is appended, so a locale-filtered list is its own cache
   // entry while `list(scope)` (no locale) stays the prefix every mutation
   // invalidates — that prefix match still clears every locale variant.
-  list: (scope: VersionScope, locale?: string) =>
+  list: (
+    scope: VersionScope,
+    locale?: string
+  ): readonly ["versions", "list", ...string[]] =>
     [
       ...versionKeys.lists(),
       ...scopeKey(scope),
@@ -87,12 +95,17 @@ export const versionKeys = {
     ] as const,
   // Under `all()`, so every mutation that clears history clears the events
   // beside it too: a restore or a rename writes an event as well as a version.
-  events: (scope: VersionScope) =>
+  events: (scope: VersionScope): readonly ["versions", "events", ...string[]] =>
     [...versionKeys.all(), "events", ...scopeKey(scope)] as const,
-  details: () => [...versionKeys.all(), "detail"] as const,
-  detail: (scope: VersionScope, versionNo: number) =>
+  details: (): readonly ["versions", "detail"] =>
+    [...versionKeys.all(), "detail"] as const,
+  detail: (
+    scope: VersionScope,
+    versionNo: number
+  ): readonly ["versions", "detail", ...string[], number] =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
-  diffs: () => [...versionKeys.all(), "diff"] as const,
+  diffs: (): readonly ["versions", "diff"] =>
+    [...versionKeys.all(), "diff"] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
   // The result also depends on the live schema, which the query treats as
@@ -102,7 +115,7 @@ export const versionKeys = {
     from: number,
     to: number,
     modifiedOnly: boolean
-  ) =>
+  ): readonly ["versions", "diff", ...string[], number, number, boolean] =>
     [
       ...versionKeys.diffs(),
       ...scopeKey(scope),
@@ -139,7 +152,10 @@ export function useVersions({
   scope,
   enabled = true,
   locale,
-}: UseVersionsOptions) {
+}: UseVersionsOptions): UseInfiniteQueryResult<
+  InfiniteData<VersionListResponse, unknown>,
+  Error
+> {
   return useInfiniteQuery<VersionListResponse, Error>({
     queryKey: versionKeys.list(scope, locale),
     queryFn: ({ pageParam }) =>
@@ -186,7 +202,10 @@ export interface UseDocumentEventsOptions {
 export function useDocumentEvents({
   scope,
   enabled = true,
-}: UseDocumentEventsOptions) {
+}: UseDocumentEventsOptions): UseInfiniteQueryResult<
+  InfiniteData<DocumentEventListResponse, unknown>,
+  Error
+> {
   return useInfiniteQuery<DocumentEventListResponse, Error>({
     queryKey: versionKeys.events(scope),
     queryFn: ({ pageParam }) =>
@@ -221,7 +240,7 @@ export function useVersion({
   scope,
   versionNo,
   enabled = true,
-}: UseVersionOptions) {
+}: UseVersionOptions): UseQueryResult<VersionDetail, Error> {
   return useQuery<VersionDetail, Error>({
     // A disabled placeholder must not occupy the parent key, which a broad
     // `invalidateQueries({ queryKey: versionKeys.details() })` would match.
@@ -267,7 +286,7 @@ export function useVersionDiff({
   to,
   modifiedOnly = false,
   enabled = true,
-}: UseVersionDiffOptions) {
+}: UseVersionDiffOptions): UseQueryResult<VersionDiff, Error> {
   return useQuery<VersionDiff, Error>({
     queryKey:
       from === null || to === null
@@ -330,7 +349,12 @@ export function useSetVersionLabel({
   scope,
   onSuccess,
   onError,
-}: UseSetVersionLabelOptions) {
+}: UseSetVersionLabelOptions): UseMutationResult<
+  SetVersionLabelResponse,
+  Error,
+  SetVersionLabelInput,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<SetVersionLabelResponse, Error, SetVersionLabelInput>({
@@ -358,7 +382,12 @@ export function useRestoreVersion({
   scope,
   onSuccess,
   onError,
-}: UseRestoreVersionOptions) {
+}: UseRestoreVersionOptions): UseMutationResult<
+  RestoreVersionResponse,
+  Error,
+  number,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<RestoreVersionResponse, Error, number>({

@@ -19,9 +19,17 @@ import type { FieldConfig } from "../../collections/fields/types";
 import {
   applyFieldReadAccess,
   getFieldFunctions,
+  openNestedContainer,
   type CallerGrants,
   type FieldFunctions,
+  type ReadAccessRedactions,
 } from "../../shared/lib/field-level-registry";
+import {
+  forEachFieldGroupInstance,
+  nameOf,
+  subFieldsOf,
+  type ComponentFieldMap,
+} from "../field-groups/field-group-instances";
 import {
   extractFieldGroupReferences,
   fieldGroupSlugList,
@@ -33,119 +41,70 @@ export interface ComponentReadCaller {
   user?: Record<string, unknown>;
   authenticatedScope?: AuthenticatedScope;
   grants: () => Promise<CallerGrants>;
+  /**
+   * The store shared by the passes one read makes over a document, so a pass
+   * after the hooks restores what an earlier one removed as evidence and
+   * re-judges each instance against it, as the entity's own passes do. Keyed
+   * by object, so it can be the entity's own store. A read judged once has
+   * no use for one.
+   */
+  redactions?: ReadAccessRedactions;
+  /**
+   * Set for a live document: a field declared with one component judges its
+   * value by that component, whatever type the value claims, since a hook may
+   * retag it. Unset for a version, whose snapshot keeps the component it was
+   * captured under, which is the one its values were written against.
+   */
+  declaredComponentDecides?: boolean;
 }
 
 /** Component field schemas, keyed by component slug. */
-export type ComponentFieldMap = ReadonlyMap<string, readonly FieldConfig[]>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function rowsOf(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) return value.filter(isRecord);
-  return isRecord(value) ? [value] : [];
-}
-
-function subFieldsOf(field: FieldConfig): readonly FieldConfig[] | undefined {
-  const fields = (field as { fields?: unknown }).fields;
-  return Array.isArray(fields) ? (fields as FieldConfig[]) : undefined;
-}
-
-function nameOf(field: FieldConfig): string | undefined {
-  const name = (field as { name?: unknown }).name;
-  return typeof name === "string" && name !== "" ? name : undefined;
-}
-
-/**
- * The component instances a field-group field's value holds, each with the
- * component it is judged by: a block's own type (under either stored key), or
- * the field's single component.
- */
-function componentInstances(
-  field: FieldConfig,
-  value: unknown
-): { slug: string; instance: Record<string, unknown> }[] {
-  const { single } = extractFieldGroupReferences(field);
-  return rowsOf(value).flatMap(instance => {
-    const own = readFieldGroupType(instance);
-    const slug = own !== undefined && own !== "" ? own : single;
-    return slug ? [{ slug, instance }] : [];
-  });
-}
+export type { ComponentFieldMap };
 
 /**
  * Apply each component's own field read rules to the instances `entry` holds,
  * in place: a field the caller may not read is removed from its instance.
  * Walks groups and repeaters to reach components nested in them, and
- * components nested in components.
+ * components nested in components, through the one walk every pass over a
+ * document's field groups shares.
  */
 export async function applyComponentReadAccess(
   entry: Record<string, unknown>,
   fields: readonly FieldConfig[],
   componentFields: ComponentFieldMap,
-  caller: ComponentReadCaller,
-  open: WeakSet<object> = new WeakSet()
-): Promise<void> {
-  for (const field of fields) {
-    await judgeField(entry, field, componentFields, caller, open);
-  }
-}
-
-/** One field of `entry`: its component instances, or the rows it contains. */
-async function judgeField(
-  entry: Record<string, unknown>,
-  field: FieldConfig,
-  componentFields: ComponentFieldMap,
-  caller: ComponentReadCaller,
-  open: WeakSet<object>
-): Promise<void> {
-  const name = nameOf(field);
-  const sub = subFieldsOf(field);
-  // A layout container keeps its fields on the same object, so it is the one
-  // descent that recurses on the same value, and the one that can loop: a
-  // container whose fields reach itself. `open` holds the containers open on
-  // this path and releases each on the way out, so a container shared by
-  // several rows is still walked once in each.
-  if (name === undefined) {
-    if (!sub || open.has(field)) return;
-    open.add(field);
-    await applyComponentReadAccess(entry, sub, componentFields, caller, open);
-    open.delete(field);
-    return;
-  }
-  if (isFieldGroupField(field)) {
-    for (const { slug, instance } of componentInstances(field, entry[name])) {
-      await judgeInstance(instance, slug, componentFields, caller);
-    }
-    return;
-  }
-  if (!sub) return;
-  for (const row of rowsOf(entry[name])) {
-    await applyComponentReadAccess(row, sub, componentFields, caller);
-  }
-}
-
-/** One component instance, by its component's own rules, then what it holds. */
-async function judgeInstance(
-  instance: Record<string, unknown>,
-  slug: string,
-  componentFields: ComponentFieldMap,
   caller: ComponentReadCaller
 ): Promise<void> {
-  await applyFieldReadAccess({
-    kind: "fieldGroup",
-    slug,
-    entry: instance,
-    user: caller.user,
-    authenticatedScope: caller.authenticatedScope,
-    grants: caller.grants,
-    overrideAccess: false,
-  });
-  const inner = componentFields.get(slug);
-  if (inner) {
-    await applyComponentReadAccess(instance, inner, componentFields, caller);
-  }
+  await forEachFieldGroupInstance(
+    entry,
+    fields,
+    componentFields,
+    ({ instance, slug }) =>
+      applyFieldReadAccess(
+        {
+          kind: "fieldGroup",
+          slug,
+          entry: instance,
+          user: caller.user,
+          authenticatedScope: caller.authenticatedScope,
+          grants: caller.grants,
+          overrideAccess: false,
+        },
+        caller.redactions
+      ),
+    {
+      declaredComponentDecides: caller.declaredComponentDecides === true,
+      // A live read withholds what no rules can judge; a version keeps it.
+      withholdMalformed: caller.declaredComponentDecides === true,
+    }
+  );
+}
+
+/**
+ * The rows a container value holds, through the same parse the redaction
+ * used, so a container held as JSON text reports what was withheld inside it.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  return openNestedContainer(value)?.rows ?? [];
 }
 
 /**
@@ -188,8 +147,8 @@ export function nestedWithheldPaths(
         paths.add(path);
         continue;
       }
-      const beforeRows = rowsOf(beforeObj[name]);
-      const afterRows = rowsOf(afterObj[name]);
+      const beforeRows = containerRows(beforeObj[name]);
+      const afterRows = containerRows(afterObj[name]);
       beforeRows.forEach((row, index) => {
         const afterRow = afterRows[index];
         if (!afterRow) return;

@@ -1,9 +1,9 @@
 /**
- * The admin keeps ONE client-safe copy of core's system-resource list, and four
- * views derive from it: the role matrix puts a system resource in the Settings
- * tab rather than among collections, the capability builder maps it to a
- * dedicated flag rather than per-collection access, and the permissions page
- * both classifies and orders by it.
+ * The admin keeps ONE client-safe copy of core's system-resource list, and
+ * three views derive from it: the role matrix puts a system resource in the
+ * Settings tab rather than among collections, and the permissions page both
+ * classifies and orders by it. The capability builder no longer needs it: the
+ * server's answer names collections and Singles only.
  *
  * A resource that core treats as a system resource but the admin does not is
  * silently miscategorised — granted from the wrong section of the role editor,
@@ -33,7 +33,6 @@ import {
   SYSTEM_ORDER,
   SYSTEM_RESOURCES as PAGE_RESOURCES,
 } from "../../pages/dashboard/settings/permissions/system-resources";
-import { SYSTEM_RESOURCES as CAPABILITY_RESOURCES } from "../useCurrentUserPermissions";
 import { SYSTEM_RESOURCE_SLUGS } from "../useRoleForm";
 
 const expected = [...SYSTEM_RESOURCES].sort();
@@ -41,7 +40,6 @@ const expected = [...SYSTEM_RESOURCES].sort();
 describe("admin system-resource lists match core", () => {
   it.each([
     ["the role matrix", SYSTEM_RESOURCE_SLUGS],
-    ["the capability builder", CAPABILITY_RESOURCES],
     ["the permissions page", PAGE_RESOURCES],
     ["the permissions page display order", SYSTEM_ORDER],
   ])("%s covers every system resource", (_label, copy) => {

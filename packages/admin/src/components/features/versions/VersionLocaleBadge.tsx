@@ -18,6 +18,8 @@
  * @module components/features/versions/VersionLocaleBadge
  */
 
+import type { JSX } from "react";
+
 import { Badge } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
@@ -45,7 +47,11 @@ export function useVersionLocale(locale: string | null): VersionLocale {
 
 /** Nothing is rendered on a single-language install, or for a version that
  *  carries no locale — a badge there would carry no information. */
-export function VersionLocaleBadge({ locale }: { locale: string | null }) {
+export function VersionLocaleBadge({
+  locale,
+}: {
+  locale: string | null;
+}): JSX.Element | null {
   const { show, code, label } = useVersionLocale(locale);
   if (!show) return null;
   return (

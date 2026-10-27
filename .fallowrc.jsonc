@@ -53,7 +53,22 @@
     "packages/ui/src/styles/index.css",
     // Passed as an argv path to the admin-css bin by its integration test.
     "packages/admin-css/__fixtures__/**",
+    // Handed to oxlint by the templates pass in scripts/lint.mjs.
+    "oxlint.templates.config.mjs",
+    // Type-level tests, compiled by each package's `check-types` rather than
+    // run by Vitest, so no test runner names them as entries.
+    "**/*.test-d.ts",
   ],
+
+  // A lazy import, an `import()` inside a function, loads nothing when the
+  // importing module loads, so it cannot take part in a load-order cycle; it
+  // is how a module that needs a heavy one on first use stays out of its
+  // import graph. Cycle detection skips those edges. A static import is still
+  // an edge, so a static cycle through the same files is still an error, as
+  // is a top-level `await import()`, which loads before the module finishes.
+  "circularDependencies": {
+    "ignoreLazyImports": true,
+  },
 
   // Specifiers tsc and Node both resolve, and fallow does not.
   //

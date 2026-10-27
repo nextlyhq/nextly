@@ -9,7 +9,7 @@
  * nullable entity it has already proven is present.
  */
 import { Skeleton } from "@nextlyhq/ui";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 
@@ -39,7 +39,7 @@ type BuilderNotFoundScreenProps = {
 export function BuilderNotFoundScreen({
   title,
   description,
-}: BuilderNotFoundScreenProps) {
+}: BuilderNotFoundScreenProps): JSX.Element {
   return (
     <BuilderCenteredScreen>
       <div className="text-center">
@@ -54,7 +54,7 @@ export function BuilderNotFoundScreen({
  * Shown while the entity loads: a toolbar-shaped header over three field rows,
  * matching the layout the builder settles into so the page does not jump.
  */
-export function BuilderLoadingScreen() {
+export function BuilderLoadingScreen(): JSX.Element {
   return (
     <div className="h-screen flex flex-col bg-background">
       <div className="p-6 border-b border-border">
@@ -74,7 +74,7 @@ export function BuilderLoadingScreen() {
  * Shown when the entity query failed, or resolved without the data the builder
  * needs. Carries no kind-specific copy — the fallback owns the message.
  */
-export function BuilderErrorScreen() {
+export function BuilderErrorScreen(): JSX.Element {
   return (
     <BuilderCenteredScreen>
       <PageErrorFallback />

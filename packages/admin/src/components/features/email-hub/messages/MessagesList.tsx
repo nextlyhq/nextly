@@ -14,6 +14,7 @@ import {
   SelectValue,
   Skeleton,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
 import {
@@ -303,7 +304,7 @@ function plural(count: number, one: string, many: string): string {
  * list, notices name the emails waiting on someone: an owner's update to
  * review, and emails kept as the previous engine sent them.
  */
-export function MessagesList() {
+export function MessagesList(): JSX.Element {
   const {
     data: templates = [],
     isLoading,

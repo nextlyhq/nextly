@@ -25,7 +25,7 @@
  * @module components/features/entries/EntryForm/PreviewActions
  */
 
-import type { ReactElement } from "react";
+import type { JSX, ReactElement } from "react";
 
 import {
   ChevronDown,
@@ -183,7 +183,7 @@ export function PreviewActions({
   onShareLink,
   disabled = false,
   size = "default",
-}: PreviewActionsProps) {
+}: PreviewActionsProps): JSX.Element | null {
   const canPane = onTogglePreviewPane !== undefined;
   const canOpen = isPreviewAvailable && onPreview !== undefined;
   const canShare = isLinkAvailable && onShareLink !== undefined;

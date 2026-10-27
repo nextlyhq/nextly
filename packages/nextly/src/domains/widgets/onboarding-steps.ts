@@ -24,6 +24,10 @@
  * core declares a step, and a surface with no consumer is one whose shape gets
  * decided by guesswork; this list grows by adding a member and its detection
  * together.
+ *
+ * @deprecated The checklist these name has become the Get started card, whose
+ * steps are `GET_STARTED_STEP_KINDS`. Kept unchanged for one release, with the
+ * onboarding read that answers in these ids.
  */
 export const ONBOARDING_STEPS = ["account", "collection", "entry"] as const;
 export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number];
