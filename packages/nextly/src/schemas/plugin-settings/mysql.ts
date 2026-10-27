@@ -16,13 +16,17 @@ import {
 } from "drizzle-orm/mysql-core";
 
 import { PLUGIN_SETTINGS_TABLE } from "./table-name";
+import {
+  PLUGIN_SETTING_KEY_LENGTH,
+  PLUGIN_SETTING_OWNER_LENGTH,
+} from "./widths";
 
 export const nextlyPluginSettings = mysqlTable(
   PLUGIN_SETTINGS_TABLE,
   {
     // Bounded, because MySQL cannot key a TEXT column without a prefix length.
-    owner: varchar("owner", { length: 191 }).notNull(),
-    key: varchar("key", { length: 191 }).notNull(),
+    owner: varchar("owner", { length: PLUGIN_SETTING_OWNER_LENGTH }).notNull(),
+    key: varchar("key", { length: PLUGIN_SETTING_KEY_LENGTH }).notNull(),
     // `mediumtext` (16 MiB), not `TEXT` (65,535 bytes): an encrypted value is
     // about twice its plaintext, so a large setting saved on PostgreSQL and
     // SQLite failed or was truncated here. The service bounds every value

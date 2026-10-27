@@ -290,8 +290,15 @@ describe("the boot modules' exemption from the request-path imports guard", () =
   // form, and given the static-only rule with the same patterns instead.
   // Exempting them from both would let a static import in.
   it("hands every exempted file the static-only rule, over the same patterns", () => {
-    const restricted = overrideFor("no-restricted-imports");
+    // Two overrides turn \`no-restricted-imports\` on: the dialect-table one
+    // over all of nextly's product code, and the request path's, which
+    // repeats its patterns. The boot modules are the request path's exemption.
     const staticOnly = overrideFor("nextly/no-static-restricted-import");
+    const restricted = committed.overrides.find(
+      override =>
+        override.rules?.["no-restricted-imports"] !== undefined &&
+        staticOnly.files.every(file => override.excludeFiles?.includes(file))
+    );
     expect(staticOnly.files.sort()).toEqual(
       [...restricted.excludeFiles].sort()
     );
