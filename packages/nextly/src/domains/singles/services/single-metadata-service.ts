@@ -210,6 +210,8 @@ interface UpdateDdlPlan {
    * before the copy. Empty when no such field leaves.
    */
   settingsSQL: string;
+  /** The fields whose Required or Unique setting `settingsSQL` applies; empty when it is empty. */
+  deferredSettingsFor: ReadonlySet<string>;
   /**
    * Whether the statements describe the WHOLE table rather than a change to it.
    *
@@ -679,10 +681,26 @@ export class SingleMetadataService {
 
     if (plan) {
       // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
-      const applied = await this.applyUpdateDdl(input, plan);
+      const { status: applied, settingsLanded } = await this.applyUpdateDdl(
+        input,
+        plan
+      );
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
         migrationStatus = applied;
+      }
+      // A leaving field whose Required or Unique setting did not land is recorded without it, as
+      // the table holds it: recorded with it, the next save of the same fields would find nothing
+      // to apply, and the setting would never be asked for again.
+      if (
+        !settingsLanded &&
+        plan.deferredSettingsFor.size > 0 &&
+        Array.isArray(updateData.fields)
+      ) {
+        updateData.fields = withoutLeavingConstraints(
+          updateData.fields as FieldDefinition[],
+          plan.deferredSettingsFor
+        );
       }
     }
 
@@ -827,6 +845,7 @@ export class SingleMetadataService {
     if (fields === undefined) {
       return {
         settingsSQL: "",
+        deferredSettingsFor: new Set(),
         migrationSQL: "",
         fields: previousFields,
         previousFields,
@@ -850,6 +869,7 @@ export class SingleMetadataService {
     if (!adapter) {
       return {
         settingsSQL: "",
+        deferredSettingsFor: new Set(),
         migrationSQL: "",
         fields,
         previousFields,
@@ -867,6 +887,7 @@ export class SingleMetadataService {
         // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
         // companion.
         settingsSQL: "",
+        deferredSettingsFor: new Set(),
         migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
           isSingle: true,
           hasStatus,
@@ -949,6 +970,7 @@ export class SingleMetadataService {
 
     return {
       settingsSQL: deferred.settingsSQL,
+      deferredSettingsFor: deferred.deferredSettingsFor,
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
@@ -1164,7 +1186,11 @@ export class SingleMetadataService {
       DynamicCollectionSchemaService,
       "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
     >
-  ): { newFields: FieldDefinition[]; settingsSQL: string } {
+  ): {
+    newFields: FieldDefinition[];
+    settingsSQL: string;
+    deferredSettingsFor: ReadonlySet<string>;
+  } {
     const { wasLocalized, isLocalized, hasStatus } = input;
     const previousFields = (input.existing.fields ??
       []) as unknown as FieldDefinition[];
@@ -1184,9 +1210,13 @@ export class SingleMetadataService {
         : []
     );
     const unconstrained = withoutLeavingConstraints(newFields, leaving);
-    const deferred = unconstrained.some((f, i) => f !== newFields[i]);
+    const deferredSettingsFor = new Set(
+      unconstrained.filter((f, i) => f !== newFields[i]).map(f => f.name)
+    );
+    const deferred = deferredSettingsFor.size > 0;
     return {
       newFields: unconstrained,
+      deferredSettingsFor,
       settingsSQL: deferred
         ? schemaService.generateAlterTableMigration(
             input.existing.tableName,
@@ -1612,15 +1642,23 @@ export class SingleMetadataService {
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan
-  ): Promise<SingleMigrationStatus | undefined> {
+  ): Promise<{
+    status: SingleMigrationStatus | undefined;
+    /** Whether the deferred Required and Unique settings ran; true when none were deferred. */
+    settingsLanded: boolean;
+  }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
+    let settingsLanded = plan.settingsSQL.trim() === "";
 
     if (!adapter) {
       this.logger.warn(
         "[Singles] No adapter registered, migration not executed"
       );
-      return plan.ownsMigrationStatus ? "pending" : undefined;
+      return {
+        status: plan.ownsMigrationStatus ? "pending" : undefined,
+        settingsLanded,
+      };
     }
 
     // A field becoming translated takes its value to the default language's companion row first:
@@ -1649,7 +1687,7 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return "failed";
+        return { status: "failed", settingsLanded };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -1705,12 +1743,13 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return "failed";
+        return { status: "failed", settingsLanded };
       }
 
       // The Required and Unique settings of fields leaving translation, now that their shared
       // columns hold the default language's values. Nothing when no such field leaves.
       await applyMigrationStatements(adapter, plan.settingsSQL);
+      settingsLanded = true;
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -1759,10 +1798,10 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return "failed";
+        return { status: "failed", settingsLanded };
       }
 
-      return "applied";
+      return { status: "applied", settingsLanded };
     } catch (error) {
       // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
       // is deliberately not consulted.
@@ -1789,7 +1828,7 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return "failed";
+      return { status: "failed", settingsLanded };
     }
   }
 

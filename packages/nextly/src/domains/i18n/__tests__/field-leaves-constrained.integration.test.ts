@@ -13,6 +13,33 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+// What runs before each statement of a schema change applied after its first push (a leaving
+// field's settings): nothing unless a test arms it, to model a write landing at that moment.
+const { beforeStatement } = vi.hoisted(() => ({
+  beforeStatement: {
+    run: undefined as ((sql: string) => Promise<void>) | undefined,
+  },
+}));
+
+vi.mock(
+  "../../schema/services/apply-migration-statements",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../schema/services/apply-migration-statements")
+      >();
+    return {
+      ...actual,
+      applyMigrationStatements: async (
+        ...args: Parameters<typeof actual.applyMigrationStatements>
+      ) => {
+        await beforeStatement.run?.(args[1]);
+        return actual.applyMigrationStatements(...args);
+      },
+    };
+  }
+);
+
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -631,6 +658,74 @@ describeEachDialect(
         expect(await sharedCodes(path.table)).toEqual(english);
         // The row sharing an entry's value first, then one of the same shape that does not: the
         // second is taken, so the first was refused for its value, not for its shape.
+        expect(
+          await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
+        ).not.toBe(true);
+        expect(
+          await inserts(rowFor(path.table, "kept-1", "'kept@example.com'"))
+        ).toBe(true);
+      }
+    );
+
+    /** The registry's record of `code` for `entity`. */
+    async function registryCode(
+      entity: string
+    ): Promise<{ localized?: boolean; unique?: boolean } | undefined> {
+      const { table, slug } = REGISTRY[entity];
+      const [row] = await query<{ fields: unknown }>(
+        `SELECT ${q("fields")} AS fields FROM ${q(table)} WHERE ${q("slug")} = '${slug}'`
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as { name: string; localized?: boolean; unique?: boolean }[];
+      return fields.find(f => f.name === "code");
+    }
+
+    // A Single's save records its field list even when a statement fails, since by then the table
+    // may already have changed. When the one that fails applies a leaving field's setting, after
+    // its value is shared, the record has to say the field holds no setting yet: recorded with it,
+    // the next save of the same fields would find nothing to apply and the setting would never land.
+    it.each(
+      // A collection's save returns before its record is written when a statement fails, so its
+      // record stays as it was and the same save, retried, finishes the change.
+      PATHS.filter(p => p.path === "a Single's schema is saved")
+    )(
+      "records a field without the Unique it did not get, so saving it again applies it, when $path",
+      async path => {
+        const english =
+          path.entity === "single"
+            ? ["a1@example.com"]
+            : ["a1@example.com", "b2@example.com"];
+        await seedConstrained(path, { unique: true }, english);
+        const change = [{ ...CODE, localized: false, unique: true }, VIEWS];
+
+        // The real statements, run as they are; before the ones applying the leaving field's
+        // settings, a second row holding the entry's value is written, as a concurrent write would.
+        let injected = false;
+        beforeStatement.run = async (sql: string) => {
+          if (injected || !/unique/i.test(sql) || !/code/.test(sql)) return;
+          injected = true;
+          await query(rowFor(path.table, "concurrent-1", "'a1@example.com'"));
+        };
+        await attempt(path.change(change));
+        beforeStatement.run = undefined;
+
+        expect(injected).toBe(true);
+        expect(await registryCode(path.entity)).toMatchObject({
+          localized: false,
+        });
+        expect((await registryCode(path.entity))?.unique).not.toBe(true);
+
+        await query(
+          `DELETE FROM ${q(path.table)} WHERE ${q("id")} = 'concurrent-1'`
+        );
+        await path.change(change);
+
+        expect(await registryCode(path.entity)).toMatchObject({
+          localized: false,
+          unique: true,
+        });
+        expect(await sharedCodes(path.table)).toEqual(english);
         expect(
           await inserts(rowFor(path.table, "broken-1", "'a1@example.com'"))
         ).not.toBe(true);
