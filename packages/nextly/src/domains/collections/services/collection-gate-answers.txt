@@ -111,10 +111,10 @@ service none key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service true visitor
-  create:A
+  create:403 You can't create posts.
   read:A
-  update:A
-  delete:A
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service true user-with
@@ -335,10 +335,10 @@ service false key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-true visitor
-  create:A
+  create:403 You can't create posts.
   read:A
-  update:A
-  delete:A
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-true user-with
@@ -1007,10 +1007,10 @@ service throws key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service async-true visitor
-  create:A
+  create:403 You can't create posts.
   read:A
-  update:A
-  delete:A
+  update:403 You can't edit posts.
+  delete:403 You can't delete posts.
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service async-true user-with

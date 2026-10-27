@@ -29,6 +29,10 @@ import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import {
+  PUBLIC_ROLE_SLUG,
+  publicRoleMade,
+} from "../../domains/auth/services/public-role";
+import {
   MAX_ROLE_HIERARCHY_DEPTH,
   walkRoleGraph,
 } from "../../domains/auth/services/role-graph";
@@ -461,6 +465,115 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
  */
 function actorThisRequest(userId: string): Promise<ResolvedActor> {
   return keptForRequest(userId, "actor", () => actorOnPool(userId));
+}
+
+/** The Public role's grants as this process keeps them, as an actor is kept. */
+interface KeptPublicGrants {
+  readonly grants: readonly GrantedPermission[];
+  /** The role version they were read under. */
+  readonly epoch: string;
+  readonly expiresAt: number;
+}
+
+let publicGrantsKept: KeptPublicGrants | undefined;
+
+/**
+ * The key the Public role's grants are kept under for a request, beside each
+ * user's. A role slug with a prefix no user id carries, so it names no user.
+ */
+const PUBLIC_GRANTS_KEY = `role:${PUBLIC_ROLE_SLUG}`;
+
+/** What reading the Public role's id needs of `nextly_meta`. */
+interface MetaReader {
+  get<T>(key: string, executor?: unknown): Promise<T | null>;
+}
+
+/**
+ * The Public role's id, once boot seeding has recorded making it, and `null`
+ * before: until then the slug may still be held by a site's own role, whose
+ * grants are not visitors'. Throws on a failed read.
+ */
+async function publicRoleId(executor?: unknown): Promise<string | null> {
+  const meta = container.get<MetaReader>("metaService");
+  const made = await publicRoleMade({
+    get: <T>(key: string) => meta.get<T>(key, executor),
+  });
+  if (!made) return null;
+  const { roles } = getTablesLazy();
+  const [row] = await rbacQuery(executor)
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
+    .limit(1);
+  return row === undefined ? null : String(row.id);
+}
+
+/**
+ * The Public role's grants, read now with nothing kept: none while the role is
+ * not made. The role inherits no other (its writers refuse that), so its own
+ * grants are all it holds. Throws on a failed read.
+ */
+async function loadPublicGrants(
+  executor?: unknown
+): Promise<GrantedPermission[]> {
+  const roleId = await publicRoleId(executor);
+  if (roleId === null) return [];
+  return grantsOf(PUBLIC_GRANTS_KEY, new Set([roleId]), executor);
+}
+
+/**
+ * The Public role's grants on the pool: what this process kept, while the role
+ * version they were read under stands and before they expire, and otherwise
+ * read now and kept, exactly as a user's actor is (`actorOnPool`).
+ */
+async function publicGrantsOnPool(): Promise<readonly GrantedPermission[]> {
+  const resolvedUnder = await refreshEpoch();
+  const kept = publicGrantsKept;
+  if (kept && stampIsCurrent(kept.epoch) && kept.expiresAt > Date.now()) {
+    return kept.grants;
+  }
+  const grants = await loadPublicGrants();
+  if (stampIsCurrent(resolvedUnder)) {
+    publicGrantsKept = {
+      grants,
+      epoch: resolvedUnder,
+      expiresAt: Date.now() + ACTOR_CACHE_TTL_MS,
+    };
+  }
+  return grants;
+}
+
+/**
+ * The permissions the Public role grants, which are what a visitor holds, as
+ * their rows name them, sorted by slug. None until boot seeding has made the
+ * role.
+ *
+ * With `executor`, read on the caller's transaction and kept nowhere, as a
+ * user's lookups are inside one. Otherwise read once per request on the pool,
+ * and kept per process behind the role version.
+ *
+ * A lookup that fails refuses rather than answering empty, as a user's do:
+ * an empty list would judge visitors by a role that holds nothing, which is
+ * not the role the site configured.
+ *
+ * @throws NextlyError when the Public role or its grants cannot be read.
+ */
+export async function listPublicGrants(
+  executor?: unknown
+): Promise<GrantedPermission[]> {
+  try {
+    if (executor !== undefined) return await loadPublicGrants(executor);
+    // A list of its own for each caller: a rule handed it may change it.
+    return [
+      ...(await keptForRequest(
+        PUBLIC_GRANTS_KEY,
+        "grants",
+        publicGrantsOnPool
+      )),
+    ];
+  } catch (cause) {
+    throw unreadable(cause, { reason: "public-grants-unreadable" });
+  }
 }
 
 /**
@@ -924,6 +1037,7 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
  */
 function clearInMemoryTiers(): void {
   actorCache.clear();
+  publicGrantsKept = undefined;
 }
 
 /**
@@ -1070,7 +1184,11 @@ export async function invalidatePermissionCache(
   // an actor is one walk of a user's roles. A role change is rare; guessing
   // at the subset is how a demotion survives.
   if (userId) actorCache.delete(userId);
-  if (roleId) actorCache.clear();
+  // The Public role's grants go too: the role changed may be Public.
+  if (roleId) {
+    actorCache.clear();
+    publicGrantsKept = undefined;
+  }
 
   await publishRetirement();
 }

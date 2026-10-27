@@ -227,18 +227,29 @@ describe("a visitor", () => {
     expect(await allowed("visitor-public-read", "read", "false")).toBe(false);
   });
 
-  it("asks its rule with no permissions, whatever the Public role holds", async () => {
-    // A rule that reads the permissions refuses the visitor, as it does for an
-    // anonymous caller today, though Public holds the permission it names.
+  it("asks its rule with the Public role's permissions", async () => {
+    // A rule that reads the permissions admits the visitor where Public holds
+    // the one it names, as it admits a user holding it.
     const readersOnly: AccessTarget = {
       kind: "collection",
       slug: "posts",
       access: {
-        read: ({ permissions }) => permissions.includes("posts:read"),
+        read: ({ permissions }) => permissions.includes("read-posts"),
       },
     };
     expect(
       await decide(callers["visitor-public-read"], "read", readersOnly)
+    ).toEqual({ allowed: true });
+    // The control: a rule naming a permission Public does not hold refuses.
+    const editorsOnly: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        read: ({ permissions }) => permissions.includes("delete-posts"),
+      },
+    };
+    expect(
+      await decide(callers["visitor-public-read"], "read", editorsOnly)
     ).toEqual({ allowed: false, reason: "rule-refused" });
   });
 
@@ -477,9 +488,13 @@ describe("what a rule is handed", () => {
     const visitor = await contextFor(callers["visitor-public-read"]);
     expect(visitor.user).toBeNull();
     expect(visitor.principal).toBeNull();
-    // What the Public role grants is not handed to the rule, as an anonymous
-    // caller's rule has always been asked with no permissions.
-    expect(visitor.permissions).toEqual([]);
+    // What the Public role grants is handed to the rule, spelled as stored.
+    expect([...visitor.permissions].sort()).toEqual([
+      "publish-posts",
+      "read-posts",
+      "unpublish-posts",
+      "update-posts",
+    ]);
     const person = await contextFor(callers.principal);
     expect(person.user).toBeNull();
     expect(person.principal).toBe(MEMBER);

@@ -15,7 +15,7 @@ import { decidePermission } from "../../auth/access/decide";
 import { deviate } from "../../auth/access/deviations";
 import {
   actorForPrincipal,
-  actorForVisitor,
+  actorForVisitorFailingClosed,
 } from "../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { currentPrincipal } from "../../auth/principal-scope";
@@ -141,15 +141,18 @@ export async function identifiedCallerMayRead(
 ): Promise<boolean> {
   if (!hasCallerIdentity(access)) {
     // Kept until a read with no caller identity, a visitor's or a plugin's
-    // person's, reads media through the Public role: the decision refuses a
-    // caller with no grant.
+    // person's, reads media through the Public role: the decision judges a
+    // visitor by the Public role's grants and refuses a plugin's person, who
+    // holds none.
     const principal = currentPrincipal();
     return deviate(
       "visitor-keeps-media",
       resource === MEDIA_TARGET,
-      () =>
+      async () =>
         decidePermission(
-          principal ? actorForPrincipal(principal) : actorForVisitor(),
+          principal
+            ? actorForPrincipal(principal)
+            : await actorForVisitorFailingClosed(),
           "read",
           resource
         ).allowed

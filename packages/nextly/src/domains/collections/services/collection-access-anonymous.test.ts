@@ -7,10 +7,12 @@
  * consulted. Treating the two as one is what left `access: { create: false }`
  * accepted at boot and never asked.
  *
- * With no rule governing the operation, a read falls through to the
- * permission-less default and is allowed, while a write is refused: an
- * anonymous create, update or delete needs a rule that answers `true`.
- * Publishing is refused whatever the rule says.
+ * A caller with no user holds what the Public role grants (faked here: the
+ * read, unless a test says otherwise). With no rule governing the operation
+ * that permission alone decides, and a rule only narrows it: an anonymous
+ * create, update or delete needs the Public role's permission, and a rule, if
+ * one names it, that answers `true`. Publishing is refused whatever the rule
+ * says.
  *
  * The pairing is the point. A service that denied every anonymous request would
  * pass the publish case while being wrong about the read, and one that never
@@ -30,6 +32,8 @@ import {
   fakeActorForUser,
   fakeUserHoldsPermission,
   fakeUserIsSuperAdmin,
+  publicMay,
+  resetCallerAccess,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
 
@@ -41,6 +45,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("../__tests__/collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -48,6 +53,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
 }));
 
 beforeEach(() => {
+  resetCallerAccess();
   fakeActorForUser.mockClear();
   fakeUserHoldsPermission.mockClear();
 });
@@ -101,9 +107,11 @@ describe("checkCollectionAccess with no user", () => {
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
-  it("allows a write the inline rule answers true for", async () => {
-    // The control for the refusal above: the same anonymous write, with a
-    // rule that lets it through, as a public form's submissions declare.
+  it("allows a write the Public role holds and the inline rule answers true for", async () => {
+    // The control for the refusal above: the same anonymous write, which the
+    // Public role grants and a rule lets through, as a public form's
+    // submissions are.
+    publicMay("read", "create");
     const { service } = buildService(() => true);
 
     const result = await service.checkCollectionAccess({
@@ -113,6 +121,22 @@ describe("checkCollectionAccess with no user", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("refuses a write the inline rule answers true for, where the Public role does not hold it", async () => {
+    // The permission first: a rule only narrows what the Public role grants.
+    const { service } = buildService(() => true);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "create",
+      user: undefined,
+    });
+
+    expect(result?.statusCode).toBe(403);
+    expect(result?.refusalReason).toBe(
+      "create on posts requires an authenticated user"
+    );
   });
 
   it("applies the collection's inline code rule, which needs no user", async () => {
@@ -132,7 +156,8 @@ describe("checkCollectionAccess with no user", () => {
       expect.objectContaining({
         user: null,
         roles: [],
-        permissions: [],
+        // What the Public role grants, which is what the visitor holds.
+        permissions: expect.arrayContaining(["read-posts"]),
         operation: "read",
         target: { kind: "collection", slug: "posts" },
       })
@@ -143,10 +168,9 @@ describe("checkCollectionAccess with no user", () => {
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
-  it("falls through to the public default when no inline rule governs the operation", async () => {
+  it("reads on the Public role's read when no inline rule governs the operation", async () => {
     // The control that keeps the case above from meaning "anonymous is denied".
-    // No rule is no opinion, not a refusal, so a collection with no inline rule
-    // for this operation still reads as it always did.
+    // No rule is no opinion, not a refusal, so the Public role's read decides.
     const { service, rbac } = buildService();
 
     const result = await service.checkCollectionAccess({
@@ -157,6 +181,21 @@ describe("checkCollectionAccess with no user", () => {
 
     expect(rbac.getRegisteredTarget).toHaveBeenCalledWith("posts");
     expect(result).toBeNull();
+  });
+
+  it("refuses a read no inline rule governs where the Public role does not grant it", async () => {
+    // No public default: what the Public role does not grant, a visitor does
+    // not hold.
+    publicMay();
+    const { service } = buildService();
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "read",
+      user: undefined,
+    });
+
+    expect(result?.success).toBe(false);
   });
 
   it("refuses publish with no user", async () => {

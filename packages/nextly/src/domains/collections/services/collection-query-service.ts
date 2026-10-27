@@ -32,6 +32,7 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import { currentRuleLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -1800,6 +1801,8 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     overrideAccess?: boolean;
     status?: StatusOption;
+    /** The user access is judged for; absent for a visitor's read. */
+    accessUser?: UserContext;
   }): Promise<{
     statusFilter: ReturnType<typeof resolveStatusFilter>;
     collection: unknown;
@@ -1815,6 +1818,10 @@ export class CollectionQueryService extends BaseService {
       collectionHasStatus: (collection as { status?: boolean }).status === true,
       overrideAccess: params.overrideAccess === true,
       explicit: params.status,
+      publishedOnly: readsAsVisitor({
+        overrideAccess: params.overrideAccess,
+        user: params.accessUser,
+      }),
     });
 
     return { statusFilter, collection };
@@ -2076,6 +2083,7 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       overrideAccess: params.overrideAccess,
       status: params.status,
+      accessUser: params.accessUser,
     });
     // The lifecycle predicate: the resolved status set, widened by whatever a
     // due release has made public as of this read's instant. Built here rather
@@ -4492,6 +4500,7 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           overrideAccess: params.overrideAccess,
           status: params.status,
+          accessUser,
         });
 
       const idCondition = eq(schema.id, entryId);

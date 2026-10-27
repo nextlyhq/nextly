@@ -28,6 +28,7 @@ import {
   type Actor,
   type KeyActor,
   type UserActor,
+  type VisitorActor,
 } from "./actor";
 import {
   askRule,
@@ -274,7 +275,13 @@ async function visitorVerdict(
 ): Promise<GateVerdict> {
   // A Single refuses a visitor's publish before asking its rule.
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
-  const visitor = actorForVisitor();
+  let visitor: VisitorActor;
+  try {
+    visitor = await actorForVisitor({ executor: q.executor });
+  } catch (error) {
+    // The Public role's grants could not be read: refused, never guessed.
+    return { allowed: false, refusal: "failed", error };
+  }
   const outcome = await askRule(visitor, q.action, target);
   // A rule that answers `false` or fails refuses a visitor outright, and a
   // publish or an unpublish needs a signed-in user whatever the rule says.
@@ -288,38 +295,28 @@ async function visitorVerdict(
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
     return INSUFFICIENT;
   }
-  return visitorPassVerdict(q, target, outcome.declared);
+  return visitorPassVerdict(visitor, q, target, outcome);
 }
 
 /**
  * A visitor whose rule did not refuse: no rule for the action, or one that
- * answered `true`.
+ * answered `true`. The decision, judged from the rule's outcome already
+ * asked, so the rule runs once: the visitor needs the Public role's
+ * permission for the action, and a rule only narrows it.
  *
- * Only a read keeps the public default. Every other action changes data, so
- * with no rule naming it the write needs a signed-in caller: an anonymous
- * create, update or delete is allowed only where the target's author wrote a
- * rule that answers `true`. Asked of every action but a read, so an action
- * added later is refused rather than let through.
+ * A visitor refused for want of that permission is told the action needs a
+ * signed-in caller, as a write no rule names always was: a visitor may hold
+ * no more than the Public role grants, and signing in is how to hold more.
  */
-async function visitorPassVerdict(
+function visitorPassVerdict(
+  visitor: VisitorActor,
   q: GateQuestion,
   target: AccessTarget,
-  ruleDeclared: boolean
-): Promise<GateVerdict> {
-  const visitor = actorForVisitor();
-  if (q.action === "read") {
-    return verdictOf(
-      await deviate("visitor-public-default", true, () =>
-        decided(visitor, q.action, target)
-      )
-    );
-  }
-  if (!ruleDeclared) return UNAUTHENTICATED;
-  return verdictOf(
-    await deviate("visitor-write-by-rule", true, () =>
-      decided(visitor, q.action, target)
-    )
-  );
+  outcome: RuleOutcome
+): GateVerdict {
+  const decision = judge(visitor, q.action, target, { action: outcome });
+  if (decision.allowed) return ALLOWED;
+  return decision.reason === "no-permission" ? UNAUTHENTICATED : INSUFFICIENT;
 }
 
 async function keyVerdict(

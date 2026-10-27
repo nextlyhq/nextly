@@ -16,15 +16,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A visitor's read that the target's rule does not refuse, with no rule or
-  // one answering `true`, is allowed, where the decision reads the Public
-  // role's permissions. Reads only: a visitor's write with no rule naming it
-  // is refused, as the decision refuses it.
-  "visitor-public-default",
-  // A visitor's create, update or delete is allowed by a target rule that
-  // answers `true` alone, where the decision also reads the Public role's
-  // permissions.
-  "visitor-write-by-rule",
   // A publish or an unpublish is judged on its own permission and rule, not
   // on update's as well.
   "lifecycle-judged-alone",

@@ -47,7 +47,7 @@ export interface SystemActor {
 
 /**
  * A caller with no session, no key and no plugin person. Its permissions are
- * the Public role's, which grants nothing until that role exists.
+ * the Public role's, which grants nothing until boot seeding has made it.
  */
 export interface VisitorActor {
   readonly kind: "visitor";
@@ -222,10 +222,9 @@ export function isSuperAdmin(actor: Actor): boolean {
  *
  * A key's rule is handed the user who made the key, as it is today. A
  * visitor and a plugin person are handed no user, and only a plugin person is
- * handed a principal. A visitor's rule is handed no permissions either: what
- * the Public role grants decides whether the visitor holds the permission,
- * but a rule written against an anonymous caller is asked with none, as it
- * always has been, so the same rule answers the same way.
+ * handed a principal. A visitor's rule is handed the permissions the visitor
+ * holds, which are the Public role's, so a rule that reads the caller's
+ * permissions answers a visitor by what Public grants.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
@@ -237,7 +236,7 @@ export function ruleContext(
     {
       user: staff ? { id: actor.userId } : null,
       roles: staff ? actor.roles : [],
-      permissions: actor.kind === "visitor" ? [] : grantsOf(actor),
+      permissions: grantsOf(actor),
       principal: actor.kind === "principal" ? actor.principal : null,
     },
     { operation, target: { kind: target.kind, slug: target.slug } }

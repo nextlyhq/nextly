@@ -46,6 +46,8 @@ import {
   createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
+  publicMay,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
@@ -135,8 +137,10 @@ const callerLookup = vi.hoisted(() => ({ failure: undefined as unknown }));
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   const real =
     await importOriginal<typeof import("../../../auth/access/resolve-actor")>();
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
   return {
     ...real,
+    actorForVisitor: fake.fakeActorForVisitor,
     actorForUser: (...args: Parameters<typeof real.actorForUser>) =>
       callerLookup.failure === undefined
         ? real.actorForUser(...args)
@@ -171,8 +175,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockHookRegistry = createMockHookRegistry();
     const mockRbac = createMockRbacAccessControlService();
     // The batch writes here are made with no user, as an anonymous caller
-    // makes them, and an anonymous write needs a rule that allows it. The
-    // mechanics under test start past that gate.
+    // makes them, and an anonymous write needs the Public role's permission
+    // and a rule that allows it. The mechanics under test start past that
+    // gate.
+    resetCallerAccess();
+    publicMay("read", "create", "update", "delete");
     mockRbac.getRegisteredAccess.mockReturnValue({
       create: true,
       update: true,

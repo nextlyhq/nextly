@@ -34,8 +34,8 @@ export async function readsSystemResource(
 ): Promise<boolean> {
   const decided = decidePermission(actor, "read", resource).allowed;
   // Without the service a signed-in user's grant is never asked, so the read
-  // is refused, super-admin included. A key is judged by its own scope, which
-  // needs no service, and a visitor holds no grant either way.
+  // is refused, super-admin included. A key is judged by its own scope, and a
+  // visitor by the Public role's grants, neither of which needs the service.
   if (!serviceRegistered && actor.kind === "user") {
     return deviate("no-service", false, () => decided);
   }

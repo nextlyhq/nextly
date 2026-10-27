@@ -11,7 +11,9 @@
  *   request's first; outside a request they run per call, as they always have;
  * - a key's come from its scope exactly as authentication resolved them, and
  *   a key never holds super-admin authority, whoever made it;
- * - a plugin's person and a visitor carry no lookup at all.
+ * - a visitor's permissions are the Public role's, read once per request as a
+ *   user's are, and kept per process behind the role version;
+ * - a plugin's person carries no lookup at all.
  *
  * A caller handed in by server code (a Direct API `user`, a service's `as`)
  * is resolved like any other, so a narrower caller is its own actor.
@@ -24,10 +26,12 @@ import {
   isSuperAdmin,
   isSuperAdminOrRefuse,
   listEffectiveGrants,
+  listPublicGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
 import { consoleLogger } from "../../shared/types";
 import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
+import { currentPrincipal } from "../principal-scope";
 
 import {
   keyActor,
@@ -212,7 +216,43 @@ export function actorForPrincipal(principal: Principal): PrincipalActor {
   return principalActor(principal);
 }
 
-/** A caller with no session, no key and no plugin person. */
-export function actorForVisitor(): VisitorActor {
-  return visitorActor();
+/**
+ * A caller with no session, no key and no plugin person, holding what the
+ * Public role grants. With `executor`, the grants are read on the caller's
+ * transaction rather than the pool, as a user's lookups are inside one. A
+ * lookup that fails refuses: it throws, as a user's lookups do.
+ */
+export async function actorForVisitor(
+  options: { executor?: unknown } = {}
+): Promise<VisitorActor> {
+  return visitorActor(await listPublicGrants(options.executor));
+}
+
+/**
+ * Whether a read is judged as a visitor's, as the collection and Single gates
+ * judge it: checked (`overrideAccess` not true), made as no plugin person, and
+ * naming no user. Such a read sees published content only, whatever it asks
+ * for and whatever the Public role grants.
+ */
+export function readsAsVisitor(read: {
+  readonly overrideAccess?: boolean;
+  readonly user?: unknown;
+}): boolean {
+  return (
+    read.overrideAccess !== true && currentPrincipal() === null && !read.user
+  );
+}
+
+/**
+ * A visitor's actor for a reader that refuses rather than fails, as
+ * {@link actorForUserFailingClosed} is a user's: Public's grants that could
+ * not be read count as none (the failed read is logged where it failed), so
+ * the visitor is refused whatever needs them.
+ */
+export async function actorForVisitorFailingClosed(): Promise<VisitorActor> {
+  try {
+    return await actorForVisitor();
+  } catch {
+    return visitorActor();
+  }
 }

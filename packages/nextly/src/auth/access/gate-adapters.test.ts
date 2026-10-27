@@ -27,22 +27,39 @@ import {
   type CollectionQuestion,
 } from "./gate-adapters";
 
+/** What the Public role grants in a test, and so what a visitor holds. */
+const publicRole = vi.hoisted(() => ({
+  grants: [] as { slug: string; action: string; resource: string }[],
+}));
+
 vi.mock("./resolve-actor", async importOriginal => {
   const fake = await import(
     "../../domains/collections/__tests__/collection-test-helpers"
   );
+  const { visitorActor } = await import("./actor");
   return {
     ...(await importOriginal<object>()),
     actorForUser: fake.fakeActorForUser,
+    actorForVisitor: async () => visitorActor(publicRole.grants),
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
 });
 
+/** The Public role grants `actions` on `posts`. */
+function publicHolds(...actions: string[]): void {
+  publicRole.grants = actions.map(action => ({
+    slug: `${action}-posts`,
+    action,
+    resource: "posts",
+  }));
+}
+
 beforeEach(() => {
   resetCallerAccess();
   fakeActorForUser.mockClear();
   fakeUserIsSuperAdmin.mockClear();
+  publicRole.grants = [];
 });
 
 /** A question about `posts`, which declares `access`. */
@@ -110,6 +127,8 @@ describe("a rule's answer, at the collection gate", () => {
     );
 
   it("lets a visitor through only on true: null, undefined and a truthy value refuse", async () => {
+    // Public holds the read, so only the rule can refuse.
+    publicHolds("read");
     for (const value of [null, undefined, "yes"]) {
       expect((await answer(value)).allowed).toBe(false);
     }
@@ -125,6 +144,7 @@ describe("a rule's answer, at the collection gate", () => {
 
   it("names a refusal once where the answer let the caller in before, and not where it did not", async () => {
     const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
     // A visitor was refused before only by `false`, so `null` let it in.
     await answer(null);
     await answer(null);
@@ -144,10 +164,11 @@ describe("a rule's answer, at the collection gate", () => {
 describe("a visitor's write", () => {
   const WRITES = ["create", "update", "delete"] as const;
 
-  it("is refused as needing a signed-in caller where no rule names it", async () => {
+  it("is refused as needing a signed-in caller where the Public role does not hold it", async () => {
     // `read: true` is declared so the target has an access object: only the
     // write's own rule is missing, which is the case the public default used
-    // to let through.
+    // to let through. Public holds the read alone.
+    publicHolds("read");
     for (const action of WRITES) {
       const verdict = await collectionGateVerdict(
         asked({ read: true }, { action })
@@ -170,7 +191,20 @@ describe("a visitor's write", () => {
     expect(verdict.allowed).toBe(false);
   });
 
-  it("is allowed where the target's rule answers true, plain or as a function", async () => {
+  it("is refused where the target's rule answers true but the Public role does not hold it", async () => {
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ [action]: () => true }, { action })
+      );
+      expect(verdict, action).toEqual({
+        allowed: false,
+        refusal: "unauthenticated",
+      });
+    }
+  });
+
+  it("is allowed where the Public role holds it and the rule answers true, plain or as a function", async () => {
+    publicHolds(...WRITES);
     for (const action of WRITES) {
       const plain = await collectionGateVerdict(
         asked({ [action]: true }, { action })
@@ -183,9 +217,22 @@ describe("a visitor's write", () => {
     }
   });
 
-  it("leaves a visitor's read with no rule on the public default", async () => {
-    // The control for the refusals above: the same target with no rule at
-    // all still admits a visitor's read, so only writes changed.
+  it("is allowed where the Public role holds it and no rule names it", async () => {
+    publicHolds(...WRITES);
+    for (const action of WRITES) {
+      const verdict = await collectionGateVerdict(
+        asked({ read: true }, { action })
+      );
+      expect(verdict.allowed, action).toBe(true);
+    }
+  });
+
+  it("judges a visitor's read with no rule by the Public role's read alone", async () => {
+    // No public default: without Public's read the visitor is refused, and
+    // with it let through.
+    const refused = await collectionGateVerdict(asked({}, { action: "read" }));
+    expect(refused).toEqual({ allowed: false, refusal: "unauthenticated" });
+    publicHolds("read");
     const verdict = await collectionGateVerdict(asked({}, { action: "read" }));
     expect(verdict.allowed).toBe(true);
   });

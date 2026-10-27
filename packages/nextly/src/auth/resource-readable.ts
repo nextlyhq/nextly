@@ -20,7 +20,7 @@ import {
   actorForKey,
   actorForScope,
   actorForUserFailingClosed,
-  actorForVisitor,
+  actorForVisitorFailingClosed,
 } from "./access/resolve-actor";
 import { readsSystemResource } from "./access/system-resource-read";
 import {
@@ -37,7 +37,7 @@ import {
  * The caller becomes an actor: a scoped API key from its OWN scope, never its
  * owner's roles, so a narrowly scoped key belonging to a super-admin cannot
  * read a resource its scope excludes; a caller with no id a visitor, who holds
- * no grant; anyone else the signed-in user, whose grant decides and whose
+ * the Public role's grants; anyone else the signed-in user, whose grant decides and whose
  * super-admin authority passes. A system resource declares no code rule, so
  * the permission is the whole decision.
  *
@@ -88,7 +88,11 @@ export async function canReadSystemResource(
     }
     return readsSystemResource(actor, read);
   }
-  if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
+  // A visitor holds the Public role's grants; one that could not be read
+  // refuses, as a user's failed lookup does below.
+  if (userId === undefined) {
+    return readsSystemResource(await actorForVisitorFailingClosed(), read);
+  }
   if (!read.serviceRegistered) {
     // Without the service a signed-in user is refused whatever they hold, as
     // before, so nothing is looked up to say so. The decision it is compared

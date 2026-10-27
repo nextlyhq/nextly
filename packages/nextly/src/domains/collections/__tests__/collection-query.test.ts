@@ -50,6 +50,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("./collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -303,8 +304,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         new Error("Collection 'nonexistent' not found")
       );
 
+      // Trusted, so the missing collection answers rather than a visitor's
+      // refusal: the Public role grants nothing on a collection that is not.
       const result = await service.listEntries({
         collectionName: "nonexistent",
+        overrideAccess: true,
       });
 
       expect(result.success).toBe(false);
@@ -717,8 +721,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         new Error("Collection 'missing' does not exist")
       );
 
+      // Trusted, so the missing collection answers rather than a visitor's
+      // refusal: the Public role grants nothing on a collection that is not.
       const result = await service.countEntries({
         collectionName: "missing",
+        overrideAccess: true,
       });
 
       expect(result.success).toBe(false);

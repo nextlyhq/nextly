@@ -4,6 +4,7 @@ import { inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -1577,6 +1578,8 @@ export class CollectionRelationshipService extends BaseService {
       // The LIFECYCLE question, not the trust question — see widensLifecycle.
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
+      // A visitor's expansion sees published rows only, as its own read does.
+      publishedOnly: readsAsVisitor(access),
     });
     return statusFilter;
   }

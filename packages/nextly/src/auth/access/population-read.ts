@@ -32,7 +32,7 @@ import {
   actorForPrincipal,
   actorForScope,
   actorForUserFailingClosed,
-  actorForVisitor,
+  actorForVisitorFailingClosed,
   userHoldsPermission,
 } from "./resolve-actor";
 
@@ -76,7 +76,7 @@ function keyActorOf(
 async function actorOf(caller: RelatedRowCaller): Promise<Actor> {
   if (caller.principal) return actorForPrincipal(caller.principal);
   if (caller.user) return actorForUserFailingClosed(caller.user.id);
-  return actorForVisitor();
+  return actorForVisitorFailingClosed();
 }
 
 /** Population's answer for a visitor. */
@@ -84,18 +84,13 @@ async function visitorReads(
   target: AccessTarget,
   rbac: RBACAccessControlService | undefined
 ): Promise<boolean> {
-  const visitor = actorForVisitor();
-  // A visitor is judged by the target's read rule alone: no rule, or any
-  // answer but `false`, admits them, and a rule that throws refuses. Without
-  // the service nothing is asked, and the visitor is admitted.
+  // A failed read of Public's grants withholds the row rather than failing
+  // the read, as a user's failed lookup does here.
+  const visitor = await actorForVisitorFailingClosed();
+  // Without the service nothing is asked, and the visitor is admitted.
   if (!rbac) return deviate("no-service", true, () => decided(visitor, target));
-  const verdict = await rbac.checkAnonymousCodeAccess({
-    operation: "read",
-    resource: target.slug,
-  });
-  return deviate("visitor-public-default", verdict !== false, () =>
-    decided(visitor, target)
-  );
+  // The decision: the Public role's read, then a read rule answering `true`.
+  return decided(visitor, target);
 }
 
 /** Population's answer for an API key. */

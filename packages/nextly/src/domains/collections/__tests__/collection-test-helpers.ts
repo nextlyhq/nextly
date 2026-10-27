@@ -271,8 +271,10 @@ export {
   callerMay,
   callerMayNot,
   fakeActorForUser,
+  fakeActorForVisitor,
   fakeUserHoldsPermission,
   fakeUserIsSuperAdmin,
+  publicMay,
   resetCallerAccess,
 } from "../../../auth/access/__tests__/fake-caller";
 

@@ -4,8 +4,10 @@
  *
  * A signed-in user holds the actions set with {@link callerMay} on every
  * target these suites use, or the lookup fails ({@link callerLookupFails}).
+ * A visitor holds what the Public role grants, set with {@link publicMay}.
  * Every test should start from {@link resetCallerAccess}: a user holding
- * every action.
+ * every action, and a Public role granting the read alone, which is what a
+ * visitor could do on a target with no rules before the Public role judged it.
  *
  * Mock the module with it in each suite:
  *
@@ -15,6 +17,7 @@
  *   return {
  *     ...(await importOriginal<object>()),
  *     actorForUser: fake.fakeActorForUser,
+ *     actorForVisitor: fake.fakeActorForVisitor,
  *     userHoldsPermission: fake.fakeUserHoldsPermission,
  *     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
  *   };
@@ -24,7 +27,13 @@
 import { vi } from "vitest";
 
 import type { AccessOperation } from "../../../services/access";
-import { userActor, type UserActor } from "../actor";
+import {
+  userActor,
+  visitorActor,
+  type PermissionGrant,
+  type UserActor,
+  type VisitorActor,
+} from "../actor";
 
 const EVERY_ACTION: readonly AccessOperation[] = [
   "create",
@@ -38,11 +47,37 @@ const EVERY_ACTION: readonly AccessOperation[] = [
 /** The collections and Singles the suites that use this fake ask about. */
 const SUITE_TARGETS = ["posts", "site-settings"];
 
+/**
+ * The targets the faked Public role grants on: the suites' own, and the
+ * collections some suites read with no user to test what a read does.
+ */
+const PUBLIC_TARGETS = [...SUITE_TARGETS, "products", "articles"];
+
 const callerAccess = {
   actions: new Set<AccessOperation>(EVERY_ACTION),
   failure: undefined as Error | undefined,
   superAdmin: false,
+  /** What the Public role grants on every suite target. */
+  publicActions: new Set<AccessOperation>(["read"]),
 };
+
+/** `actions` on every one of `targets`, as permission rows. */
+const grantsOn = (
+  actions: Iterable<AccessOperation>,
+  targets: readonly string[] = SUITE_TARGETS
+): PermissionGrant[] =>
+  targets.flatMap(resource =>
+    [...actions].map(action => ({
+      slug: `${action}-${resource}`,
+      action,
+      resource,
+    }))
+  );
+
+/** The Public role grants only these actions, and so a visitor holds them. */
+export function publicMay(...actions: AccessOperation[]): void {
+  callerAccess.publicActions = new Set(actions);
+}
 
 /** A signed-in user holds only these actions. */
 export function callerMay(...actions: AccessOperation[]): void {
@@ -70,6 +105,7 @@ export function resetCallerAccess(): void {
   callerAccess.actions = new Set(EVERY_ACTION);
   callerAccess.failure = undefined;
   callerAccess.superAdmin = false;
+  callerAccess.publicActions = new Set<AccessOperation>(["read"]);
 }
 
 /** Stands in for `actorForUser`: the user's actor from the faked lookup. */
@@ -79,15 +115,18 @@ export const fakeActorForUser = vi.fn(
     return userActor({
       userId,
       roles: callerAccess.superAdmin ? ["super-admin"] : [],
-      permissions: SUITE_TARGETS.flatMap(resource =>
-        [...callerAccess.actions].map(action => ({
-          slug: `${action}-${resource}`,
-          action,
-          resource,
-        }))
-      ),
+      permissions: grantsOn(callerAccess.actions),
     });
   }
+);
+
+/**
+ * Stands in for `actorForVisitor`: a visitor holding what the faked Public
+ * role grants ({@link publicMay}).
+ */
+export const fakeActorForVisitor = vi.fn(
+  async (): Promise<VisitorActor> =>
+    visitorActor(grantsOn(callerAccess.publicActions, PUBLIC_TARGETS))
 );
 
 /**
