@@ -503,7 +503,9 @@ export class MediaService {
     options: ListMediaOptions = {},
     _context: RequestContext
   ): Promise<PaginatedResult<MediaFile>> {
-    this.logger.debug("Listing media files", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing media files");
 
     const page = options.page ?? 1;
     const limit = options.limit ?? 24;
