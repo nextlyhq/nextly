@@ -12,9 +12,11 @@
  * run and, where the job's log names them, the failing tests. It closes once
  * every job it names has since passed, having run its test: a job skipped or
  * cancelled (a superseded push), or one that decided a commit could not affect
- * it, proved nothing. The issue records the commit it was last written for,
- * and a run on an older commit (runs on `main` can finish out of order) leaves
- * it alone.
+ * it, proved nothing. A job that passed is struck off even while the others
+ * wait, so runs that each prove one close it between them. The issue records
+ * the commit it was last written for, closed or not, and a run on an older
+ * commit (runs on `main` can finish out of order) leaves it alone; the job
+ * runs one at a time, so two runs never write it interleaved.
  *
  * Usage, in a workflow step: node scripts/main-red-issue.mjs
  * Reads RESULTS (the `needs` context as JSON), GITHUB_REPOSITORY, GITHUB_SHA,
@@ -89,15 +91,18 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
       console.log("main-red-issue: no advisory job failed or ran its test; nothing to report");
       return 0;
     }
-    const open = (await githubJson(`repos/${repository}/issues?labels=${LABEL}&state=open&per_page=10`, context)).filter(
-      issue => !issue.pull_request
-    );
-    const current = open[0];
-    const state = current ? recorded(current) : null;
-    if (current && (await olderThan(sha, state, { repository, context }))) {
-      console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${current.number}'s ${state.sha.slice(0, 9)}; leaving it`);
+    // The newest labelled issue, open or closed, records the newest commit
+    // any run wrote for; a closed one still orders a run that finishes late.
+    // A second is opened only while none is open, so an open one is the newest.
+    const [newest] = (
+      await githubJson(`repos/${repository}/issues?labels=${LABEL}&state=all&sort=created&direction=desc&per_page=10`, context)
+    ).filter(issue => !issue.pull_request);
+    const state = newest ? recorded(newest) : null;
+    if (newest && (await olderThan(sha, state, { repository, context }))) {
+      console.log(`main-red-issue: ${sha.slice(0, 9)} is older than #${newest.number}'s ${state.sha.slice(0, 9)}; leaving it`);
       return 0;
     }
+    const current = newest?.state === "open" ? newest : null;
     const run = { sha, runUrl, runId: env.GITHUB_RUN_ID, repository, context };
     if (failed.length === 0) {
       if (current) await closeIfProven(current, state, passed, run);
@@ -111,19 +116,48 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   }
 }
 
-/** Closes the open issue once every job it names has passed in this run, having run its test; else leaves it open. */
+/**
+ * Closes the open issue once every job it names has passed, having run its
+ * test. A job that passed here is struck from the issue even while others are
+ * not yet tested, so runs that each prove a different job close it between
+ * them. Either way the issue records this commit, to order later runs.
+ */
 async function closeIfProven(current, state, passed, { sha, runUrl, repository, context }) {
   const named = state?.jobs ?? Object.keys(ADVISORY);
   const unproven = named.filter(id => !passed.includes(id));
+  const path = `repos/${repository}/issues/${current.number}`;
   if (unproven.length > 0) {
+    if (unproven.length < named.length) {
+      await write(path, context, "PATCH", {
+        title: retitled(current.title, unproven),
+        body: withMarker(current.body, { sha, jobs: unproven }),
+      });
+    }
     console.log(`main-red-issue: #${current.number} stays open; not yet passed: ${unproven.map(id => ADVISORY[id] ?? id).join(", ")}`);
     return;
   }
-  await write(`repos/${repository}/issues/${current.number}/comments`, context, "POST", {
+  await write(`${path}/comments`, context, "POST", {
     body: `${named.map(id => ADVISORY[id] ?? id).join(", ")} passed on ${sha.slice(0, 9)} (${runUrl}).`,
   });
-  await write(`repos/${repository}/issues/${current.number}`, context, "PATCH", { state: "closed", state_reason: "completed" });
+  await write(path, context, "PATCH", {
+    state: "closed",
+    state_reason: "completed",
+    body: withMarker(current.body, { sha, jobs: [] }),
+  });
   console.log(`main-red-issue: green on ${sha.slice(0, 9)}; closed #${current.number}`);
+}
+
+/** The issue's text with its marker recording `state` instead. */
+function withMarker(body, state) {
+  const marker = `<!-- main-red ${JSON.stringify(state)} -->`;
+  const text = body ?? "";
+  return /<!-- main-red \{.*?\} -->/.test(text) ? text.replace(/<!-- main-red \{.*?\} -->/, marker) : `${marker}\n${text}`;
+}
+
+/** The issue's title naming only the jobs still red, keeping the commit it was opened for. */
+function retitled(title, jobs) {
+  const commit = / on [0-9a-f]{9}$/.exec(title ?? "")?.[0] ?? "";
+  return `main is red: ${jobs.map(id => ADVISORY[id] ?? id).join(", ")}${commit}`;
 }
 
 /** Opens the issue for this run's failures, or updates the open one. */

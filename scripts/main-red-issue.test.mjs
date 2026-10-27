@@ -27,13 +27,19 @@ const env = (results, extra = {}) => ({
 const all = (result, overrides = {}, outputs = {}) =>
   Object.fromEntries(Object.keys(ADVISORY).map(id => [id, { result: overrides[id] ?? result, outputs: outputs[id] ?? {} }]));
 
-const openIssues = `GET repos/${REPO}/issues?labels=${LABEL}&state=open&per_page=10`;
+/** Every issue with the label, newest first: the open one, or the last one closed. */
+const labelled = `GET repos/${REPO}/issues?labels=${LABEL}&state=all&sort=created&direction=desc&per_page=10`;
 const runJobs = `GET repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100`;
 const label = { [`GET repos/${REPO}/labels/${LABEL}`]: { name: LABEL } };
-/** How the compare API places this run's commit against the one the open issue records. */
+/** How the compare API places this run's commit against the one the newest issue records. */
 const placed = status => ({ [`GET repos/${REPO}/compare/${OLDER}...${SHA}`]: { status } });
-/** An open issue recording the commit and jobs it was last written for. */
-const issue = (jobs, sha = OLDER) => ({ number: 7, body: `<!-- main-red ${JSON.stringify({ sha, jobs })} -->\nmain is red` });
+/** An issue (open unless a case says otherwise) recording the commit and jobs it was last written for. */
+const issue = (jobs, sha = OLDER, state = "open") => ({
+  number: 7,
+  state,
+  title: `main is red: Browser tests on ${sha.slice(0, 9)}`,
+  body: `<!-- main-red ${JSON.stringify({ sha, jobs })} -->\nmain is red`,
+});
 
 /** A fetch answering each route given (a string answers as text), recording every call and body. */
 function api(routes) {
@@ -68,7 +74,7 @@ describe("what the advisory jobs on a main run say", () => {
 
 describe("the issue on main", () => {
   it("opens one, labelled, recording its commit and failed jobs, when main turns red and none is open", async () => {
-    const { fetchImpl, writes } = api({ ...label, [openIssues]: [], [runJobs]: { jobs: [] } });
+    const { fetchImpl, writes } = api({ ...label, [labelled]: [], [runJobs]: { jobs: [] } });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl })).toBe(0);
     const [created] = writes();
     expect(created.key).toBe(`POST repos/${REPO}/issues`);
@@ -80,14 +86,14 @@ describe("the issue on main", () => {
   });
 
   it("creates the label first when the repository has none, so the issue can be found again", async () => {
-    const { fetchImpl, writes } = api({ [openIssues]: [], [runJobs]: { jobs: [] } });
+    const { fetchImpl, writes } = api({ [labelled]: [], [runJobs]: { jobs: [] } });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl })).toBe(0);
     expect(writes().map(call => call.key)).toEqual([`POST repos/${REPO}/labels`, `POST repos/${REPO}/issues`]);
     expect(writes()[0].body.name).toBe(LABEL);
   });
 
   it("updates the open one rather than opening a second", async () => {
-    const { fetchImpl, writes } = api({ [openIssues]: [issue(["e2e"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    const { fetchImpl, writes } = api({ [labelled]: [issue(["e2e"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl })).toBe(0);
     expect(writes().map(call => call.key)).toEqual([`PATCH repos/${REPO}/issues/7`]);
     expect(writes()[0].body.title).toBe(`main is red: Browser tests on ${SHA.slice(0, 9)}`);
@@ -97,16 +103,16 @@ describe("the issue on main", () => {
     // Only Browser tests is named; the others were skipped here, which is not
     // a reason to keep it open.
     const results = all("skipped", { e2e: "success" });
-    const { fetchImpl, writes } = api({ [openIssues]: [issue(["e2e"])], ...placed("ahead") });
+    const { fetchImpl, writes } = api({ [labelled]: [issue(["e2e"])], ...placed("ahead") });
     expect(await main(env(results), { fetchImpl })).toBe(0);
     expect(writes().map(call => call.key)).toEqual([`POST repos/${REPO}/issues/7/comments`, `PATCH repos/${REPO}/issues/7`]);
     expect(writes()[0].body.body).toContain(SHA.slice(0, 9));
-    expect(writes()[1].body).toEqual({ state: "closed", state_reason: "completed" });
+    expect(writes()[1].body).toMatchObject({ state: "closed", state_reason: "completed" });
   });
 
   it("keeps it open when a job it names succeeded without running its test", async () => {
     const results = all("success", {}, { "dev-reload": { tested: "false" } });
-    const { fetchImpl, writes } = api({ [openIssues]: [issue(["dev-reload"])], ...placed("ahead") });
+    const { fetchImpl, writes } = api({ [labelled]: [issue(["dev-reload"])], ...placed("ahead") });
     expect(await main(env(results), { fetchImpl })).toBe(0);
     expect(writes()).toEqual([]);
   });
@@ -115,7 +121,7 @@ describe("the issue on main", () => {
     // Dev reload is still red from an earlier run; this run decided it could
     // not affect dev reload, and failed Browser tests instead.
     const untested = all("success", { e2e: "failure" }, { "dev-reload": { tested: "false" } });
-    const first = api({ [openIssues]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    const first = api({ [labelled]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(untested), { fetchImpl: first.fetchImpl })).toBe(0);
     const [updated] = first.writes();
     expect(updated.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e","dev-reload"]} -->`);
@@ -123,16 +129,51 @@ describe("the issue on main", () => {
 
     // Once dev reload has run its test and passed, only the job still failing stays named.
     const retested = all("success", { e2e: "failure" }, { "dev-reload": { tested: "true" } });
-    const second = api({ [openIssues]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    const second = api({ [labelled]: [issue(["dev-reload"])], ...placed("ahead"), [runJobs]: { jobs: [] } });
     expect(await main(env(retested), { fetchImpl: second.fetchImpl })).toBe(0);
     expect(second.writes()[0].body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e"]} -->`);
+  });
+
+  it("records each job that passed though others are not tested yet, so runs that each prove one can close it", async () => {
+    // A catch-up proves dev reload while the production browser tests are
+    // skipped; a later push proves those while dev reload tests nothing.
+    const first = api({ [labelled]: [issue(["e2e-production", "dev-reload"])], ...placed("ahead") });
+    const proves = all("skipped", { "dev-reload": "success" });
+    expect(await main(env(proves), { fetchImpl: first.fetchImpl })).toBe(0);
+    const [narrowed] = first.writes();
+    expect(narrowed.key).toBe(`PATCH repos/${REPO}/issues/7`);
+    expect(narrowed.body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":["e2e-production"]} -->`);
+    expect(narrowed.body.title).toBe(`main is red: Production browser tests on ${OLDER.slice(0, 9)}`);
+    expect(narrowed.body.state).toBeUndefined();
+
+    const second = api({ [labelled]: [issue(["e2e-production"])], ...placed("ahead") });
+    const rest = all("skipped", { "e2e-production": "success", "dev-reload": "success" }, { "dev-reload": { tested: "false" } });
+    expect(await main(env(rest), { fetchImpl: second.fetchImpl })).toBe(0);
+    expect(second.writes().at(-1).body).toMatchObject({ state: "closed" });
+  });
+
+  it("records the commit it closed on, so an older run finishing later opens no stale issue", async () => {
+    const closing = api({ [labelled]: [issue(["e2e"])], ...placed("ahead") });
+    expect(await main(env(all("skipped", { e2e: "success" })), { fetchImpl: closing.fetchImpl })).toBe(0);
+    expect(closing.writes().at(-1).body.body).toContain(`<!-- main-red {"sha":"${SHA}","jobs":[]} -->`);
+
+    // The newest issue is closed, recording a commit this run is behind.
+    const late = api({ ...label, [labelled]: [issue([], OLDER, "closed")], ...placed("behind"), [runJobs]: { jobs: [] } });
+    expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl: late.fetchImpl })).toBe(0);
+    expect(late.writes()).toEqual([]);
+  });
+
+  it("opens a new one when the newest is closed and this run's commit is newer", async () => {
+    const { fetchImpl, writes } = api({ ...label, [labelled]: [issue([], OLDER, "closed")], ...placed("ahead"), [runJobs]: { jobs: [] } });
+    expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl })).toBe(0);
+    expect(writes().map(call => call.key)).toEqual([`POST repos/${REPO}/issues`]);
   });
 
   it("leaves it alone when this run's commit is older than the one it records", async () => {
     // Each main commit runs in a concurrency group of its own, so an older
     // run can finish after a newer one; it must neither close nor rewrite it.
     for (const results of [all("success"), all("success", { e2e: "failure" })]) {
-      const { fetchImpl, writes } = api({ [openIssues]: [issue(["e2e"])], ...placed("behind"), [runJobs]: { jobs: [] } });
+      const { fetchImpl, writes } = api({ [labelled]: [issue(["e2e"])], ...placed("behind"), [runJobs]: { jobs: [] } });
       expect(await main(env(results), { fetchImpl })).toBe(0);
       expect(writes()).toEqual([]);
     }
@@ -140,7 +181,7 @@ describe("the issue on main", () => {
 
   it("touches nothing when nothing failed and none is open, or when the run tested nothing", async () => {
     for (const results of [all("success"), all("skipped")]) {
-      const { fetchImpl, writes } = api({ [openIssues]: [] });
+      const { fetchImpl, writes } = api({ [labelled]: [] });
       expect(await main(env(results), { fetchImpl })).toBe(0);
       expect(writes()).toEqual([]);
     }
@@ -158,7 +199,7 @@ describe("the issue on main", () => {
       "2026-10-27T01:00:02.000Z   ✘  2 [chromium] › tests/dashboard/cards.spec.ts:40:5 › draws the saved layout (retry #1) (5.0s)",
     ].join("\n");
     const jobs = { jobs: [{ id: 91, name: "Browser tests", conclusion: "failure" }] };
-    const read = api({ ...label, [openIssues]: [], [runJobs]: jobs, [`GET repos/${REPO}/actions/jobs/91/logs`]: log });
+    const read = api({ ...label, [labelled]: [], [runJobs]: jobs, [`GET repos/${REPO}/actions/jobs/91/logs`]: log });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl: read.fetchImpl })).toBe(0);
     const body = read.writes()[0].body.body;
     expect(body).toContain("tests/dashboard-card-tiers.spec.ts:134:3 › a quarter card on a 1200px dashboard is small");
@@ -167,7 +208,7 @@ describe("the issue on main", () => {
     expect(body.match(/a quarter card on a 1200px dashboard is small/g)).toHaveLength(1);
     expect(body.match(/draws the saved layout/g)).toHaveLength(1);
 
-    const unreadable = api({ ...label, [openIssues]: [], [runJobs]: jobs });
+    const unreadable = api({ ...label, [labelled]: [], [runJobs]: jobs });
     expect(await main(env(all("success", { e2e: "failure" })), { fetchImpl: unreadable.fetchImpl })).toBe(0);
     expect(unreadable.writes()[0].body.body).toContain("could not be read");
   });
@@ -199,6 +240,12 @@ describe("the job that runs it", () => {
     expect(job.if).not.toContain("pull_request");
     expect(job.if).not.toContain("merge_group");
     expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "write" });
+  });
+
+  it("runs one at a time across main's runs, never cancelling one under way", () => {
+    // Each main commit's run has a concurrency group of its own, so without
+    // one here two reporters could read the issue and write it interleaved.
+    expect(job.concurrency).toEqual({ group: "main-red-issue", "cancel-in-progress": false });
   });
 
   it("is none of the jobs CI gate needs: reporting main's state never blocks a merge", () => {
