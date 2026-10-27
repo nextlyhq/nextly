@@ -33,7 +33,10 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { safeCode } from "../../../database/errors";
 import { futureExpression, nowExpression } from "../../../database/lease-clock";
-import { deriveLeaseTimings } from "../../../database/lease-timings";
+import {
+  deriveLeaseTimings,
+  type LeaseTimings,
+} from "../../../database/lease-timings";
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
@@ -74,7 +77,10 @@ const LOCK_ROW_ID = 1;
  * is a per-dialect defect that unit doubles cannot see. An integer normalises through `Number()` on
  * every driver.
  */
-function lockStateQuery(dialect: MigrationDialect): SQL {
+function lockStateQuery(
+  dialect: MigrationDialect,
+  marginSeconds: number = LOCK_RENEW_MARGIN_SECONDS
+): SQL {
   return sql`SELECT ${sql.identifier("owner")},
       CASE WHEN ${sql.identifier("owner")} IS NOT NULL
             AND (${sql.identifier("expires_at")} IS NULL
@@ -82,7 +88,7 @@ function lockStateQuery(dialect: MigrationDialect): SQL {
            THEN 1 ELSE 0 END AS ${sql.identifier("live")},
       CASE WHEN ${sql.identifier("owner")} IS NOT NULL
             AND (${sql.identifier("expires_at")} IS NULL
-                 OR ${sql.identifier("expires_at")} > ${futureExpression(dialect, LOCK_RENEW_MARGIN_SECONDS)})
+                 OR ${sql.identifier("expires_at")} > ${futureExpression(dialect, marginSeconds)})
            THEN 1 ELSE 0 END AS ${sql.identifier("usable")}
       FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
@@ -189,20 +195,37 @@ export const LEGACY_SHUTDOWN_WAIT_MS = 5_000;
  */
 export const LOCK_RENEW_MARGIN_SECONDS = LOCK_TIMINGS.renewMarginSeconds;
 
-function expiryExpression(dialect: MigrationDialect): SQL {
-  return futureExpression(dialect, LOCK_TTL_SECONDS);
+/**
+ * The timings a session is held on: the module's own by default, or a lease the caller chose.
+ *
+ * A caller that holds this lock beside another one passes that lock's lease, so the two lapse
+ * together when their holder dies. Every timing is still derived from the one number, by the same
+ * divisor, so a chosen lease cannot pull the renewal interval and the loss deadline apart.
+ */
+function timingsFor(leaseSeconds: number | undefined): LeaseTimings {
+  return leaseSeconds === undefined
+    ? LOCK_TIMINGS
+    : deriveLeaseTimings(leaseSeconds, LOCK_RENEW_DIVISOR);
+}
+
+function expiryExpression(
+  dialect: MigrationDialect,
+  ttlSeconds: number = LOCK_TTL_SECONDS
+): SQL {
+  return futureExpression(dialect, ttlSeconds);
 }
 
 /** The row, read inside the transaction that is about to decide the claim. */
 async function readLockState(
   ctx: TransactionContext,
-  dialect: MigrationDialect
+  dialect: MigrationDialect,
+  timings: LeaseTimings = LOCK_TIMINGS
 ): Promise<LockState | undefined> {
   const rows = await ctx.queryStatement<{
     owner: string | null;
     live: unknown;
     usable: unknown;
-  }>(lockStateQuery(dialect));
+  }>(lockStateQuery(dialect, timings.renewMarginSeconds));
   return toLockState(rows[0]);
 }
 
@@ -210,13 +233,14 @@ async function readLockState(
 async function renew(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect,
-  claim: string
+  claim: string,
+  timings: LeaseTimings
 ): Promise<boolean> {
   return adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
-          SET ${sql.identifier("expires_at")} = ${expiryExpression(dialect)}
+          SET ${sql.identifier("expires_at")} = ${expiryExpression(dialect, timings.ttlSeconds)}
           WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
             AND ${sql.identifier("owner")} = ${claim}`
     );
@@ -230,7 +254,7 @@ async function renew(
     // that correctly as `live: false`, and an owner-only check discards exactly the field that
     // says so — reporting a successful renewal on a lease a contender may take the instant this
     // commits, while the callback carries on believing it is protected.
-    const after = await readLockState(ctx, dialect);
+    const after = await readLockState(ctx, dialect, timings);
     return after?.owner === claim && after.usable;
   });
 }
@@ -543,10 +567,19 @@ export async function withMigrationSession<T>(
      * writers impossible, and this mode is precisely its absence.
      */
     mode?: "claim" | "observe";
+    /**
+     * The lease a claim is held on, in seconds, when not this module's own.
+     *
+     * For the schema lock, which holds this lock beside its own: the two must lapse together when
+     * their holder dies, or the next run finds this one still held and waits on a process that has
+     * gone. Absent, the claim is held on {@link LOCK_TTL_SECONDS}.
+     */
+    leaseSeconds?: number;
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
   const { adapter, dialect, label, mode = "claim" } = args;
+  const timings = timingsFor(args.leaseSeconds);
 
   if (label.length === 0) {
     throw NextlyError.internal({
@@ -828,7 +861,7 @@ export async function withMigrationSession<T>(
   // left. Reading the clock after `acquire` resolves would credit the claim with time it spent
   // waiting for a connection or for this process to be scheduled again.
   const claimStartedAt = performance.now();
-  const acquired = await acquire(adapter, dialect, claim);
+  const acquired = await acquire(adapter, dialect, claim, timings);
   if (!acquired.ok) {
     // Raised outside the transaction on purpose: the adapters route every error
     // escaping a transaction callback through `classifyError`, which rewraps
@@ -872,7 +905,7 @@ export async function withMigrationSession<T>(
   // work has nothing to lose by starting over, and re-extending here would paper over whatever
   // stalled. The row is cleared for the same reason a refused acquisition clears it — leaving this
   // claim behind would block contenders with nothing renewing it.
-  if (performance.now() - claimStartedAt >= LOCK_LOSS_AFTER_MS) {
+  if (performance.now() - claimStartedAt >= timings.lossAfterMs) {
     await release(adapter, dialect, claim);
     throw NextlyError.serviceUnavailable({
       logMessage:
@@ -970,7 +1003,7 @@ export async function withMigrationSession<T>(
   // the shutdown below, which will not wait past it. Two spellings of one formula would agree today
   // and drift the first time the margin moves.
   const leaseRemainingMs = (): number =>
-    LOCK_LOSS_AFTER_MS - (performance.now() - leaseConfirmedAt);
+    timings.lossAfterMs - (performance.now() - leaseConfirmedAt);
 
   // Only ever one attempt in flight. `setInterval` fires on a schedule, not on completion, so a
   // renewal slower than the interval would otherwise have a second started underneath it — and with
@@ -1013,7 +1046,7 @@ export async function withMigrationSession<T>(
     // Kept rather than discarded: a renewal blocked on the connection or the row lock can land long
     // after this session gave up, and its UPDATE re-extends the row whether or not anyone is still
     // waiting for it. The abandonment path below needs to know when that attempt has finished.
-    outstandingRenewal = renew(adapter, dialect, claim).then(
+    outstandingRenewal = renew(adapter, dialect, claim, timings).then(
       held => {
         renewing = false;
         // Ownership DISPROVED is not a margin question. The row names someone else, so no amount of
@@ -1032,7 +1065,7 @@ export async function withMigrationSession<T>(
       }
     );
     void outstandingRenewal;
-  }, LOCK_RENEW_INTERVAL_MS);
+  }, timings.renewIntervalMs);
   // Never a reason for the process to stay alive: this timer exists to protect work that is already
   // running, so if nothing else is pending there is nothing left to protect.
   renewal.unref?.();
@@ -1277,14 +1310,15 @@ type Acquisition = { ok: true } | { ok: false; heldBy: string | null };
 async function acquire(
   adapter: DrizzleAdapter,
   dialect: MigrationDialect,
-  claim: string
+  claim: string,
+  timings: LeaseTimings
 ): Promise<Acquisition> {
   return adapter.transaction(async ctx => {
     // Serializes contenders: everyone else waits here until this transaction
     // ends, so the read below cannot be overtaken between reading and writing.
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
 
-    const row = await readLockState(ctx, dialect);
+    const row = await readLockState(ctx, dialect, timings);
     if (row === undefined) return { ok: false, heldBy: null };
 
     // 🔴 An occupied row refuses only while its claim is still LIVE. The holder renews for as long
@@ -1307,7 +1341,7 @@ async function acquire(
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
           SET ${sql.identifier("owner")} = ${claim},
-              ${sql.identifier("expires_at")} = ${expiryExpression(dialect)}
+              ${sql.identifier("expires_at")} = ${expiryExpression(dialect, timings.ttlSeconds)}
           WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
     );
 
@@ -1319,7 +1353,7 @@ async function acquire(
     // expired is not a claim. Treated as held by whoever the row names — which is this process —
     // because the honest answer is that acquisition did not establish exclusion, not that the row
     // was empty.
-    const after = await readLockState(ctx, dialect);
+    const after = await readLockState(ctx, dialect, timings);
     if (after?.owner !== claim || !after.usable) {
       // 🔴 A refused acquisition must not leave OUR name on the row. The claim UPDATE above has
       // already happened, and returning a result rather than throwing commits it — so without this
@@ -1446,6 +1480,30 @@ async function releaseOwnerOnly(
             AND ${sql.identifier("owner")} = ${claim}`
     );
     return heldToTheEnd;
+  });
+}
+
+/**
+ * Free a claim this process made, on its way out after an interrupt.
+ *
+ * For a caller that holds this lock inside another one and handles the signal itself: it releases
+ * every lock it holds before the process stops, so the next run is not left waiting on this one.
+ * Clears `owner` alone, owner-scoped, because that is enough to free the row on every version of
+ * this table — an expiry left behind on a row that names no owner excludes nobody — and because a
+ * table that predates `expires_at` has no other column to clear.
+ */
+export async function releaseMigrationClaim(
+  adapter: DrizzleAdapter,
+  claim: string
+): Promise<void> {
+  await adapter.transaction(async ctx => {
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = NULL
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
+    );
   });
 }
 

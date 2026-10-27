@@ -160,6 +160,13 @@ function laterInRunOrder(a: string, b: string, plugin?: string): number {
 export interface MigrateDownCoreDeps {
   dialect: SupportedDialect;
   db: unknown;
+  /**
+   * The adapter the schema lock is taken through (`downDatabaseDeps` supplies it). Optional only
+   * so a test that replaces `withLock` need not build one; the real lock refuses without it.
+   */
+  adapter?: DrizzleAdapter;
+  /** What holds the lock while this runs, as another run's refusal names it. */
+  lockCommand?: string;
   nodeEnv: string | undefined;
   logger: CommandContext["logger"];
   options: {
@@ -254,6 +261,23 @@ export interface MigrateDownCoreDeps {
     statementLists: ReadonlyArray<readonly string[]>
   ) => Promise<ReadonlyMap<string, string>>;
   withLock: typeof withMigrateLock;
+}
+
+/**
+ * The adapter the lock is taken through. Refused rather than guessed when absent: a rollback run
+ * without the schema lock is the overlap the lock exists to prevent.
+ */
+function lockAdapter(deps: MigrateDownCoreDeps): DrizzleAdapter {
+  if (deps.adapter !== undefined) return deps.adapter;
+  // A stand-in `withLock` ignores its first argument, so a test that replaces the lock still runs;
+  // the real one reads `getCapabilities` off it and fails loudly on this placeholder.
+  return {
+    getCapabilities: () => {
+      throw NextlyError.internal({
+        logContext: { reason: "migrate:down was given no adapter to lock" },
+      });
+    },
+  } as unknown as DrizzleAdapter;
 }
 
 export interface MigrateDownResult {
@@ -581,7 +605,7 @@ export async function migrateDownCore(
 
   const rolledBack: string[] = [];
   await deps.withLock(
-    deps.db,
+    lockAdapter(deps),
     deps.dialect,
     async () => {
       for (const p of planned) {
@@ -591,7 +615,9 @@ export async function migrateDownCore(
       }
     },
     {
-      mode: "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate:down",
+      // A held lock is waited for, about a minute, and then the run stops naming its holder.
+      mode: "wait",
       logger: {
         warn: m => deps.logger.warn(m),
         info: m => deps.logger.info(m),
@@ -653,6 +679,7 @@ export async function downDatabaseDeps(args: {
     MigrateDownCoreDeps,
     | "dialect"
     | "db"
+    | "adapter"
     | "owners"
     | "elementOwners"
     | "readLiveColumns"
@@ -681,6 +708,7 @@ export async function downDatabaseDeps(args: {
   return {
     dialect,
     db,
+    adapter,
     owners: tableOwnersByName(ownerRows),
     elementOwners: ownerRows,
     readLiveColumns: lists => readLiveColumns(db, dialect, lists),

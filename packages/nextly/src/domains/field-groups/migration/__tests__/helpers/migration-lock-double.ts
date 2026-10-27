@@ -62,6 +62,22 @@ export interface LockRow {
    */
   expiresAt: number | null;
   readonly clock: LockClock;
+  /**
+   * The schema lock's row, which every schema change now takes before this one, and the earlier
+   * migrate lock's row (PostgreSQL) it holds beside it. Modelled on the same clock, so a suite that
+   * reaches a schema change through a double meets the lock the change really takes.
+   */
+  readonly schema: SchemaLockRowModel;
+  readonly earlierMigrate: { owner: string | null; expiresAt: number | null };
+}
+
+/** The schema lock's single row, as the model holds it. */
+export interface SchemaLockRowModel {
+  seeded: boolean;
+  owner: string | null;
+  command: string | null;
+  acquiredAt: number | null;
+  expiresAt: number | null;
 }
 
 export interface LockRowOptions {
@@ -84,6 +100,14 @@ export function createLockRow(
     owner: heldBy ?? null,
     expiresAt: options.expiresAt ?? null,
     clock: options.clock ?? createLockClock(),
+    schema: {
+      seeded: false,
+      owner: null,
+      command: null,
+      acquiredAt: null,
+      expiresAt: null,
+    },
+    earlierMigrate: { owner: null, expiresAt: null },
   };
 }
 
@@ -160,6 +184,152 @@ const OWNER_RELEASE = new RegExp(
   String.raw`^UPDATE "${TABLE}" SET "owner" = NULL WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
 );
 
+// The schema lock's statements, and the earlier migrate lock's (PostgreSQL), which every schema
+// change now issues before the field-group lock's own.
+const SCHEMA = "nextly_schema_lock";
+const EARLIER = "nextly_migrate_lock";
+const SCHEMA_EXISTS = new RegExp(
+  String.raw`^SELECT "id" FROM "${SCHEMA}" WHERE "id" = \$\d+$`
+);
+const SCHEMA_SEED = new RegExp(
+  String.raw`^INSERT INTO "${SCHEMA}" \("id"\) VALUES \(\$\d+\)$`
+);
+const SCHEMA_STATE = new RegExp(
+  String.raw`^SELECT "owner", "command", .*"expires_at" > ${EXPIRY} THEN 1 ELSE 0 END AS "usable", .* FROM "${SCHEMA}" WHERE "id" = \$\d+$`
+);
+const SCHEMA_CLAIM = new RegExp(
+  String.raw`^UPDATE "${SCHEMA}" SET "owner" = \$(?<claim>\d+), "command" = \$(?<command>\d+), "acquired_at" = ${NOW}, "expires_at" = ${EXPIRY} WHERE "id" = \$\d+$`
+);
+const SCHEMA_RENEW = new RegExp(
+  String.raw`^UPDATE "${SCHEMA}" SET "expires_at" = ${EXPIRY} WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+const SCHEMA_CLEAR = new RegExp(
+  String.raw`^UPDATE "${SCHEMA}" SET "owner" = NULL, "command" = NULL, "acquired_at" = NULL, "expires_at" = NULL WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+const EARLIER_TAKE = new RegExp(
+  String.raw`^INSERT INTO "${EARLIER}" .* VALUES \(\$\d+, \$(?<claim>\d+), ${NOW}, ${EXPIRY}\) ON CONFLICT .* RETURNING "id"$`
+);
+const EARLIER_RENEW = new RegExp(
+  String.raw`^UPDATE "${EARLIER}" SET "expires_at" = ${EXPIRY} WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+const EARLIER_READ = new RegExp(
+  String.raw`^SELECT "owner",? .*FROM "${EARLIER}" WHERE "id" = \$\d+$`
+);
+const EARLIER_RELEASE = new RegExp(
+  String.raw`^DELETE FROM "${EARLIER}" WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+
+/** Every schema lock and earlier migrate lock statement, for classifying one. */
+const SCHEMA_STATEMENTS: readonly RegExp[] = [
+  SCHEMA_EXISTS,
+  SCHEMA_SEED,
+  SCHEMA_STATE,
+  SCHEMA_CLAIM,
+  SCHEMA_RENEW,
+  SCHEMA_CLEAR,
+  EARLIER_TAKE,
+  EARLIER_RENEW,
+  EARLIER_READ,
+  EARLIER_RELEASE,
+];
+
+/**
+ * Apply a schema lock (or earlier migrate lock) statement to the model, or say it is not one.
+ *
+ * Answers as the database would, on the model's clock, so a held schema lock refuses a schema
+ * change through a double exactly as it does through a database.
+ */
+function interpretSchemaLockStatement(
+  lock: LockRow,
+  flat: string,
+  params: readonly unknown[]
+): Record<string, unknown>[] | undefined {
+  const row = lock.schema;
+  const now = lock.clock.now();
+  const live = (owner: string | null, expiresAt: number | null) =>
+    owner !== null && expiresAt !== null && expiresAt > now;
+  let m: RegExpExecArray | null;
+  if (SCHEMA_EXISTS.test(flat)) return row.seeded ? [{ id: 1 }] : [];
+  if (SCHEMA_SEED.test(flat)) {
+    row.seeded = true;
+    return [];
+  }
+  if ((m = SCHEMA_STATE.exec(flat))) {
+    if (!row.seeded) return [];
+    const margin = boundTtl(m.groups, params);
+    return [
+      {
+        owner: row.owner,
+        command: row.command,
+        live: live(row.owner, row.expiresAt) ? 1 : 0,
+        usable:
+          row.owner !== null &&
+          row.expiresAt !== null &&
+          row.expiresAt > now + margin
+            ? 1
+            : 0,
+        lapses_in: row.expiresAt === null ? null : row.expiresAt - now,
+        started_in: row.acquiredAt === null ? null : row.acquiredAt - now,
+      },
+    ];
+  }
+  if ((m = SCHEMA_CLAIM.exec(flat))) {
+    if (!row.seeded) return [];
+    row.owner = bound(m.groups, params, "claim") as string;
+    row.command = bound(m.groups, params, "command") as string;
+    row.acquiredAt = now;
+    row.expiresAt = now + boundTtl(m.groups, params);
+    return [];
+  }
+  if ((m = SCHEMA_RENEW.exec(flat))) {
+    if (row.owner === bound(m.groups, params, "owner")) {
+      row.expiresAt = now + boundTtl(m.groups, params);
+    }
+    return [];
+  }
+  if ((m = SCHEMA_CLEAR.exec(flat))) {
+    if (row.owner === bound(m.groups, params, "owner")) {
+      row.owner = null;
+      row.command = null;
+      row.acquiredAt = null;
+      row.expiresAt = null;
+    }
+    return [];
+  }
+  const earlier = lock.earlierMigrate;
+  if ((m = EARLIER_TAKE.exec(flat))) {
+    if (live(earlier.owner, earlier.expiresAt)) return [];
+    earlier.owner = bound(m.groups, params, "claim") as string;
+    earlier.expiresAt = now + boundTtl(m.groups, params);
+    return [{ id: 1 }];
+  }
+  if ((m = EARLIER_RENEW.exec(flat))) {
+    if (earlier.owner === bound(m.groups, params, "owner")) {
+      earlier.expiresAt = now + boundTtl(m.groups, params);
+    }
+    return [];
+  }
+  if ((m = EARLIER_RELEASE.exec(flat))) {
+    if (earlier.owner === bound(m.groups, params, "owner")) {
+      earlier.owner = null;
+      earlier.expiresAt = null;
+    }
+    return [];
+  }
+  if (EARLIER_READ.test(flat)) {
+    return earlier.owner === null
+      ? []
+      : [
+          {
+            owner: earlier.owner,
+            lapses_in:
+              earlier.expiresAt === null ? null : earlier.expiresAt - now,
+          },
+        ];
+  }
+  return undefined;
+}
+
 type Groups = Record<string, string | undefined> | undefined;
 
 /** The statements this module issues, named. */
@@ -174,7 +344,11 @@ export type LockStatementKind =
   // the state read cannot work.
   | "owner-read"
   | "owner-claim"
-  | "owner-release";
+  | "owner-release"
+  // Any statement of the schema lock, or of the earlier migrate lock it holds beside it. One kind
+  // for all of them: a suite that observes the field-group lock's own statements counts those, and
+  // these are the lock every schema change takes first.
+  | "schema-lock";
 
 /**
  * What a statement IS, separately from what it DOES.
@@ -207,7 +381,11 @@ export function classifyLockStatement(
   statement: SQL
 ): LockStatementKind | undefined {
   const { sql: text } = new PgDialect().sqlToQuery(statement);
-  return matchLockStatement(text.replace(/\s+/g, " ").trim())?.kind;
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (SCHEMA_STATEMENTS.some(pattern => pattern.test(flat))) {
+    return "schema-lock";
+  }
+  return matchLockStatement(flat)?.kind;
 }
 
 /** The value a captured `$n` placeholder was bound to. */
@@ -250,6 +428,9 @@ export function interpretLockStatement(
 ): Record<string, unknown>[] {
   const { sql: text, params } = new PgDialect().sqlToQuery(statement);
   const flat = text.replace(/\s+/g, " ").trim();
+
+  const schemaRows = interpretSchemaLockStatement(lock, flat, params);
+  if (schemaRows !== undefined) return schemaRows;
 
   const matched = matchLockStatement(flat);
   const groups = matched?.groups;
@@ -375,7 +556,11 @@ export function isRenewalStatement(statement: SQL): boolean {
  * keeps saying it accurately, rather than each suite carrying its own idea of what to ignore.
  */
 export function isMigrationLockStatement(sql: string): boolean {
-  return sql.includes(MIGRATION_LOCK_TABLE);
+  return (
+    sql.includes(MIGRATION_LOCK_TABLE) ||
+    sql.includes(SCHEMA) ||
+    sql.includes(EARLIER)
+  );
 }
 
 export interface MigrationLockSurfaceOptions {
@@ -391,6 +576,21 @@ export interface MigrationLockSurfaceOptions {
   /** The seeded claim's expiry, and the clock it is measured against. */
   clock?: LockClock;
   expiresAt?: number | null;
+}
+
+/**
+ * MySQL's named-lock statements, answered as a server where nobody else holds either name: the
+ * per-database name is granted and the earlier server-wide one is free.
+ */
+function interpretMysqlNamedLock(
+  statement: SQL
+): Record<string, unknown>[] | undefined {
+  const { sql: text } = new PgDialect().sqlToQuery(statement);
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.startsWith("SELECT GET_LOCK(")) return [{ locked: 1, holder: 1 }];
+  if (flat.startsWith("SELECT IS_USED_LOCK(")) return [{ holder: null }];
+  if (flat.startsWith("SELECT RELEASE_LOCK(")) return [{}];
+  return undefined;
 }
 
 /** The adapter methods this composes with; anything else the double declares is carried through. */
@@ -443,12 +643,32 @@ export function withMigrationLockSurface<T extends AdapterDoubleBase>(
       name === MIGRATION_LOCK_TABLE
         ? Promise.resolve(options.lockTableExists ?? true)
         : base.tableExists(name),
-    getDrizzle: () => ({
-      ...(base.getDrizzle?.() ?? {}),
-      select: () => ({
-        from: () => ({ where: () => ({ limit: readMarker }) }),
-      }),
-    }),
+    getDrizzle: () => {
+      const drizzle = base.getDrizzle?.() ?? {};
+      return {
+        ...drizzle,
+        select: () => ({
+          from: () => ({ where: () => ({ limit: readMarker }) }),
+        }),
+        // MySQL's named lock, which the schema lock holds beside its own row there for an earlier
+        // version's `nextly migrate`. Free unless a suite says otherwise; anything else is the
+        // double's own.
+        execute: (statement: SQL) => {
+          const named = interpretMysqlNamedLock(statement);
+          if (named !== undefined) return Promise.resolve([named, []]);
+          const own = (drizzle as { execute?: (q: SQL) => Promise<unknown> })
+            .execute;
+          if (own !== undefined) return own(statement);
+          return Promise.reject(
+            NextlyError.internal({
+              logContext: {
+                reason: "unrecognised drizzle execute in lock double",
+              },
+            })
+          );
+        },
+      };
+    },
     queryStatement: (statement: SQL) =>
       Promise.resolve(interpretLockStatement(lock, statement)),
     transaction: (work: (ctx: unknown) => Promise<unknown>) =>

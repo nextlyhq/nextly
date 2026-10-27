@@ -397,7 +397,9 @@ export async function runMigrate(
         migrationsDir: appMigrationsDir,
         logger,
         ...(await pluginMigrationArgs(configResult.config.plugins ?? [])),
-        lockMode: "fail-fast",
+        // A run that finds the schema lock held waits about a minute for it, then stops naming
+        // what holds it.
+        lockMode: "wait",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
         // convention, and such a table is in no snapshot — so the drift check
@@ -620,8 +622,25 @@ export interface MigrateCoreDeps {
   adapter: CLIDatabaseAdapter;
   migrationsDir: string;
   logger: CommandContext["logger"];
+  /**
+   * What a held schema lock does to this run: `wait` (the default) waits about a minute and then
+   * stops naming the holder; `fail-fast` stops at once.
+   */
   lockMode?: "fail-fast" | "wait";
+  /** The schema lock's lease, in seconds (`db.migrateLockTtlSeconds`). */
   ttlSeconds?: number;
+  /** How long `wait` waits for a held lock, in milliseconds. Default about a minute. */
+  lockWaitMs?: number;
+  /**
+   * What holds the lock while this runs, as the refusal another run prints names it. Default
+   * `nextly migrate`; the boot migrate step names itself.
+   */
+  lockCommand?: string;
+  /**
+   * Release the lock on an interrupt (the default, for the command). The boot step runs inside a
+   * server, whose shutdown may let the work run on, so it leaves the lock to lapse instead.
+   */
+  lockReleaseOnInterrupt?: boolean;
   isSettled?: () => Promise<boolean>;
   allowDestructive?: boolean;
   /** NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired auth tables. */
@@ -1389,7 +1408,7 @@ export async function migrateCore(
   };
 
   const outcome = await lock(
-    deps.db,
+    deps.adapter as unknown as DrizzleAdapter,
     deps.dialect,
     async () => {
       // Before anything changes the database, the core reconcile included:
@@ -1526,8 +1545,11 @@ export async function migrateCore(
       }
     },
     {
-      mode: deps.lockMode ?? "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate",
+      mode: deps.lockMode ?? "wait",
       ttlSeconds: deps.ttlSeconds,
+      waitMs: deps.lockWaitMs,
+      releaseOnInterrupt: deps.lockReleaseOnInterrupt ?? true,
       isSettled: deps.isSettled,
       logger: {
         warn: m => deps.logger.warn(m),
