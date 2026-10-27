@@ -18,6 +18,7 @@ import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import type { SQL } from "drizzle-orm";
 import {
   and,
+  bindIfParam,
   Column,
   eq,
   is,
@@ -109,7 +110,20 @@ export function buildLocalizedWhereExists(
   const companionColumn =
     ctx.table !== undefined ? resolveColumn(ctx.table, column) : undefined;
   if (companionColumn && COMPARISONS.has(op)) {
-    value = comparisonOperand(companionColumn, column, value);
+    // The refusal names the field as the caller wrote it, not the
+    // companion's physical column spelling.
+    const apiName =
+      ctx.localizedFields.find(f => f.column === column)?.name ?? column;
+    value = comparisonOperand(companionColumn, apiName, value);
+    // Bind through the column, as the main builder's eq() does: a Date
+    // bound raw reaches the driver as the driver zone's wall clock, while
+    // the companion column stores the UTC wall clock its encoder writes.
+    // Lists bind element-wise, each element through the column.
+    if (Array.isArray(value)) {
+      value = value.map(v => sql`${bindIfParam(v, companionColumn)}`);
+    } else {
+      value = bindIfParam(value, companionColumn);
+    }
   }
   let valueCondition: SQL | undefined;
   switch (op) {
