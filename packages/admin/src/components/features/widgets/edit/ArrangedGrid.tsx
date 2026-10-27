@@ -34,6 +34,7 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
+import { GRID_GAP_CLASS } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -209,6 +210,25 @@ function cellSettingsWrite(
   };
 }
 
+/**
+ * When the OLDEST answer drawn on the dashboard arrived, or `undefined` before any has: the time
+ * the page's one freshness line is true of, since every card on show is at least that fresh. Only
+ * a card that asked counts, as only it has an answer to be stale.
+ */
+function oldestAnswer(
+  rows: readonly ArrangedWidget[],
+  requested: ReadonlySet<string>,
+  updatedAtFor: (placementId: string) => Date | null
+): Date | undefined {
+  let oldest: Date | undefined;
+  for (const row of rows) {
+    if (!requested.has(row.placementId)) continue;
+    const at = updatedAtFor(row.placementId);
+    if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
+  }
+  return oldest;
+}
+
 export function ArrangedGrid({
   rows,
   placements,
@@ -229,6 +249,7 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
+  const answeredAt = oldestAnswer(rows, requested, updatedAtFor);
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -240,9 +261,12 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts. `relative` so the
-        // drop line is placed from the grid's own corner, where the drag measures from.
-        className="relative grid grid-cols-12 gap-[24px]"
+        // The gaps a card's predicted width counts (`GRID_GAP_CLASS`). `relative` so the drop
+        // line is placed from the grid's own corner, where the drag measures from.
+        className={`relative grid grid-cols-12 ${GRID_GAP_CLASS}`}
+        // When the oldest answer on show arrived, for the page's one freshness line: no card
+        // says when its own data arrived.
+        data-answered-at={answeredAt?.toISOString()}
       >
         <span
           role="status"

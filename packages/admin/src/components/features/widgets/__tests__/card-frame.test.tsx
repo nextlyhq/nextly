@@ -75,7 +75,6 @@ describe("the card frame", () => {
         title="Recent activity"
         customizing
         link={{ label: "View all", href: "/a" }}
-        updatedAt={new Date()}
         quick={<button>30 days</button>}
       >
         <a href="/x">An entry</a>
@@ -83,14 +82,15 @@ describe("the card frame", () => {
     );
     expect(screen.getByText("An entry").closest("[inert]")).not.toBeNull();
     expect(screen.getByText("View all").closest("[inert]")).not.toBeNull();
-    // The quick setting is for using the card, not arranging it.
-    expect(screen.queryByRole("button", { name: "30 days" })).toBeNull();
+    // The quick setting is for using the card, not arranging it: it keeps its
+    // place, so the header keeps its shape, and is out of reach.
+    expect(screen.getByText("30 days").closest("[inert]")).not.toBeNull();
     expect(screen.getAllByRole("heading")).toHaveLength(1);
   });
 
   it("shows a skeleton, marked busy, while data has never arrived", () => {
     render(
-      <WidgetCard title="Posts" state="loading" skeleton="figure">
+      <WidgetCard title="Posts" state={{ kind: "loading" }} skeleton="figure">
         <p>never shown</p>
       </WidgetCard>
     );
@@ -112,15 +112,17 @@ describe("the card frame", () => {
     ).toBeNull();
   });
 
-  it("says what an empty card will show and offers at most its one action", () => {
+  it("says what an empty card will show, offers at most its one action, and keeps its footer link", () => {
     render(
       <WidgetCard
         title="Recent posts"
-        state="empty"
-        empty={{
-          title: "No posts yet",
-          detail: "Your newest posts show here.",
-          action: { label: "New post", href: "/posts/new" },
+        state={{
+          kind: "empty",
+          empty: {
+            title: "No posts yet",
+            detail: "Your newest posts show here.",
+            action: { label: "New post", href: "/posts/new" },
+          },
         }}
         link={{ label: "View all posts", href: "/posts" }}
       >
@@ -128,7 +130,13 @@ describe("the card frame", () => {
       </WidgetCard>
     );
     expect(screen.getByText("No posts yet")).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toHaveLength(1);
+    // The empty state's one action (foundations R-4), and the footer's one
+    // trailing link (R-1), which R-4 withholds only from a failed card: from an
+    // empty one it still leads somewhere.
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
+      "New post",
+      "View all posts",
+    ]);
     expect(screen.getByRole("link", { name: "New post" })).toHaveAttribute(
       "href",
       "/posts/new"
@@ -139,7 +147,7 @@ describe("the card frame", () => {
     render(
       <WidgetCard
         title="Usage backfill"
-        state="unavailable"
+        state={{ kind: "no-access" }}
         link={{ label: "Open", href: "/u" }}
       >
         <p>never shown</p>
@@ -156,8 +164,11 @@ describe("the card frame", () => {
     render(
       <WidgetCard
         title="Posts by status"
-        error="The server didn't answer."
-        onRetry={onRetry}
+        state={{
+          kind: "error",
+          message: "The server didn't answer.",
+          retry: onRetry,
+        }}
       >
         <p>never shown</p>
       </WidgetCard>
@@ -171,7 +182,10 @@ describe("the card frame", () => {
 
   it("offers no Retry when the caller cannot retry", () => {
     render(
-      <WidgetCard title="Posts by status" error="The server didn't answer.">
+      <WidgetCard
+        title="Posts by status"
+        state={{ kind: "error", message: "The server didn't answer." }}
+      >
         <p>never shown</p>
       </WidgetCard>
     );

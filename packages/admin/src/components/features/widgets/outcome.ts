@@ -158,8 +158,9 @@ export function coreDraws(definition: DeclaredWidget): boolean {
  * renderer can draw.
  *
  * `self-drawn` is neither success nor failure and must not be counted as
- * either: the plugin's component decides what it shows, and core has no way to
- * know whether it worked.
+ * either: the component draws the answer, and reports to the frame anything its
+ * data says beyond it (`FrameState`), which the grid does not see. A failed
+ * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
  */
 export type WidgetOutcome =
   | { state: "self-drawn" }
@@ -246,6 +247,25 @@ function declaredComponentOutcome(slot: WidgetSlot | undefined): WidgetOutcome {
   };
 }
 
+/**
+ * The outcome of a card drawn by a component, or `undefined` for one core draws.
+ *
+ * A declared widget's component is handed its data once there is some, the frame drawing every
+ * other state. A custom card's own component is reached with an answer or while one is on the
+ * way: a failed answer is the frame's to draw and the grid's to count, like any other card's, and
+ * what its answer says beyond that, the component reports to the frame (`FrameState`).
+ */
+function componentOutcome(
+  definition: DashboardWidget,
+  slot: WidgetSlot | undefined
+): WidgetOutcome | undefined {
+  if (drawsDeclaredComponent(definition)) {
+    return declaredComponentOutcome(slot);
+  }
+  if (definition.archetype !== "custom") return undefined;
+  return slot?.ok === false ? slotFailure(slot) : { state: "self-drawn" };
+}
+
 export function resolveWidgetOutcome(
   definition: DashboardWidget,
   slot: WidgetSlot | undefined,
@@ -266,12 +286,8 @@ export function resolveWidgetOutcome(
     return { state: "empty", empty: emptyFor(definition) };
   }
 
-  if (drawsDeclaredComponent(definition)) {
-    return declaredComponentOutcome(slot);
-  }
-
-  // The escape hatch. A plugin component owns its own body and its own states.
-  if (definition.archetype === "custom") return { state: "self-drawn" };
+  const component = componentOutcome(definition, slot);
+  if (component !== undefined) return component;
 
   // Everything knowable WITHOUT a payload, decided first: an archetype with no
   // renderer, and a declaration the renderer refuses. Both are settled before

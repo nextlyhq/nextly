@@ -28,7 +28,7 @@ import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
   archetypeResultProblem,
-  chromeProblem,
+  chromeFieldProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
   legacySizeToWidgetSize,
@@ -360,18 +360,15 @@ const FIELD_RULES: ReadonlyArray<
   widget =>
     widgetSettingsProblem(widget.settings, false, settingsSourceOf(widget)),
 
-  // Through the SAME rule the registry applies. Without it a contributed
-  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
-  // refused the identical declaration, and the admin then ignored the value --
-  // so the documented refusal was true of one channel only.
-  widget => chromeProblem(widget.chrome, widget.archetype),
+  // Through the SAME rule the registry applies: no widget declines the frame.
+  widget => chromeFieldProblem(widget),
 
   // The rules that hold whatever core version a plugin was built against: a
   // title that is a string, a query that is an object, orderings between sizes
   // this core can rank, and `actions` on an archetype it recognises.
   //
   // Vocabulary checks are deliberately NOT among them. A contribution crosses a
-  // version boundary, so refusing a size, height or chrome value this core has
+  // version boundary, so refusing a size or height value this core has
   // not learned yet would abort a whole plugin install over a card the admin
   // renders anyway -- those belong to `validateWidgetDefinition`, which judges
   // the resolved widget rather than a declaration from an unknown vintage.
@@ -612,6 +609,7 @@ function lifecycleOf(
     // is a declaration mistake, and publishing it as `true` would honour a
     // value the author never wrote.
     ...(declaration.dismissible === true ? { dismissible: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
   };
 }
 

@@ -50,6 +50,8 @@ import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 
+import { FrameState } from "../widgets/frame/card-state";
+import { EMPTY_DEFAULT } from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
@@ -113,26 +115,39 @@ export function QuickCreate(): JSX.Element | null {
   // request fails. Absence is the honest answer until both have arrived,
   // because a claim about what someone may do cannot be made from an answer
   // that has not come back.
-  if (collectionsLoading || content.isLoading) return null;
-  if (collectionsError || !content.hasAnswer) return null;
+  if (collectionsLoading || content.isLoading) {
+    return (
+      <FrameState state={{ kind: "loading", skeleton: { shape: "actions" } }} />
+    );
+  }
+  if (collectionsError || !content.hasAnswer) {
+    return (
+      <FrameState
+        state={{
+          kind: "error",
+          message: "What you can create could not be read just now.",
+        }}
+      />
+    );
+  }
 
   // 🔴 A truncated list cannot support the empty claim either. The page holds
   // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than
   // that may have every creatable one beyond the boundary — and "you may create
-  // nothing" would then be false rather than merely incomplete. Saying nothing
-  // is wrong in a way the reader can recover from; saying the wrong thing is
-  // not.
+  // nothing" would then be false rather than merely incomplete. The frame's own
+  // neutral empty state says no more than is known; saying the wrong thing
+  // could not be recovered from.
   const truncated = data?.meta?.hasNext === true;
-  if (creatable.length === 0 && truncated) return null;
-
   if (creatable.length === 0) {
     return (
-      <p
-        data-testid="quick-create-empty"
-        className="text-sm text-muted-foreground"
-      >
-        Nothing here for you to create.
-      </p>
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: truncated
+            ? EMPTY_DEFAULT
+            : { title: "Nothing here for you to create." },
+        }}
+      />
     );
   }
 

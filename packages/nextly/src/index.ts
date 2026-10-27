@@ -685,7 +685,6 @@ export type {
 // author declare one as a named function instead.
 export {
   WIDGET_SIZES,
-  WIDGET_CHROME,
   WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   WIDGET_SOURCE_KINDS,
@@ -712,7 +711,6 @@ export {
   type WidgetQuery,
   type WidgetQuerySpec,
   type WidgetSize,
-  type WidgetChrome,
   type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,

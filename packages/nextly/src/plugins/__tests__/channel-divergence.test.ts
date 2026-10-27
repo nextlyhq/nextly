@@ -191,29 +191,6 @@ const DECLARED_DIFFERENCES: Array<{
       component: "p#X",
     },
   },
-  {
-    case: "a chrome value this core does not know",
-    why: 'a newer core may add one, and anything that is not "none" frames anyway, so this admin renders the card regardless',
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      component: "p#X",
-      chrome: "borderless",
-    },
-  },
-  {
-    case: "chrome none on an archetype this core does not know",
-    why: "its own placement BRANCH: this core cannot say whether a newer archetype's body is composed into a card, so removing the guard would break the boundary without failing the unknown-archetype or unknown-chrome rows",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "timeline",
-      defaultSize: "sm",
-      chrome: "none",
-    },
-  },
 ];
 
 /**
@@ -351,14 +328,14 @@ const MUST_AGREE: Array<{
     },
   },
   {
-    case: "chrome none on an archetype core draws",
+    case: "a chrome field, whatever its value: no widget declines the frame",
     widget: {
       id: "acme/thing",
       title: "T",
-      archetype: "metric",
+      archetype: "custom",
       defaultSize: "sm",
-      query: { source: "collection:p", op: "count" },
-      chrome: "none",
+      component: "p#X",
+      chrome: "card",
     },
   },
   {
@@ -575,7 +552,7 @@ const MUST_AGREE: Array<{
     // It decides whether the admin draws a control that HIDES a card, and the
     // admin copies a registration's fields verbatim -- so a truthy non-boolean
     // such as "false" would draw the control on a card whose author declared
-    // the opposite. Unlike `chrome` there is no vocabulary a newer core could
+    // the opposite. There is no vocabulary a newer core could
     // extend here, so anything but a boolean is a mistake rather than skew.
     case: "a dismissible that is not a boolean",
     expect: /dismissible, when given, must be a boolean/,
@@ -632,15 +609,15 @@ const MUST_AGREE: Array<{
     },
   },
   {
-    case: "a chrome that is not a string",
-    expect: /chrome, when given, must be a string/,
+    case: "a hidesWhenEmpty that is not a boolean",
+    expect: /hidesWhenEmpty, when given, must be a boolean/,
     widget: {
       id: "acme/thing",
       title: "T",
       archetype: "custom",
       defaultSize: "sm",
       component: "p#X",
-      chrome: 42,
+      hidesWhenEmpty: "yes",
     },
   },
   {
@@ -802,23 +779,6 @@ describe("the registry and contributions channels agree except where declared", 
       expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
     }
   );
-
-  it("accepts chrome none on an archetype resolution supplies", () => {
-    // `{ component, chrome: "none" }` with no archetype is the typed, renderable
-    // form: resolution fills in `custom`, which is exactly where `"none"` is
-    // legal. Nothing else exercises the `resolved-custom` standing THROUGH the
-    // chrome rule -- the valid-chrome case spells `archetype: "custom"` out --
-    // so remapping that standing would start refusing this and no row would
-    // move.
-    const widget = {
-      id: "acme/thing",
-      title: "T",
-      defaultSize: "sm",
-      component: "p#X",
-      chrome: "none",
-    };
-    expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
-  });
 
   it("accepts a well-formed widget through BOTH channels", () => {
     // The positive control. Two validators that refused everything would

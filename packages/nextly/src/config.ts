@@ -285,7 +285,6 @@ export type {
   WidgetQueryCell,
   WidgetHeight,
   WidgetSize,
-  WidgetChrome,
 } from "./domains/widgets/definition";
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the

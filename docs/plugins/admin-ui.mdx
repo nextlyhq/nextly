@@ -404,31 +404,40 @@ of it as where the card starts, not where it stays.
 
 ### The card frame and its states
 
-Every card draws in one frame: its title, an optional line under it, the body, at most one footer
-link, and when its data last arrived. The frame also owns the states, so a card never draws its
-own: a skeleton while data has never arrived, the last value marked busy while it refreshes, an
-empty state, one "Not available to you" state for a source the reader cannot see (forbidden,
-missing and hidden all read the same), and an error that keeps the title and offers Retry for
-that card only. Figures go through `formatCount` from `@nextlyhq/ui/format`, so a number reads the
-same on every card.
+Every card draws in one frame: a header of one fixed height, the body, and at most one footer
+link. The header shows the card's subject as its title (a collection card set to Posts reads
+"Posts"), with the widget's own name beneath it when the two differ ("Count"), then the card's
+one quick control and its menu, in the same place on every card. A card does not say when its
+data arrived.
 
-### Widgets that draw their own surface
+The frame also owns the states, so a card never draws its own: a skeleton while data has never
+arrived, the last value marked busy while it refreshes, an empty state, one "Not available to
+you" state for a source the reader cannot see (forbidden, missing and hidden all read the same),
+and an error that keeps the title and offers Retry for that card only. Figures go through
+`formatCount` from `@nextlyhq/ui/format`, so a number reads the same on every card.
 
-A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is
-then responsible for everything the card would have provided — its heading, its loading
-and error states, its own visual boundary.
+A component whose own data says the card is not ready (the answer holds nothing it can show, or
+something it cannot read) returns `FrameState` from `@nextlyhq/plugin-sdk/admin` with that state,
+and the frame draws it:
 
-Reach for it only when your component **is** already a designed surface, such as a
-titled section with its own rules. Framing one of those draws a second heading above its
-own. If your component draws a body and expects a title around it, leave `chrome` alone.
+```tsx
+import { FrameState } from "@nextlyhq/plugin-sdk/admin";
 
-It is refused on every other archetype, because core composes those bodies **into** the
-card — the card owns the title, the footer and the busy state — so an unframed one would
-render with no heading and nothing reporting that it was loading.
+if (orders.length === 0) {
+  return (
+    <FrameState
+      state={{ kind: "empty", empty: { title: "No orders yet" } }}
+    />
+  );
+}
+```
 
-One consequence worth knowing: an unframed component that renders nothing costs no space
-at all. The grid collapses a cell whose widget drew nothing, so a card that hides itself
-when it has nothing to say leaves no gap behind.
+A widget that should leave the dashboard while it has nothing to show, rather than say so,
+declares `hidesWhenEmpty: true`. A card that failed, or whose source the reader cannot see, is
+never hidden, and customise mode still shows it, marked "Hidden while empty".
+
+Every card is framed: there is no way to decline the frame, and a widget that names `chrome` is
+refused at startup.
 
 <Callout type="info">
   `core#` is reserved. Core's own dashboard cards resolve their components under that

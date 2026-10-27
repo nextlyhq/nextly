@@ -79,6 +79,7 @@ interface DeclaredWidgetShape {
   readonly category: string;
   readonly width: WidgetWidth;
   readonly several?: boolean;
+  readonly hidesWhenEmpty?: boolean;
   readonly permission?: string;
   readonly sketch?: WidgetDefinition["sketch"];
   readonly empty?: {
@@ -153,6 +154,7 @@ function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
     ),
     defaultWidth: declaration.width,
     ...(declaration.several === true ? { allowsSeveral: true } : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
     ...(declaration.permission === undefined
       ? {}
       : { requiredPermission: declaration.permission }),

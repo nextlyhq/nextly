@@ -1,5 +1,4 @@
 import type {
-  WidgetChrome,
   DataWidgetArchetype,
   CellWidgetArchetype,
   WidgetStatCell,
@@ -318,20 +317,11 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
  * with no query is a real declaration, and core reports that card as undrawable
  * so the component is what renders.
  *
- * `chrome` is the part that cannot stay open. It is split across two
- * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
- * declines the frame must supply the surface itself, and for every archetype
- * core draws the card IS the surface the body is composed against -- it owns
- * the title, the footer and the busy state. Expressed as a constraint rather
- * than left to `validateChrome`, which still refuses the pair at boot: a type
- * that permits it makes the runtime refusal the FIRST time an author learns,
- * after the plugin ships.
  */
 export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
   (
     | {
         archetype?: "custom";
-        chrome?: WidgetChrome;
         /**
          * @experimental Whether the host sizes this widget's list query to the
          * card; see `WidgetDefinition.sizedQuery`.
@@ -346,7 +336,6 @@ export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
           WidgetArchetype,
           "custom" | QuerylessWidgetArchetype
         >;
-        chrome?: never;
         sizedQuery?: never;
       }
   );

@@ -132,13 +132,9 @@ export interface ArrangedCellProps {
 }
 
 /**
- * This card's dismiss control, and where it is drawn.
- *
- * A FRAMED card has a header that reserves space beside the declared icon; an
- * UNFRAMED one has no header, so the cell floats the control in the corner the
- * drag handle leaves free while not customising. Both are `undefined` for a
- * card whose author offered no dismiss, and while customising, where Remove in
- * the card's menu does the same thing.
+ * This card's header controls at rest: its dismiss control, where its author offered one, and
+ * its menu, in that order at the header's right end. Nothing while customising, where Remove in
+ * the customise menu does the same thing and the controls are drawn over the header.
  *
  * 🔴 `=== true`, not truthiness. A registration arrives over the wire from a
  * server that may be a different version and the admin copies the field
@@ -154,44 +150,27 @@ function dismissAffordance(
   dismiss: (() => void) | undefined,
   /** The card's menu at rest, drawn beside the dismiss control when both are offered. */
   menu?: ReactNode
-): { floating?: ReactNode; header?: ReactNode } {
+): ReactNode | undefined {
   const dismissible =
     dismiss !== undefined && !props.isEditing && widget.dismissible === true;
-  if (!dismissible && !menu) return {};
-  const button = (floating: boolean) =>
-    dismissible ? (
-      <DismissWidgetButton
-        title={widget.title}
-        isDismissing={props.isWriting}
-        unavailableReason={props.singleCardWriteBlocked}
-        floating={floating}
-        buttonRef={props.refs.dismiss}
-        onDismiss={dismiss}
-      />
-    ) : null;
-  if (widget.chrome === "none") {
-    if (!menu) return { floating: button(true) };
-    // An unframed card has no header, so its controls float together in the corner the drag
-    // handle leaves free, rather than each claiming the same spot.
-    return {
-      floating: (
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
-          {button(false)}
-          {menu}
-        </div>
-      ),
-    };
-  }
-  return {
-    header: menu ? (
-      <span className="flex items-center gap-1">
-        {button(false)}
-        {menu}
-      </span>
-    ) : (
-      button(false)
-    ),
-  };
+  if (!dismissible && !menu) return undefined;
+  const button = dismissible ? (
+    <DismissWidgetButton
+      title={widget.title}
+      isDismissing={props.isWriting}
+      unavailableReason={props.singleCardWriteBlocked}
+      buttonRef={props.refs.dismiss}
+      onDismiss={dismiss}
+    />
+  ) : null;
+  return menu ? (
+    <span className="flex items-center gap-1">
+      {button}
+      {menu}
+    </span>
+  ) : (
+    button
+  );
 }
 
 /** A card's width and its one menu, side by side, while customising. */
@@ -229,88 +208,52 @@ function CardEditActions(props: {
   );
 }
 
-/**
- * The small header the cell gives an unframed widget while customising.
- *
- * An unframed widget draws no header of its own, so the cell draws one: the
- * card's name and its controls. `pl-9` leaves room for the drag handle, which
- * sits over its left end.
- */
-function UnframedEditHeader(props: { title: string; children: ReactNode }) {
-  return (
-    <div
-      className="flex items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 py-1 pl-9 pr-2"
-      data-testid="widget-edit-header"
-    >
-      <span className="mr-auto truncate text-xs font-medium text-muted-foreground">
-        {props.title}
-      </span>
-      {props.children}
-    </div>
-  );
-}
-
-/** The widget itself, in the one of its three settings the cell is in. */
+/** The widget itself, at rest or while customising. */
 function CardBody(props: {
   widget: DashboardWidget;
+  /** The widget's own name under the title, when the title names the card's subject. */
+  subtitle: string | undefined;
   placement: ComponentProps<typeof WidgetRenderer>["placement"];
   headerAction: ReactNode;
   /** The card's quick setting, at rest; the frame decides when to draw it. */
   quick: ReactNode;
   data: ArrangedCellProps["data"];
   isEditing: boolean;
-  /** Whether a floated dismiss control shares the cell. */
-  floated: boolean;
 }) {
-  const { widget, placement, headerAction, quick, data, isEditing, floated } =
-    props;
+  const { widget, placement, headerAction, quick, data, isEditing } = props;
+  const { subtitle } = props;
   if (isEditing) {
     // While customising: drawn, and out of reach. A different element from
     // the resting cell's, so entering and leaving customise mode mounts the
-    // widget afresh, as the floated control's slot below already does for a
-    // dismissible card.
+    // widget afresh.
     return (
-      <CustomizingFence framed={widget.chrome !== "none"}>
+      <CustomizingFence>
         <WidgetRenderer
           definition={widget}
           placement={placement}
           headerAction={headerAction}
+          customizing
+          subtitle={subtitle}
           {...data}
         />
       </CustomizingFence>
     );
   }
-  if (floated) {
-    // The body's own slot, so the cell can ask whether the widget drew
-    // anything. Present only where a floated control shares the cell.
-    return (
-      <div data-widget-body>
-        <WidgetRenderer
-          definition={widget}
-          placement={placement}
-          quick={quick}
-          {...data}
-        />
-      </div>
-    );
-  }
-  // 🔴 A DIRECT child otherwise, because the cell's `empty:hidden` reads
-  // `:empty` -- which counts element children, not rendered output. An
-  // always-present wrapper made every cell non-empty.
   return (
     <WidgetRenderer
       definition={widget}
       placement={placement}
       headerAction={headerAction}
       quick={quick}
+      subtitle={subtitle}
       {...data}
     />
   );
 }
 
 /**
- * What a card offers at rest: its quick setting, its dismiss control and menu (in its header,
- * or floated over an unframed card), and where its sheet's Done goes.
+ * What a card offers at rest: its quick setting, its dismiss control and menu in its header, and
+ * where its sheet's Done goes.
  */
 function useRestingControls(
   props: ArrangedCellProps,
@@ -332,12 +275,46 @@ function useRestingControls(
   );
   return {
     quick,
-    ...dismissAffordance(widget, props, props.on.dismiss, menu),
+    header: dismissAffordance(widget, props, props.on.dismiss, menu),
     done: doneFor(props),
   };
 }
 
-/** The card's menu at rest, for a card whose settings can be saved there; otherwise none. */
+/** Whether a card's settings cannot be saved at rest right now: a write is in flight, or none is possible. */
+function settingsBlocked(write: CellSettingsWrite | undefined): boolean {
+  return (
+    write !== undefined && (write.isWriting || write.unavailable !== undefined)
+  );
+}
+
+/**
+ * What the card's menu at rest offers: its quick setting where the header has no room for it,
+ * Settings where its settings can be saved there, and Refresh where it asks for data. Nothing
+ * while customising, where the customise menu stands in its place, nor for a card that would
+ * offer nothing in it.
+ */
+function restingMenuItems(
+  props: ArrangedCellProps,
+  hasSettings: boolean,
+  quick: ReturnType<typeof useCardQuickSetting>,
+  openSettings: () => void
+) {
+  if (props.isEditing) return undefined;
+  const items = {
+    quick: quick.menu,
+    onOpenSettings:
+      props.settingsWrite !== undefined && hasSettings
+        ? openSettings
+        : undefined,
+    onRefresh: props.data.onRetry,
+  };
+  const offersSomething = Object.values(items).some(item => item !== undefined);
+  return offersSomething
+    ? { ...items, settingsDisabled: settingsBlocked(props.settingsWrite) }
+    : undefined;
+}
+
+/** The card's menu at rest, in the same place on every card, or none (`restingMenuItems`). */
 function restingMenuFor(
   props: ArrangedCellProps,
   widget: DashboardWidget,
@@ -345,16 +322,8 @@ function restingMenuFor(
   quick: ReturnType<typeof useCardQuickSetting>,
   openSettings: () => void
 ): ReactNode | undefined {
-  const write = props.settingsWrite;
-  if (props.isEditing || !write || !hasSettings) return undefined;
-  return (
-    <CardMenu
-      title={widget.title}
-      {...(quick.menu ? { quick: quick.menu } : {})}
-      onOpenSettings={openSettings}
-      disabled={write.isWriting || write.unavailable !== undefined}
-    />
-  );
+  const items = restingMenuItems(props, hasSettings, quick, openSettings);
+  return items ? <CardMenu title={widget.title} {...items} /> : undefined;
 }
 
 /**
@@ -389,10 +358,9 @@ function doneFor(props: ArrangedCellProps): {
   };
 }
 
-/** The cell's classes: its width, its collapse when empty, and its spacing. */
+/** The cell's classes: its width, its leaving the grid while hidden, and its spacing. */
 function cellClassName(
   row: ArrangedCellProps["row"],
-  unframed: boolean,
   isEditing: boolean
 ): string {
   return cn(
@@ -403,19 +371,9 @@ function cellClassName(
     // allows. The stored width IS the reader's arrangement, so it is never
     // replaced by the declaration's default here.
     cardSpanClass(row.width, row.allowedWidths),
-    // `empty:hidden` so a widget that drew NOTHING costs no grid row: an
-    // unframed widget whose component returned null, which core's
-    // conditional sections do. A framed widget always renders its card.
-    "empty:hidden",
-    // The same collapse, asked of the BODY, for a cell that also carries a
-    // floated dismiss control: that control comes from the declaration, so
-    // it is present even when the widget renders nothing. `:empty` on the
-    // body counts text nodes, which `:only-child` on the control would not.
-    "has-[>[data-widget-body]:empty]:hidden",
-    // An unframed widget is a SECTION, and sections on this page sit 48px
-    // apart: 24px of trailing margin plus the grid's 24px gap. Bottom only,
-    // so the first row is not pushed down from the welcome header.
-    unframed && "mb-6",
+    // A card whose widget hides when empty leaves the grid while its answer is: the frame marks
+    // it (`data-hidden-empty`) only outside customise mode, so the cell needs no state of its own.
+    "has-[[data-hidden-empty]]:hidden",
     // Room above each control as it takes focus, so scrolling it into view
     // stops below the customise bar stuck to the top rather than under
     // it. On the controls rather than the cell, because the margin that
@@ -441,22 +399,10 @@ function editActionsOf(
   );
 }
 
-/**
- * The card's width and menu while customising, where its frame keeps them: over a framed card's
- * own header, or in the small header the cell draws for an unframed one. Nothing at rest.
- */
-function CellEditActions({
-  unframed,
-  title,
-  actions,
-}: {
-  unframed: boolean;
-  title: string;
-  actions: ReactNode;
-}) {
+/** The card's width and menu while customising, drawn over its header's right end. */
+function CellEditActions({ actions }: { actions: ReactNode }) {
   if (!actions) return null;
-  if (!unframed) return <CardControlsOverlay>{actions}</CardControlsOverlay>;
-  return <UnframedEditHeader title={title}>{actions}</UnframedEditHeader>;
+  return <CardControlsOverlay>{actions}</CardControlsOverlay>;
 }
 
 /**
@@ -514,11 +460,16 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
   const sources = useBranding().widgetSources;
+  const heading = useMemo(
+    () => titleAsAsked(row.widget, row.config, sources),
+    [row.widget, row.config, sources]
+  );
   const widget = useMemo(() => {
     const asked = widgetAsAsked(row.widget, row.config, sources);
-    const title = titleAsAsked(row.widget, row.config, sources);
-    return title === asked.title ? asked : { ...asked, title };
-  }, [row.widget, row.config, sources]);
+    return heading.title === asked.title
+      ? asked
+      : { ...asked, title: heading.title };
+  }, [row.widget, row.config, sources, heading.title]);
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
@@ -543,26 +494,22 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   );
   const {
     quick,
-    floating: floatingControl,
-    header: dismissControl,
+    header: restingControls,
     done,
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
-  // While customising, the card's width and its one menu, side by side. A
-  // framed card shows them over its own header's right end; an unframed one
-  // in the small header the cell draws for it below. Both outside the fence
-  // that puts the card's own content out of reach.
+  // While customising, the card's width and its one menu, side by side, over
+  // its own header's right end, outside the fence that puts the card's own
+  // content out of reach.
   const editActions = editActionsOf(
     props,
     width,
     hasSettings ? () => setSettingsOpen(true) : undefined
   );
-  const unframed = widget.chrome === "none";
-  // While customising, a framed card's header keeps the room its controls are
-  // drawn over; at rest it holds the dismiss control, if any.
-  const framedHeaderAction = isEditing ? <CardControlsSpace /> : dismissControl;
-  const headerAction = unframed ? undefined : framedHeaderAction;
+  // While customising, the card's header keeps the room its controls are drawn
+  // over; at rest it holds the dismiss control and the menu.
+  const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
 
   return (
     <DraggableWidgetCell
@@ -572,14 +519,9 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       highlighted={props.highlighted}
       {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
-      className={cellClassName(row, unframed, isEditing)}
+      className={cellClassName(row, isEditing)}
     >
-      <CellEditActions
-        unframed={unframed}
-        title={widget.title}
-        actions={editActions}
-      />
-      {floatingControl}
+      <CellEditActions actions={editActions} />
       {/* Mounted whenever the widget offers settings, not only while
           customising. A closed `Sheet` renders nothing, so this costs a card
           nothing — and it is what lets the panel outlive customise mode rather
@@ -593,8 +535,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       ) : null}
       <CardBody
         {...{ widget, placement, headerAction, data, isEditing }}
+        subtitle={heading.subtitle}
         quick={quick.inline}
-        floated={floatingControl !== undefined}
       />
     </DraggableWidgetCell>
   );
