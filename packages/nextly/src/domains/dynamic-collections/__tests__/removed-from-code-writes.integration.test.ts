@@ -151,6 +151,21 @@ interface Target {
 /** The context the probe plugin was given, per boot. */
 let plugin: PluginContext["services"] | undefined;
 let pinHolder: PluginVersionPinHolder | undefined;
+/**
+ * Every write hook that ran, by phase and the entity it ran for. A refusal
+ * comes before any hook, which the database alone cannot show: a refusal
+ * further in rolls the transaction back, but a hook it ran has already run.
+ */
+const hookCalls: string[] = [];
+const WRITE_PHASES = [
+  "beforeCreate",
+  "beforeUpdate",
+  "beforeChange",
+  "beforeDelete",
+  "afterCreate",
+  "afterUpdate",
+  "afterDelete",
+] as const;
 const probe = definePlugin({
   name: "@test/removed-writes",
   version: "1.0.0",
@@ -161,6 +176,12 @@ const probe = definePlugin({
       name: "rw-hold",
       label: "Removed-writes probe",
     });
+    for (const phase of WRITE_PHASES) {
+      ctx.hooks.on(phase, "*", context => {
+        hookCalls.push(`${phase} ${String(context.collection)}`);
+        return context.data;
+      });
+    }
   },
 });
 
@@ -1154,6 +1175,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses every write operation with nothing in the database changed, and still serves reads", async () => {
       const before = await everyRow(database.adapter);
+      hookCalls.length = 0;
       const outcomes: string[] = [];
       for (const operation of OPERATIONS) {
         const error = await refusedWith(operation.run(removed));
@@ -1179,6 +1201,7 @@ describe.each(getConfiguredTestDialects())(
         changedTables(before, await everyRow(database.adapter)),
         outcomes.join("\n")
       ).toEqual([]);
+      expect(hookCalls, "no write hook ran").toEqual([]);
 
       // The refusal says what happened and both ways out.
       const sample = refusalOf(await refusedWith(OPERATIONS[1]!.run(removed)));
@@ -1258,6 +1281,7 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(true);
 
       const before = await everyRow(database.adapter);
+      hookCalls.length = 0;
       const mutations = createReleaseMutations({
         contentApi: t().nextly,
         lockServer: lockServerOf(t()),
@@ -1296,6 +1320,7 @@ describe.each(getConfiguredTestDialects())(
       // Only the release's own bookkeeping: none of the entities' tables and
       // none of the history or content-event tables.
       expect(changed.filter(table => !/release/i.test(table))).toEqual([]);
+      expect(hookCalls, "no write hook ran").toEqual([]);
     }, 300_000);
 
     it("lets every one of those write operations through to a declared collection and Single", async () => {
@@ -1316,6 +1341,10 @@ describe.each(getConfiguredTestDialects())(
           )
           .toBe("succeeded");
       }
+      // The probe's hooks do run for these writes, so their silence above is
+      // the refusal's and not a hook that never fires.
+      expect(hookCalls).toContain(`beforeUpdate ${DECLARED.collection}`);
+      expect(hookCalls).toContain(`beforeChange ${DECLARED.collection}`);
     }, 600_000);
   }
 );
