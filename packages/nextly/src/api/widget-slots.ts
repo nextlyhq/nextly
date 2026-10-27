@@ -67,6 +67,15 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * `withErrorHandler` never sees it and neither did the logger. A dashboard
  * whose widgets all fail left no trace anywhere.
  */
+/**
+ * The one "not available" slot, byte for byte whoever gets it. Built here and nowhere else, so a
+ * card refused before it ran answers exactly what one refused while it ran does, and logs
+ * nothing: its caller says whether the refusal is worth a line.
+ */
+export function unavailableSlot(): Extract<QuerySlot, { ok: false }> {
+  return { ok: false, error: UNAVAILABLE_SOURCE_MESSAGE, code: "unavailable" };
+}
+
 // Narrowed to the failure arm so a caller can read the slot's `code` without a guard.
 export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // Guarded the way `withErrorHandler` guards its own logging call: a
@@ -88,13 +97,7 @@ export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // "not available" without matching the sentence. A FORBIDDEN raised while the query ran is not
   // one of them: the gate above has already refused a source the caller may not read, so that
   // one comes from a field-level rule on a source they can, and names the guard that refused.
-  if (isUnavailableSourceRefusal(error)) {
-    return {
-      ok: false,
-      error: UNAVAILABLE_SOURCE_MESSAGE,
-      code: "unavailable",
-    };
-  }
+  if (isUnavailableSourceRefusal(error)) return unavailableSlot();
   return {
     ok: false,
     error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,

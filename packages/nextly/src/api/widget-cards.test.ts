@@ -16,6 +16,7 @@ import { prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
 import {
   answerReadyQueries,
+  failedSlot,
   SLOT_TIMEOUT_MS,
   type ReadyCardData,
 } from "./widget-slots";
@@ -130,6 +131,24 @@ const declarations: Record<string, unknown> = {
       view: "figure",
     },
   },
+  // Throws the core error type a plugin can import, with its own words in it.
+  "acme/raises": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/raises",
+      size: { default: { w: 12, h: 3 } },
+      load: async () => {
+        throw new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "Customer 42 at secret@example.com owes 9000",
+          logMessage: "row secret@example.com",
+          logContext: { row: "secret@example.com" },
+        });
+      },
+      view: "figure",
+    },
+  },
   "acme/dated": {
     owner: "plugin @acme/shop",
     display: "metric",
@@ -189,6 +208,16 @@ beforeEach(() => {
         { id: "c-dated", widgetId: "acme/dated", w: 12, h: 3, removed: false },
       ],
       [
+        "c-raises",
+        {
+          id: "c-raises",
+          widgetId: "acme/raises",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ],
+      [
         "c-gone",
         { id: "c-gone", widgetId: "acme/gone", w: 12, h: 3, removed: false },
       ],
@@ -202,6 +231,7 @@ beforeEach(() => {
       "acme/maybe",
       "acme/throws",
       "acme/dated",
+      "acme/raises",
       "acme/gone",
     ]),
   });
@@ -382,6 +412,33 @@ describe("a card's load, judged before it runs", () => {
     expect(accessPredicate).toHaveBeenCalledWith({ user: { id: "reader" } });
   });
 
+  it("logs a refusal at debug level only, since a person without access is routine", async () => {
+    accessPredicate.mockImplementation(() => false);
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      await answered("acme/gated");
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith({
+        kind: "declared-widget-access-refused",
+        owner: "plugin @acme/shop",
+        widget: "acme/gated",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("is run for a person the predicate admits", async () => {
     // The control for the refusal above: the same widget, the same card.
     await expect(answered("acme/gated")).resolves.toEqual({
@@ -516,6 +573,31 @@ describe("a card's load, judged before it runs", () => {
 });
 
 describe("a card's load that fails", () => {
+  it("treats a NextlyError the plugin threw as the plugin's, keeping none of its words", async () => {
+    // 🔴 A NextlyError's message is public by construction, so a plugin's own reached the card
+    // and its log context the production log: trusted only when core raised it.
+    vi.stubEnv("NODE_ENV", "production");
+    let refused: unknown;
+    try {
+      await answered("acme/raises");
+    } catch (error) {
+      refused = error;
+    }
+    vi.unstubAllEnvs();
+    const error = refused as NextlyError;
+    expect(error.publicMessage).toBe("An unexpected error occurred.");
+    expect(error.logContext).toEqual({
+      owner: "plugin @acme/shop",
+      widget: "acme/raises",
+      reason: "widget-load-threw",
+    });
+    const slot = failedSlot(error);
+    expect(slot).toEqual({ ok: false, error: "An unexpected error occurred." });
+    expect(JSON.stringify(error.toLogJSON("widget-query"))).not.toContain(
+      "secret@example.com"
+    );
+  });
+
   it("fails its card, naming owner, widget and reason, and none of what the plugin said in production", async () => {
     vi.stubEnv("NODE_ENV", "production");
     let refused: unknown;

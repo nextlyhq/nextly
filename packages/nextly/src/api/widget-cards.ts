@@ -35,6 +35,7 @@ import type { ReadCaller } from "../services/dashboard/readable-resources";
 import { askableCards } from "./widget-layout";
 import {
   failedSlot,
+  unavailableSlot,
   type CardAnswer,
   type ReadyCardData,
 } from "./widget-slots";
@@ -95,8 +96,7 @@ export interface CardBatch {
  * never declared, and a mixed entry. One slot, built by the refusal the batch
  * gives an unavailable source, so the bytes cannot tell any of them apart.
  */
-// Narrowed to the failure arm, so a card refused before its load can be settled with it.
-function unavailableCard(detail: string): Extract<WidgetSlot, { ok: false }> {
+function unavailableCard(detail: string): WidgetSlot {
   try {
     failUnavailableSourceOrOp(detail);
   } catch (error) {
@@ -291,10 +291,25 @@ async function ownCode<T>(
   try {
     return await run();
   } catch (error) {
-    // Its own abort (the card's budget, or the batch given up) is not the plugin's fault,
-    // and the budget names the card's timeout itself.
-    if (NextlyError.is(error)) throw error;
+    // 🔴 Whatever it throws is the plugin's, a NextlyError included: one imported from the SDK
+    // carries the plugin's own public message and log context, which can hold the data it was
+    // reading. Core's own errors never pass through here: the card's budget and a batch given up
+    // are decided around this call, and settle the card before anything thrown in here is read.
     throw pluginFailure(declared, reason, error);
+  }
+}
+
+/** That a widget's access refused the person asking, for whoever is debugging it. */
+function logRefusedAccess(declared: DeclaredWidget): void {
+  // Guarded as `failedSlot` guards its own: a log that throws must not fail the card.
+  try {
+    getNextlyLogger().debug({
+      kind: "declared-widget-access-refused",
+      owner: declared.owner,
+      widget: declared.declaration.id,
+    });
+  } catch {
+    // Deliberately swallowed; see above.
   }
 }
 
@@ -318,11 +333,10 @@ async function answerCard(
   asked: CardInput
 ): Promise<CardAnswer> {
   if (await refusedAccess(declared, batch)) {
-    return {
-      settled: unavailableCard(
-        `widget "${declared.declaration.id}" refused this person by its access`
-      ),
-    };
+    // Routine, not a failure: a person without access is answered "not available" on every load,
+    // so it is said at debug level, not as an error (a predicate that threw has warned already).
+    logRefusedAccess(declared);
+    return { settled: unavailableSlot() };
   }
   const { declaration, collections } = declared;
   const settings = resolveCardSettings(declaration.settings, placement.config);
