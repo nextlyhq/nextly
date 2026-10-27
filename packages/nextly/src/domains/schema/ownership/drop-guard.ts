@@ -132,6 +132,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 
 import type { OwnerRecord } from "./owner-registry";
 import { SchemaOwnersRepository } from "./schema-owners-repository";
@@ -3788,6 +3789,25 @@ export function tableInsertedInto(
  * under different rules.
  */
 function readStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns | undefined,
+  liveTables: LiveTables | undefined,
+  liveElements?: LiveElements
+): Reading {
+  return readPlainStatements(
+    // Nextly's own MySQL runs that build a statement from the live catalog are read as the plain
+    // statement each amounts to; any other PREPARE stays unreadable and is refused.
+    dialect === "mysql" ? plainMysqlEquivalents(statements) : statements,
+    dialect,
+    liveColumns,
+    liveTables,
+    liveElements
+  );
+}
+
+/** `readStatements`, over a list with no run of Nextly's own left in it. */
+function readPlainStatements(
   statements: readonly string[],
   dialect: SupportedDialect,
   liveColumns: LiveColumns | undefined,

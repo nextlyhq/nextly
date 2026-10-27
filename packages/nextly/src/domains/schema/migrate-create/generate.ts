@@ -1699,6 +1699,68 @@ function applyRenameDecisions(
   // last, which makes this function silently depend on that contract.
   if (renames.length === 0) return remaining;
 
+  // An index the renamed column already carries is carried BY the rename: every dialect renames the
+  // column inside the index. The diff, seeing the collapsed add's index, asks to create it again
+  // under the same name, which MySQL refuses as a duplicate key and PostgreSQL skips with IF NOT
+  // EXISTS, so it is dropped here when the previous index is exactly it with the column renamed.
+  const carried = indexesCarriedByRenames(
+    effectiveAccepts.map(d => d.candidate),
+    previousSnapshot
+  );
+  const tail =
+    carried.size === 0
+      ? remaining
+      : remaining.filter(
+          op =>
+            !(
+              op.type === "add_index" &&
+              carried.get(`${op.tableName}::${op.index.name}`) ===
+                indexShape(op.index)
+            )
+        );
+  return placeRenames(tail, renames);
+}
+
+/**
+ * The indexes on renamed columns, keyed by table and name, each with its shape as it reads once
+ * the renames have run (`indexShape`).
+ */
+function indexesCarriedByRenames(
+  renamed: readonly RenameCandidate[],
+  previousSnapshot: NextlySchemaSnapshot | undefined
+): Map<string, string> {
+  const carried = new Map<string, string>();
+  for (const table of previousSnapshot?.tables ?? []) {
+    const onTable = renamed.filter(c => c.tableName === table.name);
+    if (onTable.length === 0) continue;
+    const newName = (column: string): string =>
+      onTable.find(c => c.fromColumn === column)?.toColumn ?? column;
+    for (const index of table.indexes ?? []) {
+      if (!index.columns.some(column => newName(column) !== column)) continue;
+      carried.set(
+        `${table.name}::${index.name}`,
+        indexShape({ ...index, columns: index.columns.map(newName) })
+      );
+    }
+  }
+  return carried;
+}
+
+/** What an index is, beyond its name: the same text for two indexes that index alike. */
+function indexShape(index: IndexSpec): string {
+  return JSON.stringify([
+    index.columns,
+    index.unique,
+    index.where ?? null,
+    index.expression ?? null,
+  ]);
+}
+
+/** The operations with the renames placed ahead of the index tail. */
+function placeRenames(
+  remaining: Operation[],
+  renames: Operation[]
+): Operation[] {
   // The renames land ahead of the index tail, not at the very end. Collapsing a
   // (drop_column, add_column) pair removes the statement that would have
   // created the new column, so an index declared on it can only be created
