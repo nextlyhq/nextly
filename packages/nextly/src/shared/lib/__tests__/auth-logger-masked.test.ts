@@ -120,3 +120,15 @@ describe("a database logger an app installs", () => {
     expect(output).not.toContain("db-token-2");
   });
 });
+
+describe("a logger saved and put back", () => {
+  it("is the same logger, not wrapped again", () => {
+    const auth = getAuthLogger();
+    setAuthLogger(auth);
+    expect(getAuthLogger()).toBe(auth);
+
+    const db = getDbLogger();
+    setDbLogger(db);
+    expect(getDbLogger()).toBe(db);
+  });
+});

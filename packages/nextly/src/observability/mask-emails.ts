@@ -74,14 +74,16 @@ function walk(
   if (value === null || typeof value !== "object") return value;
   const known = seen.get(value);
   if (known !== undefined) return known;
-  if (value instanceof Error) return copyError(value, rules, seen);
-  if (Array.isArray(value)) return copyList(value, rules, seen);
   // As JSON does, a value's `toJSON` is called once, and its result is not
   // asked again, so a method returning a fresh object each time still ends.
+  // Asked before anything is copied, an error included: a copy keeping the
+  // method would let a JSON writer call it past every rule.
   if (!serialised) {
     const form = serialisedForm(value);
     if (form !== value) return walk(form, rules, seen, true);
   }
+  if (value instanceof Error) return copyError(value, rules, seen);
+  if (Array.isArray(value)) return copyList(value, rules, seen);
   if (isPlainObject(value)) return copyRecord(value, rules, seen);
   if (value instanceof Map) return copyMap(value, rules, seen);
   if (value instanceof Set) return copySet(value, rules, seen);
@@ -455,6 +457,13 @@ const TEXT_PARAMETER = /(\\?["']|)\b([A-Za-z_][\w.-]*)\1(\s*[=:]\s*)/g;
 const TEXT_PARAMETER_VALUE =
   /(\\"(?:[^\\]|\\(?!"))*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\?["'][^\r\n]*|((?:[Bb]earer|[Bb]asic|BEARER|BASIC)\s+)?[^\s&"'<>]*)/y;
 
+/**
+ * An `Authorization` header's value, read to the end of its line: a scheme
+ * word (`Token`, `Digest`, `Bearer`) kept as the first group, and everything
+ * after it, which can run to several words, as the credential.
+ */
+const AUTHORIZATION_HEADER_VALUE = /([A-Za-z][\w.+-]*[ \t]+)?[^\r\n]*/y;
+
 /** A value's quotes, kept around its redaction so JSON still reads as JSON. */
 const VALUE_QUOTES = /^(\\?["']?)[\s\S]*?(\1)$/;
 
@@ -484,10 +493,11 @@ function redactCredentialParameters(text: string): string {
   // step per name rather than one stack frame.
   const names = new RegExp(TEXT_PARAMETER.source, "g");
   const values = new RegExp(TEXT_PARAMETER_VALUE.source, "y");
+  const headerValues = new RegExp(AUTHORIZATION_HEADER_VALUE.source, "y");
   let out = "";
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
-    const [prefix, , name] = match;
+    const [prefix, , name, separator] = match;
     if (
       !isCredentialName(name) &&
       !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
@@ -495,8 +505,16 @@ function redactCredentialParameters(text: string): string {
       continue;
     }
     const valueStart = match.index + prefix.length;
-    values.lastIndex = valueStart;
-    const [value = "", , scheme] = values.exec(text) ?? [];
+    // A header (`Authorization: Token …`) runs to the end of its line; any
+    // other value, and a quoted one, ends where its own form says.
+    const header =
+      separator.includes(":") &&
+      normalisedName(name).includes("authorization") &&
+      !/["'\\]/.test(text.charAt(valueStart));
+    const reader = header ? headerValues : values;
+    reader.lastIndex = valueStart;
+    const [value = "", headerScheme, valueScheme] = reader.exec(text) ?? [];
+    const scheme = header ? headerScheme : valueScheme;
     const [, open = "", close = ""] = VALUE_QUOTES.exec(value) ?? [];
     // The scheme says how a caller authenticated, which an operator needs;
     // only what follows it is the credential.

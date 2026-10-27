@@ -74,6 +74,9 @@ function isEnabled(level: DbLogLevel): boolean {
   return req >= current;
 }
 
+/** The loggers `redacting` made. */
+const wrappers = new WeakSet<object>();
+
 /**
  * `logger`, handed every event made safe first: an auth failure's message can
  * name the address that was signing in, or quote the credential it refused.
@@ -83,7 +86,14 @@ function isEnabled(level: DbLogLevel): boolean {
 function redacting<Level, Event>(logger: {
   log(level: Level, event: Event): void;
 }): { log(level: Level, event: Event): void } {
-  return { log: (level, event) => logger.log(level, safeToLog(event)) };
+  // A logger saved and put back is one already wrapped: wrapping it again
+  // would add one more copy of every event at each restore.
+  if (wrappers.has(logger)) return logger;
+  const wrapper = {
+    log: (level: Level, event: Event) => logger.log(level, safeToLog(event)),
+  };
+  wrappers.add(wrapper);
+  return wrapper;
 }
 
 class DefaultDbLogger implements DbLogger {
@@ -103,10 +113,11 @@ class DefaultDbLogger implements DbLogger {
 // The default redacts inside itself, after its enabled check, so a query
 // logged while database logging is off costs no walk; a logger an app
 // installs is handed every event made safe first (`redacting`).
-let activeLogger: DbLogger = new DefaultDbLogger();
+const defaultDbLogger: DbLogger = new DefaultDbLogger();
+let activeLogger: DbLogger = defaultDbLogger;
 
 export function setDbLogger(logger: DbLogger): void {
-  activeLogger = redacting(logger);
+  activeLogger = logger === defaultDbLogger ? logger : redacting(logger);
 }
 
 export function getDbLogger(): DbLogger {

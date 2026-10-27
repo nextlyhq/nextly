@@ -411,6 +411,32 @@ describe("credentials anywhere in a log value", () => {
     expect(out).not.toContain("path-secret-1");
   });
 
+  it("takes them out of what an error's toJSON would write", () => {
+    const error = Object.assign(new Error("upload failed"), {
+      toJSON: () => ({ token: "error-json-secret" }),
+    });
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", { error });
+
+    // As a JSON writer would serialise it, which is where `toJSON` runs.
+    expect(JSON.stringify(received)).not.toContain("error-json-secret");
+  });
+
+  it("takes a whole authorization header value out of text, any scheme", () => {
+    const out = receivedBy({
+      note: "Rejected Authorization: Token opaque-token-secret extra-part-secret",
+    });
+    expect(out).not.toContain("opaque-token-secret");
+    expect(out).not.toContain("extra-part-secret");
+    // The control: the header's name and scheme remain.
+    expect(out).toContain("Authorization: Token");
+  });
+
   it("keeps a map's entries apart when their keys redact alike", () => {
     const received: unknown[] = [];
     maskingServiceLogger({
