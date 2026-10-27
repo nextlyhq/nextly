@@ -472,6 +472,8 @@ function storedAfterSave(
 
 /** A host that holds nothing: writes are never held. */
 const writesNeverHeld = () => false;
+/** A host that doesn't count saves: a recovery's save goes uncounted. */
+const noRecoveryCount = () => {};
 
 export function useEntryForm({
   collection,
@@ -483,8 +485,8 @@ export function useEntryForm({
   onCancel,
   locale,
   readDraft,
-  writesHeld,
-  onRecoverySaved,
+  writesHeld = writesNeverHeld,
+  onRecoverySaved = noRecoveryCount,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -586,10 +588,10 @@ export function useEntryForm({
         mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
       ),
     {
-      writesHeld: writesHeld ?? writesNeverHeld,
+      writesHeld,
       latch: submissionLatch,
       resetToDocument: () => form.reset(latestDefaults.current),
-      saved: () => onRecoverySaved?.(),
+      saved: onRecoverySaved,
     }
   );
 
