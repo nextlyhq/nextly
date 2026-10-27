@@ -11,15 +11,12 @@
  *   walking into a bag of unlabelled shapes. The picture itself is hidden from
  *   assistive tech: the shapes are decoration once the text alternative exists,
  *   and exposing both would announce the chart twice.
- * - The DISCLOSURE holds the real numbers as an HTML table, which is the only
- *   form that can be navigated cell by cell, compared, and copied.
- *
- * The table is behind a disclosure rather than always shown so a dashboard of
- * several cards stays scannable — a 30-point window would otherwise add thirty
- * rows under one chart. That is a presentation choice and not an access one:
- * `<details>` is operated identically by a mouse, a keyboard and a screen
- * reader, so nobody is asked to take a longer route to the numbers. The `<desc>`
- * is what keeps the chart itself meaningful while the table is closed.
+ * - The TABLE holds the real numbers in HTML, the only form that can be
+ *   navigated cell by cell and compared. It is always in the accessibility tree
+ *   and never drawn: a card has a fixed height and no scrollbar, so a table
+ *   that opened inside it would push the card past its height, and a closed
+ *   disclosure would hide the numbers from assistive tech until opened. Sight
+ *   reads the same numbers from the chart's tooltips.
  *
  * A `group` and not `role="application"`, which is what the popular chart
  * libraries emit: `application` puts a screen reader into forms mode for the
@@ -119,43 +116,29 @@ export function ChartFrame({
         <p className="text-xs leading-tight text-muted-foreground">{note}</p>
       ) : null}
 
-      <details className="group">
-        <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
-          {/* Rotated with the disclosure's own open state rather than with
-              React state, so the marker cannot disagree with the element. */}
-          <span
-            aria-hidden="true"
-            className="transition-transform group-open:rotate-90"
-          >
-            ▸
-          </span>
-          View as table
-        </summary>
-        {/* No scroll of its own: a card never shows a scrollbar, so the open table grows the
-            card instead. Its two columns are a label and a count, and the label wraps ANYWHERE:
-            `break-words` alone leaves an automatic table at least as wide as its longest word,
-            so one long unbroken label pushed the table past a narrow card. */}
-        <div className="mt-2">
-          <table className="w-full border-collapse text-xs">
-            <caption className="sr-only">{title}</caption>
-            <thead>
-              <tr className="border-b border-border">
-                <th
-                  scope="col"
-                  className="py-1 pr-2 text-left font-medium text-muted-foreground"
-                >
-                  {labelHeading}
-                </th>
-                <th
-                  scope="col"
-                  className="py-1 text-right font-medium text-muted-foreground"
-                >
-                  Count
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {/* The separator token at full strength, matching the shared table
+      {/* Visually hidden and always present: the chart's numbers for assistive tech, cell by
+          cell, at no cost to the card's height. */}
+      <div className="sr-only" data-testid="chart-table">
+        <table className="w-full border-collapse text-xs">
+          <caption className="sr-only">{title}</caption>
+          <thead>
+            <tr className="border-b border-border">
+              <th
+                scope="col"
+                className="py-1 pr-2 text-left font-medium text-muted-foreground"
+              >
+                {labelHeading}
+              </th>
+              <th
+                scope="col"
+                className="py-1 text-right font-medium text-muted-foreground"
+              >
+                Count
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* The separator token at full strength, matching the shared table
                   primitive every other table already uses. Drawn at half alpha
                   it was a call-site variant the contrast suite flags: faint
                   alpha borders are what that guard polices, and this one
@@ -167,39 +150,38 @@ export function ChartFrame({
                   `contrast/accepted.ts` is where those pairings are held. What
                   this fixes is a one-off that was both fainter than the token
                   and inconsistent with every other table in the product. */}
-              {rows.map(row => (
-                <tr key={row.key} className="border-b border-border">
-                  {/* A row header, so a screen reader announces which row a
+            {rows.map(row => (
+              <tr key={row.key} className="border-b border-border">
+                {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
-                  <th
-                    scope="row"
-                    className={
-                      row.announce
-                        ? "py-1 pr-2 text-left font-normal italic text-muted-foreground [overflow-wrap:anywhere]"
-                        : "py-1 pr-2 text-left font-normal text-foreground [overflow-wrap:anywhere]"
-                    }
-                  >
-                    {row.announce ? (
-                      <>
-                        {/* The drawn text is hidden from the reader and the
+                <th
+                  scope="row"
+                  className={
+                    row.announce
+                      ? "py-1 pr-2 text-left font-normal italic text-muted-foreground [overflow-wrap:anywhere]"
+                      : "py-1 pr-2 text-left font-normal text-foreground [overflow-wrap:anywhere]"
+                  }
+                >
+                  {row.announce ? (
+                    <>
+                      {/* The drawn text is hidden from the reader and the
                             spoken one from the screen, so the row has ONE name
                             in each medium rather than both read in sequence. */}
-                        <span aria-hidden="true">{row.label}</span>
-                        <span className="sr-only">{row.announce}</span>
-                      </>
-                    ) : (
-                      row.label
-                    )}
-                  </th>
-                  <td className="py-1 text-right tabular-nums text-foreground">
-                    <CardFigure value={row.count} floor={row.floor} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+                      <span aria-hidden="true">{row.label}</span>
+                      <span className="sr-only">{row.announce}</span>
+                    </>
+                  ) : (
+                    row.label
+                  )}
+                </th>
+                <td className="py-1 text-right tabular-nums text-foreground">
+                  <CardFigure value={row.count} floor={row.floor} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }

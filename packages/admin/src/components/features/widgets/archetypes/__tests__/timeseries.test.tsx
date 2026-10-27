@@ -15,6 +15,7 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
+import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
 import { timeseriesAccepts, timeseriesBody } from "../timeseries";
 import { CardEmpty } from "../../frame/states";
 import { gridBounds } from "../../__tests__/grid-bounds";
@@ -50,6 +51,8 @@ function draw(result: WidgetResult, definition = widget()) {
 afterEach(() => {
   setGlobalDateTimeConfig({});
 });
+
+sizeChartsInTests();
 
 describe("the timeseries archetype", () => {
   it("refuses a payload that is not a timeline", () => {
@@ -125,7 +128,7 @@ describe("the timeseries archetype", () => {
     expect(within(table).getByText("0")).toBeInTheDocument();
   });
 
-  it("marks a single interval instead of drawing an invisible line", () => {
+  it("marks a single interval instead of drawing an invisible line", async () => {
     // One point is a legal window and produces no line segment, so without a
     // marker the card renders an empty box that reads as a failure.
     const { container } = render(
@@ -140,10 +143,9 @@ describe("the timeseries archetype", () => {
         })()}
       </>
     );
-    // A circle drawn in HTML over the line, so the stretched drawing cannot make it an ellipse.
-    expect(
-      container.querySelector('[data-testid="chart-latest-point"]')
-    ).not.toBeNull();
+    const drawing = await screen.findByTestId("chart-drawing");
+    expect(container.contains(drawing)).toBe(true);
+    expect(drawing.querySelector(".recharts-reference-dot-dot")).not.toBeNull();
   });
 
   it("says the window is empty rather than drawing nothing at all", () => {
