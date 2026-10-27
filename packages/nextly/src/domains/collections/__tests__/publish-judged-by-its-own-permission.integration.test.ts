@@ -62,6 +62,10 @@ let handedToHooks: unknown[] = [];
 let ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
 /** Whether the filtered collection's publish rule refuses the first ask. */
 let refuseFirstPublish = false;
+/** How many transactions a case's wrapped adapter has open. */
+let transactionDepth = 0;
+/** For each ask of the filtered publish rule, whether a transaction was open. */
+let publishAskedInside: boolean[] = [];
 
 afterEach(async () => {
   resetSessionStandingForTests();
@@ -72,6 +76,8 @@ afterEach(async () => {
   handedToHooks = [];
   ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
   refuseFirstPublish = false;
+  transactionDepth = 0;
+  publishAskedInside = [];
   // Single hooks register into the global registry.
   resetHookRegistry();
 });
@@ -119,6 +125,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }) as never,
           publish: () => {
             ruleAsks.filteredPublish += 1;
+            publishAskedInside.push(transactionDepth > 0);
             return !(refuseFirstPublish && ruleAsks.filteredPublish === 1);
           },
         },
@@ -843,6 +850,36 @@ describe.each(getConfiguredTestDialects())(
 
       expect(result.successful).toBe(1);
       expect((await stored(FILTERED, id)).status).toBe("published");
+    });
+
+    it("asks a batch row's own lifecycle rule before the batch's transaction opens", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+      // A rule is the app's own code and may read the database: asked inside
+      // the batch's transaction, it would wait on the connection that
+      // transaction holds.
+      const adapter = current!.adapter as unknown as {
+        transaction: (...args: unknown[]) => Promise<unknown>;
+      };
+      const open = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementation(async (...args) => {
+        transactionDepth += 1;
+        try {
+          return await open(...args);
+        } finally {
+          transactionDepth -= 1;
+        }
+      });
+
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [{ id, data: { status: "published" } }],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect(publishAskedInside.length).toBeGreaterThan(0);
+      expect(publishAskedInside).not.toContain(true);
     });
   }
 );
