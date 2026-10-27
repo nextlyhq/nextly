@@ -11,7 +11,7 @@
  */
 
 import { allWidgets, sizeFacts } from "../canonical";
-import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_WIDGET_IDS } from "../core-widgets";
 import type { WidgetDefinition } from "../definition";
 import {
   GRID_COLUMNS,
@@ -694,7 +694,7 @@ export function siteDashboardContext(
   return {
     ids: [...declared.keys(), ...registered.keys()],
     factsOf,
-    coreIds: new Set(CORE_WIDGETS.map(widget => widget.id)),
+    coreIds: new Set<string>(CORE_WIDGET_IDS),
     alternatives,
     maxPlacements: MAX_PLACEMENTS,
   };

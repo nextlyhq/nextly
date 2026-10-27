@@ -651,6 +651,7 @@ export {
   type ComponentDisplay,
   type ContentQuery,
   type CoreDisplay,
+  type CoreView,
   type AdminDashboardConfig,
   type CoreWidgetId,
   type DashboardContribution,
@@ -659,15 +660,19 @@ export {
   type WidgetOverride,
   type WidgetRef,
   type ChartStyle,
+  type WidgetAccess,
   type WidgetComponentMap,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
+  type WidgetPreviewCase,
   type WidgetProps,
   type WidgetReadServices,
   type WidgetRenderSize,
+  type WidgetSummary,
+  type WidgetView,
 } from "./domains/widgets/declaration/public";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.

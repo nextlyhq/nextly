@@ -5,11 +5,23 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { companionUniqueIndexName } from "./companion-unique-indexes";
+import {
+  companionUniqueIndexName,
+  type UniqueFieldLike,
+} from "./companion-unique-indexes";
 import { buildCompanionTransitionStatements } from "./reconcile-companion";
 
 const companion = "dc_posts_locales";
 const codeIndex = companionUniqueIndexName(companion, "code");
+
+// The reconciler reads `unique` through `UniqueFieldLike`, a wider shape than its field type.
+const sharedCode: UniqueFieldLike = {
+  name: "code",
+  type: "text",
+  localized: false,
+  unique: true,
+};
+const sharedSku: UniqueFieldLike = { ...sharedCode, name: "sku" };
 
 const change = {
   builtBy: "collection" as const,
@@ -72,9 +84,7 @@ describe("a field leaving translation, its drop held for last", () => {
   it("drops a field removed outright with the other statements, as before", () => {
     const plan = buildCompanionTransitionStatements({
       ...change,
-      newFields: [
-        { name: "code", type: "text", localized: false, unique: true },
-      ],
+      newFields: [sharedCode],
       holdLeavingDrops: true,
     });
     expect(plan.statements.some(s => dropsColumn(s, "title"))).toBe(true);
@@ -105,10 +115,7 @@ describe("a field leaving translation, its drop held for last", () => {
     const plan = buildCompanionTransitionStatements({
       ...change,
       dialect: "mysql",
-      newFields: [
-        { name: "title", type: "text", localized: true },
-        { name: "sku", type: "text", localized: false, unique: true },
-      ],
+      newFields: [{ name: "title", type: "text", localized: true }, sharedSku],
       renamed: { from: "code", to: "sku" },
       holdLeavingDrops: true,
     });
@@ -129,10 +136,7 @@ describe("a field leaving translation, its drop held for last", () => {
     const skuIndex = companionUniqueIndexName(companion, "sku");
     const plan = buildCompanionTransitionStatements({
       ...change,
-      newFields: [
-        { name: "title", type: "text", localized: true },
-        { name: "sku", type: "text", localized: false, unique: true },
-      ],
+      newFields: [{ name: "title", type: "text", localized: true }, sharedSku],
       renamed: { from: "code", to: "sku" },
       liveCompanionColumns: ["title", "sku"],
       liveCompanionIndexes: [skuIndex],

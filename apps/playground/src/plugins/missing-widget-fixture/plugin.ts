@@ -28,8 +28,10 @@ export const missingWidgetFixturePlugin = definePlugin({
           description: "Draws with a component the map does not include",
           category: "Fixtures",
           size: { default: { w: 12, h: 4 } },
-          data: async () => ({ total: 0 }),
-          display: { component: MISSING_WIDGET_COMPONENT },
+          load: async () => ({ total: 0 }),
+          view: { component: MISSING_WIDGET_COMPONENT },
+          // Never empty, so the card always reaches its missing component.
+          isEmpty: () => false,
         }),
       ],
     },

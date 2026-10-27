@@ -25,7 +25,7 @@ interface DeclaredSetting {
 /** The part of a declaration this module reads. */
 interface CardQueryDeclaration {
   readonly settings?: unknown;
-  readonly data: unknown;
+  readonly load: unknown;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -84,14 +84,14 @@ export function buildCardQuery(
   stored: Record<string, unknown> | undefined,
   collections?: Readonly<Record<string, string>>
 ): WidgetQuery | undefined {
-  const data = declaration.data;
-  if (!isQuerySource(data)) return undefined;
+  const load = declaration.load;
+  if (!isQuerySource(load)) return undefined;
   const settings = resolveCardSettings(declaration.settings, stored);
   const unset = declaredSettings(declaration.settings).some(
     ([name]) => settings[name] === undefined
   );
   if (unset) return undefined;
-  const { collection, ...rest } = queryAnswer(data.query({ settings }));
+  const { collection, ...rest } = queryAnswer(load.query({ settings }));
   return {
     ...rest,
     source: `collection:${renamedCollection(collection, collections)}`,
@@ -148,7 +148,7 @@ export function renamedCollection(
 }
 
 /**
- * Whether a declaration's data is a query written from its settings.
+ * Whether a declaration's `load` is a query written from its settings.
  *
  * Its shape, `{ query: <function> }`, was checked at startup; what the
  * function returns is checked where the query runs.

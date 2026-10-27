@@ -1982,6 +1982,11 @@ jobs:
     name: Dev reload applies a saved schema edit
     needs: [ci]
     runs-on: ubuntu-latest
+    # Whether its test ran: the Decide step below skips it for a commit that
+    # cannot affect it, and the job still succeeds. The job that reports main's
+    # advisory jobs reads this, so a success that tested nothing clears nothing.
+    outputs:
+      tested: ${{ steps.decide.outputs.inert != 'true' }}
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
@@ -2491,3 +2496,58 @@ jobs:
         run: >
           pnpm exec vitest run --dir scripts --reporter=verbose
           scripts/cli-entry.cli.test.mjs
+
+  # Keeps one issue open while a job above that does not block a merge is red
+  # on `main` (the browser tests, dev reload and the smokes), and closes it on
+  # the first run in which they all pass. They are not in `CI gate`, so a red
+  # one on `main` would otherwise show only inside a run whose gate passed.
+  # `always()` so it reads the jobs whatever they concluded; on a pull request
+  # it never runs. A run in which they were skipped (superseded) or cancelled
+  # tested nothing and leaves the issue as it is (`scripts/main-red-issue.mjs`).
+  # A run dispatched on `main` counts as a push does: under a run of merges
+  # every push run is superseded, and main-catch-up.yml's dispatched run is
+  # the one that tests main.
+  # One at a time across main's runs: each commit's run has a concurrency
+  # group of its own, and two reporters reading and writing the issue
+  # interleaved could write an older verdict over a newer one. `queue: max`
+  # keeps every waiting reporter (up to 100): by default a newly queued one
+  # cancels the one already waiting, and that run's verdict is lost.
+  main-red:
+    name: Report main's advisory jobs
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    concurrency:
+      group: main-red-issue
+      cancel-in-progress: false
+      queue: max
+    needs:
+      - e2e
+      - e2e-production
+      - dev-reload
+      - scaffold-smoke
+      - dev-script-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Open, update or close the issue
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-red-issue.mjs

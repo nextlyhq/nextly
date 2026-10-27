@@ -3,7 +3,7 @@
  * them.
  *
  * Deliberately NOT a restatement of the list. Asserting that a card carries the
- * literal written three lines away in `core-widgets.ts` is a test that can only
+ * literal written three lines away in `core-widgets/` is a test that can only
  * ever agree with itself, and it would go on agreeing while the thing the
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
