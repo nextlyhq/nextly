@@ -679,6 +679,17 @@ function assertWriteSucceeded(
   // snapshot, a server fault -- reached the caller naming nothing.
   const original = originalErrorOf(result);
 
+  // A refusal is the update's own answer, as an update refused there is
+  // answered: in words where the caller may read the entry, and as a missing
+  // entry where it may not. One that names no code is answered as missing.
+  if ((status === 403 || status === 404) && result.code) {
+    throw errorFromServiceEnvelope(result as ServiceErrorEnvelope, {
+      reason: "restore-write-denied",
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    });
+  }
   if (status === 403 || status === 404) {
     throw NextlyError.notFound({
       cause: original,
