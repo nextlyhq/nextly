@@ -26,7 +26,9 @@ import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.dashboard] });
+// Releases too: Upcoming releases draws whatever releases the run holds, and a spec scheduling
+// one alongside would change the card under this one.
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 
 const CARDS = [
   "core/team",
@@ -107,11 +109,14 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
 
     await expect(cell(page, "core/quick-create")).toBeVisible();
 
-    // The release made above is a draft holding nothing, so nothing is scheduled: the card says
-    // so, and offers Releases as its one way on.
+    // Upcoming releases offers Releases as its one way on, whatever the run holds: its empty
+    // state's "Open Releases" when nothing is scheduled, or its list's "View all" when a spec
+    // that ran before this one left a release scheduled, as the whole suite on one database does.
     const releases = cell(page, "core/upcoming-releases");
     await expect(
-      releases.getByRole("link", { name: "Open Releases" })
+      releases
+        .getByRole("link", { name: "Open Releases" })
+        .or(releases.getByRole("link", { name: /^View all/ }))
     ).toHaveAttribute("href", /\/admin\/releases$/);
 
     // A card refreshing its data dims its body and marks it aria-busy until the
