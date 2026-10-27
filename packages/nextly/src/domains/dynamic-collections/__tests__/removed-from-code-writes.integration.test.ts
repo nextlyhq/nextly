@@ -112,6 +112,11 @@ function notice(slug: string) {
 
 /** Removed from code by the second boot. */
 const REMOVED = { collection: "rw_posts", single: "rw_banner" } as const;
+/**
+ * Removed from code too, and never written: a read of a Single with no
+ * document creates one, which for a removed Single would be a write.
+ */
+const REMOVED_EMPTY_SINGLE = "rw_empty";
 /** Declared throughout: the same shapes, for the writes that must succeed. */
 const DECLARED = {
   collection: "rw_kept_posts",
@@ -120,7 +125,11 @@ const DECLARED = {
 
 const WITH_REMOVED = {
   collections: [articles(REMOVED.collection), articles(DECLARED.collection)],
-  singles: [notice(REMOVED.single), notice(DECLARED.single)],
+  singles: [
+    notice(REMOVED.single),
+    notice(REMOVED_EMPTY_SINGLE),
+    notice(DECLARED.single),
+  ],
 };
 const AFTER_REMOVAL = {
   collections: [articles(DECLARED.collection)],
@@ -1197,6 +1206,15 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await durableVersions(singleRef(removed))).toContain(
         removed.singleVersionNo
+      );
+      // A removed Single with no document is read as holding none, rather
+      // than given one.
+      await expect(
+        t().nextly.findSingle({ slug: REMOVED_EMPTY_SINGLE as never })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // And no read wrote anything.
+      expect(changedTables(before, await everyRow(database.adapter))).toEqual(
+        []
       );
     }, 300_000);
 

@@ -113,18 +113,31 @@ export async function refuseWriteIfRemovedFromCode(
   slug: string,
   options: { executor?: unknown; lookup?: RegistryLookup } = {}
 ): Promise<void> {
+  if (await entityRemovedFromCode(kind, slug, options)) {
+    throw NextlyError.removedFromCode({ kind, slug });
+  }
+}
+
+/**
+ * Whether `slug` names an entity removed from code, for a path that does
+ * something other than refuse: a read that would otherwise write. The one
+ * decision {@link refuseWriteIfRemovedFromCode} also makes.
+ */
+export async function entityRemovedFromCode(
+  kind: RemovableEntityKind,
+  slug: string,
+  options: { executor?: unknown; lookup?: RegistryLookup } = {}
+): Promise<boolean> {
   const declared = globalForDeclared.__nextly_declaredEntities;
-  if (declared === undefined) return;
+  if (declared === undefined) return false;
   const slugs = kind === "single" ? declared.singles : declared.collections;
-  if (slugs.has(slug)) return;
+  if (slugs.has(slug)) return false;
   const row = await (options.lookup ?? readRegistryRow)(
     kind,
     slug,
     options.executor
   );
-  if (row && isRemovedFromCode(row, slugs)) {
-    throw NextlyError.removedFromCode({ kind, slug });
-  }
+  return row !== null && isRemovedFromCode(row, slugs);
 }
 
 /**

@@ -911,9 +911,6 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
-    // Refused whole, before any row is read, when the collection is removed
-    // from code, rather than once for each entry it names.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1112,9 +1109,6 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<{ id: string }>> {
-    // Refused whole, before any row is read, when the collection is removed
-    // from code, rather than once for each entry it names.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1432,11 +1426,6 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    // Refused whole when the collection is removed from code, read on the
-    // caller's transaction.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
-      executor: tx.getDrizzle(),
-    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1734,11 +1723,6 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    // Refused whole when the collection is removed from code, read on the
-    // caller's transaction.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
-      executor: tx.getDrizzle(),
-    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1851,9 +1835,6 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    // Refused whole, before any row is read, when the collection is removed
-    // from code, rather than once for each entry it names.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -2012,11 +1993,6 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    // Refused whole when the collection is removed from code, read on the
-    // caller's transaction.
-    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
-      executor: tx.getDrizzle(),
-    });
     // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
