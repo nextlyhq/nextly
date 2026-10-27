@@ -27,8 +27,9 @@
  *   `table.ts` (`oneAnswer`) from the composition the access design states:
  *   the permission first, then a code rule that can only narrow; super-admin
  *   past every collection and Single rule; no key with super-admin authority;
- *   a plugin's person judged by the rule alone; and a visitor judged by a
- *   Public role that does not exist yet and so holds nothing. A door listed in
+ *   a plugin's person judged by the rule alone; and a visitor judged by the
+ *   Public role's permissions, as boot seeding leaves them, or as the
+ *   `public` setup grants them on targets of its own. A door listed in
  *   {@link NOT_YET_ONE_ANSWER} is not yet expected to give it everywhere: the
  *   cells where it disagrees are listed BY HAND in `known-disagreements.txt`,
  *   and run as expected failures named `NOT YET ONE ANSWER`, so each is

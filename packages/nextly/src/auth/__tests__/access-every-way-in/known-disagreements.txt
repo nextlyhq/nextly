@@ -20,9 +20,6 @@
 service visitor read collection none at direct  # visitor-public-default
 service visitor read collection none at website  # visitor-public-default
 service visitor read collection none at service  # visitor-public-default
-service visitor read collection true at direct  # visitor-public-default
-service visitor read collection true at website  # visitor-public-default
-service visitor read collection true at service  # visitor-public-default
 service user-with read collection false at schema  # schema-list-ignores-rules
 service custom-role read collection false at schema  # schema-list-ignores-rules
 service key-read-only read collection false at schema  # schema-list-ignores-rules
@@ -31,9 +28,6 @@ service key-role-based read collection false at schema  # schema-list-ignores-ru
 service key-super-admin read collection false at schema  # schema-list-ignores-rules
 service user-partial read collection false at schema  # schema-list-ignores-rules
 service key-partial read collection false at schema  # schema-list-ignores-rules
-service visitor read collection returns-true at direct  # visitor-public-default
-service visitor read collection returns-true at website  # visitor-public-default
-service visitor read collection returns-true at service  # visitor-public-default
 service user-with read collection returns-false at schema  # schema-list-ignores-rules
 service user-with read collection permission-spelling at schema  # schema-list-ignores-rules
 service custom-role read collection returns-false at schema  # schema-list-ignores-rules
@@ -82,9 +76,6 @@ service key-role-based read collection throws at schema  # schema-list-ignores-r
 service key-super-admin read collection throws at schema  # schema-list-ignores-rules
 service user-partial read collection throws at schema  # schema-list-ignores-rules
 service key-partial read collection throws at schema  # schema-list-ignores-rules
-service visitor read collection async-true at direct  # visitor-public-default
-service visitor read collection async-true at website  # visitor-public-default
-service visitor read collection async-true at service  # visitor-public-default
 service user-with read collection async-false at schema  # schema-list-ignores-rules
 service custom-role read collection async-false at schema  # schema-list-ignores-rules
 service key-read-only read collection async-false at schema  # schema-list-ignores-rules
@@ -110,23 +101,13 @@ service key-super-admin read collection principal-kind at schema  # schema-list-
 service user-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service key-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service visitor read single none at direct  # visitor-public-default
-service visitor read single true at direct  # visitor-public-default
-service visitor read single returns-true at direct  # visitor-public-default
-service visitor read single async-true at direct  # visitor-public-default
 service visitor read single other-operation at direct  # visitor-public-default
 service visitor read related none at population  # visitor-public-default, visitor-keeps-media
-service visitor read related true at population  # visitor-public-default, visitor-keeps-media
-service visitor read related returns-true at population  # visitor-public-default, visitor-keeps-media
-service visitor read related async-true at population  # visitor-public-default, visitor-keeps-media
 service visitor read related other-operation at population  # visitor-public-default, visitor-keeps-media
-service visitor read media none at population  # visitor-public-default, visitor-keeps-media
-service principal read media none at population  # visitor-keeps-media
-service principal-other read media none at population  # visitor-keeps-media
 no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can  # can-no-service-refuses-people
 no-service user-with read collection none at entity  # no-service
 no-service user-with read collection none at capabilities  # no-service
-no-service visitor read collection returns-true at direct  # visitor-public-default
 no-service user-with read collection returns-true at can  # can-no-service-refuses-people
 no-service user-with read collection returns-true at entity  # no-service
 no-service user-with read collection returns-true at capabilities  # no-service
@@ -149,7 +130,6 @@ no-service user-with read single none at can  # can-no-service-refuses-people
 no-service user-with read single none at entity  # no-service
 no-service user-with read single none at capabilities  # no-service
 no-service user-without read single none at direct  # no-service
-no-service visitor read single returns-true at direct  # visitor-public-default
 no-service user-with read single returns-true at can  # can-no-service-refuses-people
 no-service user-with read single returns-true at entity  # no-service
 no-service user-with read single returns-true at capabilities  # no-service
@@ -171,7 +151,6 @@ no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can  # no-service
 no-service key-role-based read single returns-null at entity  # no-service
 no-service visitor read related none at population  # visitor-public-default, no-service, visitor-keeps-media
-no-service visitor read related returns-true at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service visitor read related returns-false at population  # visitor-public-default, no-service, visitor-keeps-media
 no-service user-with read related returns-false at population  # no-service
 no-service key-role-based read related returns-false at population  # no-service
@@ -214,18 +193,6 @@ service visitor list collection none at direct  # visitor-public-default
 service visitor list collection none at service  # visitor-public-default
 service visitor count collection none at direct  # visitor-public-default
 service visitor count collection none at service  # visitor-public-default
-service visitor list collection true at direct  # visitor-public-default
-service visitor list collection true at service  # visitor-public-default
-service visitor count collection true at direct  # visitor-public-default
-service visitor count collection true at service  # visitor-public-default
-service visitor list collection returns-true at direct  # visitor-public-default
-service visitor list collection returns-true at service  # visitor-public-default
-service visitor count collection returns-true at direct  # visitor-public-default
-service visitor count collection returns-true at service  # visitor-public-default
-service visitor list collection async-true at direct  # visitor-public-default
-service visitor list collection async-true at service  # visitor-public-default
-service visitor count collection async-true at direct  # visitor-public-default
-service visitor count collection async-true at service  # visitor-public-default
 service visitor list collection other-operation at direct  # visitor-public-default
 service visitor list collection other-operation at service  # visitor-public-default
 service visitor count collection other-operation at direct  # visitor-public-default
@@ -291,7 +258,6 @@ service user-naming-super-admin read related true at population  # claimed-super
 service user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
 no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
-no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
 bound user-naming-super-admin read related async-false at population  # claimed-super-admin
 bound user-naming-super-admin read related async-throws at population  # claimed-super-admin
 bound user-naming-super-admin read related async-true at population  # claimed-super-admin
@@ -311,12 +277,9 @@ bound user-naming-super-admin read related role-screen-spelling at population  #
 bound user-naming-super-admin read related throws at population  # claimed-super-admin
 bound user-naming-super-admin read related true at population  # claimed-super-admin
 bound user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
-bound visitor read related async-true at population  # visitor-public-default
 bound visitor read related none at population  # visitor-public-default
 bound visitor read related other-operation at population  # visitor-public-default
 bound visitor read related publish-false at population  # visitor-public-default
-bound visitor read related returns-true at population  # visitor-public-default
-bound visitor read related true at population  # visitor-public-default
 service key-super-admin update providers none at route  # manage-not-counted
 service key-super-admin update providers none at can  # manage-not-counted
 service key-super-admin update providers none at widget  # manage-not-counted
@@ -1121,3 +1084,73 @@ service key-role-based new-pub collection other-operation at service  # lifecycl
 service key-super-admin new-pub collection other-operation at rest
 service key-super-admin new-pub collection other-operation at direct  # lifecycle-judged-alone
 service key-super-admin new-pub collection other-operation at service  # lifecycle-judged-alone
+
+# rest-refuses-visitors: REST refuses a visitor before it asks the Public role, until REST asks it.
+service visitor read collection true at rest
+service visitor list collection true at rest
+service visitor count collection true at rest
+service visitor read collection returns-true at rest
+service visitor list collection returns-true at rest
+service visitor count collection returns-true at rest
+service visitor read collection async-true at rest
+service visitor list collection async-true at rest
+service visitor count collection async-true at rest
+service visitor read single true at rest
+service visitor read single returns-true at rest
+service visitor read single async-true at rest
+service visitor read media none at rest
+public visitor read collection none at rest
+public visitor create collection none at rest
+public visitor update collection none at rest
+public visitor delete collection none at rest
+public visitor list collection none at rest
+public visitor count collection none at rest
+public visitor read collection true at rest
+public visitor create collection true at rest
+public visitor update collection true at rest
+public visitor delete collection true at rest
+public visitor list collection true at rest
+public visitor count collection true at rest
+public visitor read collection returns-true at rest
+public visitor create collection returns-true at rest
+public visitor update collection returns-true at rest
+public visitor delete collection returns-true at rest
+public visitor list collection returns-true at rest
+public visitor count collection returns-true at rest
+public visitor read collection async-true at rest
+public visitor create collection async-true at rest
+public visitor update collection async-true at rest
+public visitor delete collection async-true at rest
+public visitor list collection async-true at rest
+public visitor count collection async-true at rest
+public visitor read collection other-operation at rest
+public visitor create collection other-operation at rest
+public visitor delete collection other-operation at rest
+public visitor list collection other-operation at rest
+public visitor count collection other-operation at rest
+public visitor read collection role-screen-spelling at rest
+public visitor create collection role-screen-spelling at rest
+public visitor update collection role-screen-spelling at rest
+public visitor delete collection role-screen-spelling at rest
+public visitor list collection role-screen-spelling at rest
+public visitor count collection role-screen-spelling at rest
+public visitor read collection publish-false at rest
+public visitor create collection publish-false at rest
+public visitor update collection publish-false at rest
+public visitor delete collection publish-false at rest
+public visitor list collection publish-false at rest
+public visitor count collection publish-false at rest
+public visitor read single none at rest
+public visitor update single none at rest
+public visitor read single true at rest
+public visitor update single true at rest
+public visitor read single returns-true at rest
+public visitor update single returns-true at rest
+public visitor read single async-true at rest
+public visitor update single async-true at rest
+public visitor read single other-operation at rest
+public visitor read single role-screen-spelling at rest
+public visitor update single role-screen-spelling at rest
+public visitor read single publish-false at rest
+public visitor update single publish-false at rest
+public visitor read media none at rest

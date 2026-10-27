@@ -53,6 +53,7 @@ import {
   ownKey,
   personRoute,
   pubSingleOf,
+  refsOf,
   relationOf,
   singleOf,
   widgetFor,
@@ -91,11 +92,13 @@ async function settle(
 
 /** The target's slug, and the row id a collection action names. */
 function addressOf(world: World, row: Row, door: string) {
-  if (row.target === "single") return { slug: singleOf(row.rule), id: "" };
-  if (row.target === "single-pub") {
-    return { slug: pubSingleOf(row.rule), id: "" };
+  if (row.target === "single") {
+    return { slug: singleOf(row.rule, row.setup), id: "" };
   }
-  const slug = collectionOf(row.rule);
+  if (row.target === "single-pub") {
+    return { slug: pubSingleOf(row.rule, row.setup), id: "" };
+  }
+  const slug = collectionOf(row.rule, row.setup);
   const seeded = world.seeded.get(slug);
   if (!seeded) throw new Error(`nothing seeded for ${slug}`);
   const id =
@@ -467,10 +470,14 @@ async function directWithoutService(world: World, row: Row, who: CallerHandle) {
 }
 
 async function website(world: World, row: Row, who: CallerHandle) {
-  const entry = await resolveContent(collectionOf(row.rule), "probe", {
-    nextly: world.t.nextly,
-    ...(who.user ? { user: who.user } : {}),
-  });
+  const entry = await resolveContent(
+    collectionOf(row.rule, row.setup),
+    "probe",
+    {
+      nextly: world.t.nextly,
+      ...(who.user ? { user: who.user } : {}),
+    }
+  );
   return entry ? "A" : "R";
 }
 
@@ -495,9 +502,9 @@ async function route(world: World, row: Row, who: CallerHandle) {
 }
 
 export function targetSlug(row: Row): string {
-  if (row.target === "collection") return collectionOf(row.rule);
-  if (row.target === "single") return singleOf(row.rule);
-  if (row.target === "single-pub") return pubSingleOf(row.rule);
+  if (row.target === "collection") return collectionOf(row.rule, row.setup);
+  if (row.target === "single") return singleOf(row.rule, row.setup);
+  if (row.target === "single-pub") return pubSingleOf(row.rule, row.setup);
   return RESOURCE_PATHS[row.target] ?? row.target;
 }
 
@@ -678,7 +685,7 @@ async function schema(
     if (answer.refusal) noteRefusal(answer.refusal);
     return answer.refused;
   }
-  const slug = collectionOf(row.rule);
+  const slug = collectionOf(row.rule, row.setup);
   return {
     answer: answer.includes(slug) ? "A" : "R",
     deviations: bySubject.get(slug) ?? [],
@@ -717,11 +724,12 @@ function populationAnswer(value: unknown, row: Row, marker: string): Answer {
   return "uploadedBy" in value || "uploaded_by" in value ? "A" : "S";
 }
 
-/** Reads `refs` with its relationships populated, once per caller. */
+/** Reads the setup's `refs` with its relationships populated. */
 async function population(world: World, row: Row, who: CallerHandle) {
+  const collection = refsOf(row.setup);
   const ref = (await world.t.nextly.findByID({
-    collection: "refs",
-    id: world.refId,
+    collection,
+    id: world.refIds.get(collection) ?? "",
     depth: 1,
     ...(row.setup === "bound" ? boundCaller(who) : directCaller(who)),
   })) as Record<string, unknown> | null;
@@ -881,12 +889,12 @@ async function lock(world: World, row: Row, who: CallerHandle) {
     row.target === "single"
       ? {
           scopeKind: "single",
-          slug: singleOf(row.rule),
-          entryId: await singleDocumentId(world, singleOf(row.rule)),
+          slug: singleOf(row.rule, row.setup),
+          entryId: await singleDocumentId(world, singleOf(row.rule, row.setup)),
         }
       : {
           scopeKind: "collection",
-          slug: collectionOf(row.rule),
+          slug: collectionOf(row.rule, row.setup),
           entryId: addressOf(world, row, "lock").id,
         };
   const res = await request("POST", ["document-lock"], who.headers, ref);
@@ -990,9 +998,15 @@ const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
 
 const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
 
+/** The setups whose writes are asked: the others ask reads alone. */
+const WRITING_SETUPS: ReadonlySet<Row["setup"]> = new Set<Row["setup"]>([
+  "service",
+  "public",
+]);
+
 function writes(row: Row, door: Door): boolean {
   return (
-    row.setup === "service" &&
+    WRITING_SETUPS.has(row.setup) &&
     !READS.has(row.action) &&
     (row.target === "collection" ||
       row.target === "single" ||
@@ -1003,9 +1017,11 @@ function writes(row: Row, door: Door): boolean {
 
 /** The table a write to the row's target lands in. */
 function tableOf(row: Row): string {
-  if (row.target === "single") return `single_${singleOf(row.rule)}`;
-  if (row.target === "single-pub") return `single_${pubSingleOf(row.rule)}`;
-  return `dc_${collectionOf(row.rule)}`;
+  if (row.target === "single") return `single_${singleOf(row.rule, row.setup)}`;
+  if (row.target === "single-pub") {
+    return `single_${pubSingleOf(row.rule, row.setup)}`;
+  }
+  return `dc_${collectionOf(row.rule, row.setup)}`;
 }
 
 /**
@@ -1036,7 +1052,7 @@ async function markUpdated(world: World, row: Row): Promise<void> {
   const single = row.target === "single";
   const id = single
     ? (await storedTable(world, row))[0]?.id
-    : world.seeded.get(collectionOf(row.rule))?.updateId;
+    : world.seeded.get(collectionOf(row.rule, row.setup))?.updateId;
   // A Single's row is made on its first read, which every Single's update
   // follows in the table's order; an update finding none is seen anyway.
   if (id === undefined || id === null) return;
