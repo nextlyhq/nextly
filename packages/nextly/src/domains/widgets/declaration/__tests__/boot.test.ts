@@ -15,7 +15,6 @@ import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
 import { getWidget, widgetSource } from "../../registry";
 import {
-  cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
   resetLegacyIdWarnings,
@@ -95,7 +94,7 @@ describe("startup with plugins that declare widgets", () => {
     ).not.toThrow();
   });
 
-  it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
+  it("keeps the slugs a site renamed the plugin's collections to, for its widgets' reads", () => {
     const shop = definePlugin({
       name: "@acme/shop",
       version: "1.0.0",
@@ -106,9 +105,10 @@ describe("startup with plugins that declare widgets", () => {
       },
     });
     resetWidgetRegistries([shop.rename!({ orders: "sales" })]);
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders" })
-    ).toMatchObject({ source: "collection:sales" });
+    // Kept with the widget, so its load function's reads name the slug the site uses.
+    expect(declaredWidget("acme/recent-orders")?.collections).toEqual({
+      orders: "sales",
+    });
   });
 
   it("registers nothing from a disabled plugin", () => {

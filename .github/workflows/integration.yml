@@ -439,6 +439,18 @@ jobs:
             done
           ) &
           watcher=$!
+          # The MySQL service's memory every 5 s, read by the peak step after the
+          # suite. Its data dir is tmpfs, so files it writes count against memory
+          # as well as its buffers; the peak says how much room two workers need.
+          (
+            trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+            while :; do
+              docker stats --no-stream --format '{{.MemUsage}}' "${{ job.services.mysql.id }}" >> "$RUNNER_TEMP/mysql-memory.txt" 2>/dev/null || true
+              sleep 5 & nap=$!
+              wait "$nap"
+            done
+          ) &
+          sampler=$!
           # The suite's status is read on the line after it, with -e off around
           # it, so the lane's call ends its line as check-test-lanes requires and
           # a failed suite still stops the watcher before the step fails.
@@ -448,12 +460,42 @@ jobs:
             pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
           status=$?
           set -e
-          kill "$watcher" 2>/dev/null || true
-          wait "$watcher" 2>/dev/null || true
+          kill "$watcher" "$sampler" 2>/dev/null || true
+          wait "$watcher" "$sampler" 2>/dev/null || true
           exit "$status"
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
+          # nextly's files on two workers, each on a database of its own
+          # (nextly_test_pool1, nextly_test_pool2) that the run's global setup
+          # creates beside nextly_test and drops at the end
+          # (packages/nextly/src/__tests__/worker-database-guard.ts).
+          NEXTLY_INTEGRATION_WORKERS: "2"
+
+      # How close the shard came to MySQL's connection limit, judged rather than
+      # printed: more workers or larger pools would otherwise first show as
+      # "too many connections" in whichever suite ran out. The service is this
+      # job's own, so its Max_used_connections is this shard's peak. A peak that
+      # cannot be read fails too, so the check never passes by saying nothing.
+      - name: Check the MySQL connection peak
+        if: success() || failure()
+        run: |
+          read -r used max < <(mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT VARIABLE_VALUE, @@max_connections FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Max_used_connections'" 2>/dev/null) || true
+          if [ -z "${used:-}" ] || [ -z "${max:-}" ]; then
+            echo "::error::Could not read Max_used_connections and max_connections from the MySQL service."
+            exit 1
+          fi
+          limit=$(( max * 8 / 10 ))
+          echo "MySQL connection peak: ${used} of max_connections ${max} (this step fails above ${limit}, 80%)."
+          # Reported, not judged: how much memory the service used, from the
+          # suite step's samples (docker stats, every 5 s).
+          memory=$(awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/, "", v); v *= 1024} else if (v ~ /MiB/) {sub(/MiB/, "", v)} else {v = 0}; if (v + 0 > m) m = v + 0} END {if (NR) printf "%.0f MiB peak over %d samples", m, NR; else print "no samples"}' "$RUNNER_TEMP/mysql-memory.txt" 2>/dev/null || echo "no samples")
+          echo "MySQL memory: ${memory}."
+          echo "MySQL shard ${{ matrix.shard }}: connection peak ${used} of ${max}; memory ${memory}." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$used" -gt "$limit" ]; then
+            echo "::error::The shard used ${used} of MySQL's ${max} connections, over the ${limit} (80%) this leg allows. Fewer workers or smaller pools, or raise the service's max_connections."
+            exit 1
+          fi
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
@@ -574,8 +616,7 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
           # nextly's files on two workers. This leg sets no TEST_*_URL, so
-          # each worker runs on its own in-memory SQLite database; the MySQL
-          # leg shares one server database and stays on one worker
+          # each worker runs on its own in-memory SQLite database
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
 

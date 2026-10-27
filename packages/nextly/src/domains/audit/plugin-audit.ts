@@ -21,7 +21,7 @@ import { principalRefOf } from "../../plugins/principals/ref";
 import { getPrincipalKind } from "../../plugins/principals/registry";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import { resolutionError } from "../../plugins/resolution-error";
-import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
+import { AUDIT_KIND_LENGTH } from "../../schemas/audit/widths";
 
 /** What a plugin says it will write. */
 export interface PluginAuditKind {
@@ -46,8 +46,8 @@ export interface PluginAuditEvent {
 const MAX_VALUE_LENGTH = 256;
 
 /**
- * The longest kind the trail's own column can hold, read from the table
- * definition rather than restated beside it.
+ * The longest kind the trail's own column can hold: the width the column's
+ * declarations are written with, rather than a number restated beside them.
  *
  * Postgres and MySQL declare `kind` as a bounded varchar; SQLite declares
  * text, which holds anything, so the bounded declaration is the one that
@@ -56,13 +56,7 @@ const MAX_VALUE_LENGTH = 256;
  * log line nobody reads and the security event the plugin promised to record
  * simply never exists.
  */
-const KIND_COLUMN_MAX = (() => {
-  // The column itself, read as a plain property: the column-collecting helper
-  // is deprecated-but-compiles on drizzle v1 and banned by the legacy gate,
-  // while a table's columns are its own typed properties either way.
-  const length = (postgresAuditLog.kind as { length?: number }).length;
-  return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
-})();
+const KIND_COLUMN_MAX = AUDIT_KIND_LENGTH;
 
 /**
  * The credential shapes a metadata value is refused for.

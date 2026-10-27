@@ -445,6 +445,44 @@ describe("a card that hides when its data is empty", () => {
   });
 });
 
+describe("a card its widget does not show for this person", () => {
+  const notShown: CardState = {
+    kind: "empty",
+    empty: { title: "Not shown for you right now" },
+  };
+
+  it("is taken off the dashboard, though its widget does not hide when empty", () => {
+    render(
+      <WidgetCard title="Overdue invoices" state={notShown} notShown>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.getByRole("region", { name: "Overdue invoices" })
+    ).toHaveAttribute("data-hidden-empty");
+  });
+
+  it("stays in reach in customise mode, marked with why it is not shown", () => {
+    render(
+      <WidgetCard
+        title="Overdue invoices"
+        state={notShown}
+        notShown
+        customizing
+      >
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.getByRole("region", { name: "Overdue invoices" })
+    ).not.toHaveAttribute("data-hidden-empty");
+    // Its own reason, not the hidden-while-empty one a different card gives.
+    expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
+      "Not shown for you right now"
+    );
+  });
+});
+
 describe("the loading card's reservation", () => {
   // The placeholders a list or table card holds while its first answer is out: the rows its
   // tier will draw, so the card does not jump from three placeholders to twenty rows.

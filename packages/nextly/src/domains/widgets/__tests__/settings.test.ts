@@ -17,6 +17,8 @@ import {
   applyWidgetSettings,
   CONTENT_SETTING_NOT_DRAWN,
   effectiveWidgetSettings,
+  fieldsSettingQueryProblem,
+  MAX_CHOSEN_FIELDS,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
@@ -604,6 +606,41 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     }
   });
 
+  it("refuses a Fields setting over a Collection setting that is not titled", () => {
+    // 🔴 Only a titled list's first field is its title; on any other, keeping
+    // the first field would ask one the reader never chose.
+    expect(
+      widgetSettingsProblems([
+        { name: "collection", type: "collection" },
+        { name: "shown", type: "fields", of: "collection" },
+      ])
+    ).toEqual([
+      'setting "shown" is a Fields setting over "collection", which must be a Collection setting with rows "titled"',
+    ]);
+    expect(
+      widgetSettingsProblems([
+        { name: "collection", type: "collection", rows: "titled" },
+        { name: "shown", type: "fields", of: "collection" },
+      ])
+    ).toEqual([]);
+  });
+
+  it("refuses a Fields setting on a widget whose query is not a list", () => {
+    const settings = [
+      { name: "collection", type: "collection", rows: "titled" },
+      { name: "shown", type: "fields", of: "collection" },
+    ];
+    for (const op of ["count", "groupBy", "timeseries"]) {
+      expect(
+        fieldsSettingQueryProblem({ settings, query: { op } }),
+        op
+      ).toMatch(/only a list query's rows can show/);
+    }
+    expect(
+      fieldsSettingQueryProblem({ settings, query: { op: "list" } })
+    ).toBeUndefined();
+  });
+
   it("refuses a dependency that names no Collection setting of the widget", () => {
     expect(
       widgetSettingsProblems([
@@ -990,6 +1027,156 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
         expect(
           applyWidgetSettings(list, [titled], { collection: "posts" })
         ).toBe(list);
+      });
+
+      describe("with the fields its rows show chosen", () => {
+        const chosen = {
+          name: "fields",
+          type: "fields" as const,
+          of: "collection",
+        };
+        // What this reader is offered of posts: a read-ruled `salary` is not.
+        const offered = {
+          ...published(),
+          fieldsOf: (collection: string) =>
+            collection === "posts"
+              ? [
+                  { name: "headline", offered: true },
+                  { name: "updatedAt", offered: true },
+                  { name: "category", offered: true },
+                  { name: "salary", offered: false },
+                ]
+              : undefined,
+        };
+
+        it("asks the chosen fields after the title, in the order chosen", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["category", "updatedAt"] },
+              offered
+            ).select
+          ).toEqual(["headline", "category", "updatedAt"]);
+        });
+
+        it("never asks the title twice", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["headline", "updatedAt"] },
+              offered
+            ).select
+          ).toEqual(["headline", "updatedAt"]);
+        });
+
+        it("asks the list's own fields where a chosen one is not offered to this reader", () => {
+          // 🔴 A stored choice naming a read-ruled field, saved before the rule or by
+          // another reader, must not reach the read: the row keeps its defaults.
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["category", "salary"] },
+              offered
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
+
+        it("asks the list's own fields where nothing is chosen", () => {
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts" },
+              offered
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
+
+        it("asks the list's own fields where a chosen one is a field no row can print", () => {
+          // 🔴 A structured or many-valued field would be asked for and drawn as an empty place.
+          const unprintable = {
+            ...published(),
+            fieldsOf: (collection: string) =>
+              collection === "posts"
+                ? [
+                    { name: "headline", offered: true },
+                    { name: "category", offered: true },
+                    { name: "tags", offered: true, presentable: false },
+                  ]
+                : undefined,
+          };
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: ["category", "tags"] },
+              unprintable
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
+
+        it("applies the Collection setting before its Fields, whatever order they are declared in", () => {
+          // 🔴 Applied in declared order, the titled Collection setting came second
+          // and replaced the chosen fields with its own.
+          expect(
+            applyWidgetSettings(
+              list,
+              [chosen, titled],
+              { collection: "posts", fields: ["category"] },
+              offered
+            ).select
+          ).toEqual(["headline", "category"]);
+        });
+
+        it("leaves a query that is not a list as it was asked", () => {
+          const grouped = {
+            op: "groupBy" as const,
+            groupBy: "category",
+            limit: 5,
+          } as unknown as typeof list;
+          expect(
+            applyWidgetSettings(
+              grouped,
+              [titled, chosen],
+              { collection: "posts", fields: ["category"] },
+              offered
+            )
+          ).not.toHaveProperty("select");
+        });
+
+        it("asks the list's own fields where more are chosen than a row's meta line holds", () => {
+          const many = ["a", "b", "c", "d"];
+          const plenty = {
+            ...published(),
+            fieldsOf: (collection: string) =>
+              collection === "posts"
+                ? [
+                    { name: "headline", offered: true },
+                    ...many.map(name => ({ name, offered: true })),
+                  ]
+                : undefined,
+          };
+          expect(MAX_CHOSEN_FIELDS).toBe(3);
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: many.slice(0, 3) },
+              plenty
+            ).select
+          ).toEqual(["headline", "a", "b", "c"]);
+          expect(
+            applyWidgetSettings(
+              list,
+              [titled, chosen],
+              { collection: "posts", fields: many },
+              plenty
+            ).select
+          ).toEqual(["headline", "status", "updatedAt"]);
+        });
       });
     });
 

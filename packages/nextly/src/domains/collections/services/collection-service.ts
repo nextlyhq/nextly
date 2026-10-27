@@ -509,7 +509,9 @@ export class CollectionService extends BaseService {
     // callers (and future ACL/multitenant logic) can pass request context.
     _context: RequestContext
   ): Promise<PaginatedResult<Collection>> {
-    this.logger.debug("Listing collections", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing collections");
 
     const result = await this.metadataService.listCollections(options);
 
@@ -796,7 +798,9 @@ export class CollectionService extends BaseService {
     options: QueryOptions = {},
     context: RequestContext
   ): Promise<PaginatedResult<CollectionEntry>> {
-    this.logger.debug("Listing entries", { collectionName, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing entries", { collectionName });
 
     const limit = options.pagination?.limit ?? 10;
     const page = options.pagination?.page ?? 1;

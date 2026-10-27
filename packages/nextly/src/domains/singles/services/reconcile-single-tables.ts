@@ -19,6 +19,8 @@
  * unit-testable.
  */
 
+import { withoutRemovedFromCode } from "../../dynamic-collections/services/removed-from-code";
+
 /**
  * Registry row shape the reconciler needs. Intentionally minimal: we only
  * need the slug (for createTable config) and the canonical tableName.
@@ -45,21 +47,32 @@ export interface SingleTableReconciler {
  * The two reads every caller supplies the same way: the registry's Singles and
  * the live table names. Built here once so boot and `db:sync` cannot come to
  * disagree about what counts as registered or as existing.
+ *
+ * A Single removed from code (its row's source is the app's code and the
+ * configuration no longer declares it) is left out of the registered set, so
+ * no start creates its table again: a migration that dropped it would
+ * otherwise be undone by an empty table rebuilt from the row's stored fields.
+ * `declaredSlugs` is required for that reason, so no caller can reconcile
+ * without saying what the configuration declares.
  */
 export function singleTableSources(
   registry: {
     getAllSingles(): Promise<
-      ReadonlyArray<{ slug: string; tableName: string }>
+      ReadonlyArray<{ slug: string; tableName: string; source?: string | null }>
     >;
   },
-  listTables: () => Promise<readonly string[]>
+  listTables: () => Promise<readonly string[]>,
+  /** The Single slugs the running configuration declares. */
+  declaredSlugs: ReadonlySet<string>
 ): Pick<SingleTableReconciler, "registeredSingles" | "existingTableNames"> {
   return {
     registeredSingles: async () =>
-      (await registry.getAllSingles()).map(r => ({
-        slug: r.slug,
-        tableName: r.tableName,
-      })),
+      withoutRemovedFromCode(await registry.getAllSingles(), declaredSlugs).map(
+        r => ({
+          slug: r.slug,
+          tableName: r.tableName,
+        })
+      ),
     existingTableNames: async () => new Set(await listTables()),
   };
 }

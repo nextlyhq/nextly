@@ -1269,7 +1269,12 @@ export class SingleMutationService extends BaseService {
       ? { ...rawOptions, locale: undefined }
       : rawOptions;
 
-    this.logger.debug("Updating Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Updating Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
     // `updateEntry` for why Strapi withholds `"*"` from its update method and
