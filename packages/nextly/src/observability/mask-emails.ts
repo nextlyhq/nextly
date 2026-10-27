@@ -330,6 +330,9 @@ function copyErrorFields(
   return copy;
 }
 
+/** The symbol Node's `util.inspect` (and so `console.*`) asks a value for. */
+const INSPECT_HOOK = Symbol.for("nodejs.util.inspect.custom");
+
 /**
  * An empty error of the same class as `error`, holding `message`. A
  * `DOMException` (an aborted `fetch`, say) is built by its own constructor:
@@ -343,6 +346,15 @@ function blankCopyOf(error: Error, message: string, name: string): Error {
   }
   const copy = new Error(message);
   Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
+  // The copy keeps the error's class, and with it any inspection hook the
+  // class defines, which a console logger would call past every rule. An own
+  // empty hook shadows it, so the copy prints as its redacted fields.
+  Object.defineProperty(copy, INSPECT_HOOK, {
+    value: undefined,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
   return copy;
 }
 

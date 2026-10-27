@@ -427,6 +427,20 @@ describe("credentials anywhere in a log value", () => {
     expect(JSON.stringify(received)).not.toContain("error-json-secret");
   });
 
+  it("takes them out of what an error's own inspection hook would print", () => {
+    const captured = "inspect-hook-secret";
+    class HookedError extends Error {
+      [Symbol.for("nodejs.util.inspect.custom")](): string {
+        return `HookedError token=${captured}`;
+      }
+    }
+    const out = receivedBy({ error: new HookedError("upload failed") });
+    // A console logger calls the hook the error's class defines.
+    expect(out).not.toContain("inspect-hook-secret");
+    // The control: the error's own message remains.
+    expect(out).toContain("upload failed");
+  });
+
   it("takes them out of a function's own fields", () => {
     const out = receivedBy({
       callback: Object.assign(() => undefined, {
