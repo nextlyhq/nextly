@@ -182,3 +182,49 @@ test("crosses from small to medium where the bands put the edge", async ({
   await expectTierAt(page, RECENT_ENTRIES, 330, "small");
   await expectTierAt(page, RECENT_ENTRIES, 350, "medium");
 });
+
+/**
+ * The generated card core once drew for posts' recent entries. A layout saved before Recent
+ * entries replaced it can still hold it, at a quarter, and a read converts it to Recent entries
+ * set to posts, keeping the width. The layout write refuses a NEW Recent entries card at a
+ * quarter, so a converted card is the only quarter one there is.
+ */
+const GENERATED_RECENT_POSTS = "collection/posts-recent";
+
+// Recent entries allows a third to the full row (RECENT_ENTRIES_WIDTHS), so a converted card
+// saved at a quarter is drawn at the nearest width it allows: a third, which on a 1,200 px
+// dashboard is medium. The quarter cases above use Count, which allows a quarter.
+test("a converted quarter card on a 1200px dashboard is drawn at a third, and is medium", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const read = await page.request.get("/admin/api/dashboard/layout");
+  const layout = (await read.json()) as Layout;
+  if (!(GENERATED_RECENT_POSTS in layout.widgets))
+    throw new Error(`${GENERATED_RECENT_POSTS} is not visible to this reader`);
+  const placements = [
+    ...layout.placements.filter(
+      placement =>
+        placement.widgetId !== RECENT_ENTRIES &&
+        placement.widgetId !== GENERATED_RECENT_POSTS
+    ),
+    {
+      id: "e2e-generated-recent-posts",
+      widgetId: GENERATED_RECENT_POSTS,
+      width: "quarter",
+      removed: false,
+    },
+  ];
+  const write = await page.request.put("/admin/api/dashboard/layout", {
+    data: { placements, version: layout.version, scope: layout.scope },
+  });
+  expect(write.ok()).toBe(true);
+  await page.reload();
+
+  await expectTierAt(page, RECENT_ENTRIES, 1200, "medium");
+  // A third is four of the grid's twelve tracks at this width, and a quarter three.
+  const span = await cellOf(page, RECENT_ENTRIES).evaluate(
+    element => getComputedStyle(element).gridColumnEnd
+  );
+  expect(span).toBe("span 4");
+});
