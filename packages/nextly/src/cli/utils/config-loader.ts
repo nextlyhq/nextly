@@ -210,6 +210,13 @@ export interface LoadConfigResult {
   configPath?: string;
 
   /**
+   * The project the config was looked for in, as an absolute path: `cwd`
+   * when one was given, otherwise the process's own directory. The app whose
+   * installed packages a boot from this config judges.
+   */
+  projectRoot: string;
+
+  /**
    * List of files that the config depends on.
    * Useful for watch mode to know what files to watch.
    */
@@ -487,6 +494,7 @@ async function loadConfigInternal(
       config: appConfig,
       appConfig,
       configPath: undefined,
+      projectRoot: resolve(cwd),
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
@@ -715,6 +723,7 @@ async function loadConfigInternal(
       config,
       appConfig,
       configPath,
+      projectRoot: resolve(cwd),
       dependencies,
       deferredExtends,
       pluginConsent,

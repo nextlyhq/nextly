@@ -327,6 +327,14 @@ import { getService } from "./service-access";
  */
 export interface NextlyServiceConfig {
   /**
+   * The directory of the app nextly runs in, whose installed Next.js, React
+   * and React DOM the start check judges. Defaults to the process's own
+   * directory, which is the app's for a server; the CLI passes the project it
+   * was pointed at with `--cwd`.
+   */
+  appRoot?: string;
+
+  /**
    * Database adapter for multi-database support.
    * If not provided, created automatically from environment variables.
    */
@@ -739,7 +747,7 @@ export async function registerServices(
   // releases' APIs directly and carries no code for older ones, so an app
   // outside the ranges is refused before an adapter connects, naming each
   // installed version, rather than failing later at whichever API it lacks.
-  ensureSupportedFrameworkVersions(process.cwd());
+  ensureSupportedFrameworkVersions(config.appRoot ?? process.cwd());
 
   // Nothing awaits between the loop above finding no attempt in flight and
   // this line publishing one, so no other caller can start an attempt in

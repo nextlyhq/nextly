@@ -2,7 +2,8 @@
  * Every way nextly starts refuses an unsupported Next.js, because the gate sits
  * in `registerServices()`, which both boots reach: `getNextly()`, and a route
  * handler's request-path boot for an app that never calls it. The installed
- * versions are the one thing faked. One file for both, since each boot loads
+ * versions are the one thing faked, and the app directory they are read from
+ * is the one the boot names. One file for both, since each boot loads
  * the whole service registry.
  */
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -10,13 +11,20 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { defineConfig } from "../collections/config/define-config";
 import { sanitizeConfig } from "../shared/types/config";
 
+// Which app directory each version read asked about.
+const judgedRoots = vi.hoisted(() => [] as string[]);
+
 vi.mock("../shared/lib/installed-package-version", () => ({
-  installedPackageVersion: (_appRoot: string, name: string) =>
-    name === "next" ? "15.5.0" : "19.3.1",
+  installedPackageVersion: (appRoot: string, name: string) => {
+    judgedRoots.push(appRoot);
+    return name === "next" ? "15.5.0" : "19.3.1";
+  },
 }));
 
 const { getNextly } = await import("../init");
 const { createDynamicHandlers } = await import("../routeHandler");
+const { registerServices } = await import("../di/register");
+const { getImageProcessor } = await import("../storage/image-processor");
 
 const ORIGINAL_DB_DIALECT = process.env.DB_DIALECT;
 // sqlite is the one dialect that needs no connection string.
@@ -62,5 +70,18 @@ describe("starting nextly on an unsupported Next.js", () => {
         { params: Promise.resolve({ params: ["webhooks"] }) }
       )
     ).rejects.toMatchObject(REFUSAL);
+  });
+
+  it("judges the app the boot names, not the process's directory", async () => {
+    // As the CLI boots for `--cwd apps/site`: the app is not where it runs.
+    judgedRoots.length = 0;
+
+    await expect(
+      registerServices({
+        appRoot: "/projects/site",
+        imageProcessor: getImageProcessor(),
+      })
+    ).rejects.toMatchObject(REFUSAL);
+    expect(new Set(judgedRoots)).toEqual(new Set(["/projects/site"]));
   });
 });
