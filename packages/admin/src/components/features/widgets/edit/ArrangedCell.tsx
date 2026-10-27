@@ -221,6 +221,8 @@ function CardBody(props: {
   quick: ReactNode;
   data: ArrangedCellProps["data"];
   isEditing: boolean;
+  /** Opens this card's settings from its empty state, where the reader can change them. */
+  onOpenSettings: (() => void) | undefined;
 }) {
   const { widget, placement, headerAction, quick, data, isEditing } = props;
   const { subtitle } = props;
@@ -248,6 +250,9 @@ function CardBody(props: {
       headerAction={headerAction}
       quick={quick}
       subtitle={subtitle}
+      {...(props.onOpenSettings
+        ? { onOpenSettings: props.onOpenSettings }
+        : {})}
       {...data}
     />
   );
@@ -417,6 +422,7 @@ function CellSettings({
   done,
   open,
   onOpenChange,
+  focusFirstField,
 }: {
   row: ArrangedCellProps["row"];
   widget: DashboardWidget;
@@ -424,11 +430,13 @@ function CellSettings({
   done: ReturnType<typeof doneFor>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  focusFirstField: boolean;
 }) {
   return (
     <WidgetSettingsSheet
       open={open}
       onOpenChange={onOpenChange}
+      focusFirstField={focusFirstField}
       title={widget.title}
       settings={widget.settings ?? []}
       // The declaration, not the card as asked: each candidate collection is
@@ -458,6 +466,13 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
    * open for no benefit to either.
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Whether the sheet opens on its first field, as the empty state's action opens it to ask for
+  // what the card is missing; reset when it closes, so the menu's Settings opens it as before.
+  const [focusFirstField, setFocusFirstField] = useState(false);
+  const changeSettingsOpen = (open: boolean) => {
+    setSettingsOpen(open);
+    if (!open) setFocusFirstField(false);
+  };
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
   // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
   const sources = useBranding().widgetSources;
@@ -514,6 +529,18 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   // While customising, the card's header keeps the room its controls are drawn
   // over; at rest it holds the dismiss control and the menu.
   const headerAction = isEditing ? <CardControlsSpace /> : restingControls;
+  // The empty state's way into the settings: at rest, and only where the menu's Settings could
+  // save them now, so the button never opens a sheet whose Done cannot keep anything.
+  const openSettingsFromEmpty =
+    !isEditing &&
+    props.settingsWrite !== undefined &&
+    hasSettings &&
+    !settingsBlocked(props.settingsWrite)
+      ? () => {
+          setFocusFirstField(true);
+          setSettingsOpen(true);
+        }
+      : undefined;
 
   return (
     <DraggableWidgetCell
@@ -535,7 +562,8 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
         <CellSettings
           {...{ row, widget, data, done }}
           open={settingsOpen}
-          onOpenChange={setSettingsOpen}
+          onOpenChange={changeSettingsOpen}
+          focusFirstField={focusFirstField}
         />
       ) : null}
       <CardGrowContext.Provider value={setContentHeight}>
@@ -543,6 +571,7 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           {...{ widget, placement, headerAction, data, isEditing }}
           subtitle={heading.subtitle}
           quick={quick.inline}
+          onOpenSettings={openSettingsFromEmpty}
         />
       </CardGrowContext.Provider>
     </DraggableWidgetCell>

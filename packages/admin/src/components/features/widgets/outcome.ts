@@ -138,8 +138,8 @@ export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
  */
 function emptyFor(
   definition: DashboardWidget,
-  own: CardEmptyContent = EMPTY_DEFAULT
-): CardEmptyContent {
+  own: OutcomeEmpty = EMPTY_DEFAULT
+): OutcomeEmpty {
   const declared = definition.declaredEmpty;
   if (declared === undefined) return own;
   const words = declared.title === undefined ? own : { title: declared.title };
@@ -162,6 +162,15 @@ export function coreDraws(definition: DeclaredWidget): boolean {
  * data says beyond it (`FrameState`), which the grid does not see. A failed
  * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
  */
+/**
+ * An empty card's words and action as the outcome decides them: the frame's own action, or the
+ * card's settings, which only the card can open and draws as a button where it can
+ * (`WidgetRenderer`), and not at all where it cannot.
+ */
+type OutcomeEmpty = Omit<CardEmptyContent, "action"> & {
+  action?: CardEmptyContent["action"] | { label: string; opensSettings: true };
+};
+
 export type WidgetOutcome =
   | { state: "self-drawn" }
   // A widget declared with `defineWidget` and drawn by its own component, with
@@ -174,7 +183,7 @@ export type WidgetOutcome =
   // The widget's own `shows` said no for this person: left out of their dashboard, neither drawn
   // nor counted; customise mode still shows it, marked, so it can be removed.
   | { state: "not-shown" }
-  | { state: "empty"; empty: CardEmptyContent }
+  | { state: "empty"; empty: OutcomeEmpty }
   | { state: "ready"; node: ReactNode };
 
 /**

@@ -582,20 +582,28 @@ export function resolveDashboardWidgets(
 
 /**
  * A declared widget's empty state as its card draws it: the declared message as
- * the empty state's title, and its action with its link made an href. An action
- * whose link is not a path relative to the admin is not drawn.
+ * the empty state's title, and its action with its link made an href, or the
+ * card's settings. An action whose link is not a path relative to the admin is
+ * not drawn.
  */
+/** A declared empty action as the card offers it, or none when its link leads nowhere here. */
+function declaredActionOf(
+  action: NonNullable<RegisteredWidgetMeta["empty"]>["action"]
+): NonNullable<DashboardWidget["declaredEmpty"]>["action"] {
+  if (action === undefined) return undefined;
+  if ("opens" in action) return { label: action.label, opensSettings: true };
+  const href = adminHref(action.link);
+  return href === undefined ? undefined : { label: action.label, href };
+}
+
 function declaredEmptyOf(
   empty: RegisteredWidgetMeta["empty"]
 ): Pick<DashboardWidget, "declaredEmpty"> {
   if (empty === undefined) return {};
-  const href =
-    empty.action === undefined ? undefined : adminHref(empty.action.link);
+  const action = declaredActionOf(empty.action);
   const declared = {
     ...(empty.message === undefined ? {} : { title: empty.message }),
-    ...(empty.action === undefined || href === undefined
-      ? {}
-      : { action: { label: empty.action.label, href } }),
+    ...(action === undefined ? {} : { action }),
   };
   return Object.keys(declared).length === 0 ? {} : { declaredEmpty: declared };
 }

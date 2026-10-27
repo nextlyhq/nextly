@@ -248,9 +248,12 @@ export interface CardEmptyContent {
   detail?: string;
   /**
    * At most ONE action, and only one the person may take. The caller decides that; the frame
-   * draws what it is given and never a second button.
+   * draws what it is given and never a second button: a link for an `href`, a button for an
+   * `onSelect`, such as one opening the card's own settings.
    */
-  action?: { label: string; href: string };
+  action?:
+    | { label: string; href: string }
+    | { label: string; onSelect: () => void };
 }
 
 /** The frame's own empty state, for a card whose body says nothing more particular. */
@@ -265,13 +268,25 @@ export function CardEmpty({
     <div className="grid justify-items-center gap-1" data-testid="card-empty">
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
-      {action && (
+      {action && "href" in action && (
         <Link
           href={action.href}
           className="mt-2 inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5"
         >
           {action.label}
         </Link>
+      )}
+      {action && "onSelect" in action && (
+        // The button the link stands beside elsewhere, so the two read as one kind of step.
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={action.onSelect}
+          data-testid="card-empty-action"
+        >
+          {action.label}
+        </Button>
       )}
     </div>
   );
