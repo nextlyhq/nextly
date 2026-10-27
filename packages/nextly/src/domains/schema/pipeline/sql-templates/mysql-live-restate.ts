@@ -69,6 +69,39 @@ export function mysqlLiveStatements(op: Operation): string[] | undefined {
   }
 }
 
+/** A backslash, spelled so that no SQL mode can read it as an escape. */
+const BACKSLASH = "CHAR(92 USING utf8mb4)";
+
+/**
+ * `expression` with the escaping layer `information_schema` adds taken off: the catalog stores a
+ * default expression or a check's clause with a backslash before each quote and each backslash of
+ * the expression as MySQL prints it (`_utf8mb4\'draft\'`). Taking it off in one pass, each `\x`
+ * to `x`, leaves the expression as MySQL printed it, which is DDL again (`introspect-live.ts`
+ * reads a clause the same way). Converted first, to the backslash's character set and collation:
+ * the catalog's columns are utf8mb3, and MySQL refuses to compare the two.
+ */
+const decoded = (expression: string): string =>
+  `REGEXP_REPLACE(CONVERT(${expression} USING utf8mb4) COLLATE utf8mb4_bin, CONCAT(${BACKSLASH}, ${BACKSLASH}, '(.)'), '$1', 1, 0, 'n')`;
+
+/** Whether this session reads a backslash as an ordinary character. */
+const NO_BACKSLASH_ESCAPES = "@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%'";
+
+/**
+ * `value` as a string literal this session reads back as `value`. QUOTE() escapes with
+ * backslashes, which a session in `NO_BACKSLASH_ESCAPES` reads as ordinary characters, so there
+ * the quotes are doubled instead and nothing else is touched.
+ */
+const quotedForSession = (value: string): string =>
+  `IF(${NO_BACKSLASH_ESCAPES}, CONCAT('''', REPLACE(${value}, '''', ''''''), ''''), QUOTE(${value}))`;
+
+/**
+ * Whether `expression`, as MySQL prints it, cannot be written into this session's DDL: MySQL
+ * prints a quote inside a literal with a backslash before it, which a `NO_BACKSLASH_ESCAPES`
+ * session would not read as one.
+ */
+const unreadableHere = (expression: string): string =>
+  `(${NO_BACKSLASH_ESCAPES} AND INSTR(${expression}, ${BACKSLASH}) > 0)`;
+
 /** The filter that finds one column of one table in this database. */
 function columnFilter(table: string, column: string): string {
   return `TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${literal(table)} AND COLUMN_NAME = ${literal(column)}`;
@@ -81,12 +114,13 @@ function columnFilter(table: string, column: string): string {
  * not part of a column's definition and MODIFY leaves them where they are.
  *
  * A default is restated the way `information_schema` reports it: an expression default
- * (`DEFAULT_GENERATED`) in parentheses, with the backslash the catalog puts before each quote taken
- * out, except `CURRENT_TIMESTAMP`, which is written bare as MySQL writes it; a BIT literal as it is;
- * any other value quoted.
+ * (`DEFAULT_GENERATED`) in parentheses, with the catalog's escaping taken off (`decoded`), except
+ * `CURRENT_TIMESTAMP`, which is written bare as MySQL writes it; a BIT literal as it is; any other
+ * value, and the comment, quoted as this session reads quotes (`quotedForSession`).
  *
- * A column the database does not have leaves the variable holding a sentence naming it, which
- * PREPARE rejects with that sentence in its message.
+ * A column the database does not have, or an expression default a `NO_BACKSLASH_ESCAPES` session
+ * cannot read back, leaves the variable holding a sentence saying so, which PREPARE rejects with
+ * that sentence in its message.
  */
 function restatedNullability(op: ChangeColumnNullableOp): string[] {
   const definition = [
@@ -99,15 +133,17 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
     literal(op.toNullable ? " NULL" : " NOT NULL"),
     "IF(COLUMN_DEFAULT IS NULL, '', IF(EXTRA LIKE '%DEFAULT_GENERATED%', " +
       "IF(LEFT(COLUMN_DEFAULT, 17) = 'CURRENT_TIMESTAMP', CONCAT(' DEFAULT ', COLUMN_DEFAULT), " +
-      "CONCAT(' DEFAULT (', REPLACE(COLUMN_DEFAULT, CONCAT(CHAR(92), ''''), ''''), ')')), " +
-      "CONCAT(' DEFAULT ', IF(DATA_TYPE = 'bit', COLUMN_DEFAULT, QUOTE(COLUMN_DEFAULT)))))",
+      `CONCAT(' DEFAULT (', ${decoded("COLUMN_DEFAULT")}, ')')), ` +
+      `CONCAT(' DEFAULT ', IF(DATA_TYPE = 'bit', COLUMN_DEFAULT, ${quotedForSession("COLUMN_DEFAULT")}))))`,
     "IF(EXTRA LIKE '%auto_increment%', ' AUTO_INCREMENT', '')",
     "IF(EXTRA LIKE '%on update %', CONCAT(' ON UPDATE ', REGEXP_SUBSTR(EXTRA, '(?<=on update )[^ ]+')), '')",
     "IF(EXTRA LIKE '%INVISIBLE%', ' INVISIBLE', '')",
-    "IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', QUOTE(COLUMN_COMMENT)))",
+    `IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', ${quotedForSession("COLUMN_COMMENT")}))`,
   ].join(", ");
+  const unwritable = `EXTRA LIKE '%DEFAULT_GENERATED%' AND ${unreadableHere(decoded("COLUMN_DEFAULT"))}`;
   return runBuilt(
-    `COALESCE((SELECT CONCAT(${definition}) FROM information_schema.COLUMNS WHERE ${columnFilter(op.tableName, op.columnName)}), ` +
+    `COALESCE((SELECT IF(${unwritable}, ${literal(`cannot restate ${op.tableName}.${op.columnName}: its default needs backslash escapes`)}, CONCAT(${definition})) ` +
+      `FROM information_schema.COLUMNS WHERE ${columnFilter(op.tableName, op.columnName)}), ` +
       `${literal(`column ${op.tableName}.${op.columnName} is not in this database`)})`
   );
 }
@@ -116,13 +152,14 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  * `RENAME COLUMN`, with every check that uses the column dropped and added again under the same
  * name around it, in one ALTER. MySQL refuses the rename while such a check exists, and accepts the
  * three together. Each check is added back as it was, enforced or not, with the column's name
- * replaced where the catalog quotes it (`CHECK_CLAUSE` always backquotes a column). A table with
- * no such check gets the bare rename.
+ * replaced where the catalog quotes it (`CHECK_CLAUSE` always backquotes a column), in the clause
+ * with the catalog's escaping taken off (`decoded`). A table with no such check gets the bare
+ * rename.
  *
  * The checks are joined with GROUP_CONCAT, which cuts its result at `group_concat_max_len`. Rather
  * than run a statement cut short, the variable then holds a sentence saying so, which PREPARE
  * rejects; the same for a check whose clause names the column inside a string literal, which the
- * author renames by hand. MySQL quotes about eighty characters of the rejected text in its error,
+ * author renames by hand, or that a `NO_BACKSLASH_ESCAPES` session cannot read back. MySQL quotes about eighty characters of the rejected text in its error,
  * so each sentence leads with what failed.
  */
 function renameKeepingChecks(
@@ -140,7 +177,7 @@ function renameKeepingChecks(
     `${checksOnColumn})`;
   const adds =
     `(SELECT GROUP_CONCAT(CONCAT('ADD CONSTRAINT ', ${checkName}, ' CHECK ', ` +
-    `REPLACE(cc.CHECK_CLAUSE, ${from}, ${literal(q(op.toColumn))}), IF(tc.ENFORCED = 'NO', ' NOT ENFORCED', '')) ` +
+    `REPLACE(${decoded("cc.CHECK_CLAUSE")}, ${from}, ${literal(q(op.toColumn))}), IF(tc.ENFORCED = 'NO', ' NOT ENFORCED', '')) ` +
     `ORDER BY cc.CONSTRAINT_NAME SEPARATOR ', ') ${checksOnColumn})`;
   const tooLong =
     `(SELECT COALESCE(SUM(2 * LENGTH(cc.CHECK_CLAUSE) + 4 * LENGTH(cc.CONSTRAINT_NAME) + 64), 0) ` +
@@ -152,12 +189,13 @@ function renameKeepingChecks(
   // to hold the quoted name would change too, and the check would then test something else. The
   // literals are taken out to count the name outside them; a check that names the column inside
   // one, or holds a quote the count cannot pair, is not rewritten.
-  const literalFree = `REGEXP_REPLACE(cc.CHECK_CLAUSE, ${literal("'[^']*'")}, '')`;
+  const clause = decoded("cc.CHECK_CLAUSE");
+  const literalFree = `REGEXP_REPLACE(${clause}, ${literal("'[^']*'")}, '')`;
   const namings = (text: string) =>
     `(LENGTH(${text}) - LENGTH(REPLACE(${text}, ${from}, '')))`;
   const unsafe =
-    `(SELECT COUNT(*) ${checksOnColumn} AND (${namings("cc.CHECK_CLAUSE")} <> ${namings(literalFree)} ` +
-    `OR INSTR(${literalFree}, ${literal("'")}) > 0)) > 0`;
+    `(SELECT COUNT(*) ${checksOnColumn} AND (${namings(clause)} <> ${namings(literalFree)} ` +
+    `OR INSTR(${literalFree}, ${literal("'")}) > 0 OR ${unreadableHere(clause)})) > 0`;
   return runBuilt(
     `IF(${tooLong}, ${literal(`the checks on ${op.tableName} are too long to restate around a rename`)}, ` +
       `IF(${unsafe}, ${literal(`cannot rename ${op.tableName}.${op.fromColumn}: a check names it inside a string`)}, ${statement}))`
@@ -168,7 +206,7 @@ function renameKeepingChecks(
 const RENAME_RUN =
   /^SET @nextly_ddl = .*'ALTER TABLE `([^`]+)` '.*'RENAME COLUMN `([^`]+)` TO `([^`]+)`'/s;
 const NULLABILITY_RUN =
-  /^SET @nextly_ddl = COALESCE\(\(SELECT CONCAT\('ALTER TABLE `([^`]+)` MODIFY COLUMN `([^`]+)` ', .*' (NOT NULL|NULL)'/s;
+  /^SET @nextly_ddl = COALESCE\(\(SELECT .*'ALTER TABLE `([^`]+)` MODIFY COLUMN `([^`]+)` ', .*' (NOT NULL|NULL)'/s;
 
 /**
  * `statements` with each run this module writes replaced by the one plain statement it amounts to,

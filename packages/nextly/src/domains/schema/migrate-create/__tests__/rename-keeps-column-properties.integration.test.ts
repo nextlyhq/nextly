@@ -28,6 +28,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
+import mysql from "mysql2/promise";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -45,6 +46,7 @@ import {
 import { reconcileCore } from "../../migrate/core-reconcile";
 import type { TableSpec } from "../../pipeline/diff/types";
 import type { AppStreamTables } from "../app-stream";
+import { mysqlLiveStatements } from "../../pipeline/sql-templates/mysql-live-restate";
 import { generateMigration, type MinimalConfigField } from "../generate";
 
 interface TestAdapter {
@@ -187,7 +189,9 @@ for (const entry of DIALECTS) {
         const check = options.check !== false;
         const checked =
           options.checkOf ??
-          ((name: string) => `char_length(${q(name)}) <= 60`);
+          // A string literal in the check, which MySQL's catalog stores escaped once more.
+          ((name: string) =>
+            `char_length(${q(name)}) <= 60 AND ${q(name)} <> 'draft'`);
         if (dialect === "postgresql") {
           if (collation) {
             await exec(
@@ -195,7 +199,7 @@ for (const entry of DIALECTS) {
             );
           }
           await exec(
-            `COMMENT ON COLUMN ${q(table)}.${q(column)} IS 'kept by the change'`
+            `COMMENT ON COLUMN ${q(table)}.${q(column)} IS 'it''s kept by the change'`
           );
           await exec(
             `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (${checked(column)})`
@@ -221,7 +225,7 @@ for (const entry of DIALECTS) {
               (collation ? " CHARACTER SET utf8mb4 COLLATE utf8mb4_bin" : "") +
               (current.nullable === "YES" ? " NULL" : " NOT NULL") +
               (dflt.dflt === null ? "" : ` DEFAULT '${dflt.dflt}'`) +
-              " COMMENT 'kept by the change'"
+              " COMMENT 'it''s kept by the change'"
           );
           await exec(
             `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(`${table}_short`)} CHECK (${checked(column)})`
@@ -428,6 +432,57 @@ for (const entry of DIALECTS) {
           );
           expect(columns).toContain("heading");
           expect(columns).not.toContain("title2");
+        }
+      );
+
+      it.skipIf(dialect !== "mysql")(
+        "restates a MySQL column's comment and default as a NO_BACKSLASH_ESCAPES session reads them",
+        async () => {
+          // The runner keeps the server's SQL mode, so a site may run in this one: QUOTE()'s
+          // backslashes would then be read as characters, and a quote in a comment would fail.
+          await exec(
+            "CREATE TABLE `modes` (`id` int PRIMARY KEY, `note` varchar(32) NULL DEFAULT 'it''s' COMMENT 'a \\\\ and it''s')"
+          );
+          // Apart, because MySQL re-reads every expression default of a table it alters, and one
+          // printed with a backslash fails that session's ALTER whichever column it names.
+          await exec(
+            "CREATE TABLE `stamps` (`id` int PRIMARY KEY, `stamp` varchar(32) NULL DEFAULT (concat('it''s', 'x')))"
+          );
+          const before = await definitionOf("modes");
+          const stampsBefore = await definitionOf("stamps");
+          const session = await mysql.createConnection(scratch!.url);
+          try {
+            await session.query(
+              "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')"
+            );
+            const run = (column: string) =>
+              mysqlLiveStatements({
+                type: "change_column_nullable",
+                tableName: column === "note" ? "modes" : "stamps",
+                columnName: column,
+                fromNullable: true,
+                toNullable: false,
+              })!;
+            for (const statement of run("note")) await session.query(statement);
+            // MySQL prints this default with a backslash before its quote, which this session
+            // would read differently: refused, and the column left as it was.
+            let refusal = "";
+            try {
+              for (const statement of run("stamp"))
+                await session.query(statement);
+            } catch (error) {
+              refusal = (error as Error).message;
+            }
+            expect(refusal).toMatch(
+              /cannot restate stamps.stamp: its default needs backslash/
+            );
+          } finally {
+            await session.end();
+          }
+          expect(await definitionOf("modes")).toEqual(
+            withNamedChange(before, { column: "note", nullable: false })
+          );
+          expect(await definitionOf("stamps")).toEqual(stampsBefore);
         }
       );
 
