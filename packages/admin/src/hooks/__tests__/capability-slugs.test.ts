@@ -174,6 +174,13 @@ describe("collections and Singles, which the server answers", () => {
       canDelete: false,
       canPublish: true,
       canUnpublish: false,
+      // An answer naming no request judged in other languages refuses each:
+      // its action's own cell is judged in one language only.
+      canReadTranslations: false,
+      canReadHistory: false,
+      canPublishEveryLanguage: false,
+      canUpdateInDefaultLanguage: false,
+      canDuplicate: false,
     });
     expect(caps.canViewCollections).toBe(true);
   });

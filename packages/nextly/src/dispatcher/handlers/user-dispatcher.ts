@@ -19,6 +19,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { aboutSubject } from "../../auth/access/deviations";
+import { actorForScope } from "../../auth/access/resolve-actor";
 import {
   routeGateCapabilities,
   sentParams,
@@ -283,6 +284,19 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   getCurrentUserPermissions: {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
+      // An API key is answered with what the key itself holds, which is no
+      // more than its maker's and often less, never with its maker's own.
+      const scope = currentCallerScope();
+      if (scope?.actorType === "apiKey") {
+        const caller = capabilitiesCaller(userId);
+        const actor = actorForScope(scope, { id: userId });
+        return respondData({
+          permissions: [...scope.permissions],
+          isSuperAdmin: actor.superAdmin,
+          roles: [...actor.roles],
+          validUntil: await capabilitiesValidUntil(caller),
+        });
+      }
       // The soonest end of the role assignments comes from the same
       // request-scoped read of the user's roles the permissions do, so the
       // list and its end describe one moment.

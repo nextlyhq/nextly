@@ -242,21 +242,21 @@ describe("a signed-in user without the permission", () => {
 describe("a signed-in user's publish", () => {
   const publish = { action: "publish" as const, user: { id: "u1" } };
 
-  it("is recorded where the gate judges it alone and the decision also asks update", async () => {
-    // The user holds publish and not update: the gate allows, the decision
-    // refuses.
+  it("is allowed by its own permission and rule without update, as the decision allows it", async () => {
+    // The user holds publish and not update: a publish is judged by its own
+    // permission and rule, at the gate and in the decision alike.
     callerMayNot("update");
     for (const access of [{ publish: true }, { publish: () => true }]) {
       const { result, deviations } = await recordingDeviations(() =>
         collectionGateVerdict(asked(access, publish))
       );
       expect(result.allowed).toBe(true);
-      expect(deviations).toEqual(["lifecycle-judged-alone"]);
+      expect(deviations).toEqual([]);
     }
   });
 
-  it("is recorded as nothing where the user holds update too", async () => {
-    // The control: the two agree.
+  it("is allowed alike where the user holds update too", async () => {
+    // The control: holding update changes nothing.
     for (const access of [{ publish: true }, { publish: () => true }]) {
       const { result, deviations } = await recordingDeviations(() =>
         collectionGateVerdict(asked(access, publish))

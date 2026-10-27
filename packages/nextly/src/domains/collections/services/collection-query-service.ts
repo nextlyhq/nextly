@@ -550,6 +550,30 @@ interface GroupedRows {
 type SettledRead = { readonly denied: null; readonly filter?: RuleFilter };
 
 /**
+ * The key a list's settled access is handed to its own count under. Private to
+ * this module, so no other caller can make a count skip judging access: an
+ * object without it carries nothing a count reads.
+ */
+const SETTLED_ACCESS = Symbol("settled read access");
+
+/** A list's settled access, as only this module can hand it to a count. */
+interface SettledAccessToken {
+  readonly [SETTLED_ACCESS]: SettledRead;
+}
+
+const settledAccess = (read: SettledRead): SettledAccessToken =>
+  Object.freeze({ [SETTLED_ACCESS]: read });
+
+/** The settled access a token carries, or none for anything else. */
+function settledReadIn(token: unknown): SettledRead | undefined {
+  if (token === null || typeof token !== "object") return undefined;
+  if (!Object.prototype.hasOwnProperty.call(token, SETTLED_ACCESS)) {
+    return undefined;
+  }
+  return (token as SettledAccessToken)[SETTLED_ACCESS];
+}
+
+/**
  * Everything a filtered read needs to settle the row set a caller is allowed
  * to see.
  *
@@ -3313,7 +3337,7 @@ export class CollectionQueryService extends BaseService {
               // The page's own access: the total counts the entries the page's
               // filter matched, not those of a second answer of the rule.
             },
-            { denied: null, filter: access.filter }
+            settledAccess({ denied: null, filter: access.filter })
           ),
         ]);
 
@@ -3946,15 +3970,15 @@ export class CollectionQueryService extends BaseService {
     /**
      * The access a list already settled for the page this count totals, so
      * the total is counted under the filter the page was read with. Only
-     * this service's own list passes it; any other caller leaves it out and
+     * this module can make one; anything else passed here is ignored, and
      * the count judges access itself (see {@link resolveReadPlan}).
      */
-    settled?: SettledRead
+    settled?: SettledAccessToken
   ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {
       const plan = await this.resolveReadPlan<{ totalDocs: number }>(
         params,
-        settled
+        settledReadIn(settled)
       );
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;

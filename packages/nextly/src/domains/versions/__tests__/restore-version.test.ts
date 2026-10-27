@@ -13,6 +13,7 @@ const {
   singleRegistrySpy,
   componentSpy,
   configSpy,
+  appLocalizationSpy,
 } = vi.hoisted(() => ({
   getVersionSpy: vi.fn(),
   updateEntrySpy: vi.fn(),
@@ -21,6 +22,14 @@ const {
   singleRegistrySpy: vi.fn(),
   componentSpy: vi.fn(),
   configSpy: vi.fn(),
+  appLocalizationSpy: vi.fn(),
+}));
+
+// The site's languages as they are now. By default the configuration's block, as on a site that
+// declares its languages there; a site whose languages are stored answers from the registry.
+vi.mock("../../i18n/configured-locales", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../i18n/configured-locales")>()),
+  appLocalization: appLocalizationSpy,
 }));
 
 // Field-level write rules are evaluated by the update path too; stubbed here so
@@ -110,6 +119,10 @@ describe("restoreVersion", () => {
         locales: [{ code: "en" }, { code: "de" }],
       },
     });
+    appLocalizationSpy.mockImplementation(
+      () =>
+        (configSpy() as { localization?: unknown } | undefined)?.localization
+    );
   });
 
   it("writes the snapshot through the normal update path", async () => {
@@ -153,6 +166,31 @@ describe("restoreVersion", () => {
     expect(updateEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ locale: "de" }),
       expect.anything()
+    );
+  });
+
+  it("writes into the captured locale on a site whose languages are stored, not configured", async () => {
+    configSpy.mockReturnValue({ localization: undefined });
+    appLocalizationSpy.mockReturnValue({
+      defaultLocale: "en",
+      locales: [{ code: "en" }, { code: "de" }],
+    });
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: "de",
+      snapshot: { title: "Hallo" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [{ name: "title", type: "text", localized: true }],
+      localized: true,
+      versions: { enabled: true },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "de" }),
+      { title: "Hallo" }
     );
   });
 

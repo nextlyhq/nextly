@@ -53,6 +53,9 @@ const DEFAULT_LIMIT = 5;
  * publishing it to every reader who may see the source at all.
  */
 const RELEASE_FIELDS = [
+  // What a row links to: the release itself, which this reader may read, since the service
+  // returned it to them.
+  { name: "id", type: "string" as const, label: "ID" },
   { name: "title", type: "string" as const, label: "Release" },
   { name: "state", type: "string" as const, label: "State" },
   { name: "scheduledAt", type: "date" as const, label: "Scheduled" },
@@ -127,6 +130,7 @@ function actorFor(caller: ReadCaller): ReleaseActor {
 function projected(row: ReleaseRow, names: readonly string[]) {
   const full: Record<string, unknown> = {
     kind: "release",
+    id: row.id,
     title: row.title,
     state: row.state,
     scheduledAt: row.scheduledAt,

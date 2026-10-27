@@ -1431,9 +1431,9 @@ function parseSingleRoutes(
   }
 
   // POST /api/singles/[slug]/publish-all → publish every language at once.
-  // Authorized as an `update` like the collection entry equivalent: the route
-  // gate cannot express `publish`, so the service checks `publish-{slug}` for
-  // itself on top of the update the route authorized.
+  // Admitted on `publish-{slug}` like the collection entry equivalent (see
+  // the route's resolveAuthorization); the service asks the publish rule in
+  // each language the publish puts live.
   if (id && subresource === "publish-all" && !subId && httpMethod === "POST") {
     routeParams.slug = id;
     return {
@@ -3241,8 +3241,9 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // The site's content languages, for Settings.
-  if (resource === "languages") {
+  // The site's content languages, for Settings. Only the bare path: a trailing segment is another
+  // address, which must answer not found rather than list or change the languages.
+  if (resource === "languages" && id === undefined) {
     const method = httpMethod === "GET" ? "getLanguages" : "changeLanguages";
     const operation = httpMethod === "GET" ? "list" : "update";
     return { service: "languages", operation, method, routeParams };

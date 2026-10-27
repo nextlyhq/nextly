@@ -16,7 +16,7 @@ export function KitCard({
   size,
 }: WidgetProps<typeof fixture.kitCardWidget>): JSX.Element {
   return (
-    <div data-testid="kit-card" data-size={size.class}>
+    <div data-testid="kit-card" data-size={size.tier}>
       <CardFigure value={data.total} />
       <GroupsChart
         title="Orders by state"

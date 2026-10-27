@@ -53,8 +53,10 @@ export interface CollectionForColumns {
    */
   status?: boolean;
   /**
-   * Whether this collection has multilingual content (i18n). When true, the table can render a
-   * per-row translation-completeness column from each row's `_translations` map.
+   * Whether the table shows each row's translation state: a collection with multilingual content
+   * (i18n), listed for a user who may read every language's state. When true, the table renders
+   * a per-row translation-completeness column from each row's `_translations` map, and a
+   * language filter.
    */
   localized?: boolean;
   /** Admin UI configuration */

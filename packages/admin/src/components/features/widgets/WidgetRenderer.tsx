@@ -22,7 +22,7 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
 
@@ -30,14 +30,15 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
   DashboardWidget,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
 import { DREW_NOTHING } from "./draw-failures";
 import type { CardState } from "./frame/card-state";
+import { listDensityOf } from "./frame/list-rows";
 import type { SkeletonShape } from "./frame/states";
+import type { AnswerSize } from "./frame/tier";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -184,10 +185,10 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
-   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
-   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   * The size the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerSizeContext`.
    */
-  answerTier?: SizeTier;
+  answerSize?: AnswerSize;
   /**
    * Which CARD this render is, and what its reader configured.
    *
@@ -211,8 +212,8 @@ export interface WidgetRendererProps {
   placement?: {
     id: string;
     settings: Record<string, unknown>;
-    /** The width the card is drawn at, for the size a declared component is handed. */
-    width?: WidgetWidth;
+    /** The size the card is drawn at, for the size a declared component is handed. */
+    size?: GridSize;
   };
 }
 
@@ -226,7 +227,7 @@ function sharedCardProps(
     | "quick"
     | "leading"
     | "customizing"
-    | "answerTier"
+    | "answerSize"
     | "subtitle"
   >
 ) {
@@ -236,8 +237,12 @@ function sharedCardProps(
     ...controls,
     hidesWhenEmpty: definition.hidesWhenEmpty === true,
     cardId: placement?.id ?? definition.id,
+    // The card's height, which its list rows are counted from.
+    ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    // The density the card's list rows, and the skeleton holding their place, are drawn at.
+    listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),
     // A stats card's labels; a custom card's cells draw no skeleton of their own.
     skeletonCells: definition.cells?.flatMap(cell =>
@@ -390,7 +395,7 @@ export function WidgetRenderer({
   customizing = false,
   onRetry,
   isFetching = false,
-  answerTier,
+  answerSize,
   subtitle,
 }: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, placement, {
@@ -398,7 +403,7 @@ export function WidgetRenderer({
     quick,
     leading,
     customizing,
-    answerTier,
+    answerSize,
     subtitle,
   });
 

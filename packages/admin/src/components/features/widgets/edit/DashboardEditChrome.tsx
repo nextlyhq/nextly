@@ -246,7 +246,7 @@ export function DashboardEditChrome({
         open={askingReset}
         onOpenChange={setAskingReset}
         title="Reset to the default dashboard?"
-        description="Your cards, widths and settings will be replaced."
+        description="Your cards, sizes and settings will be replaced."
         confirm="Reset dashboard"
         keep="Keep my layout"
         onConfirm={onStageReset}
