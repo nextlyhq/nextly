@@ -60,6 +60,8 @@ let services: PluginServices | undefined;
 let handedToHooks: unknown[] = [];
 /** How often each counted rule was asked. */
 let ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
+/** Whether the filtered collection's publish rule refuses the first ask. */
+let refuseFirstPublish = false;
 
 afterEach(async () => {
   resetSessionStandingForTests();
@@ -69,6 +71,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   handedToHooks = [];
   ruleAsks = { filteredUpdate: 0, filteredPublish: 0, homePublish: 0 };
+  refuseFirstPublish = false;
   // Single hooks register into the global registry.
   resetHookRegistry();
 });
@@ -116,7 +119,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }) as never,
           publish: () => {
             ruleAsks.filteredPublish += 1;
-            return true;
+            return !(refuseFirstPublish && ruleAsks.filteredPublish === 1);
           },
         },
         fields: [text({ name: "title" })],
@@ -801,6 +804,45 @@ describe.each(getConfiguredTestDialects())(
       expect(result.failed).toBe(1);
       expect(locked).toEqual([]);
       expect((await stored(POSTS, id)).status).toBe("draft");
+    });
+
+    it("reads each batch row's body once, so its strategy and its write agree", async () => {
+      await boot(dialect);
+      const id = await draft(POSTS, "t");
+      let reads = 0;
+      const body = {
+        get status() {
+          reads += 1;
+          return "published";
+        },
+      };
+
+      const result = await pluginServices().collections.updateMany(
+        POSTS,
+        [{ id, data: body }],
+        asPlugin(PUBLISHER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect(reads).toBe(1);
+    });
+
+    it("lets a batch row's own lifecycle answer stand at its transition", async () => {
+      await boot(dialect);
+      const id = await draft(FILTERED, "t");
+      // A rule that refuses its first ask and allows after: asked once for the
+      // batch and again for the row, the row would pass its gate, run its
+      // hooks, and be refused at its transition by the first answer.
+      refuseFirstPublish = true;
+
+      const result = await pluginServices().collections.updateMany(
+        FILTERED,
+        [{ id, data: { status: "published" } }],
+        asPlugin(MAINTAINER)
+      );
+
+      expect(result.successful).toBe(1);
+      expect((await stored(FILTERED, id)).status).toBe("published");
     });
   }
 );
