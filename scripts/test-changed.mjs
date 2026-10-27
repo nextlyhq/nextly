@@ -244,7 +244,7 @@ const DEPENDENCY_FIELDS = [
   "optionalDependencies",
 ];
 
-function workspaceDependencies(manifest) {
+export function workspaceDependencies(manifest) {
   const entries = DEPENDENCY_FIELDS.flatMap(field =>
     Object.entries(manifest?.[field] ?? {})
   );
@@ -315,7 +315,7 @@ function guardsIn(root, dir) {
  * The test files `vitest list` prints for a package, with `extra` arguments
  * (`--changed <base>` to select), or null when it could not say.
  */
-function vitestList(root, dir, extra) {
+export function vitestList(root, dir, extra) {
   const { command, args, shell } = pnpmInvocation([
     "exec",
     "vitest",
@@ -365,7 +365,7 @@ function testPackage(root, workspace, plan, workers) {
 }
 
 /** A workspace's own manifest. */
-function manifestOf(root, workspace) {
+export function manifestOf(root, workspace) {
   return JSON.parse(readFileSync(join(root, workspace.dir, "package.json"), "utf8"));
 }
 
@@ -378,22 +378,26 @@ function stampPath(root, dir) {
 }
 
 /** Records that every test of a package just passed at HEAD, so every record describes HEAD. */
-function stampFullRun(root, dir) {
+export function stampFullRun(root, dir) {
   const path = stampPath(root, dir);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${git(root, ["rev-parse", "HEAD"]).trim()}\n`);
 }
 
+/** The commit a package's dependency records describe, or null when no full run here has stamped one. */
+export function readStamp(root, dir) {
+  try {
+    const stamped = readFileSync(stampPath(root, dir), "utf8").trim();
+    return /^[0-9a-f]{40}$/.test(stamped) ? stamped : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The package's files changed since its last passing full run, or null when that commit is unknown here. */
 function changedSinceFullRun(root, dir) {
-  const stamped = (() => {
-    try {
-      return readFileSync(stampPath(root, dir), "utf8").trim();
-    } catch {
-      return "";
-    }
-  })();
-  if (!/^[0-9a-f]{40}$/.test(stamped)) return null;
+  const stamped = readStamp(root, dir);
+  if (stamped === null) return null;
   const diff = spawnSync("git", ["diff", "--name-only", stamped, "HEAD", "--", dir], {
     cwd: root,
     encoding: "utf8",
@@ -417,7 +421,12 @@ function fullReasonFor(root, workspace, context) {
         changed: paths,
         changedPackages: filters,
       }),
-    () => staleRecordsReason(changedSinceFullRun(root, workspace.dir), new Set(paths)),
+    // Whether the records still describe the tree: the pre-push's own rule
+    // unless the caller judges them another way (CI, against main as tested).
+    () =>
+      context.recordsReason
+        ? context.recordsReason(workspace)
+        : staleRecordsReason(changedSinceFullRun(root, workspace.dir), new Set(paths)),
   ];
   for (const check of checks) {
     const reason = check();
@@ -427,7 +436,7 @@ function fullReasonFor(root, workspace, context) {
 }
 
 /** What to run for one package. */
-function planFor(root, workspace, context) {
+export function planFor(root, workspace, context) {
   const reason = fullReasonFor(root, workspace, context);
   return reason ? { full: true, reason } : selectionPlan(root, workspace.dir, context.mergeBase);
 }
@@ -456,7 +465,7 @@ function workersFrom(argv) {
 }
 
 /** What turbo declares the test tasks read outside their packages, or everything when it cannot say. */
-function turboDeclaration(root, paths) {
+export function turboDeclaration(root, paths) {
   const { command, args, shell } = pnpmInvocation(["turbo", "run", "test", "--dry=json"]);
   const dry = spawnSync(command, args, { cwd: root, encoding: "utf8", maxBuffer: 1024 * 1024 * 64, shell });
   return (dry.status === 0 && declaredReaders(parsedJson(dry.stdout), paths)) || UNDECLARED;
