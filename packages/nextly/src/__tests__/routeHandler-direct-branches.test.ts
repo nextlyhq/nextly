@@ -26,10 +26,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // to gate access. Tests force the happy path (auth allowed); negative auth
 // paths are covered by other test suites.
 vi.mock("../auth/middleware", () => ({
+  admittedActionOf: vi.fn(),
   requireAnyPermission: vi.fn(),
   requirePermission: vi.fn(),
   requireAuthentication: vi.fn(),
   requireCollectionAccess: vi.fn(),
+  requireCollectionWriteAccess: vi.fn(),
+  requireLifecycleAccess: vi.fn(),
   isErrorResponse: vi.fn(),
   createJsonErrorResponse: vi.fn(),
 }));

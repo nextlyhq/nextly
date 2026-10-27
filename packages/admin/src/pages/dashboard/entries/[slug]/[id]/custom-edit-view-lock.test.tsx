@@ -91,6 +91,12 @@ vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
   useUpdateAnswer: () => updateAnswer,
 }));
+// The requests judged in other languages: allowed, so these cases stay
+// about the claim.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: () => true,
+  useAsksTranslationStatus: () => false,
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));

@@ -875,6 +875,11 @@ export class RoleMutationService extends BaseService {
 
           // Handle permission updates
           if (changes.permissionIds !== undefined) {
+            // Under the lock on the role's row that every other writer of
+            // its permissions takes (`setRolePermissions`, and boot seeding's
+            // grants to the Public role), so neither lands between this
+            // removal and the insert below.
+            await tx.lockRow("roles", storedRoleId);
             // Delete all existing role-permission mappings
             await tx.delete(
               "role_permissions",

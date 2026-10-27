@@ -3,12 +3,15 @@
  * companion table over its value and `_locale`, so the same value is refused twice in one
  * language and allowed in two.
  *
- * A text column is keyed on `NULLIF(column, '')` rather than the column: a value left blank is
- * stored as `''`, and two blanks are not the same value. Inside the index a blank becomes NULL, and
- * NULLs never collide, so untranslated documents are never duplicates of one another, while what is
- * stored, and what every read returns, stays exactly as it was. PostgreSQL and SQLite key an index
- * on an expression; MySQL does from 8.0.13 (a functional key part, in its own parentheses), on a
- * SHA-256 since it cannot key an expression returning TEXT. Any other column (a number, a
+ * A text column leaves its blank out of the index: a value left blank is stored as `''`, and two
+ * blanks are not the same value, so untranslated documents are never duplicates of one another,
+ * while what is stored, and what every read returns, stays exactly as it was. PostgreSQL keys
+ * `NULLIF(column, '')`, under which a blank becomes NULL and NULLs never collide; MySQL does from
+ * 8.0.13 (a functional key part, in its own parentheses), on a SHA-256 since it cannot key an
+ * expression returning TEXT. SQLite keys the column itself in a partial index whose `WHERE` leaves
+ * blanks and NULLs out, which holds exactly the same values: the schema pipeline reads every SQLite
+ * table on a change that is not purely additive, and the tool it reads them with refuses a unique
+ * index over several columns when one of them is an expression. Any other column (a number, a
  * boolean, a date) has no blank, so it is keyed as it is: zero and false are values like any other.
  *
  * @module domains/i18n/migration/companion-unique-indexes
@@ -176,8 +179,9 @@ export function companionUniqueIndexStatements(
 }
 
 /**
- * What the index keys a column on. Text leaves its blank out (`NULLIF`); any other column is keyed
- * as it is.
+ * What the index keys a column on, and the rows it leaves out. Text leaves its blank out: by
+ * `NULLIF` in the key, or on SQLite by a partial index's `WHERE`, which keeps the key to plain
+ * columns (see the module's note); any other column is keyed as it is, over every row.
  *
  * MySQL takes an expression only as a functional key part, in parentheses of its own, and cannot
  * key one that returns TEXT, which a companion's text column is. It keys a SHA-256 instead, of the
@@ -189,11 +193,16 @@ export function companionUniqueIndexStatements(
 function indexKey(
   column: UniqueTranslatedColumn,
   dialect: SupportedDialect
-): string {
+): { key: string; where?: string } {
   const quoted = q(column.column, dialect);
-  if (!column.text) return quoted;
+  if (!column.text) return { key: quoted };
+  if (dialect === "sqlite") {
+    return { key: quoted, where: `${quoted} IS NOT NULL AND ${quoted} <> ''` };
+  }
   const value = `NULLIF(${quoted}, '')`;
-  return dialect === "mysql" ? `(SHA2(WEIGHT_STRING(${value}), 256))` : value;
+  return {
+    key: dialect === "mysql" ? `(SHA2(WEIGHT_STRING(${value}), 256))` : value,
+  };
 }
 
 /**
@@ -231,9 +240,9 @@ export function companionUniqueIndexChanges(args: CompanionUniqueIndexArgs): {
         companionUniqueIndexName(companionTable, w.column),
         dialect
       );
-      const key = indexKey(w, dialect);
+      const { key, where } = indexKey(w, dialect);
       const ifNotExists = dialect === "mysql" ? "" : "IF NOT EXISTS ";
-      return `CREATE UNIQUE INDEX ${ifNotExists}${name} ON ${table} (${key}, ${q("_locale", dialect)})`;
+      return `CREATE UNIQUE INDEX ${ifNotExists}${name} ON ${table} (${key}, ${q("_locale", dialect)})${where ? ` WHERE ${where}` : ""}`;
     });
   // Each column once: a caller may list a column the change keeps under both its old and new
   // fields, and MySQL refuses a second DROP of the same index.

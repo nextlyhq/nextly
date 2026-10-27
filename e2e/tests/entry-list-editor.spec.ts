@@ -90,6 +90,35 @@ test("opens a post editable, with no reader's banner", async () => {
   await expect(page.getByTestId("document-lock-banner")).toHaveCount(0);
 });
 
+// Below the width the document panel is drawn from, a tablet's as a phone's,
+// the strip under the header offers the id the panel holds.
+for (const [width, height, screenName] of [
+  [390, 844, "a phone"],
+  [820, 1180, "a tablet"],
+] as const) {
+  test(`copies a post's id at ${screenName}'s width`, async () => {
+    await limited.context.grantPermissions([
+      "clipboard-read",
+      "clipboard-write",
+    ]);
+    await page.setViewportSize({ width, height });
+    try {
+      await gotoAdmin(page, `/collections/posts/${postId}`);
+      // The page is shared by these cases, so the clipboard is set to
+      // something else first: each width's own click must put the id there.
+      await page.evaluate(() =>
+        navigator.clipboard.writeText("nothing copied yet")
+      );
+      await page.getByRole("button", { name: "Copy ID to clipboard" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(postId);
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+}
+
 test("offers the preview of a page it may change", async () => {
   await gotoAdmin(page, `/collections/block-pages/${blockPageId}`);
   await expect(

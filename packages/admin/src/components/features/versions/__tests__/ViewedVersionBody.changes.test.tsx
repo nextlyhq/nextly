@@ -86,6 +86,7 @@ const viewing: ViewedVersion = {
   versionNo: 4,
   snapshot: { title: "after", excerpt: "same", body: "after", slug: "same" },
   locale: null,
+  withheld: [],
   isLoading: false,
   error: null,
   scope,
@@ -95,18 +96,24 @@ const viewing: ViewedVersion = {
   about: null,
 };
 
-function renderVersion() {
+function renderVersion(
+  override: {
+    withheld?: readonly string[];
+    fields?: FieldConfig[];
+  } = {}
+) {
+  const shown = { ...viewing, withheld: override.withheld ?? viewing.withheld };
   return render(
     <DocumentHistoryContext.Provider
       value={{
-        viewing,
+        viewing: shown,
         setViewing: () => {},
         restore: null,
         setRestore: () => {},
       }}
     >
       <ViewedVersionBody
-        fields={fields}
+        fields={override.fields ?? fields}
         values={viewing.snapshot as Record<string, unknown>}
         actionsDisabled={false}
       >
@@ -163,6 +170,142 @@ describe("ViewedVersionBody — a past version with its changes marked", () => {
     expect(
       screen.getByRole("button", { name: "Hide 2 unchanged fields" })
     ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // A held-back field, in each shape a document can hold it, and where the
+  // read names it. An unnamed group lays its fields out on the document
+  // itself, so the read and the comparison name them without it; the group
+  // is drawn whole, as the editor draws it, its heading and rules intact.
+  const secret: FieldConfig = { name: "secret", type: "text" };
+  const hiddenSecret: FieldDiff = {
+    kind: "hidden",
+    reason: "no-access",
+    name: "secret",
+    label: "Secret",
+    type: "text",
+    status: "unchanged",
+  };
+  const groupHolding = (name: string): FieldDiff =>
+    ({
+      kind: "group",
+      name,
+      label: name,
+      type: "group",
+      status: "unchanged",
+      fields: [hiddenSecret],
+    }) as FieldDiff;
+  const unnamed = (...inner: FieldConfig[]): FieldConfig =>
+    ({ type: "group", label: "Private", fields: inner }) as FieldConfig;
+  const named = (name: string, ...inner: FieldConfig[]): FieldConfig =>
+    ({ name, type: "group", fields: inner }) as FieldConfig;
+
+  it.each([
+    {
+      shape: "a field of the document",
+      withheld: ["secret"],
+      laidOut: secret,
+      drawn: ["secret"],
+      held: hiddenSecret,
+      readable: 2,
+    },
+    {
+      shape: "a field inside a named group",
+      withheld: ["meta.secret"],
+      laidOut: named("meta", secret),
+      drawn: ["meta"],
+      held: groupHolding("meta"),
+      readable: 3,
+    },
+    {
+      shape: "a field inside an unnamed group",
+      withheld: ["secret"],
+      laidOut: unnamed(secret),
+      drawn: [""],
+      held: hiddenSecret,
+      readable: 2,
+    },
+    {
+      shape: "a field inside an unnamed group inside another",
+      withheld: ["secret"],
+      laidOut: unnamed(unnamed(secret)),
+      drawn: [""],
+      held: hiddenSecret,
+      readable: 2,
+    },
+    {
+      shape: "a field inside a named group inside an unnamed one",
+      withheld: ["inner.secret"],
+      laidOut: unnamed(named("inner", secret)),
+      drawn: [""],
+      held: groupHolding("inner"),
+      readable: 3,
+    },
+  ])(
+    "keeps $shape in view when held back, out of the fold and its count",
+    async ({ withheld, laidOut, drawn, held, readable }) => {
+      // The comparison names the held-back field hidden, neither changed nor
+      // unchanged; folded with the unchanged fields it would read as one.
+      diffMock.mockResolvedValue({
+        ...diff,
+        incomplete: true,
+        fields: [node("excerpt", "unchanged"), node("body", "changed"), held],
+      } satisfies VersionDiff);
+      renderVersion({
+        withheld,
+        fields: [
+          { name: "excerpt", type: "text" },
+          { name: "body", type: "text" },
+          laidOut,
+        ],
+      });
+
+      // Counted out of the fold: only the excerpt is unchanged.
+      expect(
+        await screen.findByRole("button", { name: "Show 1 unchanged field" })
+      ).toBeInTheDocument();
+      // Drawn without asking, through the editor's own renderer, which says
+      // in its place that it is hidden (an unnamed group, nameless, whole);
+      // the unchanged excerpt stays folded.
+      // (The whole form is drawn once while the comparison loads.)
+      expect(unchangedShown.current.at(-1)).toEqual(drawn);
+      expect(unchangedShown.current).not.toContainEqual(["excerpt"]);
+      // And the count says what the reader can read, nothing more.
+      expect(
+        screen.getByText(
+          `1 of the ${String(readable)} fields you can read changed`
+        )
+      ).toBeInTheDocument();
+    }
+  );
+
+  it("folds and counts an unnamed group like any other field when nothing in it is held back", async () => {
+    // The plausible break: treating every unnamed group as held back. Nothing
+    // is withheld here, so the group folds with the excerpt and is counted.
+    diffMock.mockResolvedValue({
+      ...diff,
+      fields: [
+        node("excerpt", "unchanged"),
+        node("body", "changed"),
+        node("note", "unchanged"),
+        node("extra", "unchanged"),
+      ],
+    } satisfies VersionDiff);
+    renderVersion({
+      fields: [
+        { name: "excerpt", type: "text" },
+        { name: "body", type: "text" },
+        unnamed(
+          { name: "note", type: "text" },
+          { name: "extra", type: "text" }
+        ),
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Show 2 unchanged fields" })
+    ).toBeInTheDocument();
+    // Not drawn on its own: only the whole form, while the comparison loads.
+    expect(unchangedShown.current).not.toContainEqual([""]);
   });
 
   it("moves to the next change in reading order, and puts focus there", async () => {
