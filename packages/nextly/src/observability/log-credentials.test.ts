@@ -470,39 +470,98 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("settings.settings.token=");
   });
 
-  it("judges a name longer than 256 characters whole", () => {
-    // Too long to be read forwards within the bound, so it is read back from
-    // its separator to its start: bare, as a JSON name, and as an escaped one,
-    // with the credential word at its end, at its start, or at the start of a
-    // dotted name, where a word near the separator must not decide.
-    const name = `${"a".repeat(292)}password`;
-    const first = `password${"a".repeat(300)}`;
-    const dotted = `password.${"x.".repeat(150)}end`;
-    const ordinary = "a".repeat(300);
-    const received: unknown[] = [];
-    maskingServiceLogger({
-      debug: (_: string, m?: unknown) => received.push(m),
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    }).debug("line", {
-      bare: `${name}=opaque-long-value next=1`,
-      json: `{"${name}":"opaque-json-value","page":2}`,
-      escaped: `{\\"${name}\\":\\"opaque-escaped-value\\",\\"page\\":2}`,
-      first: `${first}=opaque-first-value next=1`,
-      firstJson: `{"${first}":"opaque-first-json","page":2}`,
-      dotted: `${dotted}=opaque-dotted-value next=1`,
-      // The control: a long name that says nothing keeps its value.
-      kept: `${ordinary}=kept-value next=1`,
+  describe("a name longer than 256 characters, judged whole", () => {
+    // Every way a name outgrows the bound: its stem, one bracketed part, many
+    // of them, or both, with the credential word at its start, its end or in
+    // a bracket. Each is too long to be read forwards, so it is read back from
+    // its separator to its start, and judged as a name of any length is.
+    const names: Record<string, string> = {
+      "a long stem ending in the word": `${"a".repeat(292)}password`,
+      "a long stem starting with it": `password${"a".repeat(300)}`,
+      "a long dotted name starting with it": `password.${"x.".repeat(150)}end`,
+      "a long bracketed part before it": `user[${"a".repeat(300)}][password]`,
+      "the word before a long bracketed part": `password[${"a".repeat(300)}]`,
+      "many short bracketed parts before it": `user${"[x]".repeat(100)}[password]`,
+      "a long stem with it bracketed": `${"a".repeat(300)}[password]`,
+      "it between long parts": `${"a".repeat(300)}[password][${"b".repeat(300)}]`,
+    };
+    // The same lengths and shapes, saying nothing: their values stay.
+    const ordinary: Record<string, string> = {
+      "a long stem": "a".repeat(300),
+      "a long bracketed part": `user[${"a".repeat(300)}][page]`,
+      "many short bracketed parts": `user${"[x]".repeat(100)}`,
+    };
+    // Each form a name is written in, and how its value reads redacted: an
+    // escaped single quote opens a value read to the end of its line.
+    const forms: Record<
+      string,
+      [(n: string, v: string) => string, (n: string) => string]
+    > = {
+      bare: [(n, v) => `${n}=${v} next=1`, n => `${n}=[redacted] next=1`],
+      spaced: [(n, v) => `${n} = ${v} next=1`, n => `${n} = [redacted] next=1`],
+      "a header": [(n, v) => `${n}: ${v}`, n => `${n}: [redacted]`],
+      "a JSON name": [
+        (n, v) => `{"${n}":"${v}","page":2}`,
+        n => `{"${n}":"[redacted]","page":2}`,
+      ],
+      "an escaped JSON name": [
+        (n, v) => `{\\"${n}\\":\\"${v}\\",\\"page\\":2}`,
+        n => `{\\"${n}\\":\\"[redacted]\\",\\"page\\":2}`,
+      ],
+      "a single-quoted name": [
+        (n, v) => `'${n}'='${v}' next=1`,
+        n => `'${n}'='[redacted]' next=1`,
+      ],
+      "an escaped single-quoted name": [
+        (n, v) => `\\'${n}\\'=\\'${v}\\' next=1`,
+        n => `\\'${n}\\'=[redacted]`,
+      ],
+    };
+
+    /** What an app's service logger receives for `note`. */
+    function noteAsLogged(note: string): unknown {
+      const received: unknown[] = [];
+      maskingServiceLogger({
+        debug: (_: string, m?: unknown) => received.push(m),
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      }).debug("line", { note });
+      return (received[0] as { note: unknown }).note;
+    }
+
+    it.each(
+      Object.entries(names).flatMap(([shape, name]) =>
+        Object.entries(forms).map(
+          ([form, [write, redacted]]): [string, string, string] => [
+            `${shape}, as ${form}`,
+            write(name, "opaque-value"),
+            redacted(name),
+          ]
+        )
+      )
+    )("takes the value out after %s", (_, text, expected) => {
+      expect(noteAsLogged(text)).toBe(expected);
     });
-    expect(received[0]).toEqual({
-      bare: `${name}=[redacted] next=1`,
-      json: `{"${name}":"[redacted]","page":2}`,
-      escaped: `{\\"${name}\\":\\"[redacted]\\",\\"page\\":2}`,
-      first: `${first}=[redacted] next=1`,
-      firstJson: `{"${first}":"[redacted]","page":2}`,
-      dotted: `${dotted}=[redacted] next=1`,
-      kept: `${ordinary}=kept-value next=1`,
+
+    it.each(
+      Object.entries(ordinary).flatMap(([shape, name]) =>
+        Object.entries(forms).map(([form, [write]]): [string, string] => [
+          `${shape}, as ${form}`,
+          write(name, "kept-value"),
+        ])
+      )
+    )("keeps the value after %s", (_, text) => {
+      expect(noteAsLogged(text)).toBe(text);
+    });
+
+    it("leaves a name within the bound to the forms that read it forwards", () => {
+      // Read backwards, the short quoted name before `=` would take the value
+      // after it to the end of the line, and the header after that with it.
+      const text = "\\'2fa_token\\'=Bearer v-5,url-secret-11: {x}";
+      expect(noteAsLogged(text)).toBe(
+        "\\'2fa_token\\'=Bearer [redacted],url-secret-11: [redacted]"
+      );
     });
   });
 

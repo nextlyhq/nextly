@@ -563,13 +563,17 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * time, so a long line cost its length squared; and a bounded name tried
  * from a word near the separator would be judged by that word alone.
  *
- * A name longer than either bound is read backwards instead, whole: at a
- * separator no other form reached, from the separator through an optional
- * closing quote and any bracketed parts, back to the start of the name, so
- * it is judged as a name of any length would be (`password…=` as well as
- * `…password=`), bare, quoted or escaped. It is read only where a separator
- * could follow, and only back to the start of the name, so each name is
- * read once and a long line still costs its length.
+ * A name longer than either bound, counting its bracketed parts with its
+ * stem, is read backwards instead, whole: at a separator no other form
+ * reached, from the separator through an optional closing quote and any
+ * bracketed parts, back to the start of the name, so it is judged as a name
+ * of any length would be (`password…=` as well as `…password=`, and
+ * `user[…][password]`), bare, quoted or escaped. Its length is what is
+ * measured, so a short stem with long bracketed parts is read this way too;
+ * a name within the bound is left to the forms above, which read it
+ * forwards. It is read only where a separator could follow, and only back
+ * to the start of the name, so each name is read once and a long line still
+ * costs its length.
  *
  * An escaped JSON name is a JSON string inside another one, so it is read
  * as the outer quoting wrote the inner one's characters: a plain character,
@@ -585,7 +589,7 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=(?<![\w.-])([\w.-]{257,}(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=(?<![\w.-])(?=[\w.[\]-]{257})([\w.-]+(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
