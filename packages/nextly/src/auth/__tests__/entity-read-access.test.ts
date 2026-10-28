@@ -47,7 +47,11 @@ vi.mock("../../di/container", () => ({
 
 import { userActor } from "../access/actor";
 import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
-import { routeVerdictFor, runWithAccessMemo } from "../access/request-memo";
+import {
+  JUDGED_OTHERWISE,
+  routeVerdictFor,
+  runWithAccessMemo,
+} from "../access/request-memo";
 import { currentRuleLanguage } from "../access/rule-language";
 import { apiKeyScope } from "../authenticated-scope";
 import {
@@ -339,6 +343,28 @@ describe("canReadEntity — a declared read rule that answers a filter", () => {
     ]);
     expect(answer).toBe(true);
     expect(kept).toEqual({ filter });
+  });
+
+  it("keeps a key's filter under the key's scope, for the read its request runs", async () => {
+    const key = apiKey(["read-posts"]);
+    const scopeOf = apiKeyScope(key.grants ?? [], key.roles);
+    const asked = (scope?: typeof scopeOf) =>
+      routeVerdictFor({
+        userId: "owner-1",
+        ...(scope ? { scope } : {}),
+        slug: "posts",
+        action: "read",
+        language: currentRuleLanguage(),
+      });
+    const [answer, asKey, asSession] = await runWithAccessMemo(async () => [
+      await canReadEntity("posts", key),
+      asked(scopeOf),
+      asked(),
+    ]);
+    expect(answer).toBe(true);
+    expect(asKey).toEqual({ filter });
+    // The owner's own session is another caller, and is refused the key's.
+    expect(asSession).toBe(JUDGED_OTHERWISE);
   });
 
   it("answers no outside a request, where nothing can carry the filter", async () => {
