@@ -11913,7 +11913,14 @@ export class CollectionMutationService extends BaseService {
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName
     );
-    if (params.action !== "publish") {
+    // An unpublish is asked once, in the default language. So is a publish
+    // whose translation table lacks its per-language status: the write is
+    // refused on that before any language is asked, and there are no
+    // statuses to read the languages going live from.
+    if (
+      params.action !== "publish" ||
+      (await this.companionLacksStatus(params.collectionName))
+    ) {
       return this.entriesWithinWriteFilterNow(params, schema, ids, {
         asked,
       });
@@ -11922,9 +11929,6 @@ export class CollectionMutationService extends BaseService {
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
-    // The languages going live read the translations' own statuses, which
-    // need the companion's readiness resolved, as the write resolves it.
-    await this.warmCompanionReadiness(params.collectionName);
     const fields = collectionFields(collection);
     const rows: Record<string, unknown>[] =
       ids.length === 0
