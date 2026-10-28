@@ -16,7 +16,9 @@
 //   7. Generate per-statement SQL via sql-templates/.
 //   8. Write paired migrations/<ts>_<slug>.sql + migrations/meta/<ts>_<slug>.snapshot.json.
 //
-// Returns null when no operations remain (after rename collapsing).
+// Returns null when no operations remain (after rename collapsing) and no
+// entity's settings changed: a settings change alone is written as a
+// migration with no table statements, beside its snapshot.
 // CLI exits with code 2 in that case ("no changes detected" — distinct
 // from exit 1 for actual errors so CI scripts can tell apart).
 
@@ -91,6 +93,13 @@ import {
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
+import {
+  describeSettingsChange,
+  settingsChanges,
+  settingsRecordOf,
+  type EntitySettingsChange,
+  type RecordedEntitySettings,
+} from "./entity-settings";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
@@ -159,6 +168,14 @@ export interface MinimalConfigEntity {
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
   localized?: boolean;
+  /**
+   * The entity's declaration, as the snapshot records its settings: from the
+   * code-first config (`toMinimalEntities`) or the Builder's manifest. Every
+   * entity `migrate:create` hands in carries it, so each snapshot records every
+   * entity's settings; one without it contributes no record, and a run in
+   * which none carries one writes a snapshot that says nothing about settings.
+   */
+  settings?: RecordedEntitySettings;
 }
 
 export interface GenerateArgs {
@@ -173,7 +190,9 @@ export interface GenerateArgs {
   components: MinimalConfigEntity[];
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
-   * Each is appended to the generated SQL when an operation touches its table.
+   * Each is appended to the generated SQL when an operation touches its table
+   * or the entity's settings changed: the row is how a Builder entity's
+   * settings reach a deployed registry.
    */
   metadataUpserts?: { tableName: string; sql: string }[];
   /**
@@ -218,6 +237,11 @@ export interface GenerateResult {
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
   renamesAccepted: number;
+  /**
+   * Each entity whose settings changed since the previous snapshot, whether or
+   * not this migration changes its table. Empty when only tables changed.
+   */
+  settingsChanges: EntitySettingsChange[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -342,7 +366,26 @@ export async function generateMigration(
     fieldLeavesPlans.length > 0 ||
     fieldJoinsPlans.length > 0 ||
     uniquePlans.length > 0;
-  if (operations.length === 0 && !hasCompanions) {
+
+  // 3e. Settings: what the declarations say beyond their columns. A change to
+  //     one alone changes no table, so without this the run returned "no
+  //     changes" and the setting never reached a deployed database. Compared
+  //     with the previous snapshot's record; a previous snapshot that predates
+  //     the record says nothing about settings, so each entity is named as
+  //     recorded for the first time (`settingsChanges`).
+  const settingsRecord = settingsRecordOf(args);
+  const changedSettings = settingsChanges(
+    previous === null ? null : previous.data.entities,
+    settingsRecord,
+    {
+      collection: new Set(args.collections.map(e => e.slug)),
+      single: new Set(args.singles.map(e => e.slug)),
+      fieldGroup: new Set(args.components.map(e => e.slug)),
+    }
+  );
+  const hasSettingsChanges = changedSettings.length > 0;
+
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
 
@@ -376,7 +419,7 @@ export async function generateMigration(
       previousSnapshot
     );
   }
-  if (operations.length === 0 && !hasCompanions) {
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
 
@@ -428,11 +471,16 @@ export async function generateMigration(
     previousSnapshot.tables
   );
 
-  // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  // 7b. Append UI metadata-row upserts for any UI-built table this migration
+  //     touches (§4.12.7), and for any whose entity's settings changed: the row
+  //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set(operations.map(operationTableName));
+  const settingsTables = tablesOfSettingsChanges(changedSettings, args);
   if (args.metadataUpserts && args.metadataUpserts.length > 0) {
     for (const m of args.metadataUpserts) {
-      if (touched.has(m.tableName)) sqlStatements.push(m.sql);
+      if (touched.has(m.tableName) || settingsTables.has(m.tableName)) {
+        sqlStatements.push(m.sql);
+      }
     }
   }
 
@@ -491,6 +539,7 @@ export async function generateMigration(
     singles: singleSlugs,
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
+    settingsChanges: changedSettings.map(describeSettingsChange),
     now,
   });
 
@@ -504,7 +553,8 @@ export async function generateMigration(
     baseName,
     stream.written,
     sqlContent,
-    stream.contributions
+    stream.contributions,
+    settingsRecord
   );
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -608,7 +658,26 @@ export async function generateMigration(
     snapshotPath,
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
+    settingsChanges: changedSettings,
   };
+}
+
+/** The tables of the entities whose settings changed, by kind and slug. */
+function tablesOfSettingsChanges(
+  changes: readonly EntitySettingsChange[],
+  entities: Pick<GenerateArgs, "collections" | "singles" | "components">
+): Set<string> {
+  const lists = {
+    collection: entities.collections,
+    single: entities.singles,
+    fieldGroup: entities.components,
+  };
+  const tables = new Set<string>();
+  for (const change of changes) {
+    const entity = lists[change.kind].find(e => e.slug === change.slug);
+    if (entity) tables.add(entity.tableName);
+  }
+  return tables;
 }
 
 /**

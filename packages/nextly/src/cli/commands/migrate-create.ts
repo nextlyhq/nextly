@@ -62,7 +62,11 @@ import {
   hasAppStreamTables,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  toMinimalEntities,
+  withBuilderSettings,
+} from "../../domains/schema/migrate-create/config-entities";
+import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
   formatTimestamp,
@@ -354,7 +358,17 @@ export async function runMigrateCreate(
       `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
     );
   }
-  const { collections, singles, components } = merged;
+  // Each Builder entity carries its manifest entry as its settings, as each
+  // code-first one carries its config entry, so the snapshot records both.
+  const collections = withBuilderSettings(
+    merged.collections,
+    manifest.collections
+  );
+  const singles = withBuilderSettings(merged.singles, manifest.singles);
+  const components = withBuilderSettings(
+    merged.components,
+    manifest.components
+  );
 
   // Checked on the config's and the manifest's own entries rather than the
   // merged ones: the merge has already dropped shadowed Builder entities by
@@ -504,6 +518,9 @@ export async function runMigrateCreate(
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
   logger.keyValue("Operations", result.operationCount);
+  for (const change of result.settingsChanges) {
+    logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
   }

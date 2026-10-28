@@ -97,8 +97,10 @@ import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, type SupportedDialect } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import {
+  builderMigrationRemedy,
   discoverMigrationGroups,
   getSortedBaseNames,
+  isBuilderWrittenMigration,
   selectVariant,
 } from "../utils/migration-discovery";
 
@@ -360,6 +362,14 @@ export async function runChecks(args: {
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
+      // A Builder save writes no snapshot. Its remedy is the file
+      // `migrate:create` writes for the change, which `nextly migrate` also
+      // asks for before it refuses to apply this one.
+      if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
+        logger.error(`MISSING_SNAPSHOT: ${builderMigrationRemedy(sqlName)}`);
+        process.exit(1);
+        return;
+      }
       logger.error(
         `MISSING_SNAPSHOT: ${sqlName} has no paired snapshot file in ${metaDir}. ` +
           "If this migration was generated before F11 PR 3 (snapshot-based migrate:create), " +

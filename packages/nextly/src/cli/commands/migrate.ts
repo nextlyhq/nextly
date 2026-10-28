@@ -138,7 +138,9 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
+  builderMigrationRemedy,
   discoverMigrationGroups,
+  isBuilderWrittenMigration,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
@@ -414,6 +416,9 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        // A file the Builder wrote with no snapshot is replaced by the one
+        // `migrate:create` writes, never applied as written here.
+        refuseBuilderFilesWithoutSnapshot: true,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
@@ -697,6 +702,17 @@ export interface MigrateCoreDeps {
    * against the database.
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
+   * Refuse, before anything changes, a pending migration file the Schema
+   * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
+   * rather than apply it as written.
+   *
+   * `nextly migrate` passes it. Off by default because the development boot
+   * runs this core too, over the files the Builder writes into the project as
+   * it saves: there the Builder has already applied the change, and refusing
+   * would stop every later migration of a development server.
+   */
+  refuseBuilderFilesWithoutSnapshot?: boolean;
 }
 
 export interface MigrateCoreResult {
@@ -804,7 +820,14 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) previewPendingFile(m, dialect, logger);
+  for (const m of pendingFiles) {
+    previewPendingFile(m, dialect, logger);
+    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+      logger.info(
+        `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
 }
 
 /**
@@ -1445,6 +1468,9 @@ export async function migrateCore(
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
+      if (deps.refuseBuilderFilesWithoutSnapshot === true) {
+        await assertNoBuilderFilesWithoutSnapshot(deps);
+      }
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -1635,6 +1661,70 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Refuse a pending app migration file the Schema Builder wrote with no snapshot
+ * beside it, naming each and the file to commit instead.
+ *
+ * Applied as written, such a file runs without the drift check a snapshot
+ * gives — so on a database that is not where the Builder's own was, it either
+ * fails part-way or changes a table into a shape nothing recorded — and it
+ * leaves the next `migrate:create` comparing against a snapshot that never saw
+ * the change. `migrate:create` writes the same change with its snapshot.
+ *
+ * Read before the core reconcile, inside the lock, so the run is refused with
+ * the schema, the ledger and the registry as it found them. A missing ledger
+ * reads as every file pending, as it does for the files phase.
+ */
+async function assertNoBuilderFilesWithoutSnapshot(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  const files = await discoverMigrations(
+    deps.migrationsDir,
+    deps.logger,
+    deps.dialect,
+    "app"
+  );
+  const builderFiles = files.filter(m => isBuilderWrittenMigration(m.name));
+  if (builderFiles.length === 0) return;
+  const hasLedger = await (
+    deps.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+  ).tableExists("nextly_schema_events");
+  const repo = hasLedger
+    ? new SchemaEventsRepository(deps.db, deps.dialect)
+    : undefined;
+  const refused: string[] = [];
+  for (const m of builderFiles) {
+    const filename = `${m.name}.sql`;
+    if (repo && (await repo.isFileApplied(filename))) continue;
+    if (await isRefusedWithoutSnapshot(m, deps.migrationsDir)) {
+      refused.push(filename);
+    }
+  }
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+    publicMessage:
+      `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+      refused.map(builderMigrationRemedy).join(" "),
+    logContext: { files: refused },
+  });
+}
+
+/**
+ * Whether `nextly migrate` refuses this file for want of a snapshot: one the
+ * Schema Builder wrote, with none beside it. The one answer the run and
+ * `--dry-run` both ask.
+ */
+async function isRefusedWithoutSnapshot(
+  m: ParsedMigration,
+  migrationsDir: string
+): Promise<boolean> {
+  return (
+    isBuilderWrittenMigration(m.name) &&
+    (await loadTargetSnapshot(resolve(migrationsDir, "meta"), m.name)) === null
+  );
 }
 
 /** Load a migration's paired target snapshot, or null if absent. */
