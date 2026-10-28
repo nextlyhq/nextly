@@ -2,7 +2,7 @@
  * The join between `SingleForm` and its header for the shareable link.
  *
  * The halves are covered elsewhere — `entry-address.test.tsx` pins the locale
- * outcomes and `EntrySystemHeader.preview.test.tsx` pins what the header
+ * outcomes and `DocumentBar.preview.test.tsx` pins what the header
  * renders given props — and neither sees the conjunction that consumes them.
  * The collection form has the same seam and the same tests, for the reason
  * recorded there: removing the `unresolved` guard leaves every test around the
@@ -36,15 +36,12 @@ vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
   useUpdateAnswer: () => (reader.current ? "refused" : "allowed"),
 }));
 
-vi.mock(
-  "@admin/components/features/entries/EntryForm/EntrySystemHeader",
-  () => ({
-    EntrySystemHeader: (props: Record<string, unknown>) => {
-      headerProps(props);
-      return null;
-    },
-  })
-);
+vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
+  DocumentBar: (props: Record<string, unknown>) => {
+    headerProps(props);
+    return null;
+  },
+}));
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({

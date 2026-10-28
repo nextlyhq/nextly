@@ -38,6 +38,7 @@ export function PermissionMatrix({
     isPartiallySelected,
     isAllSelectedForAction,
     isPartiallySelectedForAction,
+    shown,
   } = usePermissionMatrix({ permissions, value, onChange, lockedIds });
 
   return (
@@ -71,8 +72,23 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
-              onClick={() => onChange(permissions.map(p => p.id))}
-              disabled={disabled || value.length === permissions.length}
+              // Every permission the base does not already give, beside any
+              // the role holds itself.
+              onClick={() =>
+                onChange(
+                  Array.from(
+                    new Set([
+                      ...value,
+                      ...permissions
+                        .map(p => p.id)
+                        .filter(id => !lockedIds.includes(id)),
+                    ])
+                  )
+                )
+              }
+              disabled={
+                disabled || permissions.every(p => shown.includes(p.id))
+              }
               aria-label="Select all permissions"
             >
               Select All
@@ -82,6 +98,8 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
+              // The value is the role's own permissions, so clearing takes all
+              // of them away; inherited ones stay shown, as the base gives them.
               onClick={() => onChange([])}
               disabled={disabled || value.length === 0}
               aria-label="Clear all permissions"
@@ -101,7 +119,7 @@ export function PermissionMatrix({
             >
               <PermissionMatrixTable
                 contentTypes={filteredContentTypes[category] ?? []}
-                value={value}
+                value={shown}
                 lockedIds={lockedIds}
                 disabled={disabled}
                 searchTerm={searchTerm}

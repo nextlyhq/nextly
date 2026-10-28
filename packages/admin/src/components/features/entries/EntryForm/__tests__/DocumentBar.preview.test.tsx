@@ -25,7 +25,7 @@ vi.mock("@admin/services/previewLinkApi", () => ({
   previewLinkApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) },
 }));
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 /**
  * The header reads form state through context, so it is given a real form:
@@ -43,7 +43,7 @@ const SHARE_DOCUMENT = { collection: "posts", entryId: "e1" };
 function renderHeader(overrides: Record<string, unknown> = {}) {
   return render(
     <WithForm>
-      <EntrySystemHeader
+      <DocumentBar
         mode="edit"
         hasStatus={false}
         collectionSlug="posts"
@@ -58,7 +58,7 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
   );
 }
 
-describe("EntrySystemHeader preview control", () => {
+describe("DocumentBar preview control", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canMock.mockReturnValue(true);
