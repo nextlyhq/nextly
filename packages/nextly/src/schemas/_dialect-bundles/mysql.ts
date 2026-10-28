@@ -19,6 +19,9 @@ export { users } from "../users/mysql";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
 export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
 export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
@@ -107,6 +110,11 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
+export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

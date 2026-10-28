@@ -75,6 +75,29 @@ const REQUEST_PATH_RESTRICTED = [
 ];
 
 /**
+ * One dialect's table definitions, which nextly's product code reads through
+ * the loaded dialect (`loadedDialect`, `getDialectTables`) so that a process
+ * imports only its own dialect's tables. A value import of a dialect file, or
+ * of a feature barrel that re-exports all three, puts every dialect into every
+ * process that loads the importer. Type-only imports load nothing.
+ */
+const DIALECT_TABLE_RESTRICTED = [
+  {
+    group: [
+      "**/schemas/*/postgres",
+      "**/schemas/*/mysql",
+      "**/schemas/*/sqlite",
+      // The feature barrels that re-export all three dialects' files.
+      "**/schemas/{dynamic-collections,dynamic-field-groups,email-providers,email-templates,user-field-definitions}",
+      "**/schemas/{dynamic-collections,dynamic-field-groups,email-providers,email-templates,user-field-definitions}/index",
+    ],
+    allowTypeImports: true,
+    message:
+      "Read a dialect's tables through the loaded dialect (loadedDialect or getDialectTables from database/), not by importing a dialect's file: that loads every dialect in every process.",
+  },
+];
+
+/**
  * The React Compiler rules of eslint-plugin-react-hooks 7's recommended
  * preset that oxlint implements, under its `react` plugin. The preset's
  * `config` and `gating` rules check the compiler's own configuration and have
@@ -474,6 +497,24 @@ export default defineConfig({
       },
     },
     {
+      // Product code reads a dialect's tables through the loaded dialect. The
+      // schema files themselves, the loader and tests are exempt. Before the
+      // request-path override, which repeats these patterns: a later override
+      // replaces this rule's options for the files both match.
+      files: ["packages/nextly/src/**/*.{ts,tsx}"],
+      excludeFiles: [
+        "packages/nextly/src/schemas/**",
+        "packages/nextly/src/database/dialect-tables.ts",
+        ...TESTS,
+      ],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          { patterns: DIALECT_TABLE_RESTRICTED },
+        ],
+      },
+    },
+    {
       // The request path never loads the dev-only drizzle-kit entrypoints or
       // the migrate CLI: migrations are a CLI concern.
       files: [
@@ -492,7 +533,7 @@ export default defineConfig({
         "no-restricted-imports": [
           "error",
           {
-            patterns: REQUEST_PATH_RESTRICTED,
+            patterns: [...REQUEST_PATH_RESTRICTED, ...DIALECT_TABLE_RESTRICTED],
           },
         ],
       },
@@ -508,7 +549,9 @@ export default defineConfig({
       rules: {
         "nextly/no-static-restricted-import": [
           "error",
-          { patterns: REQUEST_PATH_RESTRICTED },
+          {
+            patterns: [...REQUEST_PATH_RESTRICTED, ...DIALECT_TABLE_RESTRICTED],
+          },
         ],
       },
     },

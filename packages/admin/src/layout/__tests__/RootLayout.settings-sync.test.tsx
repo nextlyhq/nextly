@@ -28,6 +28,14 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   ),
 }));
 
+// The tab title's provider reads branding and the open collection; neither is
+// under test here, and RootLayout.document-title.test.tsx covers its wiring.
+vi.mock("@admin/context/providers/DocumentTitleProvider", () => ({
+  DocumentTitleProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
 // The private-route chrome; not under test, and the real one reads branding
 // and router state through half a dozen hooks.
 vi.mock("../DashboardLayout", () => ({

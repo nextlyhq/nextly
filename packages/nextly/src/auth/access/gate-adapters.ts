@@ -43,7 +43,11 @@ import {
 } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
-import { rememberRuleOutcome, routeVerdictFor } from "./request-memo";
+import {
+  JUDGED_OTHERWISE,
+  rememberRuleOutcome,
+  routeVerdictFor,
+} from "./request-memo";
 import {
   actorForKey,
   actorForPrincipal,
@@ -347,13 +351,14 @@ async function routeAuthorizedVerdict(
     // from the first.
     const kept = routeVerdictFor({
       userId: q.user.id,
+      ...(q.scope ? { scope: q.scope } : {}),
       slug: q.slug,
       action: q.action,
       language: currentRuleLanguage(),
     });
-    // A route that judged this read only in another language said nothing
-    // of this one.
-    if (kept === "other-language") return INSUFFICIENT;
+    // A route that judged this read only for another caller of the same user,
+    // or only in another language, said nothing of this one.
+    if (kept === JUDGED_OTHERWISE) return INSUFFICIENT;
     if (kept && "filter" in kept) return onlyMatching(q, kept.filter, true);
     // `routeAuthorized` is set by server code that has already judged the
     // caller, never from a request's input. Where no route in this request
@@ -403,11 +408,14 @@ function ruleContextKeyOf(
   switch (actor.kind) {
     case "user":
     case "key":
+      // In the order the rule is handed them: a rule may read `roles[0]`,
+      // so two scopes holding the same roles in another order are told
+      // different things.
       return JSON.stringify([
         "staff",
         actor.userId,
-        [...actor.roles].sort(),
-        actor.permissions.map(grant => grant.slug).sort(),
+        actor.roles,
+        actor.permissions.map(grant => grant.slug),
       ]);
     case "principal": {
       const person = canonicalJson(actor.principal);

@@ -43,7 +43,10 @@ import {
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -479,8 +482,11 @@ export function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
+  // Told whether the route's handler applies a read rule's filter, so a rule
+  // answering one is handed back to be kept rather than refused.
   return authorizeBy(
-    routeGateVerdict,
+    (auth, asked, slug, rules) =>
+      routeGateVerdict(auth, asked, slug, rules, appliesFilter),
     authResult,
     action,
     resource,
@@ -519,28 +525,43 @@ async function authorizeBy(
   action: string,
   resource: string,
   scope: RefusalScope,
+  // Whether the route's handler applies a read rule's filter: only such a
+  // route keeps its verdict.
   appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
   const answered = await verdictOf(
     authResult,
     action,
     resource,
-    getRBACService(),
-    appliesFilter
+    getRBACService()
   );
-  // The route keeps its verdict for the request, every entry or the entries
-  // a read rule's filter matches, so the handler it authorizes applies it
-  // without asking the rule again. A request that cannot keep a filter
-  // refuses the caller, as a route that applies no filter does, rather than
-  // let the read run unfiltered.
+  // A route whose handler applies a read rule's filter keeps its verdict for
+  // the request, every entry or the entries the filter matches, so the read
+  // it authorizes applies it without asking the rule again. A request that
+  // cannot keep a filter refuses the caller, as a route that applies no
+  // filter does, rather than let the read run unfiltered. A route that
+  // applies no filter keeps nothing: its rule is asked afresh, and an allow
+  // kept from it could overwrite a filter another route in the request kept
+  // for the same caller; no kept verdict already means every entry.
   const question = {
     userId: authResult.userId,
+    // A key is kept apart from its user's other keys and sessions by the
+    // scope its rule is told.
+    ...(authResult.authMethod === "api-key"
+      ? { scope: apiKeyScopeFrom(authResult) }
+      : {}),
     slug: resource,
     action,
     language: currentRuleLanguage(),
   };
-  if (answered.allowed) rememberRouteVerdict(question, { all: true });
-  if (!answered.allowed && answered.refusal === "only-matching-entries") {
+  if (appliesFilter && answered.allowed) {
+    rememberRouteVerdict(question, { all: true });
+  }
+  if (
+    appliesFilter &&
+    !answered.allowed &&
+    answered.refusal === "only-matching-entries"
+  ) {
     const kept = rememberRouteVerdict(question, { filter: answered.filter });
     if (kept) return authResult;
   }

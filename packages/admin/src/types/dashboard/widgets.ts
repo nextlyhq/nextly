@@ -94,10 +94,16 @@ export interface DashboardWidget {
   serverData?: true;
   /**
    * What a declared widget's empty state says and offers in place of the
-   * frame's own, its action already an href and already one this reader may
-   * take (the server withholds one they may not).
+   * frame's own: its action a link already made an href and already one this
+   * reader may take (the server withholds one they may not), or the card's own
+   * settings, which the card offers only where its reader can change them.
    */
-  declaredEmpty?: { title?: string; action?: { label: string; href: string } };
+  declaredEmpty?: {
+    title?: string;
+    action?:
+      | { label: string; href: string }
+      | { label: string; opensSettings: true };
+  };
   /**
    * What a reader may change about this card, as the widget declared it.
    *
@@ -116,6 +122,11 @@ export interface DashboardWidget {
   cells?: WidgetStatCell[] | WidgetQueryCell[];
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
+  /**
+   * Who declared a widget drawn by its own component (`plugin "name"`), as core publishes it,
+   * so a card whose component is missing can say whose it is. Absent for any other widget.
+   */
+  owner?: string;
   /**
    * Present for `actions`, already filtered to the shortcuts this reader may
    * use — `resolve-widgets` drops the rest, so the renderer never sees one it

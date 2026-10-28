@@ -4,24 +4,22 @@
  * Each builder returns a declaration that carries the type of the value a
  * person can choose, so a widget's settings object is enough for the compiler
  * to know, with no generated file, what its data function, its query and its
- * component will be handed: `settings.items()` is a number wherever it is read,
- * `settings.dateRange()` one of four ranges.
+ * component will be handed: `setting.number({ ... })` is a number wherever it
+ * is read, `setting.dateRange({ ... })` one of four ranges.
  *
- * The standard builders are the shared set every widget offers alike (title
- * aside, which core gives every widget); the custom ones are for what is
- * particular to one widget. A dependent setting names the setting it depends
- * on, and that name is checked against the widget's own settings when the
- * widget is declared.
+ * The field builders are the collections' own (text, textarea, number,
+ * checkbox, select, date), taking the config a collection field takes less its
+ * `name`; the pickers beside them choose something of the site (a collection,
+ * a field of it, a date range, a list's filter, sort, grouping and fields).
+ * Every setting carries a label. A dependent setting names the setting it
+ * depends on, and that name is checked against the widget's own settings when
+ * the widget is declared.
  *
  * @module domains/widgets/declaration/setting-builders
  */
 
 import type { RelativeSpan, WidgetQuery } from "../query";
-import {
-  LIST_DENSITIES,
-  type ListDensity,
-  MAX_WIDGET_ROWS,
-} from "../query-limits";
+import { LIST_DENSITIES, type ListDensity } from "../query-limits";
 
 /**
  * Carries a setting's value type without a runtime property.
@@ -36,7 +34,7 @@ declare const settingValue: unique symbol;
  * (`WidgetSetting` in `../settings.ts`), with its value type carried along.
  *
  * 🔴 The SAME vocabulary as the definitions registration validates: `type`,
- * `defaultValue` and `of`, and core's eight setting types (`AnyWidgetSetting`
+ * `defaultValue` and `of`, and core's setting types (`AnyWidgetSetting`
  * in `../settings.ts`), judged by its rules and read by its reader. The record
  * key becomes the definition's `name`. So a declaration is not a second
  * schema to convert and keep in step.
@@ -52,6 +50,10 @@ export interface SettingDeclaration<
   On extends string = never,
 > {
   readonly type: Kind;
+  /** What the settings sheet calls it: a setting is never shown by its key. */
+  readonly label: string;
+  /** Help text under the control, where the field renderer reads it. */
+  readonly admin?: { readonly description?: string };
   /**
    * The starting value, used until a person changes the setting.
    *
@@ -148,37 +150,6 @@ export type ChartStyle = (typeof CHART_STYLES)[number];
 export type WidgetFilter = NonNullable<WidgetQuery["where"]>;
 
 /**
- * Builds one declaration; every builder below is this with its types fixed.
- *
- * Options beyond the default and the dependency (a select's choices, a
- * number's bounds) are kept on the object for startup to validate; only the
- * value type needs to be visible to the compiler.
- */
-function declare<Value, Kind extends string, On extends string = never>(
-  type: Kind,
-  {
-    default: defaultValue,
-    ...rest
-  }: { default?: Value; of?: On; [option: string]: unknown } = {}
-): SettingDeclaration<Value, Kind, On> {
-  // `default` is what an author writes; `defaultValue` is the definition's own
-  // field, so the object needs no translation on its way to registration.
-  return defaultValue === undefined
-    ? { type, ...rest }
-    : { type, defaultValue, ...rest };
-}
-
-/**
- * Marks a setting as the card's quick one, or leaves it unmarked.
- *
- * Offered only by builders whose control fits a card's header (a choice or an
- * on/off), and written only when true, so an unmarked setting's declaration is
- * exactly what it was before quick settings existed.
- */
-const quickFlag = (quick: boolean | undefined) =>
-  quick === true ? { quick: true } : {};
-
-/**
  * What the reader is shown for each density. A record over every density, so one added to
  * `LIST_DENSITIES` cannot reach a settings sheet unnamed.
  */
@@ -188,121 +159,170 @@ const DENSITY_LABELS: Readonly<Record<ListDensity, string>> = {
 };
 
 /**
- * A list card's Density options, one for every density, each named for the reader: what
- * `settings.density()` offers, and what core's own list cards offer, so the two cannot differ.
+ * A list card's Density options, one for every density, each named for the reader: what each of
+ * core's own list cards offers, so they cannot differ.
  */
 export const DENSITY_OPTIONS: readonly { label: string; value: ListDensity }[] =
   LIST_DENSITIES.map(value => ({ label: DENSITY_LABELS[value], value }));
 
-/** A fixed set of values, as a select definition lists its options. */
-function choices<Option extends string>(values: readonly Option[]) {
-  return values.map(value => ({ label: value, value }));
+/**
+ * What a reader is shown for each date range: the words the card's header and
+ * its settings use, so every widget offering a range names them alike.
+ */
+const DATE_RANGE_LABELS: Readonly<Record<DateRange, string>> = {
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
+  "12m": "Last 12 months",
+};
+
+/** The date ranges as a select's options, each named for the reader. */
+export const DATE_RANGE_OPTIONS: readonly {
+  label: string;
+  value: DateRange;
+}[] = DATE_RANGES.map(value => ({ label: DATE_RANGE_LABELS[value], value }));
+
+/**
+ * What a field builder takes: the keys of the collection field's config a
+ * setting reads (`Extra`), with `label` required and the starting value a
+ * plain value. A setting's config IS its collection builder's config less
+ * `name`, which the setting's key gives: only the keys a setting reads are
+ * offered, so an author never writes one that silently does nothing on a card.
+ *
+ * 🔴 Declared STRUCTURALLY rather than picked from `TextFieldConfig` and its
+ * siblings, for the reason `WidgetSetting` is (`../settings.ts`): the admin's
+ * type check reaches this module through core's widgets, and the field types
+ * pull `collections/fields/types/base` behind them, whose imports do not
+ * resolve there. `__tests__/setting-builders.compat.test-d.ts` holds each
+ * config to the collection field's own, key by key, where they do.
+ */
+type SettingConfig<
+  Extra,
+  Value,
+  StartRequired extends boolean = false,
+> = Extra &
+  PickerConfig &
+  (StartRequired extends true
+    ? { defaultValue: Value }
+    : { defaultValue?: Value });
+
+/**
+ * What every setting takes, a dashboard picker included: the label and help
+ * text a collection field takes.
+ */
+type PickerConfig = {
+  /** What the settings sheet calls it: a setting is never shown by its key. */
+  label: string;
+  /** Help text under the control, where the field renderer reads it. */
+  admin?: { description?: string };
+};
+
+/** The quick flag a choice or an on/off may carry: drawn on the card's header. */
+type Quick = {
+  /** Whether it sits on the card's header. At most one per widget. */
+  quick?: boolean;
+};
+
+/**
+ * One declaration, in the definitions' own vocabulary, so the object needs no
+ * translation on its way to registration. The quick flag is written only when
+ * true, so an unmarked setting's declaration has no `quick` key at all.
+ */
+function declare<Value, Kind extends string, On extends string = never>(
+  type: Kind,
+  { quick, ...config }: Record<string, unknown> & { quick?: boolean }
+): SettingDeclaration<Value, Kind, On> {
+  return {
+    type,
+    ...config,
+    ...(quick === true ? { quick: true } : {}),
+  } as SettingDeclaration<Value, Kind, On>;
 }
 
 /**
- * The setting builders.
+ * The setting builders: the collections' field builders, as a card's settings
+ * take them, and the dashboard's pickers beside them.
  *
- * `const` type parameters keep a dependency's name, and a select's options, as
- * the literals the author wrote: widened to `string`, neither could be checked.
+ * Each field builder's config is the collection builder's config without
+ * `name`, the setting's key, and with `label` required. `const` type
+ * parameters keep a select's options and a dependency's name as the literals
+ * the author wrote, so a reader comparing against a value the setting does
+ * not offer, or naming a setting the widget does not have, fails to compile.
+ *
+ * @experimental While the dashboard widget SDK is being built.
  */
-export const settings = {
-  /** Collection: the collection a card reads. */
-  collection: () => declare<string, "collection">("collection"),
-  /** Filter: the list view's conditions, over the collection it names. */
-  filter: <const On extends string>(options: { of: On }) =>
-    declare<WidgetFilter, "filter", On>("filter", options),
-  /** Sort: a field of the collection it names; newest edit first by default. */
-  sort: <const On extends string>(options: { of: On; default?: string }) =>
-    declare<string, "sort", On>("sort", options),
-  /** Group by: status, or a choice field of the collection it names. */
-  groupBy: <const On extends string>(options: { of: On; default?: string }) =>
-    declare<string, "groupBy", On>("groupBy", options),
+export const setting = {
+  /** A line of text. */
+  text: (config: SettingConfig<object, string, true>) =>
+    declare<string, "text">("text", config),
   /**
-   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 10), 5 by
-   * default. Read from that one limit, so the editor never offers rows the card would not draw.
+   * Text over several lines, at most `maxLength` characters when given,
+   * counted in code points.
    */
-  items: ({ default: start = 5 }: { default?: number } = {}) =>
-    declare<number, "number">("number", {
-      default: start,
-      min: 1,
-      max: MAX_WIDGET_ROWS,
-    }),
-  /** Date range: a select of the four ranges, the last 30 days by default. */
-  dateRange: ({
-    default: start = "30d",
-    quick,
-  }: { default?: DateRange; quick?: boolean } = {}) =>
-    declare<DateRange, "select">("select", {
-      default: start,
-      options: choices(DATE_RANGES),
-      ...quickFlag(quick),
-    }),
-  /** Chart style: a select of line or bars, a line by default. */
-  chartStyle: ({
-    default: start = "line",
-    quick,
-  }: { default?: ChartStyle; quick?: boolean } = {}) =>
-    declare<ChartStyle, "select">("select", {
-      default: start,
-      options: choices(CHART_STYLES),
-      ...quickFlag(quick),
-    }),
+  textarea: (config: SettingConfig<{ maxLength?: number }, string>) =>
+    declare<string, "textarea">("textarea", config),
+  /** A number, within `min` and `max` when given. */
+  number: (
+    config: SettingConfig<{ min?: number; max?: number }, number, true>
+  ) => declare<number, "number">("number", config),
+  /** On or off. */
+  checkbox: (config: SettingConfig<object, boolean, true> & Quick) =>
+    declare<boolean, "checkbox">("checkbox", config),
   /**
-   * Density: a select of default or compact rows, for a list card; default
-   * unless chosen. A compact card holds more rows at the same size.
+   * One of a fixed set, each with a label and a value. The value type is the
+   * options' values, and `NoInfer` keeps the default from widening the set it
+   * must belong to.
+   */
+  select: <const Value extends string>(
+    config: PickerConfig & {
+      options: readonly { label: string; value: Value }[];
+      defaultValue: NoInfer<Value>;
+    } & Quick
+  ) =>
+    declare<Value, "select">("select", {
+      ...config,
+      options: config.options.map(({ label, value }) => ({ label, value })),
+    }),
+  /** A date, as an ISO 8601 date string. */
+  date: (config: SettingConfig<object, string>) =>
+    declare<string, "date">("date", config),
+
+  /**
+   * Collection: the collection a card reads. It has no default: a card starts
+   * on the collection whose group it was added from.
+   */
+  collection: (config: PickerConfig) =>
+    declare<string, "collection">("collection", config),
+  /**
+   * A field of the collection the setting named by `of` chooses: one of the
+   * fields that collection offers this reader, for a card's own `load` to read.
+   */
+  fieldOf: <const On extends string>(
+    config: PickerConfig & { of: On; defaultValue?: string }
+  ) => declare<string, "field", On>("field", config),
+  /** Date range: one of four spans, the last 30 days by default. */
+  dateRange: (config: PickerConfig & { defaultValue?: DateRange } & Quick) =>
+    declare<DateRange, "select">("select", {
+      ...config,
+      defaultValue: config.defaultValue ?? "30d",
+      options: DATE_RANGE_OPTIONS.map(option => ({ ...option })),
+    }),
+  /** Filter: the list view's conditions, over the collection `of` names. */
+  filter: <const On extends string>(config: PickerConfig & { of: On }) =>
+    declare<WidgetFilter, "filter", On>("filter", config),
+  /** Sort: a field of the collection `of` names, with a direction. */
+  sort: <const On extends string>(
+    config: PickerConfig & { of: On; defaultValue?: string }
+  ) => declare<string, "sort", On>("sort", config),
+  /**
+   * Fields: the fields each row of a list shows after its title, in order.
    *
    * @experimental
    */
-  density: ({ default: start = "default" }: { default?: ListDensity } = {}) =>
-    declare<ListDensity, "select">("select", {
-      default: start,
-      options: DENSITY_OPTIONS,
-    }),
-  /** Only mine: a checkbox, off by default. */
-  onlyMine: ({
-    default: start = false,
-    quick,
-  }: { default?: boolean; quick?: boolean } = {}) =>
-    declare<boolean, "checkbox">("checkbox", {
-      default: start,
-      ...quickFlag(quick),
-    }),
-
-  /** A setting of the widget's own: a line of text. */
-  text: (options: { default: string }) =>
-    declare<string, "text">("text", options),
-  /**
-   * A setting of the widget's own: text over several lines, at most
-   * `maxLength` characters when given, counted in code points.
-   *
-   * @experimental The shape may still change.
-   */
-  textarea: (options: { default?: string; maxLength?: number } = {}) =>
-    declare<string, "textarea">("textarea", options),
-  /** A setting of the widget's own: a number. */
-  number: (options: { default: number; min?: number; max?: number }) =>
-    declare<number, "number">("number", options),
-  /** A setting of the widget's own: on or off, a checkbox. */
-  toggle: ({ quick, ...options }: { default: boolean; quick?: boolean }) =>
-    declare<boolean, "checkbox">("checkbox", {
-      ...options,
-      ...quickFlag(quick),
-    }),
-  /**
-   * A setting of the widget's own: one of a fixed set.
-   *
-   * The value type is the options themselves, so a reader comparing against a
-   * value the setting does not offer is told so. `NoInfer` keeps the default
-   * from widening the set it must belong to.
-   */
-  select: <const Option extends string>(options: {
-    options: readonly Option[];
-    default: NoInfer<Option>;
-    quick?: boolean;
-  }) =>
-    declare<Option, "select">("select", {
-      default: options.default,
-      options: choices(options.options),
-      ...quickFlag(options.quick),
-    }),
+  fields: <const On extends string>(config: PickerConfig & { of: On }) =>
+    declare<string[], "fields", On>("fields", config),
+  /** Group by: status, or a choice field of the collection `of` names. */
+  groupBy: <const On extends string>(
+    config: PickerConfig & { of: On; defaultValue?: string }
+  ) => declare<string, "groupBy", On>("groupBy", config),
 };

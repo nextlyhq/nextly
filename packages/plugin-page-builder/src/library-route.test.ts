@@ -1117,24 +1117,31 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(true);
   });
 
-  it("still reaches the item ceiling through its smaller pages", async () => {
-    const pages = Array.from(
-      { length: MAX_LIBRARY_PATTERNS / COMPONENT_LIST_PAGE_SIZE + 1 },
-      (_, page) =>
-        Array.from({ length: COMPONENT_LIST_PAGE_SIZE }, (_, i) =>
-          componentRow(`c${String(page * COMPONENT_LIST_PAGE_SIZE + i)}`)
-        )
-    );
-    const byId = Object.fromEntries(
-      pages.flat().map(row => [row.id, { ...row, content: draft(row.id) }])
-    );
-    const { ctx } = componentContext({ pages, byId });
+  // Walks the whole ceiling, 3,000 rows and a page more, each completed and
+  // read again by id: CPU-bound work that a Windows runner spends 5.0 to 5.1 s
+  // on, at Vitest's 5 s default. Three times that, for this test alone.
+  it(
+    "still reaches the item ceiling through its smaller pages",
+    { timeout: 15_000 },
+    async () => {
+      const pages = Array.from(
+        { length: MAX_LIBRARY_PATTERNS / COMPONENT_LIST_PAGE_SIZE + 1 },
+        (_, page) =>
+          Array.from({ length: COMPONENT_LIST_PAGE_SIZE }, (_, i) =>
+            componentRow(`c${String(page * COMPONENT_LIST_PAGE_SIZE + i)}`)
+          )
+      );
+      const byId = Object.fromEntries(
+        pages.flat().map(row => [row.id, { ...row, content: draft(row.id) }])
+      );
+      const { ctx } = componentContext({ pages, byId });
 
-    const library = await readComponentLibrary(ctx);
+      const library = await readComponentLibrary(ctx);
 
-    expect(library.items).toHaveLength(MAX_LIBRARY_PATTERNS);
-    expect(library.meta.truncated).toBe(true);
-  });
+      expect(library.items).toHaveLength(MAX_LIBRARY_PATTERNS);
+      expect(library.meta.truncated).toBe(true);
+    }
+  );
 
   it("pages the listing through the INJECTED read, deterministically, by page", async () => {
     // The plugin-facing listing cannot ask for every lifecycle state, so the

@@ -47,6 +47,23 @@
  *   `pragma_foreign_key_list`; SQLite keeps no catalog of checks, so any
  *   `CHECK` in the stored CREATE statement counts, which refuses rather than
  *   risks a false "none".
+ * - A collation on any column (`COLLATE ...`). No snapshot records one, so
+ *   the rebuilt table would compare and index that column by SQLite's default
+ *   instead, with nothing to say so.
+ * - An index or UNIQUE constraint the target spec does not declare, which the
+ *   rebuild would not recreate (`untrackedIndexCount`).
+ * - A comment in the table's stored statement, which can hide a clause from
+ *   the counts above (`commentsIn`).
+ * - A table option, `STRICT` or `WITHOUT ROWID`, which the rebuilt table
+ *   would not carry (`tableOptionsOf`).
+ * - A generated column, which no spec declares (`generatedColumnsOf`).
+ * - An `AUTOINCREMENT` key, which Nextly never declares (`autoincrementIn`).
+ *
+ * The same rebuild changes a column's nullability or default in a migration
+ * file, which SQLite cannot do in place; the rebuilt column takes both from
+ * the target spec. The rebuilt table declares its columns in the spec's order,
+ * which a snapshot keeps by name; a static file cannot read the live order, so
+ * a column added after the table was created can move.
  *
  * @module domains/schema/pipeline/sql-templates/sqlite-rebuild
  */
@@ -74,6 +91,18 @@ const REBUILD_OPERATIONS = new Set<Operation["type"]>([
   "add_foreign_key",
   "drop_foreign_key",
   "change_foreign_key_action",
+]);
+
+/**
+ * The column changes SQLite can only make by rebuilding the table, in a
+ * migration file: it has no statement that changes a column's nullability or
+ * default. Kept apart from `REBUILD_OPERATIONS` because only the file's
+ * rendering performs them by a rebuild; `sqliteRebuiltTables` answers the dev
+ * push, whose SQLite rebuilds of a column's settings are drizzle-kit's.
+ */
+const COLUMN_REBUILD_OPERATIONS = new Set<Operation["type"]>([
+  "change_column_nullable",
+  "change_column_default",
 ]);
 
 /**
@@ -130,6 +159,7 @@ function performedByRebuild(
   addsByRebuild: ReadonlySet<string>
 ): boolean {
   if (REBUILD_OPERATIONS.has(op.type)) return true;
+  if (COLUMN_REBUILD_OPERATIONS.has(op.type)) return true;
   if (op.type === "add_column") return addedByRebuild(op);
   return (
     op.type === "add_index" && addsByRebuild.has(op.tableName.toLowerCase())
@@ -205,21 +235,36 @@ export function sqliteTableRebuildStatements(
   const needsForeignKeysOff = `rebuilding ${name} needs foreign keys off: apply it with nextly migrate`;
   const wouldDropTriggers = `rebuilding ${name} would drop the triggers on it`;
   const untracked = untrackedConstraintCounts(table, ops);
+  const collations = untrackedCollationCount(table);
+  const indexes = untrackedIndexCount(table);
+  const unreadable = `rebuilding ${name} cannot read its definition past a comment: write this change as a manual migration (nextly migrate:create --blank) that recreates ${name}`;
   return [
     // The guard: one row, checked on insert, before anything is dropped.
     `CREATE TABLE ${q(guard)} ("foreign_keys" INTEGER NOT NULL, ` +
       `"triggers" INTEGER NOT NULL, ` +
       `"untracked_foreign_keys" INTEGER NOT NULL, ` +
       `"untracked_checks" INTEGER NOT NULL, ` +
+      `"untracked_collations" INTEGER NOT NULL, ` +
+      `"untracked_indexes" INTEGER NOT NULL, ` +
+      `"table_options" INTEGER NOT NULL, ` +
+      `"generated_columns" INTEGER NOT NULL, ` +
+      `"autoincrement" INTEGER NOT NULL, ` +
+      `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "foreign keys"))} CHECK ("untracked_foreign_keys" <= 0), ` +
-      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0))`,
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "table options"))} CHECK ("table_options" = 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "generated columns"))} CHECK ("generated_columns" = 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "AUTOINCREMENT keys"))} CHECK ("autoincrement" = 0), ` +
+      `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "generated_columns", "autoincrement", "comments") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${autoincrementIn(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -241,7 +286,15 @@ export function sqliteTableRebuildStatements(
  */
 export function untrackedConstraintRefusal(
   table: string,
-  kind: "foreign keys" | "checks" | "triggers"
+  kind:
+    | "foreign keys"
+    | "checks"
+    | "triggers"
+    | "collations"
+    | "indexes"
+    | "table options"
+    | "generated columns"
+    | "AUTOINCREMENT keys"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }
@@ -314,11 +367,21 @@ export function untrackedConstraintCounts(
       ? ` WHERE lower("table" || '.' || "from") NOT IN (${declaredPairs.join(", ")})`
       : "") +
     ")";
-  const folded =
-    "replace(replace(replace(replace(replace(upper(sql), char(10), ' '), char(13), ' '), char(9), ' '), '  ', ' '), '  ', ' ')";
+  // Every whitespace character SQLite accepts becomes a space, and runs of spaces are halved eight
+  // times, which brings any run of up to 256 down to one. A longer run still beside CHECK cannot be
+  // read, and counts as a check of its own: refused rather than missed.
+  const spaced = [10, 13, 9, 11, 12].reduce(
+    (text, code) => `replace(${text}, char(${code}), ' ')`,
+    "upper(sql)"
+  );
+  const folded = Array.from({ length: 8 }).reduce<string>(
+    text => `replace(${text}, '  ', ' ')`,
+    spaced
+  );
   const clauses =
     `((length(${folded}) - length(replace(${folded}, 'CHECK (', ''))) / 7 + ` +
-    `(length(${folded}) - length(replace(${folded}, 'CHECK(', ''))) / 6)`;
+    `(length(${folded}) - length(replace(${folded}, 'CHECK(', ''))) / 6 + ` +
+    `(instr(${folded}, 'CHECK  ') > 0))`;
   const declared = knownChecks.map(
     check =>
       `(instr(sql, ${literalOf(`"${check.name}"`)}) > 0 OR instr(sql, ${literalOf(`\`${check.name}\``)}) > 0)`
@@ -328,6 +391,125 @@ export function untrackedConstraintCounts(
     `COALESCE((SELECT ${clauses}${declared.length > 0 ? ` - (${declared.join(" + ")})` : ""} ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`;
   return { foreignKeys, checks };
+}
+
+/**
+ * A SQL expression counting the times `COLLATE` appears in the live table's
+ * stored CREATE statement — the collations a rebuild from `table` would
+ * silently lose. No snapshot records a column's collation and no Nextly table
+ * declares one, so every appearance counts: a column made `COLLATE NOCASE` by
+ * hand would come back comparing case by case, and its index with it. Matched
+ * as a bare substring, case-folded, so a clause SQLite still reads when a
+ * comment or no space sits beside it (`COLLATE/*c*\/NOCASE`) counts; the word
+ * inside a string literal or a longer name counts too, which refuses rather
+ * than risks a false "none". Evaluated against the database, never against a
+ * snapshot, for the reason `untrackedConstraintCounts` gives.
+ */
+function untrackedCollationCount(table: TableSpec): string {
+  const name = literalOf(table.name);
+  // The indexes' keys too: an index can compare by a collation of its own
+  // (`CREATE INDEX ... ("email" COLLATE NOCASE)`), which the table's statement
+  // does not show and no index spec records, so even an index whose name the
+  // spec declares would come back comparing byte for byte. Read from
+  // `pragma_index_xinfo`, which reports each key's collating sequence.
+  const onIndexes =
+    `(SELECT COUNT(*) FROM pragma_index_list(${name}) AS il, pragma_index_xinfo(il.name) AS ix ` +
+    `WHERE ix.key = 1 AND upper(ix.coll) <> 'BINARY')`;
+  return (
+    `(COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'COLLATE', ''))) / 7 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0) + ${onIndexes})`
+  );
+}
+
+/**
+ * A SQL expression counting the indexes and UNIQUE constraints the live table
+ * has that a rebuild from `table` would silently lose: the rebuild recreates
+ * only `table.indexes`, and an index added by a hand-written migration, which
+ * no snapshot records, would go with the old table — a unique one taking its
+ * uniqueness with it. Counted when the rebuild runs, after the statements
+ * before it, so an index the same file dropped or created is judged as it then
+ * stands.
+ *
+ * - Indexes made by CREATE INDEX (`sql IS NOT NULL`) whose name the target
+ *   does not declare, case-folded as SQLite resolves names.
+ * - UNIQUE in the stored CREATE statement, as a bare substring: Nextly never
+ *   writes a UNIQUE constraint into a table's own definition, so any one
+ *   there is untracked; the word elsewhere counts too, which refuses rather
+ *   than risks a false "none".
+ */
+function untrackedIndexCount(table: TableSpec): string {
+  const name = literalOf(table.name);
+  const declared = (table.indexes ?? []).map(index =>
+    literalOf(index.name.toLowerCase())
+  );
+  const created =
+    `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = ${name} AND sql IS NOT NULL` +
+    (declared.length > 0
+      ? ` AND lower(name) NOT IN (${declared.join(", ")})`
+      : "") +
+    ")";
+  const inline =
+    `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'UNIQUE', ''))) / 6 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`;
+  return `(${created} + ${inline})`;
+}
+
+/**
+ * A SQL expression counting the table options the live table was created with
+ * — `STRICT` and `WITHOUT ROWID` — which the rebuilt table, declared from the
+ * spec's columns alone, would not have. No snapshot records either, and losing
+ * one changes what the table accepts (`STRICT` refuses a value of the wrong
+ * type) or how it stores its rows. Read from `pragma_table_list`, which SQLite
+ * has reported both in since 3.37, below this codebase's minimum.
+ */
+function tableOptionsOf(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT "strict" + "wr" FROM pragma_table_list(${literalOf(table.name)}) ` +
+    `WHERE "schema" = 'main'), 0)`
+  );
+}
+
+/**
+ * A SQL expression counting the live table's generated columns, which the
+ * rebuild would drop: no snapshot declares one, `pragma_table_info` (and so
+ * the introspection the drift check reads) leaves them out, and the rebuilt
+ * table is declared from the spec's columns alone. `pragma_table_xinfo` marks
+ * each with `hidden` 2 (virtual) or 3 (stored).
+ */
+function generatedColumnsOf(table: TableSpec): string {
+  return `(SELECT COUNT(*) FROM pragma_table_xinfo(${literalOf(table.name)}) WHERE "hidden" IN (2, 3))`;
+}
+
+/**
+ * A SQL expression that is 1 when the live table's key is declared
+ * `AUTOINCREMENT`, and 0 otherwise. Nextly declares a SQLite key as
+ * `INTEGER PRIMARY KEY` alone, so the word is never its own; the rebuilt table
+ * would lose it, and with it the promise never to reuse a key: its keys would
+ * start again from the highest one left, and the table's `sqlite_sequence` row
+ * would go with the dropped table. Matched as a bare substring, case-folded,
+ * which refuses rather than risks a false "none".
+ */
+function autoincrementIn(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT instr(upper(sql), 'AUTOINCREMENT') > 0 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${literalOf(table.name)}), 0)`
+  );
+}
+
+/**
+ * A SQL expression that is 1 when the live table's stored CREATE statement
+ * holds a comment (`/*` or `--`), and 0 otherwise. Every count above reads the
+ * statement as text, and SQLite accepts a comment between the words of a
+ * clause (`CHECK/*c*\/(...)`), which none of them would see; Nextly never
+ * writes a comment there, so one is read as something the rebuild might drop.
+ * Either marker inside a string literal counts too, which refuses rather than
+ * risks a false "none".
+ */
+function commentsIn(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT instr(sql, '/*') > 0 OR instr(sql, '--') > 0 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${literalOf(table.name)}), 0)`
+  );
 }
 
 /** Every table name an operation reads or writes. */
@@ -344,8 +526,9 @@ function tablesOf(op: Operation): string[] {
 
 /**
  * SQLite statements for a list of operations, with every check and
- * foreign-key change, and every column SQLite cannot add to a table that has
- * rows (`needsRowsFilledByDefault`), folded into one rebuild per table.
+ * foreign-key change, every change to a column's nullability or default, and
+ * every column SQLite cannot add to a table that has rows
+ * (`needsRowsFilledByDefault`), folded into one rebuild per table.
  *
  * The rebuild takes the place of the LAST operation that touches its table,
  * so every column, index and rename change to that table has already run and
@@ -363,7 +546,16 @@ export function sqliteStatements(
   const addsByRebuild = new Set(
     ops.filter(addedByRebuild).map(op => op.tableName.toLowerCase())
   );
-  const rebuilt = new Set([...sqliteRebuiltTables(ops), ...addsByRebuild]);
+  const settingsByRebuild = ops.flatMap(op =>
+    COLUMN_REBUILD_OPERATIONS.has(op.type)
+      ? tablesOf(op).map(name => name.toLowerCase())
+      : []
+  );
+  const rebuilt = new Set([
+    ...sqliteRebuiltTables(ops),
+    ...addsByRebuild,
+    ...settingsByRebuild,
+  ]);
   const planned = withoutDropsLeftToRebuild(ops, rebuilt);
   const lastTouch = new Map<string, number>();
   planned.forEach((op, position) => {

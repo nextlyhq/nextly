@@ -21,6 +21,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 
+import type { AuthenticatedScope } from "../authenticated-scope";
+
 import type { RuleFilter } from "./rule-answer";
 import {
   languagesIn,
@@ -57,16 +59,19 @@ export type RouteVerdict =
   | { readonly all: true }
   | { readonly filter: RuleFilter };
 
-/** A route's verdict, and the languages its rules were told. */
+/** A route's verdict, the caller it judged, and the languages its rules were told. */
 interface KeptVerdict {
+  /** The caller as its rule was told it, as {@link callerKeyOf} names it. */
+  readonly caller: string;
   readonly languages: ReadonlySet<string>;
   readonly verdict: RouteVerdict;
 }
 
 /**
  * The verdicts the routes of this request gave, for the reads they authorized
- * to apply: by caller, target and action, and within those by the language
- * the route's rules were told, as `ruleLanguageKeyOf` names it. Kept apart
+ * to apply: by user, target and action, and within those by the caller as its
+ * rule was told it and the language the route's rules were told, as
+ * `ruleLanguageKeyOf` names it. Kept apart
  * from the lookups and rule outcomes above, which a write in the request
  * clears: the route's verdict is what lets the read run, so it stands for the
  * whole request, as the route's allow does.
@@ -78,6 +83,12 @@ const routeVerdicts = new AsyncLocalStorage<
 /** Which caller a route judged, on which target and action, in which language. */
 export interface RouteVerdictQuestion {
   readonly userId: string;
+  /**
+   * The key scope in force, for a key; absent for a session. Two keys of one
+   * user are told different roles and grants, so neither reads the other's
+   * verdict.
+   */
+  readonly scope?: AuthenticatedScope;
   readonly slug: string;
   readonly action: string;
   /** The languages the rule is told. */
@@ -86,6 +97,27 @@ export interface RouteVerdictQuestion {
 
 const routeVerdictKey = (q: RouteVerdictQuestion): string =>
   JSON.stringify([q.userId, q.slug, q.action]);
+
+/**
+ * The caller, within one user, as its rule is told it: a session is the user;
+ * a key is the roles and grants its scope hands the rule, in the order it
+ * hands them.
+ */
+const callerKeyOf = (scope: AuthenticatedScope | undefined): string =>
+  scope?.actorType === "apiKey"
+    ? JSON.stringify(["key", scope.roles ?? [], scope.permissions])
+    : "session";
+
+/** Where a kept verdict sits among its user's: by caller, then language. */
+const keptKeyOf = (caller: string, language: RuleLanguageOf): string =>
+  JSON.stringify([caller, ruleLanguageKeyOf(language)]);
+
+/**
+ * What a route that judged this user, target and action said of a read it
+ * did not judge: another caller of the same user, or languages that don't
+ * include the read's. Its verdicts say nothing of the read.
+ */
+export const JUDGED_OTHERWISE = "judged-otherwise";
 
 /**
  * Runs `operation` with a memo for the request. A memo already open is kept,
@@ -110,42 +142,48 @@ export function rememberRouteVerdict(
   const kept = routeVerdicts.getStore();
   if (!kept) return false;
   const key = routeVerdictKey(question);
-  const byLanguage = kept.get(key) ?? new Map<string, KeptVerdict>();
-  byLanguage.set(ruleLanguageKeyOf(question.language), {
+  const forUser = kept.get(key) ?? new Map<string, KeptVerdict>();
+  const caller = callerKeyOf(question.scope);
+  forUser.set(keptKeyOf(caller, question.language), {
+    caller,
     languages: languagesIn(question.language),
     verdict,
   });
-  kept.set(key, byLanguage);
+  kept.set(key, forUser);
   return true;
 }
 
 /**
- * The verdict a route in this request gave on `question`, where the
- * languages the route's rules were told include every language of
- * `question`: the route that judged a history in every language at once
- * judged it in each of them. `"other-language"` where the route judged this
- * caller, target and action, but in no set of languages that includes these,
- * or in several that disagree, so its verdicts say nothing of this read.
+ * The verdict a route in this request gave on `question`: for the same
+ * caller, where the languages the route's rules were told include every
+ * language of `question`, as the route that judged a history in every
+ * language at once judged it in each of them. {@link JUDGED_OTHERWISE} where
+ * a route judged this user, target and action, but not this caller, or in no
+ * set of languages that includes these, or in several that disagree: a
+ * mismatch refuses rather than reads as no route having judged at all.
  * `undefined` where no route in the request judged them.
  */
 export function routeVerdictFor(
   question: RouteVerdictQuestion
-): RouteVerdict | "other-language" | undefined {
-  const byLanguage = routeVerdicts.getStore()?.get(routeVerdictKey(question));
-  if (!byLanguage) return undefined;
-  const exact = byLanguage.get(ruleLanguageKeyOf(question.language));
+): RouteVerdict | typeof JUDGED_OTHERWISE | undefined {
+  const forUser = routeVerdicts.getStore()?.get(routeVerdictKey(question));
+  if (!forUser) return undefined;
+  const caller = callerKeyOf(question.scope);
+  const exact = forUser.get(keptKeyOf(caller, question.language));
   if (exact) return exact.verdict;
   const asked = languagesIn(question.language);
   // A read told no language is answered only by a route told none.
-  if (asked.size === 0) return "other-language";
-  const covering = [...byLanguage.values()].filter(kept =>
-    [...asked].every(language => kept.languages.has(language))
+  if (asked.size === 0) return JUDGED_OTHERWISE;
+  const covering = [...forUser.values()].filter(
+    kept =>
+      kept.caller === caller &&
+      [...asked].every(language => kept.languages.has(language))
   );
-  if (covering.length === 0) return "other-language";
+  if (covering.length === 0) return JUDGED_OTHERWISE;
   const [first, ...rest] = covering.map(kept => kept.verdict);
   return rest.every(verdict => isDeepStrictEqual(verdict, first))
     ? first
-    : "other-language";
+    : JUDGED_OTHERWISE;
 }
 
 /**

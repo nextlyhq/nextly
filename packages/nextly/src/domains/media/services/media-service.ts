@@ -422,6 +422,9 @@ export class MediaService {
         // (which left subscribers seeing the wrong folder and no move event).
         // The legacy insert normalizes a missing folder to null itself.
         folderId: input.folderId ?? undefined,
+        // As `sanitizeMediaInput` left it above, so the stored alt text carries
+        // no markup.
+        altText: input.altText,
         contentDisposition:
           validated.isSvg && this.svgCsp ? "attachment" : undefined,
       },
@@ -503,7 +506,9 @@ export class MediaService {
     options: ListMediaOptions = {},
     _context: RequestContext
   ): Promise<PaginatedResult<MediaFile>> {
-    this.logger.debug("Listing media files", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing media files");
 
     const page = options.page ?? 1;
     const limit = options.limit ?? 24;
