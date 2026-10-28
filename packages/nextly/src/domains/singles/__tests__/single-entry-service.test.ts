@@ -15,7 +15,7 @@
  * - handleError / ServiceError translation
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 
 import {
   callerLookupFails,
@@ -26,6 +26,7 @@ import {
   resetCallerAccess,
 } from "../../../auth/access/__tests__/fake-caller";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors";
 import { SingleEntryService } from "../services/single-entry-service";
 
@@ -56,6 +57,13 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
     userHoldsPermission: fake.fakeUserHoldsPermission,
     userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
   };
+});
+
+// A visitor's read with no access-control service reads the Public role on
+// the service's own database, with its dialect's tables: the postgresql ones
+// the mock adapter names, which the unit setup loads only for its own dialect.
+beforeAll(async () => {
+  await loadDialectTables("postgresql");
 });
 
 beforeEach(() => {

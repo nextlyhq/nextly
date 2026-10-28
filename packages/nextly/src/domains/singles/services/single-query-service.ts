@@ -26,6 +26,10 @@ import {
   holdsGrant,
   singleGateVerdict,
 } from "../../../auth/access/gate-adapters";
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
@@ -92,6 +96,7 @@ import {
   callerAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -298,6 +303,14 @@ export async function checkSingleAccess(params: {
   // The caller's authenticated scope. A scoped API key is judged on its OWN
   // stamped grants for the publish/unpublish transition, not the owner's RBAC.
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * Without the access-control service, where a visitor's Public grants are
+   * read: the asking service's own database (`fieldRuleVisitor`), so the gate
+   * and that service's field rules judge one Public role. Absent, through the
+   * global container, which such a setup may not have filled, or may have
+   * filled for another instance.
+   */
+  visitor?: VisitorGrantsLoader;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -308,6 +321,7 @@ export async function checkSingleAccess(params: {
     routeAuthorized,
     rbacAccessControlService,
     authenticatedScope,
+    visitor,
     logger,
   } = params;
 
@@ -326,6 +340,7 @@ export async function checkSingleAccess(params: {
       scope: authenticatedScope,
       principal: currentPrincipal(),
       rules: rbacAccessControlService,
+      ...(visitor ? { visitorWithoutService: () => visitor() } : {}),
     });
   const verdict = await ask(operation);
   if (verdict.allowed) return null;
@@ -565,6 +580,27 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * Where this service's Single gate and field rules read a visitor's Public
+   * grants: this service's own database without an access-control service, as
+   * the collection gate reads it, and the process's cached copy with one. The
+   * mutation path reads it from here, so a Single's reads and writes over one
+   * database judge one Public role.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      this.ownDatabaseVisitor
+    );
+  }
+
+  /** The Public role as this service's own database records it. */
+  private readonly ownDatabaseVisitor = ownDatabaseVisitor({
+    adapter: this.adapter,
+    logger: this.logger,
+    db: () => this.db,
+  });
+
+  /**
    * Build the document a caller would receive from a stored row.
    *
    * Covers only the stages that read: the companion translation overlay, JSON
@@ -659,6 +695,7 @@ export class SingleQueryService extends BaseService {
       routeAuthorized: false,
       rbacAccessControlService: this.rbacAccessControlService,
       authenticatedScope: options.authenticatedScope,
+      visitor: this.fieldRuleVisitor,
       logger: this.logger,
     });
     return !updateDenied;
@@ -964,7 +1001,13 @@ export class SingleQueryService extends BaseService {
       // One grants resolver for both passes, so the caller's roles and
       // permissions are read once and both passes judge with one authority:
       // a scoped API key's own grants, never its owner's.
-      grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
+      grants: callerAccessGrants(
+        fieldAccessUser,
+        options.authenticatedScope,
+        undefined,
+        // A visitor's Public grants as this service's gate read them.
+        this.fieldRuleVisitor
+      ),
     };
     // The rules on fields inside field groups, which the Single's own pass
     // does not reach, judged with the same grants resolver. Before
@@ -1051,6 +1094,9 @@ export class SingleQueryService extends BaseService {
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
+        // A visitor is judged by the Public role this service's field rules
+        // read below.
+        visitor: this.fieldRuleVisitor,
         logger: this.logger,
       });
       if (accessDenied) {

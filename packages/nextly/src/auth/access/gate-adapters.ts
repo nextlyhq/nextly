@@ -223,13 +223,11 @@ export interface GateQuestion {
 export type CollectionQuestion = GateQuestion;
 
 /**
- * What the Single gate is asked. It reads a signed-in user's permission on
- * the pool, and so a visitor's Public role too.
+ * What the Single gate is asked. Without the service it allows a signed-in
+ * user unread, and reads a visitor's Public role as the collection gate does:
+ * on the asking service's own database where it hands one in.
  */
-export type SingleQuestion = Omit<
-  GateQuestion,
-  "permissionWithoutService" | "visitorWithoutService"
->;
+export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
 
 /**
  * The decision's answer, for a deviation to compare today's against: with the
