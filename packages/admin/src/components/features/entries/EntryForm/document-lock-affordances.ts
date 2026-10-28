@@ -157,7 +157,12 @@ export function readerAffordances(
       : {
           notice: {
             tone: "reader",
-            message: `${holder.ownerLabel} is editing this right now. You can publish it once they're done.`,
+            // Named when the server named them, and promising nothing: a
+            // reader may hold no publish to make once they are done.
+            message:
+              holder.ownerLabel === null
+                ? "Someone is editing this document right now."
+                : `${holder.ownerLabel} is editing this document right now.`,
             takeOverLabel: null,
             accessRequest: null,
           },

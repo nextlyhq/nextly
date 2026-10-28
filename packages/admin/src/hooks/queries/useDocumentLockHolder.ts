@@ -42,22 +42,33 @@ export function useDocumentLockHolder({
   enabled = true,
 }: UseDocumentLockHolderOptions): DocumentLockHolder | null | undefined {
   const active = enabled && Boolean(entryId);
-  const [holder, setHolder] = useState<DocumentLockHolder | null | undefined>(
-    undefined
-  );
+  // Names the document, so an answer about one is never read as another's.
+  const documentKey = active ? `${scopeKind}:${slug}:${entryId}` : null;
+  const [answer, setAnswer] = useState<{
+    documentKey: string;
+    holder: DocumentLockHolder | null;
+  } | null>(null);
 
   useEffect(() => {
-    if (!active || !entryId) return;
+    if (!active || !entryId || documentKey === null) return;
     let stopped = false;
-    // A new document is unknown until its own first read answers.
-    setHolder(undefined);
+    // Each read is numbered as it is sent, and an answer lands only when no
+    // newer read's answer has: a slow read that returns after a newer one says
+    // what was true before it, and would hand back a write a colleague's
+    // later claim holds.
+    let sent = 0;
+    let landed = 0;
     const query = new URLSearchParams({ scopeKind, slug, entryId }).toString();
     const read = async (): Promise<void> => {
+      sent += 1;
+      const number = sent;
       try {
-        const answer = await protectedApi.get<{
+        const reply = await protectedApi.get<{
           holder: DocumentLockHolder | null;
         }>(`/document-lock?${query}`);
-        if (!stopped) setHolder(answer.holder);
+        if (stopped || number < landed) return;
+        landed = number;
+        setAnswer({ documentKey, holder: reply.holder });
       } catch {
         // The last answer stands until a read says otherwise.
       }
@@ -70,7 +81,10 @@ export function useDocumentLockHolder({
       stopped = true;
       clearInterval(beat);
     };
-  }, [active, scopeKind, slug, entryId]);
+  }, [active, documentKey, scopeKind, slug, entryId]);
 
-  return active ? holder : null;
+  if (!active) return null;
+  // Another document is unknown until its own first read answers, from the
+  // very render that names it.
+  return answer?.documentKey === documentKey ? answer.holder : undefined;
 }
