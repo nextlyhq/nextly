@@ -1020,12 +1020,22 @@ async function visitorAnswer(
     return refused;
   }
   return withRuleLanguage(requestLanguage(operation), async () => {
+    const appliesFilter =
+      action === "read" && operation.appliesReadFilter === true;
     const verdict = await routeVisitorVerdict(
       action,
       resource,
-      getRBACService()
+      getRBACService(),
+      appliesFilter
     );
     if (verdict.allowed) return null;
+    // A read rule's filter, at a route whose handler applies one: let
+    // through, as for a signed-in caller. No route vouches for a visitor, so
+    // the service judges it again and reads only the entries the filter
+    // matches; nothing needs keeping for it.
+    if (appliesFilter && verdict.refusal === "only-matching-entries") {
+      return null;
+    }
     // Access that could not be read goes to the route's error handling, as
     // a signed-in caller's does.
     if (verdict.refusal === "failed") throw verdict.error;

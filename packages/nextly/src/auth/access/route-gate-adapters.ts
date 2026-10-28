@@ -201,7 +201,10 @@ const UNAUTHENTICATED: GateVerdict = Object.freeze({
 export function routeVisitorVerdict(
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  // Whether the route's handler applies a read rule's filter, so a filter is
+  // answered as the entries it matches rather than refused.
+  appliesFilter = false
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -213,6 +216,7 @@ export function routeVisitorVerdict(
     action: action as AccessOperation,
     principal: null,
     rules,
+    appliesFilter,
     // Never read for a caller with no user: the visitor's answer is the
     // Public role's grants, read whether or not the service is there.
     permissionWithoutService: () => Promise.resolve(false),
