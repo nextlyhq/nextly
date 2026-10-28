@@ -23,7 +23,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 | `nextly migrate:create [name]` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
 | `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
 | `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
-| `nextly migrate:status` | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. |
+| `nextly migrate:status` | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. Also names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree). |
 | `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
 | `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
 | `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
@@ -286,7 +286,8 @@ Specific examples:
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
-7. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
+7. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
+8. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
 | Exit code | Meaning |
 |---|---|
@@ -294,6 +295,35 @@ Specific examples:
 | 1 | A migration failed during execution |
 | 2 | `MIGRATION_TAMPERED`. Abort before running any. |
 | 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+## Where the registry and the tables disagree
+
+The registry (`dynamic_collections`, `dynamic_singles` and the field-group registry) is what a
+running instance serves from: each row names an entity's table and records its fields. Nothing at
+start compares it with the database. When `nextly migrate` finishes, and whenever
+`nextly migrate:status` runs, each compares them and names, as a warning:
+
+- every registry row whose table does not exist;
+- every field a registry row records whose column does not exist on that table, such as a plugin's
+  new field whose column was never added;
+- every collection, single or field group the configuration declares (code-first, plugins, and the
+  Builder manifest) that has no registry row.
+
+```text
+collection "forms": field "notifyEmail" has no column "notify_email" in table "dc_forms".
+The database has not been migrated for the tables and columns above. Run `nextly migrate:create` for a change that has no migration yet, then `nextly migrate`.
+```
+
+A field that keeps its values somewhere else is not expected on the entity's table: a field group,
+a many-to-many relationship on a collection or single, a virtual field, and a translatable field
+of a localized entity, which lives in its `_locales` table. A row whose table is missing is named
+once, not once per field.
+
+Both commands only read, and neither changes its exit code for what it names. `migrate:status --json`
+carries the same findings under `registry`: `missingTables`, `missingColumns`, `unregistered`, and
+`unreadable` (a registry that could not be read, so it was not compared). `registry` is `null` on a
+database with no registry yet, and when the comparison could not run, with the reason in
+`registryError`.
 
 ## What a migration file may contain
 

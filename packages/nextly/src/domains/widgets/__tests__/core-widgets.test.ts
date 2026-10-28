@@ -3,7 +3,7 @@
  * them.
  *
  * Deliberately NOT a restatement of the list. Asserting that a card carries the
- * literal written three lines away in `core-widgets.ts` is a test that can only
+ * literal written three lines away in `core-widgets/` is a test that can only
  * ever agree with itself, and it would go on agreeing while the thing the
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
@@ -14,13 +14,14 @@ import { registerRecentEditsWidgetSource } from "../../../services/dashboard/rec
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
-import { settings } from "../declaration/setting-builders";
+import { DENSITY_OPTIONS } from "../declaration/setting-builders";
 import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
@@ -144,8 +145,8 @@ describe("core widget definitions", () => {
       min: { w: 12, h: 3 },
       max: { w: 12, h: 12 },
     });
-    const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
-    expect(card?.defaultOrder).toBe(Math.min(...orders));
+    // First on core's default: it addresses a reader who has just arrived.
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/get-started" });
   });
 
   it("no longer declares the two cards Get started replaced", () => {
@@ -233,13 +234,16 @@ describe("the list cards' Density", () => {
     "core/recent-activity",
     "core/upcoming-releases",
   ])("%s offers the shared choice, one option for every density", id => {
-    // 🔴 Restated by hand, a density added to the list would reach a plugin's list cards and
-    // not core's.
+    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
     const widget = CORE_WIDGETS.find(w => w.id === id);
     const density = widget?.settings?.find(
       setting => setting.name === "density"
     );
-    expect(density).toMatchObject(settings.density());
+    expect(density).toMatchObject({
+      type: "select",
+      defaultValue: "default",
+      options: [...DENSITY_OPTIONS],
+    });
     expect(
       (density as { options?: { value: string }[] } | undefined)?.options?.map(
         option => option.value
@@ -305,12 +309,18 @@ describe("the default dashboard", () => {
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
-  it("orders the agreed cards as agreed", () => {
-    const ordered = CORE_WIDGETS.filter(w => AGREED.some(([id]) => id === w.id))
-      .slice()
-      .sort((a, b) => (a.defaultOrder ?? 0) - (b.defaultOrder ?? 0))
-      .map(w => w.id);
-    expect(ordered).toEqual(AGREED.map(([id]) => id));
+  it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
+    // Each at its widget's starting size: no entry states a size or settings of its own.
+    expect(CORE_DEFAULT_LAYOUT).toEqual([
+      { widget: "core/get-started" },
+      ...AGREED.map(([id]) => ({ widget: id })),
+    ]);
+  });
+
+  it("states no defaultOrder on any of core's widgets: the order is the defaultLayout's", () => {
+    for (const widget of CORE_WIDGETS) {
+      expect([widget.id, widget.defaultOrder]).toEqual([widget.id, undefined]);
+    }
   });
 
   it("gives each its agreed size, within its agreed bounds", () => {

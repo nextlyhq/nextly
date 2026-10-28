@@ -14,6 +14,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { UPDATE_SETTINGS } from "@admin/lib/permissions/system-policy";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
@@ -129,6 +130,8 @@ function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
   const plugin = pluginAt(branding?.plugins, activeSlug);
 
   const title = plugin?.appearance?.label ?? plugin?.name;
+  // The tab names the plugin by the same name the page heading gives it.
+  useDocumentTitle(title);
   // A disabled plugin's settings UI must not load: its behavior is off, so a
   // form that pretends to configure it would be a lie.
   const settingsComponent =

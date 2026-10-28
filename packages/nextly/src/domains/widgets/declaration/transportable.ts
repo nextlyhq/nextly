@@ -49,11 +49,32 @@ export type TransportablePrimitive = string | number | boolean | null;
  */
 export type Transportable<T> = T extends TransportablePrimitive
   ? T
-  : T extends (...args: never[]) => unknown
-    ? never
-    : T extends object
-      ? TransportableFields<T>
-      : never;
+  : KnownTransportable<T> extends true
+    ? T
+    : T extends (...args: never[]) => unknown
+      ? never
+      : T extends object
+        ? TransportableFields<T>
+        : never;
+
+/**
+ * Whether `T` is exactly one of {@link TransportableValue}'s own object members: transportable by
+ * definition, so judged no further.
+ *
+ * 🔴 Stops the recursion, not only the work: a row a read service handed back is typed
+ * `{ readonly [field: string]: TransportableValue }`, and mapping that member's values maps the
+ * same union again, without end. Answering such rows as a list's items failed to compile as an
+ * instantiation "excessively deep", though nothing in them could fail to travel. Exactly, not
+ * assignably: an object with a symbol-keyed property is assignable to the string-keyed member,
+ * and must still be judged key by key.
+ */
+type KnownTransportable<T> =
+  Same<T, { readonly [key: string]: TransportableValue }> extends true
+    ? true
+    : Same<T, readonly TransportableValue[]>;
+
+/** Whether two types are each assignable to the other, undistributed. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 /**
  * An object's properties, each mapped by {@link Transportable}, with a

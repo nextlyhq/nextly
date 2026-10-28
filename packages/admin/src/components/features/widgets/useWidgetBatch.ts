@@ -463,7 +463,10 @@ export function useWidgetBatch(
         // announcement rather than counted as "updated" beside a card that says otherwise.
         .filter(
           outcome =>
-            outcome.state !== "self-drawn" && outcome.state !== "unavailable"
+            outcome.state !== "self-drawn" &&
+            outcome.state !== "unavailable" &&
+            // Left out of this person's dashboard, so not one of its cards to count.
+            outcome.state !== "not-shown"
         ),
     [cards, slots, cellSlots, drawFailed]
   );
