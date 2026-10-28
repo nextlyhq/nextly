@@ -11,7 +11,6 @@
 export {
   defineWidget,
   type AnyWidget,
-  type ContentQuery,
   type WidgetAccess,
   type WidgetComponentMap,
   type WidgetData,
@@ -23,13 +22,16 @@ export {
   type WidgetRenderSize,
   type WidgetSummary,
 } from "./define-widget";
-export type {
-  AdminDashboardConfig,
-  CoreWidgetId,
-  DashboardContribution,
-  DefaultLayoutCard,
-  WidgetOverride,
-  WidgetRef,
+export {
+  defineAttentionItem,
+  type AdminDashboardConfig,
+  type AttentionCount,
+  type AttentionItem,
+  type CoreWidgetId,
+  type DashboardContribution,
+  type DefaultLayoutCard,
+  type WidgetOverride,
+  type WidgetRef,
 } from "./dashboard";
 export type {
   ComponentDisplay,

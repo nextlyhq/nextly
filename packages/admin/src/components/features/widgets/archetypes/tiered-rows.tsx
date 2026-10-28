@@ -24,6 +24,7 @@ import { listViewHref } from "../frame/list-view-href";
 import { useCardTier, useRowsDrawn } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
+import { presentedCell } from "./presented-cell";
 import type { ArchetypeBody } from "./types";
 
 type AnswerRow = Record<string, unknown>;
@@ -97,7 +98,7 @@ export function answerListModel(
         // A time or a number lines up at its column's end in the table form.
         align:
           column.type === "date" || column.type === "number" ? "end" : "start",
-        present: item => asPresentedText(item[column.name], column),
+        present: item => presentedCell(item[column.name], column),
       })),
   };
 }

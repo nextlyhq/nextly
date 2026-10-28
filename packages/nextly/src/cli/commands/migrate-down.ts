@@ -35,6 +35,7 @@ import {
   judgeDataLoss,
   resolveDataLossConsent,
   type DataLossConsent,
+  type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import {
   concurrentRunError,
@@ -172,6 +173,20 @@ function laterInRunOrder(a: string, b: string, plugin?: string): number {
 export interface MigrateDownCoreDeps {
   dialect: SupportedDialect;
   db: unknown;
+  /**
+   * The adapter the schema lock is taken through (`downDatabaseDeps` supplies it). Optional only
+   * so a test that replaces `withLock` need not build one; the real lock refuses without it.
+   */
+  adapter?: DrizzleAdapter;
+  /** What holds the lock while this runs, as another run's refusal names it. */
+  lockCommand?: string;
+  /**
+   * The owner registry read again, for the plan made inside the lock. `downDatabaseDeps` supplies
+   * it; absent, the plan inside the lock uses the rows read before it.
+   */
+  readOwners?: () => Promise<
+    Pick<MigrateDownCoreDeps, "owners" | "elementOwners">
+  >;
   nodeEnv: string | undefined;
   logger: CommandContext["logger"];
   options: {
@@ -281,6 +296,23 @@ export interface MigrateDownCoreDeps {
   interactive?: boolean;
   /** Asks that person a yes-or-no question; only called when `interactive`. */
   askToDelete?: (question: string) => Promise<boolean>;
+}
+
+/**
+ * The adapter the lock is taken through. Refused rather than guessed when absent: a rollback run
+ * without the schema lock is the overlap the lock exists to prevent.
+ */
+function lockAdapter(deps: MigrateDownCoreDeps): DrizzleAdapter {
+  if (deps.adapter !== undefined) return deps.adapter;
+  // A stand-in `withLock` ignores its first argument, so a test that replaces the lock still runs;
+  // the real one reads `getCapabilities` off it and fails loudly on this placeholder.
+  return {
+    getCapabilities: () => {
+      throw NextlyError.internal({
+        logContext: { reason: "migrate:down was given no adapter to lock" },
+      });
+    },
+  } as unknown as DrizzleAdapter;
 }
 
 export interface MigrateDownResult {
@@ -535,9 +567,23 @@ export async function planRollback(
   return planned;
 }
 
-export async function migrateDownCore(
-  deps: MigrateDownCoreDeps
-): Promise<MigrateDownResult> {
+/**
+ * The targets a rollback would undo and its plan, with every guard a real run applies.
+ *
+ * Asked twice by a real run: once before the lock, so a refusal that is already certain needs no
+ * wait, and again once the lock is held, against the ledger, the owner registry and the live
+ * schema as they stand then. A run that waited for the lock may meet a database another run has
+ * since changed — a plugin install adding an owned column, another rollback undoing the target —
+ * and a plan approved before the wait would act on a database that is no longer there.
+ *
+ * The data-loss consent is judged in both, and asked about only in the first: `agreed` carries
+ * what the operator agreed to there into the second, which accepts it without asking again and
+ * refuses anything new rather than asking while other runs wait on the lock.
+ */
+async function planAndGuard(
+  deps: MigrateDownCoreDeps,
+  agreed?: readonly Deletion[]
+): Promise<GuardedPlan> {
   const step = deps.options.step ?? 1;
   // Plugin rows belong to their own migration stream, so they are excluded
   // unless `--plugin` names one; an unscoped run must never revert a plugin's
@@ -547,13 +593,69 @@ export async function migrateDownCore(
     deps.options.plugin
   );
   const targets = selectAppliedTargets(rows, step, deps.options.plugin);
+  if (targets.length === 0)
+    return { planned: [], deletions: [], declined: false };
+  const planned = await planRollback(targets, deps);
+  if (deps.options.dryRun) return { planned, deletions: [], declined: false };
 
-  if (targets.length === 0) {
+  // Guards — evaluated up front for every target, before executing anything.
+  for (const p of planned) {
+    const refusal = refusalOf(p, deps);
+    if (refusal !== undefined) throw refusal;
+  }
+
+  // A DOWN that loses data takes the data-loss consent, judged for every
+  // target before the first runs. Each is judged by its statements as a
+  // whole, so it is named by its file: only the consent without targets
+  // covers it, and a list naming tables is refused rather than read as
+  // covering a DOWN it cannot be matched against.
+  const deletions: Deletion[] = planned
+    .filter(p => isDestructiveDown(p.statements, deps.dialect, p.liveColumns))
+    .map(p => ({
+      kind: "unnamed" as const,
+      description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
+    }));
+  const first = agreed === undefined;
+  const verdict = await judgeDataLoss({
+    deletions,
+    consent:
+      deps.options.consent ??
+      resolveDataLossConsent({
+        honours: ["--allow-data-loss"],
+        earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
+      }),
+    interactive: first && deps.interactive === true,
+    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? line => deps.logger.warn(line) : () => {},
+    approved: agreed,
+  });
+  if (verdict.kind === "refused") {
+    throw NextlyError.invalidInput({
+      message: verdict.message,
+      logContext: { reason: `data-loss-${verdict.reason}` },
+    });
+  }
+  return { planned, deletions, declined: verdict.kind === "declined" };
+}
+
+/** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
+interface GuardedPlan {
+  planned: PlannedDown[];
+  deletions: Deletion[];
+  /** The terminal was asked and said no: nothing is rolled back. */
+  declined: boolean;
+}
+
+export async function migrateDownCore(
+  deps: MigrateDownCoreDeps
+): Promise<MigrateDownResult> {
+  const guarded = await planAndGuard(deps);
+  const planned = guarded.planned;
+
+  if (planned.length === 0) {
     deps.logger.info("Nothing to roll back.");
     return { rolledBack: [] };
   }
-
-  const planned = await planRollback(targets, deps);
 
   // Dry-run is a non-destructive preview: it never throws and never
   // executes. Every refusal a real run would make is reported instead, by
@@ -584,43 +686,9 @@ export async function migrateDownCore(
     return { rolledBack: [] };
   }
 
-  // Guards — evaluated up front for every target, before executing anything.
-  for (const p of planned) {
-    const refusal = refusalOf(p, deps);
-    if (refusal !== undefined) throw refusal;
-  }
-
-  // A DOWN that loses data takes the data-loss consent, judged for every
-  // target before the first runs. Each is judged by its statements as a
-  // whole, so it is named by its file: only the consent without targets
-  // covers it, and a list naming tables is refused rather than read as
-  // covering a DOWN it cannot be matched against.
-  const verdict = await judgeDataLoss({
-    deletions: planned
-      .filter(p => isDestructiveDown(p.statements, deps.dialect, p.liveColumns))
-      .map(p => ({
-        kind: "unnamed" as const,
-        description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
-      })),
-    consent:
-      deps.options.consent ??
-      resolveDataLossConsent({
-        honours: ["--allow-data-loss"],
-        earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
-      }),
-    interactive: deps.interactive === true,
-    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
-    print: line => deps.logger.warn(line),
-  });
-  if (verdict.kind === "declined") {
+  if (guarded.declined) {
     deps.logger.info("Nothing was rolled back.");
     return { rolledBack: [] };
-  }
-  if (verdict.kind === "refused") {
-    throw NextlyError.invalidInput({
-      message: verdict.message,
-      logContext: { reason: `data-loss-${verdict.reason}` },
-    });
   }
 
   if (deps.nodeEnv === "production" && !deps.options.yes) {
@@ -632,17 +700,26 @@ export async function migrateDownCore(
 
   const rolledBack: string[] = [];
   await deps.withLock(
-    deps.db,
+    lockAdapter(deps),
     deps.dialect,
     async () => {
-      for (const p of planned) {
-        await rollBackOne(p, deps);
+      // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
+      const held = { ...deps, ...(await deps.readOwners?.()) };
+      const { planned: current } = await planAndGuard(held, guarded.deletions);
+      if (current.length === 0) {
+        deps.logger.info("Nothing to roll back.");
+        return;
+      }
+      for (const p of current) {
+        await rollBackOne(p, held);
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
     },
     {
-      mode: "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate:down",
+      // A held lock is waited for, about a minute, and then the run stops naming its holder.
+      mode: "wait",
       logger: {
         warn: m => deps.logger.warn(m),
         info: m => deps.logger.info(m),
@@ -705,8 +782,10 @@ export async function downDatabaseDeps(args: {
     MigrateDownCoreDeps,
     | "dialect"
     | "db"
+    | "adapter"
     | "owners"
     | "elementOwners"
+    | "readOwners"
     | "readLiveColumns"
     | "readLiveElements"
     | "readLiveTables"
@@ -726,15 +805,23 @@ export async function downDatabaseDeps(args: {
     schemaOwnersTableExists,
     tableOwnersByName,
   } = await import("../../domains/schema/ownership/schema-owners-repository");
-  const registryExists = await schemaOwnersTableExists(adapter);
-  const ownerRows = registryExists
-    ? await new OwnersRepo(db, dialect).read()
-    : [];
+  // Read through one function, so the plan made inside the lock reads the registry the same way.
+  let registryExists = false;
+  const readOwnerRows = async () => {
+    registryExists = await schemaOwnersTableExists(adapter);
+    return registryExists ? await new OwnersRepo(db, dialect).read() : [];
+  };
+  const ownerRows = await readOwnerRows();
   return {
     dialect,
     db,
+    adapter,
     owners: tableOwnersByName(ownerRows),
     elementOwners: ownerRows,
+    readOwners: async () => {
+      const fresh = await readOwnerRows();
+      return { owners: tableOwnersByName(fresh), elementOwners: fresh };
+    },
     readLiveColumns: lists => readLiveColumns(db, dialect, lists),
     readLiveElements: lists => readLiveElements(db, dialect, lists),
     readLiveTables: lists => readLiveTables(db, dialect, lists),

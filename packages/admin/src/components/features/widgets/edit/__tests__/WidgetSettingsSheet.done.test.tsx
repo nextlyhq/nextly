@@ -128,6 +128,44 @@ const HEADING: AnyWidgetSetting[] = [
 ];
 const STORED_HEADING: Record<string, unknown> = { heading: "Stored" };
 
+describe("opening the settings sheet on its first field", () => {
+  /** The sheet with something focusable ahead of the form, where the sheet's own choice lands. */
+  function opened(focusFirstField: boolean) {
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={vi.fn()}
+        title="Recent posts"
+        settings={SETTINGS}
+        config={undefined}
+        onDone={vi.fn()}
+        focusFirstField={focusFirstField}
+        renderPreview={() => <button type="button">Ahead of the form</button>}
+      />
+    );
+  }
+
+  it("puts focus on the first field when asked, as a card's empty state asks", async () => {
+    opened(true);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("spinbutton", { name: /Number of items/ })
+      ).toHaveFocus()
+    );
+  });
+
+  it("leaves focus where the sheet puts it otherwise", async () => {
+    // The control: without the option, focus lands ahead of the form, so the case above is the
+    // option's doing.
+    opened(false);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Ahead of the form" })
+      ).toHaveFocus()
+    );
+  });
+});
+
 describe("reopening the settings sheet", () => {
   function Harness(props: {
     settings: AnyWidgetSetting[];

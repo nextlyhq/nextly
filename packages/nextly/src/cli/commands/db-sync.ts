@@ -331,6 +331,9 @@ export async function runDbSync(
         adapter: adapter as unknown as DrizzleAdapter,
         logger,
         label: "db:sync",
+        // A command-line run: a held schema lock is waited for, about a minute, and then
+        // the run stops naming its holder.
+        whenHeld: "wait",
         mayCreateLock: options.autoSync !== false,
         // A sync is idempotent and was never mutually exclusive with another sync, so dropping the
         // claim on an interrupt costs nothing a rerun does not fix.

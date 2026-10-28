@@ -11,7 +11,6 @@ import { CORE_WIDGETS } from "../../core-widgets";
 import type { WidgetDefinition } from "../../definition";
 import { clearWidgets, getWidget } from "../../registry";
 import {
-  cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
   registerDashboardWidgets,
@@ -148,6 +147,62 @@ describe("registering declared widgets", () => {
     });
   });
 
+  it("publishes a link action whose JavaScript declaration also carries opens: undefined, as a link", () => {
+    // Read by the key, `opens` with no value was published as a settings action without one, which
+    // the registry refuses at startup; the startup check reads it as the link it is.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-linked",
+              empty: {
+                message: "No orders yet",
+                action: {
+                  label: "Add an order",
+                  link: "collections/orders/create",
+                  opens: undefined,
+                },
+              },
+            } as unknown as typeof ordersByState,
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-linked")?.empty?.action).toEqual({
+      label: "Add an order",
+      link: "collections/orders/create",
+    });
+  });
+
+  it("publishes an empty action that opens the card's settings as it is, with no gate", () => {
+    // Accepted by the registry's own check too: the registration would refuse an action it read
+    // as having no link.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-choose",
+              empty: {
+                message: "Pick a collection",
+                action: { label: "Choose", opens: "settings" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-choose")?.empty).toEqual({
+      message: "Pick a collection",
+      action: { label: "Choose", opens: "settings" },
+    });
+  });
+
   it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [revenue] }],
@@ -159,6 +214,8 @@ describe("registering declared widgets", () => {
       archetype: "custom",
       component: revenue.view.component,
       serverData: true,
+      // Who declared it, so a card whose component is missing can say whose it is.
+      owner: SHOP,
     });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -186,6 +243,8 @@ describe("registering declared widgets", () => {
       archetype: "metric",
       category: "Other",
     });
+    // Core draws it, so there is no component, and no owner of one to name.
+    expect(getWidget("acme/figure")?.owner).toBeUndefined();
     // The control: a category the declaration names is kept as written.
     expect(getWidget(ordersByState.id)).toMatchObject({
       archetype: "bars",
@@ -214,43 +273,13 @@ describe("registering declared widgets", () => {
     expect(declaredWidget("acme/recent-orders")).toMatchObject({
       owner: SHOP,
       declaration: recentOrders,
+      display: "list",
     });
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders", items: 3 })
-    ).toMatchObject({ source: "collection:orders", op: "list", limit: 3 });
-    expect(cardQueryFor("acme/unknown", {})).toBeUndefined();
-  });
-
-  it("refuses a card's query its display cannot draw, once the card names its collection", () => {
-    // Plain JavaScript, as no type saw it: a list whose query selects nothing.
-    // Its Collection setting has no default, so startup builds no query and
-    // checks nothing; the first query is this card's own.
-    const unselected = {
-      ...recentOrders,
-      id: "acme/unselected",
-      load: {
-        query: ({ settings }: { settings: Record<string, unknown> }) => ({
-          collection: settings.collection,
-          op: "list",
-          limit: settings.items,
-        }),
-      },
-    } as unknown as typeof recentOrders;
-    registerDashboardWidgets({
-      groups: [{ owner: SHOP, declarations: [unselected] }],
-    });
-
-    expect(cardQueryFor("acme/unselected", {})).toBeUndefined();
-    let refused: unknown;
-    try {
-      cardQueryFor("acme/unselected", { collection: "orders" });
-    } catch (error) {
-      refused = error;
-    }
-    expect(refused).toBeInstanceOf(NextlyError);
-    expect((refused as NextlyError).logMessage).toBe(
-      'Declared widget "acme/unselected" cannot draw its query: its query selects no fields, so the "list" display has nothing to show in each row.'
+    // Its load function is kept as the plugin wrote it, to be run per card.
+    expect(declaredWidget("acme/recent-orders")?.declaration.load).toBe(
+      recentOrders.load
     );
+    expect(declaredWidget("acme/unknown")).toBeUndefined();
   });
 
   it("publishes a size stated by its default alone with every end filled in", () => {

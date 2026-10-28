@@ -9,7 +9,7 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
@@ -50,8 +50,10 @@ vi.mock(
   }
 );
 
+// A marker, so whether the page draws the banner itself or hands it to the
+// form can be told apart.
 vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
-  ScheduledReleaseBanner: () => null,
+  ScheduledReleaseBanner: () => <p>scheduled release banner</p>,
 }));
 vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
   useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
@@ -526,5 +528,20 @@ describe("a routed document view", () => {
 
     expect(entryFormProps).toBeDefined();
     expect(entryFormProps?.documentView).toBeUndefined();
+  });
+});
+
+describe("the scheduled-release banner on the default editor", () => {
+  it("is handed to the form to draw under its header, not drawn above it", () => {
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // The replaced form draws only its marker, so a banner on screen here
+    // would be one the page drew above the form, where the header covers it.
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      screen.queryByText("scheduled release banner")
+    ).not.toBeInTheDocument();
+    render(<>{entryFormProps?.documentBanner}</>);
+    expect(screen.getByText("scheduled release banner")).toBeInTheDocument();
   });
 });

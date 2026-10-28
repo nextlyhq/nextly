@@ -138,8 +138,8 @@ export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
  */
 function emptyFor(
   definition: DashboardWidget,
-  own: CardEmptyContent = EMPTY_DEFAULT
-): CardEmptyContent {
+  own: OutcomeEmpty = EMPTY_DEFAULT
+): OutcomeEmpty {
   const declared = definition.declaredEmpty;
   if (declared === undefined) return own;
   const words = declared.title === undefined ? own : { title: declared.title };
@@ -162,6 +162,15 @@ export function coreDraws(definition: DeclaredWidget): boolean {
  * data says beyond it (`FrameState`), which the grid does not see. A failed
  * answer is never `self-drawn`: it is `failed` or `unavailable` like any card's.
  */
+/**
+ * An empty card's words and action as the outcome decides them: the frame's own action, or the
+ * card's settings, which only the card can open and draws as a button where it can
+ * (`WidgetRenderer`), and not at all where it cannot.
+ */
+type OutcomeEmpty = Omit<CardEmptyContent, "action"> & {
+  action?: CardEmptyContent["action"] | { label: string; opensSettings: true };
+};
+
 export type WidgetOutcome =
   | { state: "self-drawn" }
   // A widget declared with `defineWidget` and drawn by its own component, with
@@ -171,7 +180,10 @@ export type WidgetOutcome =
   | { state: "failed"; message: string }
   // The source is forbidden, gone, or kept off the dashboard: one state for all three.
   | { state: "unavailable" }
-  | { state: "empty"; empty: CardEmptyContent }
+  // The widget's own `shows` said no for this person: left out of their dashboard, neither drawn
+  // nor counted; customise mode still shows it, marked, so it can be removed.
+  | { state: "not-shown" }
+  | { state: "empty"; empty: OutcomeEmpty }
   | { state: "ready"; node: ReactNode };
 
 /**
@@ -221,11 +233,39 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
   return definition.archetype === "custom" && definition.serverData === true;
 }
 
-/** A failed slot as the grid's outcome: one code marks every "not available". */
+/**
+ * A slot with no data as the grid's outcome: one code marks every "not available", a card whose
+ * widget needs a setting asks for it as its empty state, and one its widget does not show for
+ * this person is left out. Only the rest are failures.
+ */
+/**
+ * What a card missing a setting says, with the one step that fixes it: its own settings, opened
+ * on their first field. The button is drawn only where the card can open them
+ * (`WidgetRenderer`); elsewhere the sentence alone still says where the setting is chosen.
+ */
+function needsSettingEmpty(setting: string): OutcomeEmpty {
+  return {
+    // Says what is missing; the button beside it says how to fix it, so the two never repeat.
+    title: `No ${lowerFirst(setting)} chosen yet`,
+    action: { label: `Choose ${lowerFirst(setting)}`, opensSettings: true },
+  };
+}
+
+/** A setting's label as it reads inside a sentence: "Collection" becomes "collection". */
+const lowerFirst = (label: string) =>
+  label.charAt(0).toLowerCase() + label.slice(1);
+
 function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
-  return slot.code === "unavailable"
-    ? { state: "unavailable" }
-    : { state: "failed", message: slot.error };
+  switch (slot.code) {
+    case "unavailable":
+      return { state: "unavailable" };
+    case "needs-setting":
+      return { state: "empty", empty: needsSettingEmpty(slot.setting) };
+    case "not-shown":
+      return { state: "not-shown" };
+    default:
+      return { state: "failed", message: slot.error };
+  }
 }
 
 /**

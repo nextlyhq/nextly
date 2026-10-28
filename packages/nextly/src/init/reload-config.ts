@@ -33,6 +33,10 @@ import {
   publishedCollectionDbOptions,
 } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -364,6 +368,7 @@ interface CollectionRegistrySurface {
       fields?: unknown[];
       status?: boolean;
       localized?: boolean;
+      source?: string;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -391,6 +396,7 @@ interface SingleRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      source?: string;
     }>
   >;
 }
@@ -2364,6 +2370,15 @@ async function applyReloadHolding(
   // Schema-Builder ones). HMR only knows nextly.config.ts; the shared helper
   // owns both the merge and the policy for an unreadable registry, so this
   // path and `db:sync` cannot drift apart again.
+  //
+  // A collection or Single removed from code is not preserved. Its row's
+  // stored fields would become desired schema, so this apply would create its
+  // dropped tables again or alter kept ones to match the row, and a table that
+  // had drifted from its row would hold up the whole apply on a confirmation.
+  // Left out, the apply never names it, and the drop guard keeps drizzle-kit
+  // from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(newConfig.collections);
+  const declaredSingles = declaredSlugsOf(newConfig.singles);
   Object.assign(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
@@ -2373,7 +2388,10 @@ async function applyReloadHolding(
           "collectionRegistryService"
         )) as CollectionRegistrySurface;
         return typeof collectionRegistry?.getAllCollections === "function"
-          ? await collectionRegistry.getAllCollections()
+          ? withoutRemovedFromCode(
+              await collectionRegistry.getAllCollections(),
+              declaredCollections
+            )
           : [];
       },
       logger
@@ -2388,7 +2406,12 @@ async function applyReloadHolding(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     if (typeof singleRegistry?.getAllSingles === "function") {
-      const dbSingles = await singleRegistry.getAllSingles();
+      // Removed from code: left out, for the reason given above the
+      // collections merge.
+      const dbSingles = withoutRemovedFromCode(
+        await singleRegistry.getAllSingles(),
+        declaredSingles
+      );
       for (const s of dbSingles) {
         if (!s?.slug || !s?.tableName) continue;
         if (desiredSingles[s.slug]) continue; // code config wins
@@ -2397,10 +2420,10 @@ async function applyReloadHolding(
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
-          // Read from the row, not inferred from the row's presence. A code-first single dropped
-          // from the config keeps its registry row for optional orphan cleanup, so it reaches this
-          // loop while still owned by code; calling it the Builder's would widen its columns on the
-          // apply that follows, for a removal nobody requested.
+          // Read from the row, not inferred from the row's presence. A plugin's single whose
+          // plugin left the config keeps its row, so it reaches this loop while still owned by
+          // code; calling it the Builder's would widen its columns on the apply that follows,
+          // for a removal nobody requested.
           builderOwned: !isCodeOwned(s),
         };
       }
