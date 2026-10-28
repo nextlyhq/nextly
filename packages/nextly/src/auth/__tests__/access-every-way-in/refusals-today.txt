@@ -5744,8 +5744,6 @@ service key-role-based-super-admin update collection user-is-key-maker at lock  
 service key-role-based-super-admin update collection user-is-key-maker at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection user-is-key-maker at route  403 FORBIDDEN error  | You can't edit c user is key makers.
 service key-role-based-super-admin update collection user-is-key-maker at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service key-role-based-super-admin update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service key-role-based-super-admin update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based-super-admin update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update single async-false at rest  404 NOT_FOUND error  | Not found.
