@@ -72,8 +72,12 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
-import { retiredWidgetReplacement } from "../domains/widgets/retired-widget-namespaces";
+import {
+  retiredWidgetReplacement,
+  type NamedCollection,
+} from "../domains/widgets/retired-widget-namespaces";
 import type { TextBound } from "../domains/widgets/settings";
+import { getSource } from "../domains/widgets/sources";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -723,22 +727,35 @@ function refuseUnreadableCollections(
   });
 }
 
+/** The collections a reader may read, each by the label its source is listed under. */
+function namedCollections(readable: ReadonlySet<string>): NamedCollection[] {
+  return [...readable].map(slug => ({
+    slug,
+    label: getSource(`collection:${slug}`)?.label ?? slug,
+  }));
+}
+
 /**
  * Refuses a submission naming a widget this caller may not see, a card of a
  * retired per-collection namespace, or a placement id twice.
  */
 function refuseUnknownOrRepeated(
   submitted: readonly WidgetPlacement[],
-  visibleIds: ReadonlySet<string>
+  visibleIds: ReadonlySet<string>,
+  readable: ReadonlySet<string>
 ): void {
   // A card in a namespace core once filled per collection or per Single
   // (`collection/`, `single/`) is refused by its namespace before anything
   // else, and told what replaced it. No widget answers to one (the registry
   // refuses the namespaces), so the check below would refuse it too; this one
   // says why. It discloses nothing: the namespaces are core's, the same for
-  // every install and every reader.
+  // every install and every reader, and the collection it may name is one
+  // this reader may read.
   for (const { widgetId } of submitted) {
-    const replacement = retiredWidgetReplacement(widgetId);
+    const replacement = retiredWidgetReplacement(
+      widgetId,
+      namedCollections(readable)
+    );
     if (replacement === undefined) continue;
     throw NextlyError.validation({
       errors: [
@@ -1006,7 +1023,11 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const cards = await readerCards(auth, view, stored.layout, req.signal);
   const { notShown } = cards;
   refuseStaleScope(submittedScope, cards.scope);
-  refuseUnknownOrRepeated(submitted, view.visibleIds);
+  refuseUnknownOrRepeated(
+    submitted,
+    view.visibleIds,
+    view.audience.readableCollections
+  );
   refuseUnreadableCollections(submitted, view.withheld);
   refuseUnconfirmedReplacement(
     stored.unreadable,
