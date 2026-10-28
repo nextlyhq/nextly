@@ -130,7 +130,7 @@ function ActivePanes({
     // menu bar above it as well (3.5rem), so the panes fill the content area
     // exactly and each scrolls on its own rather than the page around them.
     // Named, so the target pane can say how tall its own scroll area is.
-    <div className="flex h-(--nx-translation-height) flex-col [--nx-translation-height:calc(100dvh-4rem)] max-lg:[--nx-translation-height:calc(100dvh-7.5rem)]">
+    <div className="flex h-(--translation-mode-height) flex-col [--translation-mode-height:calc(100dvh-4rem)] max-lg:[--translation-mode-height:calc(100dvh-7.5rem)]">
       <ModeBar source={source} onExit={onExit} control={control} />
       {/* Sizes are PERCENTAGE STRINGS, and that is load-bearing rather than a
           style choice: this library reads a bare number as PIXELS, so
@@ -160,7 +160,7 @@ function ActivePanes({
               (3rem, see `ModeBar`), which the editor's sticky panel sizes
               itself to: the page's default, the window less the top bar,
               would leave the panel's foot below this pane's. */}
-          <div className="@container/content h-full overflow-y-auto [--nx-editor-scrollport:calc(var(--nx-translation-height)-3rem)]">
+          <div className="@container/content h-full overflow-y-auto [--editor-scrollport:calc(var(--translation-mode-height)-3rem)]">
             {/* The pane stands in for `PageContainer`, so it owes the same
                 horizontal inset — and stops owing it at the same width. The
                 editor's two columns go edge-to-edge from `@4xl`, so the padding

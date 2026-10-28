@@ -259,6 +259,13 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
                 storedAt: autosaveLastSavedAt,
                 pendingOfferAt: pendingRecoveryAt,
               }}
+              // The indicator reserves the width of its widest state so that
+              // nothing after it moves as the state changes. On a bar as
+              // narrow as the one where the preview's and History's words
+              // step aside, that reserve is width the actions need, and kept
+              // it wraps the bar onto a second row, so there it takes only
+              // what it shows.
+              className="@max-[51rem]/toolbar:min-w-0"
             />
           }
         />

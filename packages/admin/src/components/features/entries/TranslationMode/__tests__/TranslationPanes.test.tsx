@@ -127,8 +127,8 @@ describe("TranslationPanes", () => {
       </TranslationPanes>
     );
     const scroller = screen.getByText("the editor").closest(".overflow-y-auto");
-    expect(scroller?.className).toContain("[--nx-editor-scrollport:");
-    expect(DOCUMENT_PANEL_STICKY).toContain("var(--nx-editor-scrollport,");
+    expect(scroller?.className).toContain("[--editor-scrollport:");
+    expect(DOCUMENT_PANEL_STICKY).toContain("var(--editor-scrollport,");
   });
 
   it("leaves the mode when the exit is used", async () => {

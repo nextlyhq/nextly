@@ -20,15 +20,17 @@ import type { JSX, ReactNode } from "react";
  * the editor is in, less the document bar. Shared by both editors' panels so
  * they line up with the one bar both draw.
  *
- * The scroll area's height is `--nx-editor-scrollport`, declared by whatever
+ * The scroll area's height is `--editor-scrollport`, declared by whatever
  * scrolls the editor where that is not the page: the translation mode's target
  * pane, which sits under the mode's own bar as well as the top bar. Where
  * nothing declares it, the editor scrolls with the page, whose scroll area is
  * the window less the admin's top bar (4rem). One rule for both, so the
  * panel's foot is reachable in either without scrolling the page past it.
+ * A layout knob rather than a palette token, so it sits outside the theme's
+ * `--nx-*` namespace, as `--sidebar-width` does.
  */
 export const DOCUMENT_PANEL_STICKY =
-  "@4xl/content:sticky @4xl/content:top-13 @4xl/content:h-[calc(var(--nx-editor-scrollport,calc(100vh-4rem))-3.25rem)]";
+  "@4xl/content:sticky @4xl/content:top-13 @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-4rem))-3.25rem)]";
 
 /**
  * The field column's inset, shared by everything drawn in it above the fields
@@ -59,7 +61,7 @@ export function DocumentEditorLayout({
     // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
     // bar reaches the top of the scroll area and the panel the bottom. The
     // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
-    <div className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--nx-editor-scrollport,calc(100vh-4rem))]">
+    <div className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]">
       {bar}
       {banners}
       {notices}
