@@ -650,23 +650,25 @@ describe("a rule that fails", () => {
 });
 
 describe("something no rule can name", () => {
-  // Settings is no entry, and `manage` no operation a rule declares, so the
-  // permission alone answers.
-  const settingsGrant = {
-    slug: "manage-settings",
+  // Background jobs is no entry, and `manage` no operation a rule declares,
+  // so the permission alone answers.
+  const jobsGrant = {
+    slug: "manage-background-jobs",
     action: "manage",
-    resource: "settings",
+    resource: "background-jobs",
   };
   const manager = userActor({
     userId: "u10",
     roles: ["manager"],
-    permissions: [settingsGrant],
+    permissions: [jobsGrant],
   });
 
   it("is allowed to whoever holds the permission, and refused to whoever does not", () => {
-    expect(decidePermission(manager, "manage", "settings").allowed).toBe(true);
-    // `export` is no action a `manage-` permission counts as.
-    expect(decidePermission(manager, "export", "settings")).toEqual({
+    expect(decidePermission(manager, "manage", "background-jobs").allowed).toBe(
+      true
+    );
+    // A `manage-` permission holds nothing but itself.
+    expect(decidePermission(manager, "read", "background-jobs")).toEqual({
       allowed: false,
       reason: "no-permission",
     });
@@ -687,13 +689,19 @@ describe("something no rule can name", () => {
       keyId: "k3",
       userId: "u11",
       roles: ["super-admin"],
-      permissions: [settingsGrant],
+      permissions: [jobsGrant],
     });
-    expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
-    expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+    expect(decidePermission(key, "manage", "background-jobs").allowed).toBe(
+      true
+    );
+    expect(decidePermission(key, "read", "background-jobs").allowed).toBe(
+      false
+    );
   });
 
-  it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {
+  it("counts a retired manage permission as none of the plain four, nor as itself", () => {
+    // A role an earlier release left holding one, not yet converted by
+    // `nextly upgrade`, is refused each plain action there.
     const holder = (resource: string) =>
       userActor({
         userId: "u12",
@@ -708,28 +716,13 @@ describe("something no rule can name", () => {
       "email-providers",
       "email-templates",
     ]) {
-      for (const action of ["read", "create", "update", "delete"]) {
+      for (const action of ["read", "create", "update", "delete", "manage"]) {
         expect(
-          decidePermission(holder(resource), action, resource).allowed,
+          decidePermission(holder(resource), action, resource),
           `${action} ${resource}`
-        ).toBe(true);
+        ).toEqual({ allowed: false, reason: "no-permission" });
       }
-      // Never a publish or an unpublish, nor another resource's actions.
-      expect(
-        decidePermission(holder(resource), "publish", resource).allowed
-      ).toBe(false);
-      expect(decidePermission(holder(resource), "read", "roles").allowed).toBe(
-        false
-      );
     }
-    // A resource outside the four, and a collection, get nothing from it.
-    expect(
-      decidePermission(holder("background-jobs"), "read", "background-jobs")
-        .allowed
-    ).toBe(false);
-    expect(decidePermission(holder("posts"), "read", "posts").allowed).toBe(
-      false
-    );
   });
 
   it("answers a system resource's manage permission, asked of it, by the plain four together", () => {

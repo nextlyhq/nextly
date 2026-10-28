@@ -7,7 +7,7 @@ service none user-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -87,7 +87,7 @@ service none key-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -135,7 +135,7 @@ service none key-slugs-only
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -168,7 +168,7 @@ service none key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -184,7 +184,7 @@ service none key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -199,7 +199,7 @@ service true user-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -279,7 +279,7 @@ service true key-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -327,7 +327,7 @@ service true key-slugs-only
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -360,7 +360,7 @@ service true key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -376,7 +376,7 @@ service true key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -391,7 +391,7 @@ service false user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -471,7 +471,7 @@ service false key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -519,7 +519,7 @@ service false key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -552,7 +552,7 @@ service false key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -568,7 +568,7 @@ service false key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -583,7 +583,7 @@ service returns-true user-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -663,7 +663,7 @@ service returns-true key-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -711,7 +711,7 @@ service returns-true key-slugs-only
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -744,7 +744,7 @@ service returns-true key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -760,7 +760,7 @@ service returns-true key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -775,7 +775,7 @@ service returns-false user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -855,7 +855,7 @@ service returns-false key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -903,7 +903,7 @@ service returns-false key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -936,7 +936,7 @@ service returns-false key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -952,7 +952,7 @@ service returns-false key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -967,7 +967,7 @@ service returns-null user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1047,7 +1047,7 @@ service returns-null key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1095,7 +1095,7 @@ service returns-null key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1128,7 +1128,7 @@ service returns-null key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1144,7 +1144,7 @@ service returns-null key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1159,7 +1159,7 @@ service returns-truthy user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1239,7 +1239,7 @@ service returns-truthy key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1287,7 +1287,7 @@ service returns-truthy key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1320,7 +1320,7 @@ service returns-truthy key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1336,7 +1336,7 @@ service returns-truthy key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1351,7 +1351,7 @@ service throws user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1431,7 +1431,7 @@ service throws key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1479,7 +1479,7 @@ service throws key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1512,7 +1512,7 @@ service throws key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1528,7 +1528,7 @@ service throws key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1543,7 +1543,7 @@ service role-name user-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1623,7 +1623,7 @@ service role-name key-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1671,7 +1671,7 @@ service role-name key-slugs-only
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1704,7 +1704,7 @@ service role-name key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1720,7 +1720,7 @@ service role-name key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1735,7 +1735,7 @@ service permission-spelling user-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1815,7 +1815,7 @@ service permission-spelling key-with
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1863,7 +1863,7 @@ service permission-spelling key-slugs-only
   unpublish-posts:403 You can't unpublish posts.
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -1896,7 +1896,7 @@ service permission-spelling key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1912,7 +1912,7 @@ service permission-spelling key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -1927,7 +1927,7 @@ no-service none user-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -2007,7 +2007,7 @@ no-service none key-with
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -2055,7 +2055,7 @@ no-service none key-slugs-only
   unpublish-posts:A
   export-posts:403 You can't export posts.
   read-settings:A
-  manage-settings:A
+  manage-settings:403 You can't manage settings.
   update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):403 You can't edit email providers.
@@ -2088,7 +2088,7 @@ no-service none key-custom-slugs
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.
@@ -2104,7 +2104,7 @@ no-service none key-manage
   export-posts:403 You can't export posts.
   read-settings:403 You can't see settings.
   manage-settings:403 You can't manage settings.
-  update-email-providers:A
+  update-email-providers:403 You can't edit email providers.
   manage-:403 You can't do that.
   any(update-email-providers|manage-email-providers):A
   any(read-settings|manage-settings):403 You can't see settings.

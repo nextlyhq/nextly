@@ -118,7 +118,12 @@ describeEachDialect("the languages route", dialect => {
 
   it("changes the languages for a caller who manages Settings, and the registry serves the change", async () => {
     const t = await boot();
-    const manager = await keyHolding(t, ["manage-settings"]);
+    const manager = await keyHolding(t, [
+      "read-settings",
+      "create-settings",
+      "update-settings",
+      "delete-settings",
+    ]);
 
     const change = await rest(manager, "POST", {
       kind: "add",
@@ -178,7 +183,12 @@ describeEachDialect("the languages route", dialect => {
 
   it("refuses a change it cannot read, naming the field", async () => {
     const t = await boot();
-    const manager = await keyHolding(t, ["manage-settings"]);
+    const manager = await keyHolding(t, [
+      "read-settings",
+      "create-settings",
+      "update-settings",
+      "delete-settings",
+    ]);
 
     const change = await rest(manager, "POST", {
       kind: "add",
