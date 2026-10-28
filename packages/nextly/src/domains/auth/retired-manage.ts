@@ -14,7 +14,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { MANAGE_BRIDGED_RESOURCES } from "../../auth/access/manage-bridge";
+import { RETIRED_MANAGE_RESOURCES } from "../../auth/access/retired-manage-permissions";
 
 /** Where the roles are read: an adapter or a transaction. */
 type Reader = Pick<TransactionContext, "select">;
@@ -40,7 +40,7 @@ export async function rolesHoldingRetiredManage(
           {
             column: "resource",
             op: "IN",
-            value: [...MANAGE_BRIDGED_RESOURCES],
+            value: [...RETIRED_MANAGE_RESOURCES],
           },
         ],
       },

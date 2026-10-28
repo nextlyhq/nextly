@@ -34,8 +34,8 @@ import {
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import { manageCounts, type Actor, type KeyActor } from "./actor";
-import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
+import type { Actor, KeyActor } from "./actor";
+import { storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -44,7 +44,6 @@ import {
   type CollectionQuestion,
   type GateVerdict,
 } from "./gate-adapters";
-import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
 import {
   actorForKey,
   actorForUser,
@@ -53,6 +52,11 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isPlainOfRetiredManage,
+  isRetiredManage,
+} from "./retired-manage-permissions";
 import { allowsSome } from "./rule-answer";
 import {
   askEachLanguage,
@@ -100,8 +104,8 @@ function isAccessOperation(action: string): action is AccessOperation {
  * Whether one permission is an entity's operation, asked of the target with
  * its rules, rather than a permission alone. A route naming no resource
  * (`requiredPermission: "manage"`) asks about nothing a rule or a permission
- * row can name. A system resource a `manage-` permission still counts on
- * declares no rule, so it is a permission alone, unless an entity registered
+ * row can name. A system resource whose `manage-` permission is retired
+ * declares no rule, so its plain actions are a permission alone, unless an entity registered
  * rules under its name: those rules are read whatever the name.
  */
 function asksTheEntity(
@@ -112,7 +116,7 @@ function asksTheEntity(
   return (
     isAccessOperation(action) &&
     resource !== "" &&
-    (target !== undefined || !manageCounts(action, resource))
+    (target !== undefined || !isPlainOfRetiredManage(action, resource))
   );
 }
 
@@ -571,28 +575,10 @@ function gateVerdict(
   });
 }
 
-/** Whether a signed-in user holds any permission holding the action. */
-async function userHoldsAnswering(
-  userId: string,
-  action: string,
-  resource: string
-): Promise<boolean> {
-  for (const permission of answeringPermissions(action, resource)) {
-    if (
-      await userHoldsPermission(userId, permission.action, permission.resource)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
  * slug; a session, with the access-control service, by super-admin authority
- * and then the permission, and without it by the permission alone. On a
- * system resource its `manage-` permission holds it too, as it does for the
- * decision.
+ * and then the permission, and without it by the permission alone.
  */
 async function permissionVerdict(
   caller: GateCaller,
@@ -604,7 +590,7 @@ async function permissionVerdict(
   // retired, is held only by holding all four plain permissions it stood
   // for, each asked here as any other: the decision answers it the same way.
   if (isRetiredManage(action, resource)) {
-    for (const plain of MANAGE_BRIDGED_ACTIONS) {
+    for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
       if (!(await permissionVerdict(caller, plain, resource, rules)).allowed) {
         return verdictOf(false);
       }
@@ -625,15 +611,14 @@ async function permissionVerdict(
   }
   return verdictOf(
     (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-      (await userHoldsAnswering(caller.userId, action, resource))
+      (await userHoldsPermission(caller.userId, action, resource))
   );
 }
 
 /**
  * The verdict when any one of several permissions will do. Today a key holds
- * one by its stored slug and a session by its database permissions, a system
- * resource's `manage-` permission counting on it as the decision counts it,
- * and no rule is read for either.
+ * one by its stored slug and a session by its database permissions, and no
+ * rule is read for either.
  */
 export function anyPermissionVerdict(
   auth: AuthContext,
@@ -667,12 +652,7 @@ async function anyPermissionVerdictOf(
     );
     return verdictOf(today);
   }
-  const today = await hasAnyPermission(
-    caller.userId,
-    permissions.flatMap(({ action, resource }) =>
-      answeringPermissions(action, resource)
-    )
-  );
+  const today = await hasAnyPermission(caller.userId, [...permissions]);
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
   const userActor = () => (actor ??= actorForUser(caller.userId));
@@ -748,7 +728,7 @@ async function decidedOne(
  *
  * `action` is a plain string rather than the operation union, because a
  * permission's action is not bounded by those six: `export-submissions` and
- * `manage-settings` are both real grants.
+ * `manage-background-jobs` are both real grants.
  */
 export async function callerMayPerform(
   scope: AuthenticatedScope | undefined,
@@ -931,8 +911,7 @@ export async function schemaListed<T extends ListedCollection>(
   const actor = await actorForUserFailingClosed(caller.userId);
   // The super-admin authority the actor's roles carry counts too: it is what
   // each collection's permission check passed first, and it holds when the
-  // cached check above failed but the roles were read. So does a system
-  // resource's `manage-` permission, as the decision counts it.
+  // cached check above failed but the roles were read.
   return keptWhere(collections, slug =>
     readByPermission(
       actor,

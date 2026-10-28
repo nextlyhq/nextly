@@ -89,9 +89,7 @@ export function assertSettingsPermissionsOwned(
 /**
  * Core's permission for a plugin's settings, kept unless the plugin names its
  * own: a settings change, `update-settings`, as the system write policy names
- * it (`SYSTEM_WRITE_POLICY.settings.update`). A role still holding
- * `manage-settings` holds it, since that counts as the plain four on
- * settings.
+ * it (`SYSTEM_WRITE_POLICY.settings.update`).
  */
 export const CORE_SETTINGS_PERMISSION = "update-settings";
 

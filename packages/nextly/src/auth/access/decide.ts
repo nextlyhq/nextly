@@ -33,7 +33,6 @@ import type {
 } from "../../shared/types/access";
 
 import {
-  holdsByManage,
   holdsPermission,
   isSuperAdmin,
   ruleContext,
@@ -41,7 +40,10 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
-import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isRetiredManage,
+} from "./retired-manage-permissions";
 import {
   mayAnswerFilter,
   reportRuleFilterMisuse,
@@ -335,8 +337,7 @@ export async function decide(
  * as settings, roles or email providers, or an action no rule is declared for,
  * such as `manage`. The permission alone answers: trusted work is allowed, a
  * super-admin is allowed, a plugin's person, who holds no role and meets no
- * rule here, is refused, and anyone else needs the permission, which on a
- * system resource its `manage-` permission also gives ({@link holdsByManage}).
+ * rule here, is refused, and anyone else needs the permission itself.
  */
 export function decidePermission(
   actor: Actor,
@@ -347,17 +348,16 @@ export function decidePermission(
   if (actor.kind === "principal") return refuse("principal-without-rule");
   if (isSuperAdmin(actor)) return ALLOW;
   // A retired `manage-` permission, asked by a gate written before it was
-  // retired, is answered by the plain four it stood for, each counted as
-  // below: an unconverted role's `manage-` permission still holds all four.
+  // retired, is answered by the plain four it stood for, each held as stored:
+  // a role still holding the retired one itself holds none of them.
   if (isRetiredManage(action, resource)) {
-    return MANAGE_BRIDGED_ACTIONS.every(
+    return RETIRED_MANAGE_PLAIN_ACTIONS.every(
       plain => decidePermission(actor, plain, resource).allowed
     )
       ? ALLOW
       : refuse("no-permission");
   }
-  return holdsPermission(actor, action, resource) ||
-    holdsByManage(actor, action, resource)
+  return holdsPermission(actor, action, resource)
     ? ALLOW
     : refuse("no-permission");
 }

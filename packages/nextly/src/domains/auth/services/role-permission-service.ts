@@ -10,9 +10,9 @@ import type {
 } from "@nextly/types/rbac-operations";
 
 import {
-  MANAGE_BRIDGED_ACTIONS,
+  RETIRED_MANAGE_PLAIN_ACTIONS,
   isRetiredManage,
-} from "../../../auth/access/manage-bridge";
+} from "../../../auth/access/retired-manage-permissions";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -79,7 +79,7 @@ export class RolePermissionService extends BaseService {
     // A retired `manage-` permission is added as the plain four it stands
     // for, each as a permission of its own.
     if (isRetiredManage(perm.action, perm.resource)) {
-      for (const action of MANAGE_BRIDGED_ACTIONS) {
+      for (const action of RETIRED_MANAGE_PLAIN_ACTIONS) {
         await this.addPermissionToRole(roleId, {
           action,
           resource: perm.resource,
@@ -650,7 +650,11 @@ export async function storedAsPlain(
     columns: ["id", "action", "resource"],
     where: {
       and: [
-        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
+        {
+          column: "action",
+          op: "IN",
+          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
+        },
         { column: "resource", op: "IN", value: resources },
       ],
     },
@@ -660,7 +664,7 @@ export async function storedAsPlain(
   for (const resource of resources) {
     const four = plain.filter(row => row.resource === resource);
     if (
-      !MANAGE_BRIDGED_ACTIONS.every(action =>
+      !RETIRED_MANAGE_PLAIN_ACTIONS.every(action =>
         four.some(row => row.action === action)
       )
     ) {

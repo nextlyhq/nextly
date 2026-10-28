@@ -25,8 +25,8 @@ import { recordSettingsActivity } from "../audit/record-settings-activity";
  *
  * `settings`, because that is the resource the routes authorize them with,
  * and the feed shows a settings namespace to whoever `read-{namespace}`
- * admits: `read-settings`. The settings route also admits `manage-settings`,
- * so a role granted only that can change plugin settings without seeing this
+ * admits: `read-settings`. The settings route admits `update-settings`, so a
+ * role granted only that can change plugin settings without seeing this
  * trail; grant `read-settings` beside it to see both. The name is
  * reserved for collections and singles, so no content can share it.
  */

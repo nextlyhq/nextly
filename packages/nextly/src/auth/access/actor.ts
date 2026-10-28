@@ -20,7 +20,6 @@ import type { AccessOperation } from "../../services/access/types";
 import type { AccessRuleContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
 
-import { manageCounts } from "./manage-bridge";
 import { buildRuleContext } from "./rule-context";
 
 /**
@@ -186,23 +185,6 @@ export function holdsPermission(
 ): boolean {
   return grantsOf(actor).some(
     grant => grant.action === action && grant.resource === resource
-  );
-}
-
-// Decided in a leaf module of its own, which the admin's copy is held to.
-export { manageCounts } from "./manage-bridge";
-
-/**
- * Whether the actor holds `action` on a system resource through that
- * resource's `manage-` permission alone ({@link manageCounts}).
- */
-export function holdsByManage(
-  actor: Actor,
-  action: string,
-  resource: string
-): boolean {
-  return (
-    manageCounts(action, resource) && holdsPermission(actor, "manage", resource)
   );
 }
 

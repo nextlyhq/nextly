@@ -827,7 +827,7 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
 
   /**
    * @experimental The permission an operator needs to change this plugin's
-   * settings, in place of core's `manage-settings`: a payment provider's keys,
+   * settings, in place of core's `update-settings`: a payment provider's keys,
    * say, kept to the roles that handle payments.
    *
    * It must be one of this plugin's own `permissions`, so a misspelt name

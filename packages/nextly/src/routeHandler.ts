@@ -2421,7 +2421,7 @@ const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
 /**
  * The grant a catch-all Email route asks, read from the system policies:
  * its method's own entry where it has one, else the entry for the action its
- * verb names. A `manage-` permission counts as each plain one.
+ * verb names.
  */
 function emailGrant(
   resource: "emailProviders" | "emailTemplates",

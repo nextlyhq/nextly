@@ -43,10 +43,9 @@ function ownOrManage(action: string, resource: string): RouteGrant {
 /**
  * `action` on `resource` alone, asked through the any-of check as a list of
  * one. The settings and Email hub routes have always asked the any-of check;
- * a list of one keeps them on it, and so keeps a `manage-` permission
- * counting as the plain one there, rather than moving them to the
- * single-grant check, which reads an entity's own rule where an entity of
- * that name exists.
+ * a list of one keeps them on it rather than moving them to the single-grant
+ * check, which reads an entity's own rule where an entity of that name
+ * exists.
  */
 function only(
   action: string,
@@ -64,12 +63,11 @@ function only(
  * - Settings: the general settings, languages, image sizes, user fields,
  *   field groups, the sidebar's groups, a plugin's settings and the preview
  *   links all ask their own action on `settings`. Regenerating image sizes
- *   updates them. A role still holding `manage-settings` passes each, since
- *   it counts as the plain four on settings.
+ *   updates them.
  * - Email providers and email templates: their own action on each. Sending
  *   a test through a provider, or previewing a template, creates nothing
  *   stored and asks create, as the routes have; making a provider the
- *   default updates it. `manage-` counts as on settings.
+ *   default updates it.
  * - Media: `create-media` to add a file or a folder, `update-media` to edit
  *   or move one, `delete-media` to delete one, as REST's media routes ask.
  *   A bulk upload has no REST route of its own and asks what one upload asks.
@@ -210,8 +208,7 @@ export const SYSTEM_READ_POLICY = {
  * created, changed or deleted, or a schema change previewed or applied. It
  * changes settings of every kind at once, so it asks all three of create,
  * update and delete on `settings`; updating settings alone, enough to rename
- * the site, does not reach the schema. A role still holding
- * `manage-settings` holds all three.
+ * the site, does not reach the schema.
  */
 export const SCHEMA_CHANGE_PERMISSIONS: readonly SystemPermission[] = [
   { action: "create", resource: "settings" },
