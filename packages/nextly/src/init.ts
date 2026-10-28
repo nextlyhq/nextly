@@ -258,10 +258,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // call-site fix lives in the logMessage so it shows up in the dev console without
   // wire responses if this surfaces inside withErrorHandler.
   if (!options?.config) {
-    throw new NextlyError({
-      code: "CONFIGURATION_ERROR",
-      statusCode: 500,
-      publicMessage: "Server configuration error.",
+    throw NextlyError.configuration({
       logMessage:
         "getNextly() requires a `config` parameter. Import your config " +
         "and pass it: `getNextly({ config })`. If you are inside a " +
@@ -538,10 +535,7 @@ export async function getCachedNextly(): Promise<Nextly> {
     return instance;
   }
 
-  throw new NextlyError({
-    code: "CONFIGURATION_ERROR",
-    statusCode: 500,
-    publicMessage: "Server configuration error.",
+  throw NextlyError.configuration({
     logMessage:
       "getCachedNextly() called before initialization. Ensure " +
       "`getNextly({ config })` (or `createRegister(config)` from " +

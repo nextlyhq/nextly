@@ -4,7 +4,7 @@
  * The fixture's two components, drawn from nothing but the widget kit
  * `@nextlyhq/plugin-sdk/admin` exports and the props the declaration types.
  */
-import { CardFigure, GroupsChart } from "@nextlyhq/plugin-sdk/admin";
+import { Widget } from "@nextlyhq/plugin-sdk/admin";
 import type { WidgetProps } from "@nextlyhq/plugin-sdk/widgets";
 import type { JSX } from "react";
 
@@ -17,11 +17,12 @@ export function KitCard({
 }: WidgetProps<typeof fixture.kitCardWidget>): JSX.Element {
   return (
     <div data-testid="kit-card" data-size={size.tier}>
-      <CardFigure value={data.total} />
-      <GroupsChart
+      <Widget.Figure value={data.total} />
+      <Widget.BarChart
         title="Orders by state"
         labelHeading="State"
         groups={data.groups}
+        unit={{ one: "order", other: "orders" }}
       />
     </div>
   );

@@ -125,8 +125,8 @@
       "compiled": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 10,
-      "compiled": 8
+      "samples": 11,
+      "compiled": 9
     },
     "docs/jobs/index.mdx": {
       "samples": 4,
@@ -157,7 +157,7 @@
       "compiled": 2
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 16,
+      "samples": 18,
       "compiled": 9
     },
     "docs/plugins/api-reference.mdx": {
@@ -357,22 +357,23 @@
       "reader-file #4 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "#7 error TS2304: Cannot find name 'getPostBySlug'.": 1,
-      "#8 error TS2304: Cannot find name 'services'.": 1,
-      "#8 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
+      "#8 error TS2304: Cannot find name 'getPostBySlug'.": 1,
+      "#9 error TS2304: Cannot find name 'services'.": 1,
+      "#9 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
       "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
-      "reader-name #6 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1
+      "reader-name #6 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1,
+      "reader-name #7 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "#13 error TS2552: Cannot find name 'Skeleton'. Did you mean 'Selection'?": 1,
-      "uninstalled #15 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "#15 error TS2552: Cannot find name 'Skeleton'. Did you mean 'Selection'?": 1,
+      "uninstalled #17 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1,
-      "reader-name #13 error TS2304: Cannot find name 'Chart'.": 1
+      "reader-name #15 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,

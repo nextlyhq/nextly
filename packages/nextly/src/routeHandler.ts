@@ -1937,7 +1937,6 @@ async function serveServiceRequest(
 const NO_WIDGETS: WidgetAudience = {
   visible: [],
   declared: new Set(),
-  generated: [],
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
@@ -1959,7 +1958,7 @@ function actionsForAudience<
   W extends {
     id: string;
     actions?: readonly WidgetAction[];
-    empty?: { message?: string; action?: { requiredPermission?: string } };
+    empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
@@ -1983,11 +1982,20 @@ function actionsForAudience<
  * A declared widget's empty state with its action withheld from a reader who
  * may not take it; the same object when there is nothing to withhold.
  */
-function emptyForAudience<
-  E extends { message?: string; action?: { requiredPermission?: string } },
->(empty: E | undefined, audience: WidgetAudience): E | undefined {
+function emptyForAudience<E extends { message?: string; action?: object }>(
+  empty: E | undefined,
+  audience: WidgetAudience
+): E | undefined {
   if (empty?.action === undefined) return empty;
-  if (audience.holds(empty.action.requiredPermission)) return empty;
+  // A link's permission, when it names one; an action opening the card's own settings has none,
+  // since the admin offers it only where the reader can change that card's settings.
+  const { action } = empty;
+  const gate =
+    "requiredPermission" in action &&
+    typeof action.requiredPermission === "string"
+      ? action.requiredPermission
+      : undefined;
+  if (audience.holds(gate)) return empty;
   const { action: _withheld, ...rest } = empty;
   return rest as E;
 }
@@ -2196,17 +2204,11 @@ async function buildAdminMeta(
   // is a whole declaration -- a `text` widget's prose, an `actions` widget's
   // links -- so shipping every one and leaving the browser to hide the gated
   // cards hands a reader the contents of a card they may not see.
-  const widgets = [
-    ...publishableWidgets()
-      .filter(widget => audience.declared.has(widget.id))
-      .map(widget =>
-        collectionDefaultForReader(
-          actionsForAudience(widget, audience),
-          readable
-        )
-      ),
-    ...audience.generated,
-  ];
+  const widgets = publishableWidgets()
+    .filter(widget => audience.declared.has(widget.id))
+    .map(widget =>
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
@@ -2381,14 +2383,14 @@ async function handleAdminMetaWorkspaceRequest(
   // 🔴 Which widgets this reader may be told about is decided HERE rather than
   // inside `buildAdminMeta`, and by the SAME implementation the layout endpoint
   // places and offers with, so the two cannot disagree about what a reader may
-  // see. A declaration is its whole content -- a generated card's id, title and
-  // query all name a COLLECTION, a `text` widget carries its prose -- so
-  // publishing the whole set and leaving the browser to hide the gated ones
-  // would disclose every collection in the install and the body of every gated
-  // card to any authenticated caller. That the admin would not draw the card
+  // see. A declaration is its whole content -- a Collection setting's default
+  // names a COLLECTION, a `text` widget carries its prose -- so publishing the
+  // whole set and leaving the browser to hide the gated ones would disclose
+  // collections the reader may not read and the body of every gated card to
+  // any authenticated caller. That the admin would not draw the card
   // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // `widgetAudience` re-derives the generated cards per request, which is why
+  // `widgetAudience` refreshes the content sources per request, which is why
   // it runs on this route and not in the shared builder: the PUBLIC branding
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous
