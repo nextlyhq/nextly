@@ -1683,26 +1683,19 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
 async function assertNoBuilderFilesWithoutSnapshot(
   deps: MigrateCoreDeps
 ): Promise<void> {
-  const files = await discoverMigrations(
-    deps.migrationsDir,
-    deps.logger,
+  // The pending files as the dry run and the run's report find them, so all
+  // three agree on which files are still to run.
+  const pending = await findPendingFiles(
+    deps.adapter,
+    deps.db,
     deps.dialect,
-    "app"
+    deps.migrationsDir,
+    deps.logger
   );
-  const builderFiles = files.filter(m => isBuilderWrittenMigration(m.name));
-  if (builderFiles.length === 0) return;
-  const hasLedger = await (
-    deps.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-  ).tableExists("nextly_schema_events");
-  const repo = hasLedger
-    ? new SchemaEventsRepository(deps.db, deps.dialect)
-    : undefined;
   const refused: string[] = [];
-  for (const m of builderFiles) {
-    const filename = `${m.name}.sql`;
-    if (repo && (await repo.isFileApplied(filename))) continue;
+  for (const m of pending) {
     if (await isRefusedWithoutSnapshot(m, deps.migrationsDir)) {
-      refused.push(filename);
+      refused.push(`${m.name}.sql`);
     }
   }
   if (refused.length === 0) return;
