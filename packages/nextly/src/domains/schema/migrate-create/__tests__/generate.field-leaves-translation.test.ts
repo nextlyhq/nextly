@@ -140,30 +140,6 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       ).rejects.toThrow(/"body" changes how it is stored/);
     });
 
-    it("refuses a slug leaving translation, which its automatic unique index covers", async () => {
-      // No `unique` flag and no declared index: every `slug` column gets a unique index of its own,
-      // which the main file creates while the column is still empty.
-      const withSlug = (localized: boolean) => ({
-        ...TRANSLATED,
-        fields: [
-          { name: "slug", type: "text", localized },
-          { name: "price", type: "number" },
-        ],
-      });
-      await expect(
-        secondRun(dialect, withSlug(false), { first: withSlug(true) })
-      ).rejects.toThrow(/"slug" is unique/);
-    });
-
-    it("refuses a field a unique index covers, naming it", async () => {
-      await expect(
-        secondRun(dialect, {
-          ...SHARED,
-          indexes: [{ fields: ["body"], unique: true }],
-        })
-      ).rejects.toThrow(/"body" is unique/);
-    });
-
     it("warns when no migration file says how the field is stored", async () => {
       const warnings: string[] = [];
       // The companion file the first run wrote, gone: nothing describes `body`'s column now.
@@ -224,16 +200,117 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       ]);
     });
 
-    it("refuses a required field leaving translation, naming it", async () => {
-      await expect(
-        secondRun(dialect, {
+    /**
+     * The three files of a field leaving translation with a setting: the main file creates the
+     * shared column without it, and the shared file applies it between the copy and the companion
+     * column's drop, so a value the database refuses is still on the companion.
+     */
+    async function leavingWith(
+      next: MinimalConfigEntity,
+      first?: MinimalConfigEntity
+    ) {
+      const files = await secondRun(dialect, next, first ? { first } : {});
+      const main = sections(
+        files.find(f => /_two\.sql$/.test(f.name))?.sql ?? ""
+      );
+      const shared = sections(
+        files.find(f => f.name.includes("_shared_localization_"))?.sql ?? ""
+      );
+      return { main, shared };
+    }
+
+    it("makes a required field required after its values are copied, before the companion drop", async () => {
+      const { main, shared } = await leavingWith({
+        ...SHARED,
+        fields: [
+          { name: "body", type: "text", localized: false, required: true },
+          { name: "price", type: "number" },
+        ],
+      });
+
+      // Created nullable: no NOT NULL in the main file's ADD.
+      const add = main.up
+        .split("\n")
+        .find(line => line.includes(`ADD COLUMN ${q("body")}`));
+      expect(add).toBeDefined();
+      expect(add).not.toMatch(/NOT NULL/);
+      // Then copied, made required, and only then dropped from the companion.
+      const copy = shared.up.indexOf(`UPDATE ${q("dc_docs")}`);
+      const required =
+        dialect === "sqlite"
+          ? shared.up.indexOf(`CREATE TABLE ${q("__new_dc_docs")}`)
+          : shared.up.search(
+              dialect === "postgresql"
+                ? new RegExp(`ALTER COLUMN ${escape(q("body"))} SET NOT NULL`)
+                : new RegExp(`MODIFY COLUMN ${escape(q("body"))} [^;]*NOT NULL`)
+            );
+      const drop = shared.up.indexOf(
+        `ALTER TABLE ${q("dc_docs_locales")} DROP COLUMN ${q("body")}`
+      );
+      expect(copy).toBeGreaterThanOrEqual(0);
+      expect(required).toBeGreaterThan(copy);
+      expect(drop).toBeGreaterThan(required);
+    });
+
+    it.each([
+      {
+        how: "its own flag",
+        field: { name: "body", type: "text", localized: false, unique: true },
+        column: "body",
+      },
+      {
+        how: "a declared unique index",
+        field: { name: "body", type: "text", localized: false },
+        indexes: [{ fields: ["body"], unique: true }],
+        column: "body",
+      },
+    ])(
+      "creates the unique index from $how after the values are copied, and drops it first on the way down",
+      async ({ field, indexes, column }) => {
+        const { main, shared } = await leavingWith({
           ...SHARED,
-          fields: [
-            { name: "body", type: "text", localized: false, required: true },
-            { name: "price", type: "number" },
-          ],
-        })
-      ).rejects.toThrow(/"body" is required/);
+          fields: [field, { name: "price", type: "number" }],
+          ...(indexes ? { indexes } : {}),
+        });
+
+        const unique = new RegExp(
+          `CREATE UNIQUE INDEX[^;]*\\(${escape(q(column))}\\)`
+        );
+        expect(main.up).not.toMatch(unique);
+        const copy = shared.up.indexOf(`UPDATE ${q("dc_docs")}`);
+        const index = shared.up.search(unique);
+        const drop = shared.up.indexOf(
+          `ALTER TABLE ${q("dc_docs_locales")} DROP COLUMN ${q(column)}`
+        );
+        expect(index).toBeGreaterThan(copy);
+        expect(drop).toBeGreaterThan(index);
+        // The index goes before the column it covers: SQLite drops no indexed column. PostgreSQL
+        // spells it as the constraint first, then the index.
+        expect(shared.down.trimStart()).toMatch(
+          /^(DROP INDEX|ALTER TABLE \S+ DROP CONSTRAINT)/
+        );
+      }
+    );
+
+    it("creates a slug's automatic unique index after its values are copied", async () => {
+      // No `unique` flag and no declared index: every `slug` column gets a unique index of its own.
+      const withSlug = (localized: boolean) => ({
+        ...TRANSLATED,
+        fields: [
+          { name: "slug", type: "text", localized },
+          { name: "price", type: "number" },
+        ],
+      });
+      const { main, shared } = await leavingWith(
+        withSlug(false),
+        withSlug(true)
+      );
+
+      const unique = new RegExp(
+        `CREATE UNIQUE INDEX[^;]*\\(${escape(q("slug"))}\\)`
+      );
+      expect(main.up).not.toMatch(unique);
+      expect(shared.up).toMatch(unique);
     });
   }
 );

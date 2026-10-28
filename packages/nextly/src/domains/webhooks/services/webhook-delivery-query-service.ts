@@ -17,17 +17,18 @@
 
 import { and, count, desc, eq } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
-import {
+import type {
   nextlyEvents as eventsMysql,
   nextlyWebhookDeliveries as deliveriesMysql,
 } from "../../../schemas/webhooks/mysql";
-import {
+import type {
   nextlyEvents as eventsPg,
   nextlyWebhookDeliveries as deliveriesPg,
 } from "../../../schemas/webhooks/postgres";
-import {
+import type {
   nextlyEvents as eventsSqlite,
   nextlyWebhookDeliveries as deliveriesSqlite,
 } from "../../../schemas/webhooks/sqlite";
@@ -152,20 +153,11 @@ export class WebhookDeliveryQueryService extends BaseService {
     logger: ConstructorParameters<typeof BaseService>[1]
   ) {
     super(adapter, logger);
-    switch (this.adapter.getCapabilities().dialect) {
-      case "postgresql":
-        this.deliveries = deliveriesPg;
-        this.events = eventsPg;
-        break;
-      case "mysql":
-        this.deliveries = deliveriesMysql;
-        this.events = eventsMysql;
-        break;
-      default:
-        this.deliveries = deliveriesSqlite;
-        this.events = eventsSqlite;
-        break;
-    }
+    // The loaded dialect's own tables, so only that dialect's files are
+    // imported; `createAdapter` loads them.
+    const tables = loadedDialect(this.adapter.getCapabilities().dialect).tables;
+    this.deliveries = tables.nextlyWebhookDeliveries;
+    this.events = tables.nextlyEvents;
   }
 
   /**

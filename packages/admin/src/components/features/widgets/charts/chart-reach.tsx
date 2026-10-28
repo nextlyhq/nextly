@@ -202,7 +202,7 @@ export function ChartReachArea({
       role="group"
       aria-label={name}
       aria-describedby={describedBy}
-      className="relative rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="relative flex min-h-0 flex-1 flex-col rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       {...reach.area}
     >
       {children}
@@ -276,7 +276,8 @@ export function ChartTooltip({
       // design-lint-ok: placed beside the mark it describes.
       style={style}
     >
-      <span className="min-w-0 font-medium">{title}</span>
+      {/* The approved design's tooltip: what is in view, small and muted, over its value. */}
+      <span className="min-w-0 text-[11px] text-muted-foreground">{title}</span>
       {lines.map(line => (
         <span key={line.key} className="flex items-center gap-1.5">
           <span
@@ -288,7 +289,7 @@ export function ChartTooltip({
           {line.name ? (
             <span className="min-w-0 text-muted-foreground">{line.name}</span>
           ) : null}
-          <span className="font-medium tabular-nums">{line.value}</span>
+          <span className="font-semibold tabular-nums">{line.value}</span>
         </span>
       ))}
     </div>

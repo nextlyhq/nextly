@@ -248,30 +248,71 @@ export interface CardEmptyContent {
   detail?: string;
   /**
    * At most ONE action, and only one the person may take. The caller decides that; the frame
-   * draws what it is given and never a second button.
+   * draws what it is given and never a second button: a link for an `href`, a button for an
+   * `onSelect`, such as one opening the card's own settings.
    */
-  action?: { label: string; href: string };
+  action?:
+    | { label: string; href: string }
+    | { label: string; onSelect: () => void };
 }
 
 /** The frame's own empty state, for a card whose body says nothing more particular. */
 export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
 
+/**
+ * The height an empty state with an action takes stacked: its title's line (`text-sm`, 20 px),
+ * the gap under it (4 px), the action's margin (8 px) and the action (32 px). A body shorter than
+ * this, such as a two-row card's, lays the title and the action in one row instead, so the action
+ * stays inside the body rather than running under the footer's room.
+ */
+export const EMPTY_STACKED_WITH_ACTION_PX: number = 20 + 4 + 8 + 32;
+
 export function CardEmpty({
   title,
   detail,
   action,
-}: CardEmptyContent): JSX.Element {
+  inline = false,
+}: CardEmptyContent & {
+  /** The title and the action in one row, for a body too short to stack them. */
+  inline?: boolean;
+}): JSX.Element {
   return (
-    <div className="grid justify-items-start gap-1" data-testid="card-empty">
+    <div
+      className={
+        inline
+          ? "flex flex-wrap items-center justify-center gap-x-3 gap-y-1"
+          : "grid justify-items-center gap-1"
+      }
+      data-testid="card-empty"
+      data-layout={inline ? "inline" : "stacked"}
+    >
       <p className="text-sm font-semibold text-foreground">{title}</p>
-      {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
-      {action && (
+      {/* A one-row state has no room for a second line; its title says what is missing. */}
+      {detail && !inline && (
+        <p className="text-xs text-muted-foreground">{detail}</p>
+      )}
+      {action && "href" in action && (
         <Link
           href={action.href}
-          className="mt-2 inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5"
+          className={cn(
+            "inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5",
+            !inline && "mt-2"
+          )}
         >
           {action.label}
         </Link>
+      )}
+      {action && "onSelect" in action && (
+        // The button the link stands beside elsewhere, so the two read as one kind of step.
+        <Button
+          variant="outline"
+          size="sm"
+          className={inline ? undefined : "mt-2"}
+          onClick={action.onSelect}
+          data-testid="card-empty-action"
+        >
+          {action.label}
+        </Button>
       )}
     </div>
   );
@@ -289,7 +330,7 @@ export const UNAVAILABLE_DETAIL =
 export function CardUnavailable(): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="card-unavailable"
     >
       <Lock className="mb-1 h-5 w-5 text-muted-foreground" aria-hidden="true" />
@@ -317,7 +358,7 @@ export function CardError({
 }): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
       <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />

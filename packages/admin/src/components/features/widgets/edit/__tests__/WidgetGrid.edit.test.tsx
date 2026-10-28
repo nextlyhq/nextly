@@ -1722,6 +1722,32 @@ describe("at one column", () => {
   });
 });
 
+describe("an arrangement whose every card is not shown for its reader", () => {
+  it("tells them their dashboard is empty at rest, and still lists the cards while customising", async () => {
+    // Each card is taken off the dashboard; counted as on show, they left it blank instead.
+    mockBranding = branding(["acme/posts"], {
+      "acme/posts": {
+        archetype: "list",
+        component: undefined,
+        query: { source: "collection:posts", op: "list", select: ["title"] },
+      },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "acme/posts" }]);
+    api.post.mockResolvedValue({
+      results: [{ ok: false, error: "Not shown for you", code: "not-shown" }],
+    });
+    renderGrid();
+
+    expect(await screen.findByTestId("widget-grid-empty")).toBeInTheDocument();
+    await beginEditing();
+    // In customise mode the card is on show, marked, so it can be removed.
+    expect(screen.queryByTestId("widget-grid-empty")).toBeNull();
+    expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
+      "Not shown for you right now"
+    );
+  });
+});
+
 describe("an arrangement with nothing left on it", () => {
   it("KEEPS the way back when every card is removed", async () => {
     // 🔴 An arrangement must never reach a state it cannot leave: the

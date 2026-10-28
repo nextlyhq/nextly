@@ -429,12 +429,16 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
 const GET_STARTED = "core/get-started";
 
 /**
- * The layout read passed through with the Get started card first, at its widget's default size,
- * holding the most steps it draws before "Show N more": a collection, an entry, five of six
- * Singles and an invite. Mocked, so the card is drawn whatever earlier specs left behind (it
- * retires once a site's steps are done).
+ * The layout read passed through with the Get started card first, at `rows()` rows (its widget's
+ * default when that gives nothing), holding a collection, an entry, six Singles and an invite:
+ * more steps than a compact card holds. Mocked, so the card is drawn whatever earlier specs left
+ * behind (it retires once a site's steps are done). `rows` is read on every request, so a test
+ * changes the card's height by reloading.
  */
-async function placeFullGetStarted(page: Page): Promise<void> {
+async function placeFullGetStarted(
+  page: Page,
+  rows: () => number | undefined = () => undefined
+): Promise<void> {
   const size = (await sizeBoundsOf(page, GET_STARTED)).default;
   await page.route("**/dashboard/layout", async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
@@ -453,7 +457,13 @@ async function placeFullGetStarted(page: Page): Promise<void> {
       getStarted?: unknown;
     };
     layout.placements = [
-      { id: "e2e-get-started", widgetId: GET_STARTED, ...size, removed: false },
+      {
+        id: "e2e-get-started",
+        widgetId: GET_STARTED,
+        w: size.w,
+        h: rows() ?? size.h,
+        removed: false,
+      },
       ...layout.placements.filter(p => p.widgetId !== GET_STARTED),
     ];
     const singles = ["a", "b", "c", "d", "e", "f"].map(slug => ({
@@ -476,34 +486,96 @@ async function placeFullGetStarted(page: Page): Promise<void> {
   });
 }
 
+/** The Get started card's cell, once its steps are drawn. */
+async function getStartedCell(page: Page): Promise<Locator> {
+  const cell = page.getByTestId(`widget-cell-${GET_STARTED}`);
+  await expect(cell.getByTestId("get-started-progress")).toBeVisible({
+    timeout: 60_000,
+  });
+  return cell;
+}
+
+/** Nothing in the card's body is cut by its edge: no overflow, and every drawn step inside. */
+async function expectWholeSteps(cell: Locator, label: string): Promise<void> {
+  const fit = await cell.getByTestId("widget-card-body").evaluate(element => ({
+    scroll: element.scrollHeight,
+    client: element.clientHeight,
+  }));
+  expect(fit.scroll, `${label}: the body overflows`).toBeLessThanOrEqual(
+    fit.client + 1
+  );
+  const card = await cell.boundingBox();
+  const last = await cell.getByRole("listitem").last().boundingBox();
+  expect((last?.y ?? 0) + (last?.height ?? 0), label).toBeLessThanOrEqual(
+    (card?.y ?? 0) + (card?.height ?? 0)
+  );
+}
+
 for (const width of [1440, 390]) {
-  test(`draws every step of the Get started card within its default height (${width}px)`, async ({
+  test(`draws only whole Get started steps at every height (${width}px)`, async ({
     page,
   }) => {
-    // 🔴 A card never scrolls, so a step past the card's rows is cut off: at three rows high the
-    // invite step was drawn below the card's bottom edge.
-    await page.setViewportSize({ width, height: 1100 });
-    await placeFullGetStarted(page);
+    // 🔴 A card never scrolls, so a step past the card's rows is cut off: at three rows high
+    // the invite step was drawn below the card's bottom edge. Each height on one page, read
+    // again from the mocked layout, rather than a page a height.
+    let rows = 3;
+    await page.setViewportSize({ width, height: 2600 });
+    await placeFullGetStarted(page, () => rows);
     await gotoAdmin(page, "/");
-    const cell = page.getByTestId(`widget-cell-${GET_STARTED}`);
-    await expect(cell.getByTestId("get-started-progress")).toBeVisible({
-      timeout: 60_000,
-    });
-    const body = cell.getByTestId("widget-card-body");
-    const fit = await body.evaluate(element => ({
-      scroll: element.scrollHeight,
-      client: element.clientHeight,
-    }));
-    expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
-    // The last step and the fold control both lie inside the card.
-    const card = await cell.boundingBox();
-    const last = await cell.getByRole("listitem").last().boundingBox();
-    expect(last).not.toBeNull();
-    expect((last?.y ?? 0) + (last?.height ?? 0)).toBeLessThanOrEqual(
-      (card?.y ?? 0) + (card?.height ?? 0)
-    );
-    await expect(
-      cell.getByRole("button", { name: "Show 1 more" })
-    ).toBeInViewport();
+    for (const h of [3, 4, 8, 12]) {
+      rows = h;
+      if (h !== 3) await page.reload();
+      const cell = await getStartedCell(page);
+      await expectWholeSteps(cell, `${h} rows`);
+    }
   });
 }
+
+test("Show N more grows the Get started card in place, Show less folds it back, focus held, nothing saved", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 2600 });
+  const writes: string[] = [];
+  page.on("request", request => {
+    if (
+      request.url().includes("/dashboard/layout") &&
+      request.method() !== "GET"
+    ) {
+      writes.push(request.method());
+    }
+  });
+  await placeFullGetStarted(page);
+  await gotoAdmin(page, "/");
+  const cell = await getStartedCell(page);
+  const folded = (await cell.boundingBox())?.height ?? 0;
+  const drawn = await cell.getByRole("listitem").count();
+  expect(drawn).toBeLessThan(9);
+
+  // Found by what it is, the card's one toggle, not by its words: its name changes as it is
+  // pressed, and a locator by the first name would stop matching the very control it pressed.
+  const control = cell.locator("button[aria-expanded]");
+  await expect(control).toHaveCount(1);
+  await expect(control).toHaveAccessibleName(`Show ${9 - drawn} more`);
+  await expect(control).toHaveAttribute("aria-expanded", "false");
+  await control.focus();
+  await page.keyboard.press("Enter");
+  await expect(cell.getByRole("listitem")).toHaveCount(9);
+  await expect(control).toHaveAccessibleName("Show less");
+  await expect(control).toHaveAttribute("aria-expanded", "true");
+  await expect(control).toBeFocused();
+  // Grown in place, to hold every step, which the body then does without cutting one.
+  await expect
+    .poll(async () => (await cell.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(folded);
+  await expectWholeSteps(cell, "shown in full");
+
+  await page.keyboard.press("Enter");
+  await expect(cell.getByRole("listitem")).toHaveCount(drawn);
+  await expect(control).toHaveAccessibleName(`Show ${9 - drawn} more`);
+  await expect(control).toBeFocused();
+  await expect
+    .poll(async () => Math.round((await cell.boundingBox())?.height ?? 0))
+    .toBe(Math.round(folded));
+  // A reader's look at the rest is not an arrangement: nothing was written.
+  expect(writes).toEqual([]);
+});

@@ -1,5 +1,8 @@
 /**
- * `nextly_field_group_lock` — dialect-aware barrel.
+ * `nextly_schema_lock` and `nextly_field_group_lock` — dialect-aware barrel.
+ *
+ * The schema lock is the one every schema change takes; the field-group lock is the earlier lock it
+ * is held beside, for processes of an earlier Nextly version (`domains/schema/pipeline/schema-lock`).
  *
  * @module schemas/field-group-lock
  */
@@ -29,33 +32,76 @@ export type FieldGroupLockColumn = "id" | "owner" | "expires_at";
 export function fieldGroupLockColumnTypes(
   dialect: SupportedDialect
 ): Record<FieldGroupLockColumn, string> {
-  const declared = new Map(
-    lockForDialect(dialect).columns.map(column => [
-      column.name,
-      column.getSQLType(),
-    ])
+  const read = declaredTypeReader(
+    dialect,
+    "field-group",
+    lockForDialect(dialect).columns
   );
+  return {
+    id: read("id"),
+    owner: read("owner"),
+    expires_at: read("expires_at"),
+  };
+}
 
-  const read = (name: FieldGroupLockColumn): string => {
+/** A column the schema lock table is made of. */
+export type SchemaLockColumn =
+  | "id"
+  | "owner"
+  | "command"
+  | "acquired_at"
+  | "expires_at";
+
+/**
+ * The physical type each schema lock column is declared with, read out of the declaration for the
+ * reason {@link fieldGroupLockColumnTypes} gives: the bootstrap and a reconcile describe one table.
+ */
+export function schemaLockColumnTypes(
+  dialect: SupportedDialect
+): Record<SchemaLockColumn, string> {
+  const read = declaredTypeReader(
+    dialect,
+    "schema",
+    schemaLockForDialect(dialect).columns
+  );
+  return {
+    id: read("id"),
+    owner: read("owner"),
+    command: read("command"),
+    acquired_at: read("acquired_at"),
+    expires_at: read("expires_at"),
+  };
+}
+
+/** A declared column as both readers see it. */
+interface DeclaredColumn {
+  readonly name: string;
+  getSQLType(): string;
+}
+
+/** Reads one declared column's type, refusing a column the declaration lost. */
+function declaredTypeReader(
+  dialect: SupportedDialect,
+  lock: "field-group" | "schema",
+  columns: readonly DeclaredColumn[]
+): (name: string) => string {
+  const declared = new Map(
+    columns.map(column => [column.name, column.getSQLType()])
+  );
+  return name => {
     const type = declared.get(name);
     if (type === undefined) {
       // The declaration lost a column the bootstrap needs. `internal` because only a code change
       // can produce it, and failing here beats emitting a CREATE with a hole in it.
       throw NextlyError.internal({
         logContext: {
-          reason: "field-group lock declaration is missing a column",
+          reason: `${lock} lock declaration is missing a column`,
           dialect,
           column: name,
         },
       });
     }
     return type;
-  };
-
-  return {
-    id: read("id"),
-    owner: read("owner"),
-    expires_at: read("expires_at"),
   };
 }
 
@@ -92,4 +138,28 @@ function lockForDialect(dialect: SupportedDialect) {
 /** The lock table for the requested dialect, as a schema fragment. */
 export function fieldGroupLockTables(dialect: SupportedDialect) {
   return { nextlyFieldGroupLock: lockForDialect(dialect).table };
+}
+
+/** The schema lock table, chosen the way {@link lockForDialect} chooses the field-group one. */
+function schemaLockForDialect(dialect: SupportedDialect) {
+  const loaded = loadedDialect(dialect);
+  switch (loaded.dialect) {
+    case "postgresql": {
+      const table = loaded.tables.nextlySchemaLock;
+      return { table, columns: pgTableConfig(table).columns };
+    }
+    case "mysql": {
+      const table = loaded.tables.nextlySchemaLock;
+      return { table, columns: mysqlTableConfig(table).columns };
+    }
+    case "sqlite": {
+      const table = loaded.tables.nextlySchemaLock;
+      return { table, columns: sqliteTableConfig(table).columns };
+    }
+  }
+}
+
+/** The schema lock table for the requested dialect, as a schema fragment. */
+export function schemaLockTables(dialect: SupportedDialect) {
+  return { nextlySchemaLock: schemaLockForDialect(dialect).table };
 }

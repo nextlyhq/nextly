@@ -743,23 +743,25 @@ export {
   type CardState,
   type SkeletonHint,
 } from "./components/features/widgets/frame/card-state";
-export { CardFigure } from "./components/features/widgets/frame/figure";
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
 export {
-  cardChange,
-  cardNumber,
-} from "./components/features/widgets/frame/format";
-export {
-  GroupsChart,
-  type GroupsChartGroup,
-  type GroupsChartProps,
-} from "./components/features/widgets/charts/groups-chart";
-export {
-  OverTimeChart,
-  type OverTimeChartProps,
-  type OverTimeInterval,
-  type OverTimePoint,
-  type OverTimeSeries,
-} from "./components/features/widgets/charts/over-time-chart";
+  Widget,
+  type WidgetBarChartGroup,
+  type WidgetBarChartProps,
+  type WidgetChartUnit,
+  type WidgetFigureProps,
+  type WidgetKit,
+  type WidgetListProps,
+  type WidgetListTotal,
+  type WidgetRowAction,
+  type WidgetSeries,
+  type WidgetSeriesChartProps,
+  type WidgetSeriesInterval,
+  type WidgetSeriesPoint,
+  type WidgetTableColumn,
+  type WidgetTableProps,
+} from "./components/features/widgets/kit";
 export type { WidgetRenderSize } from "nextly/widget-result";
 
 // Constants
