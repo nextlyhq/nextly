@@ -21,7 +21,9 @@
  *
  * Resolution is the package's own: relative paths, the `paths` in its
  * `tsconfig.json`, and explicit `.ts`/`.js` extensions. A reference it cannot
- * read or resolve fails the walk rather than counting as importing nothing.
+ * read or resolve fails the walk rather than counting as importing nothing, and
+ * so does one to the package by its own name (`nextly`, `nextly/runtime`):
+ * that loads a built entry, which re-exports the registry, from inside it.
  *
  * @module cli/__tests__/cli-graph-stays-off-the-dashboard.test
  */
@@ -51,6 +53,17 @@ const OFF_LIMITS = [
 /** A module under `src`, with `/` on every platform. */
 const fromSrc = (file: string): string =>
   relative(SRC, file).split(sep).join("/");
+
+/** The package's own name, which a file inside it may import itself by. */
+const PACKAGE_NAME = (
+  JSON.parse(readFileSync(join(PACKAGE, "package.json"), "utf8")) as {
+    name: string;
+  }
+).name;
+
+/** Whether a specifier names this package itself, or one of its subpaths. */
+const isSelfReference = (specifier: string): boolean =>
+  specifier === PACKAGE_NAME || specifier.startsWith(`${PACKAGE_NAME}/`);
 
 /**
  * The `paths` of the package's `tsconfig.json`, longest prefix first, which is
@@ -99,7 +112,11 @@ function sourceFile(base: string): string | undefined {
 /** A module a file loads, and whether it loads only when it runs. */
 type Edge =
   | { kind: "module"; target: string; dynamic: boolean }
-  | { kind: "unread" | "unresolved"; detail: string; dynamic: boolean };
+  | {
+      kind: "unread" | "unresolved" | "self-reference";
+      detail: string;
+      dynamic: boolean;
+    };
 
 /**
  * Each file's runtime edges, read once: every command's walk crosses the same
@@ -116,6 +133,14 @@ function edgesOf(file: string): Edge[] {
     const { specifier, dynamic } = ref;
     if (specifier === UNRESOLVABLE_SPECIFIER) {
       edges.push({ kind: "unread", detail: fromSrc(file), dynamic });
+      continue;
+    }
+    if (isSelfReference(specifier)) {
+      edges.push({
+        kind: "self-reference",
+        detail: `${fromSrc(file)}: ${specifier}`,
+        dynamic,
+      });
       continue;
     }
     const bases = specifier.startsWith(".")
@@ -241,5 +266,9 @@ describe("the CLI's commands", () => {
       join(SRC, "di/register.ts")
     );
     expect(aliased("zod")).toBeUndefined();
+    // The package's own name is not a package to skip.
+    expect(isSelfReference(PACKAGE_NAME)).toBe(true);
+    expect(isSelfReference(`${PACKAGE_NAME}/runtime`)).toBe(true);
+    expect(isSelfReference(`${PACKAGE_NAME}-adjacent`)).toBe(false);
   });
 });
