@@ -623,12 +623,20 @@ async function permissionVerdict(
  * resource's `manage-` permission counting on it as the decision counts it,
  * and no rule is read for either.
  */
-export async function anyPermissionVerdict(
+export function anyPermissionVerdict(
   auth: AuthContext,
   permissions: readonly RoutePermission[],
   rules: RouteRules
 ): Promise<GateVerdict> {
-  const caller = callerOf(auth);
+  return anyPermissionVerdictOf(callerOf(auth), permissions, rules);
+}
+
+/** {@link anyPermissionVerdict}, for the caller a gate judges. */
+async function anyPermissionVerdictOf(
+  caller: GateCaller,
+  permissions: readonly RoutePermission[],
+  rules: RouteRules
+): Promise<GateVerdict> {
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
@@ -648,14 +656,14 @@ export async function anyPermissionVerdict(
     return verdictOf(today);
   }
   const today = await hasAnyPermission(
-    auth.userId,
+    caller.userId,
     permissions.flatMap(({ action, resource }) =>
       answeringPermissions(action, resource)
     )
   );
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
-  const userActor = () => (actor ??= actorForUser(auth.userId));
+  const userActor = () => (actor ??= actorForUser(caller.userId));
   const byPermission = async () => {
     const resolved = await userActor();
     return permissions.some(
@@ -738,14 +746,7 @@ export async function callerMayPerform(
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
-  const caller: GateCaller =
-    scope?.actorType === "apiKey"
-      ? {
-          userId: user.id,
-          key: scope,
-          ...(user.roles ? { roles: user.roles } : {}),
-        }
-      : { userId: user.id };
+  const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
   if (!caller.key) return sessionAnswer(caller.userId, action, resource, rules);
   // A key is judged on its own scope, the route gate's way, with or without
@@ -755,6 +756,39 @@ export async function callerMayPerform(
       Promise.resolve(false)
     )
   ).allowed;
+}
+
+/** The caller a probe judges: a key on its own scope, else the user. */
+function probedCaller(
+  scope: AuthenticatedScope | undefined,
+  user: { id: string; roles?: readonly string[] }
+): GateCaller {
+  return scope?.actorType === "apiKey"
+    ? {
+        userId: user.id,
+        key: scope,
+        ...(user.roles ? { roles: user.roles } : {}),
+      }
+    : { userId: user.id };
+}
+
+/**
+ * Whether the caller holds any one of `permissions`, as the REST any-of
+ * gates ask it ({@link anyPermissionVerdict}): by grant, no entity's rule
+ * read. For a probe deciding whether to offer what such a gate guards.
+ */
+export async function callerHoldsAny(
+  scope: AuthenticatedScope | undefined,
+  permissions: readonly RoutePermission[],
+  user: { id: string; roles?: readonly string[] }
+): Promise<boolean> {
+  if (!user.id) return false;
+  const verdict = await anyPermissionVerdictOf(
+    probedCaller(scope, user),
+    permissions,
+    getRBACService()
+  );
+  return verdict.allowed;
 }
 
 /**

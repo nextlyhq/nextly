@@ -17,6 +17,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
@@ -61,10 +62,7 @@ const reorderSchema = z.object({
  */
 export const PATCH = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "update", resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.userFields.update.anyOf]);
 
     let raw: unknown;
     try {
