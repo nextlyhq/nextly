@@ -673,6 +673,8 @@ export {
   type WidgetFilter,
   // A series' interval and range.
   type WidgetInterval,
+  // The size a card's `load` is handed.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
   type WidgetRange,
@@ -681,6 +683,10 @@ export {
   type WidgetSummary,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
+// @experimental The list rows a card of a given height draws at a density: what a widget's `load`
+// reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
+// cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
+export { rowsThatFit } from "./domains/widgets/card-geometry";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
 export type {
