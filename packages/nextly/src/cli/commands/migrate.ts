@@ -1441,6 +1441,12 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // Before the lock as well: taking it creates the lock's own table on a
+  // database that has none, and a refused run leaves the schema as it was. A
+  // file another run records meanwhile is only refused once more.
+  if (deps.refuseBuilderFilesWithoutSnapshot === true) {
+    await assertNoBuilderFilesWithoutSnapshot(deps);
+  }
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1468,9 +1474,6 @@ export async function migrateCore(
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
-      if (deps.refuseBuilderFilesWithoutSnapshot === true) {
-        await assertNoBuilderFilesWithoutSnapshot(deps);
-      }
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -1673,9 +1676,9 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
  * leaves the next `migrate:create` comparing against a snapshot that never saw
  * the change. `migrate:create` writes the same change with its snapshot.
  *
- * Read before the core reconcile, inside the lock, so the run is refused with
- * the schema, the ledger and the registry as it found them. A missing ledger
- * reads as every file pending, as it does for the files phase.
+ * Read before the lock and the core reconcile, so the run is refused with the
+ * schema, the ledger and the registry as it found them. A missing ledger reads
+ * as every file pending, as it does for the files phase.
  */
 async function assertNoBuilderFilesWithoutSnapshot(
   deps: MigrateCoreDeps
