@@ -16,6 +16,7 @@
 
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
+import type { RangeInterval, TimeseriesRange } from "../query";
 import type { DeclaredComponentProps } from "../result";
 import type { WidgetScope } from "../widget-scope";
 
@@ -26,12 +27,41 @@ import type {
   WidgetView,
 } from "./displays";
 import type {
+  DateRange,
   DependentSettings,
   SettingValues,
   WidgetFilter,
   WidgetSettings,
 } from "./setting-builders";
 import type { TransportableFields, TransportableValue } from "./transportable";
+
+/**
+ * How wide each point of a series is: a UTC day, an ISO week from Monday, or
+ * a calendar month. The intervals a range is drawn in (`RangeInterval`, read
+ * from the one table that pairs each range with its interval), under the name
+ * a widget author reads it by.
+ *
+ * @experimental
+ */
+export type WidgetInterval = RangeInterval;
+
+/**
+ * The ranges a series reads back over, from the instant that far before the
+ * batch's: the ones `settings.dateRange()` offers, so a card's Date range
+ * setting is handed to `timeseries` as it is. Kept to those a series query
+ * draws, so the two lists cannot part without this type saying so.
+ *
+ * @experimental
+ */
+export type WidgetRange = Extract<DateRange, TimeseriesRange>;
+
+/**
+ * Which entries a read counts: `"published"`, the published ones, what a
+ * person reads when they ask for nothing else; or `"all"`, drafts too. A
+ * collection with no draft and published lifecycle has only published
+ * entries, so both read every row.
+ */
+type WidgetReadStatus = "published" | "all";
 
 /**
  * Reads a data function may make, already bound to the person asking.
@@ -44,7 +74,16 @@ import type { TransportableFields, TransportableValue } from "./transportable";
 export interface WidgetReadServices {
   count(
     collection: string,
-    options?: { where?: WidgetFilter; signal?: AbortSignal }
+    options?: {
+      where?: WidgetFilter;
+      /**
+       * Which entries are counted: the published ones when absent.
+       *
+       * @experimental
+       */
+      status?: WidgetReadStatus;
+      signal?: AbortSignal;
+    }
   ): Promise<number>;
   find(
     collection: string,
@@ -53,9 +92,61 @@ export interface WidgetReadServices {
       sort?: string;
       limit?: number;
       select?: readonly string[];
+      /**
+       * Which entries are found: the published ones when absent.
+       *
+       * @experimental
+       */
+      status?: WidgetReadStatus;
       signal?: AbortSignal;
     }
   ): Promise<{ items: { readonly [field: string]: TransportableValue }[] }>;
+  /**
+   * How many entries hold each value of one field, largest group first: the
+   * data the `bars` view draws, so a function may answer it as it is.
+   *
+   * `field` absent, the collection's own grouping: its status where it has a
+   * draft and published lifecycle, otherwise its first field with choices,
+   * the field a card's Group by setting falls back to. `limit` bounds how many
+   * groups come back.
+   *
+   * @experimental
+   */
+  groupBy(
+    collection: string,
+    options?: {
+      field?: string;
+      where?: WidgetFilter;
+      status?: WidgetReadStatus;
+      limit?: number;
+      signal?: AbortSignal;
+    }
+  ): Promise<{ buckets: readonly { value: string | null; count: number }[] }>;
+  /**
+   * How many entries fall in each interval of a range, oldest first, every
+   * interval present, a quiet one at zero: the data the `series` view draws,
+   * so a function may answer it as it is.
+   *
+   * The range decides the interval (a day for `7d` and `30d`, a week for
+   * `90d`, a month for `12m`), and `interval` is the one the points were
+   * counted in. Entries are placed by `dateField`, their `createdAt` when
+   * absent.
+   *
+   * @experimental
+   */
+  timeseries(
+    collection: string,
+    options: {
+      range: WidgetRange;
+      dateField?: string;
+      where?: WidgetFilter;
+      status?: WidgetReadStatus;
+      signal?: AbortSignal;
+    }
+  ): Promise<{
+    points: readonly { start: string; count: number }[];
+    interval: WidgetInterval;
+  }>;
 }
 
 /** What a data function is handed. */
@@ -104,13 +195,34 @@ declare const widgetData: unique symbol;
 declare const declared: unique symbol;
 
 /**
+ * The permissions a person must hold to be offered a widget at all, each
+ * spelled as stored (`"read-orders"`):
+ *
+ * - one permission;
+ * - `{ anyOf }`, any one of several;
+ * - `{ allOf }`, every entry, each one permission or `{ anyOf }` of several.
+ *
+ * A list is never a gate on its own, so no gate reads as both "any" and
+ * "all". Judged where the dashboard decides which widgets a person is
+ * offered and which cards it sends them, by the same rule core's own widgets
+ * are gated by.
+ *
+ * @experimental
+ */
+export type WidgetAccessGate =
+  | string
+  | { anyOf: readonly string[] }
+  | { allOf: readonly (string | { anyOf: readonly string[] })[] };
+
+/**
  * Who may see a widget's cards, in one of three forms:
  *
- * - a permission they hold, such as `"read-orders"`, which also decides
- *   whether the widget is offered to them at all;
+ * - a permission gate (`WidgetAccessGate`): a permission they hold, any
+ *   of several, or all of several, which also decides whether the widget is
+ *   offered to them at all;
  * - `{ collections }`, the collections it reads, each of which they must be
  *   able to read;
- * - a predicate of the person.
+ * - a predicate of the person, sync or async, which admits only on `true`.
  *
  * The last two are judged per card, with the person, before `load` runs; a
  * person refused sees the card as not available to them. A predicate runs
@@ -119,9 +231,9 @@ declare const declared: unique symbol;
  * @experimental
  */
 export type WidgetAccess =
-  | string
+  | WidgetAccessGate
   | { collections: readonly string[] }
-  | ((input: { user: UserContext }) => boolean);
+  | ((input: { user: UserContext }) => unknown);
 
 /**
  * What a widget's summary counts for the dashboard's header: a label, and a
@@ -193,7 +305,20 @@ export interface WidgetDeclarationInput<
   shows?: (
     input: WidgetDataInput<SettingValues<S>>
   ) => boolean | Promise<boolean>;
-  /** Whether a person may add it more than once. Once, unless it says so. */
+  /**
+   * Where the add panel offers it, when not as one card for the whole
+   * dashboard: `"per-collection"`, one row per collection inside each
+   * collection's group, the card starting set to it (the widget needs a
+   * Collection setting); `"on-request"`, only as a card a person asks for.
+   * Either keeps it off the default dashboard. The registry's own `offered`.
+   *
+   * @experimental
+   */
+  offered?: "per-collection" | "on-request";
+  /**
+   * Whether a person may add it more than once. Once, unless it says so; a
+   * widget with `offered` set, any number of times, unless this says `false`.
+   */
   several?: boolean;
   /**
    * Whether the card leaves the dashboard while its answer is empty, by its
@@ -345,8 +470,23 @@ type LiteralPath<View> = View extends {
  * and against what JSON carries.
  */
 type FunctionAnswer<Display, Data> = Display extends CoreDisplay
-  ? DisplayData<Display> & Data
+  ? AnsweredData<DisplayData<Display>> & Data
   : Data;
+
+/**
+ * A core display's data as a data function may answer it: each list in it
+ * read-only or not.
+ *
+ * 🔴 A read service answers read-only lists (`groupBy`'s buckets,
+ * `timeseries`' points), the shapes the `bars` and `series` views draw, so a
+ * function may answer them as they come; a read-only list is not assignable
+ * to a mutable one, which would refuse exactly that. Only what a function may
+ * answer is widened: what its readers are handed (`WidgetData`) is unchanged.
+ */
+type AnsweredData<T> = { [K in keyof T]: ReadonlyList<T[K]> };
+
+/** A list, as read-only or not; anything else as it is. */
+type ReadonlyList<V> = V extends readonly (infer E)[] ? readonly E[] : V;
 
 /**
  * What a widget's `preview` is typed as where it is written.

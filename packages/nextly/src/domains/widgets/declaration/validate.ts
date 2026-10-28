@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isAdminRelativePath } from "../admin-path";
-import { isValidWidgetId } from "../definition";
+import { isValidWidgetId, offeredProblem } from "../definition";
 import { sizeDeclarationProblems } from "../grid-size";
 import {
   SETTING_NOT_AN_OBJECT,
@@ -79,6 +79,7 @@ const FIELDS = new Set([
   "category",
   "size",
   "access",
+  "offered",
   "shows",
   "several",
   "hidesWhenEmpty",
@@ -172,6 +173,7 @@ const CHECKS: readonly ((
   d => optionalTextProblem("category", d.category),
   d => sizeProblems(d.size),
   d => accessProblem(d.access),
+  d => declaredOfferedProblem(d.offered, d.settings),
   d =>
     d.shows === undefined || isFunction(d.shows)
       ? undefined
@@ -226,30 +228,113 @@ function optionalTextProblem(
     : `${field} must be a non-empty string when given`;
 }
 
+/** The keys that each name one of `access`'s object forms. */
+const ACCESS_FORMS = ["collections", "anyOf", "allOf"] as const;
+
 /**
- * Who may be offered the widget: a permission name today. The collections it
- * reads and a predicate of the person are typed, and refused at startup until
- * they are applied, so a declared rule is never silently ignored and the card
- * shown to everyone.
- */
-/**
- * Why `access` is none of its three forms, or `undefined`: a permission name,
- * the collections the widget reads (each judged with the person through the
- * batch's own check), or a predicate of the person.
+ * Why `access` is none of its forms, or `undefined`: a permission gate (a
+ * permission name, `{ anyOf }` or `{ allOf }`), the collections the widget
+ * reads (each judged with the person through the batch's own check), or a
+ * predicate of the person.
  */
 function accessProblem(access: unknown): string | undefined {
   if (access === undefined || isPermissionName(access) || isFunction(access)) {
     return undefined;
   }
-  if (isRecord(access) && "collections" in access) {
-    const { collections } = access;
-    return Array.isArray(collections) &&
-      collections.length > 0 &&
-      collections.every(slug => nonBlank.safeParse(slug).success)
-      ? undefined
-      : "access.collections must be a list of the collections the widget reads, each named by its slug";
+  // 🔴 A bare list is refused rather than read as one of the two gates: an
+  // author writing one means "any of these" or "all of these", and whichever
+  // was guessed would gate the widget for people its author did not intend.
+  if (Array.isArray(access)) {
+    return "access cannot be a list: write { anyOf: [...] } for any one of several permissions, or { allOf: [...] } for every one of them";
   }
-  return `access must be a permission name such as "read-orders", { collections }, or a function of the person, got ${quote(access)}`;
+  if (isRecord(access)) {
+    const forms = ACCESS_FORMS.filter(form => form in access);
+    if (forms.length > 1) {
+      return `access must take one form, but names ${forms.join(" and ")}`;
+    }
+    if ("collections" in access) return collectionsAccessProblem(access);
+    if ("anyOf" in access || "allOf" in access) return gateProblem(access);
+  }
+  return `access must be a permission name such as "read-orders", { anyOf }, { allOf }, { collections }, or a function of the person, got ${quote(access)}`;
+}
+
+function collectionsAccessProblem(
+  access: Record<string, unknown>
+): string | undefined {
+  const { collections } = access;
+  return Array.isArray(collections) &&
+    collections.length > 0 &&
+    collections.every(slug => nonBlank.safeParse(slug).success)
+    ? undefined
+    : "access.collections must be a list of the collections the widget reads, each named by its slug";
+}
+
+/**
+ * Why an `{ anyOf }` or `{ allOf }` gate cannot be used, or `undefined`.
+ *
+ * Every list must name at least one permission, each as stored: "any of
+ * nothing" admits nobody and "all of nothing" everybody, each reading to its
+ * author like the opposite. The gate the registry judges refuses both as
+ * unusable (`requiredPermissionGroups`); refused here, the author is told at
+ * startup which list is wrong rather than finding the widget offered to
+ * nobody.
+ */
+function gateProblem(gate: Record<string, unknown>): string | undefined {
+  const extra = Object.keys(gate).filter(
+    key => key !== "anyOf" && key !== "allOf"
+  );
+  if (extra.length > 0) {
+    return `access takes no ${extra.map(quote).join(", ")} beside its ${"anyOf" in gate ? "anyOf" : "allOf"}`;
+  }
+  if ("anyOf" in gate) return anyOfProblem(gate.anyOf, "access.anyOf");
+  const { allOf } = gate;
+  if (!Array.isArray(allOf) || allOf.length === 0) {
+    return "access.allOf must be a non-empty list, each entry a permission name or { anyOf: [...] }";
+  }
+  // A stray comma's empty slot is named as one, not as an entry that is no permission.
+  const sparse = sparseListProblem(allOf, "access.allOf");
+  if (sparse !== undefined) return sparse;
+  for (const [index, entry] of allOf.entries()) {
+    const problem = allOfEntryProblem(entry, `access.allOf[${index}]`);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/** Why one `allOf` entry is neither a permission name nor `{ anyOf }`, or `undefined`. */
+function allOfEntryProblem(entry: unknown, at: string): string | undefined {
+  if (isPermissionName(entry)) return undefined;
+  if (isRecord(entry) && Object.keys(entry).join() === "anyOf") {
+    return anyOfProblem(entry.anyOf, `${at}.anyOf`);
+  }
+  return `${at} must be a permission name such as "read-orders" or { anyOf: [...] }, got ${quote(entry)}`;
+}
+
+/** Why an any-of list is not a non-empty list of permission names, or `undefined`. */
+function anyOfProblem(list: unknown, at: string): string | undefined {
+  // `every` skips an empty slot, so a list with one would pass as if the
+  // entry were never written: refused by the declarations' own rule instead.
+  const sparse = Array.isArray(list) ? sparseListProblem(list, at) : undefined;
+  if (sparse !== undefined) return sparse;
+  return Array.isArray(list) && list.length > 0 && list.every(isPermissionName)
+    ? undefined
+    : `${at} must be a non-empty list of permission names such as "read-orders"`;
+}
+
+/**
+ * Why `offered` cannot work, or `undefined`: judged by the registry's own rule
+ * (`offeredProblem`), so a declaration it would refuse when published stops
+ * startup with every other fault, before any widget is kept. The registry
+ * reads settings as a list, so the declaration's are handed over as one.
+ */
+function declaredOfferedProblem(
+  offered: unknown,
+  settings: unknown
+): string | undefined {
+  return offeredProblem({
+    offered,
+    settings: isRecord(settings) ? Object.values(settings) : settings,
+  });
 }
 
 /**

@@ -15,12 +15,16 @@
 import { expectTypeOf } from "vitest";
 
 import type { WidgetSizeDeclaration } from "../../grid-size";
+import { rangeWindow, type RangeInterval } from "../../query";
 import type { WidgetRenderSize, WidgetResultField } from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
 import type { CoreView } from "../displays";
 import {
   defineWidget,
   type WidgetAccess,
+  type WidgetInterval,
+  type WidgetAccessGate,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetData,
   type WidgetPreviewCase,
@@ -232,11 +236,86 @@ defineWidget({
 });
 
 // A data function's reads take no person, user or access option: who reads is bound by core, so
-// the only options are the ones a read carries. Pinned exactly, so an option added to either is
-// a decision made here, not an accident.
+// the only options are the ones a read carries. Pinned exactly, so an option added to any of them
+// is a decision made here, not an accident.
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["count"]>[1]>
->().toEqualTypeOf<"where" | "signal">();
+>().toEqualTypeOf<"where" | "status" | "signal">();
 expectTypeOf<
   keyof NonNullable<Parameters<WidgetReadServices["find"]>[1]>
->().toEqualTypeOf<"where" | "sort" | "limit" | "select" | "signal">();
+>().toEqualTypeOf<
+  "where" | "sort" | "limit" | "select" | "status" | "signal"
+>();
+
+// The status a read may name, on every read: the published entries, or all of them.
+expectTypeOf<
+  NonNullable<Parameters<WidgetReadServices["count"]>[1]>["status"]
+>().toEqualTypeOf<"published" | "all" | undefined>();
+expectTypeOf<
+  keyof NonNullable<Parameters<WidgetReadServices["groupBy"]>[1]>
+>().toEqualTypeOf<"field" | "where" | "status" | "limit" | "signal">();
+expectTypeOf<
+  keyof Parameters<WidgetReadServices["timeseries"]>[1]
+>().toEqualTypeOf<"range" | "dateField" | "where" | "status" | "signal">();
+
+// What a grouping and a series read answer: the shapes the `bars` and `series` views draw, the
+// series with the interval its points were counted in.
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["groupBy"]>>
+>().toEqualTypeOf<{
+  buckets: readonly { value: string | null; count: number }[];
+}>();
+expectTypeOf<
+  Awaited<ReturnType<WidgetReadServices["timeseries"]>>
+>().toEqualTypeOf<{
+  points: readonly { start: string; count: number }[];
+  interval: WidgetInterval;
+}>();
+// The interval is one a range is drawn in, as the range's own window says, and a range is one a
+// Date range setting offers.
+expectTypeOf<WidgetInterval>().toEqualTypeOf<RangeInterval>();
+expectTypeOf<WidgetInterval>().toEqualTypeOf<"day" | "week" | "month">();
+expectTypeOf<
+  ReturnType<typeof rangeWindow>["interval"]
+>().toEqualTypeOf<WidgetInterval>();
+expectTypeOf<WidgetRange>().toEqualTypeOf<DateRange>();
+
+// Each answer is data its view draws as it comes: a function may answer it unchanged.
+defineWidget({
+  id: "test/grouped-read",
+  title: "Orders by state",
+  description: "Answers a grouping read as it comes",
+  category: "Test",
+  size: { default: { w: 6, h: 4 } },
+  load: async ({ services }) => services.groupBy("orders"),
+  view: "bars",
+});
+defineWidget({
+  id: "test/series-read",
+  title: "Orders over time",
+  description: "Answers a series read as it comes",
+  category: "Test",
+  size: { default: { w: 12, h: 4 } },
+  settings: { range: settings.dateRange() },
+  load: async ({ services, settings }) =>
+    services.timeseries("orders", { range: settings.range, status: "all" }),
+  view: "series",
+});
+
+// The permission gate `access` takes: one permission, any of several, or all of several, each
+// entry one permission or any of several. A list on its own is none of them.
+expectTypeOf<WidgetAccessGate>().toEqualTypeOf<
+  | string
+  | { anyOf: readonly string[] }
+  | { allOf: readonly (string | { anyOf: readonly string[] })[] }
+>();
+expectTypeOf<{ anyOf: ["read-orders"] }>().toExtend<WidgetAccess>();
+expectTypeOf<{
+  allOf: ["read-orders", { anyOf: ["update-orders", "create-orders"] }];
+}>().toExtend<WidgetAccess>();
+expectTypeOf<{ collections: ["orders"] }>().toExtend<WidgetAccess>();
+expectTypeOf<readonly ["read-orders"]>().not.toExtend<WidgetAccess>();
+// A predicate may answer anything, a promise included: only `true` admits.
+expectTypeOf<
+  (input: { user: unknown }) => Promise<boolean>
+>().toExtend<WidgetAccess>();
