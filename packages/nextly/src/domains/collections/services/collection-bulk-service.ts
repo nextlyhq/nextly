@@ -1663,40 +1663,12 @@ export class CollectionBulkService extends BaseService {
     // its outbound event would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
-    // Each row judged on its own is asked its gate here, before the shared
-    // transaction and off its connection: a rule is the app's own code and may
-    // read the database, which a transaction holding the pool's only
-    // connection would wait on. Keyed by the row itself, so two rows naming
-    // one entry keep their own answers.
-    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
-    if (rowGate === "access-service") {
-      for (const entry of entries) {
-        rowVerdicts.set(
-          entry,
-          await this.mutationService.rowVerdict(
-            { ...params, user: accessUser },
-            entry.id,
-            entry.data,
-            () => true,
-            undefined,
-            // A rule answering a filter is matched against the row under its
-            // lock, as the single write matches it.
-            true
-          )
-        );
-      }
-    } else if (hoistedFilter) {
-      for (const entry of entries) {
-        rowVerdicts.set(
-          entry,
-          filteredUpdateVerdict(
-            { ...params, user: accessUser },
-            entry.id,
-            hoistedFilter
-          )
-        );
-      }
-    }
+    const rowVerdicts = await this.updateRowVerdicts(
+      { ...params, user: accessUser },
+      entries,
+      rowGate,
+      hoistedFilter
+    );
 
     // The shared batch loop accumulates into one mutable state so the rollback
     // rewrite below can read the partial accounting a mid-batch abort leaves
@@ -1755,6 +1727,52 @@ export class CollectionBulkService extends BaseService {
     });
 
     return result;
+  }
+
+  /**
+   * Each row's verdict where rows are judged one by one: asked of the gate its
+   * row names, or matched against the filter the batch's one gate answered.
+   * Asked before the shared transaction and off its connection: a rule is the
+   * app's own code and may read the database, which a transaction holding the
+   * pool's only connection would wait on. Keyed by the row itself, so two
+   * rows naming one entry keep their own answers. Empty where the batch's one
+   * gate decided every row.
+   */
+  private async updateRowVerdicts(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    entries: BulkUpdateEntry[],
+    rowGate: "access-service" | "batch-hoisted",
+    hoistedFilter: UpdateRowFilter | undefined
+  ): Promise<Map<BulkUpdateEntry, RowVerdict>> {
+    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
+    for (const entry of entries) {
+      if (rowGate === "access-service") {
+        rowVerdicts.set(
+          entry,
+          await this.mutationService.rowVerdict(
+            params,
+            entry.id,
+            entry.data,
+            () => true,
+            undefined,
+            // A rule answering a filter is matched against the row under its
+            // lock, as the single write matches it.
+            true
+          )
+        );
+      } else if (hoistedFilter) {
+        rowVerdicts.set(
+          entry,
+          filteredUpdateVerdict(params, entry.id, hoistedFilter)
+        );
+      }
+    }
+    return rowVerdicts;
   }
 
   /**
