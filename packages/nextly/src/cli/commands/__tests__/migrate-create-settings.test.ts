@@ -1,20 +1,31 @@
 /**
- * Site content settings are data, not schema: a change to the email setup or
- * the admin's general settings never appears in a migration.
+ * What `migrate:create` writes for settings, driven through the command itself.
  *
- * `migrate:create` is driven itself over a config that changes ONLY those, and
- * must find nothing to write (exit 2, no new file). The positive control is the
- * same run after a collection's description changes, which must write one: a
- * command that wrote nothing for any settings change would pass the first half
- * on its own.
+ * Kept in one file because driving the command loads its whole module graph,
+ * and each file that does so counts against the suite's module budget.
+ *
+ * Site content settings are data, not schema: a change to the email setup or
+ * the admin's general settings never appears in a migration. The command runs
+ * over a config that changes ONLY those, and must find nothing to write (exit
+ * 2, no new file). The positive control is the same run after a collection's
+ * description changes, which must write one: a command that wrote nothing for
+ * any settings change would pass the first half on its own.
+ *
+ * A Builder entity's registry row is shadowed per kind. The code-first `dup`
+ * collection shadows the Builder `dup` collection, and nothing shadows the
+ * Builder `dup` Single, so a settings-only change to it must carry its
+ * `dynamic_singles` row. The control is the shadowed Builder collection, whose
+ * row must never be written: the code-first collection owns that slug's row.
  */
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
+import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -140,5 +151,44 @@ describe("site content settings never appear in a migration", () => {
       )
     ).toBeUndefined();
     expect(migrationFiles()).toHaveLength(2);
+  });
+});
+
+/** The manifest the Builder leaves: a collection and a Single, both `dup`. */
+async function dupManifest(singleDescription: string): Promise<void> {
+  const parsed = uiSchemaManifest.parse({
+    collections: [{ slug: "dup", fields: [{ name: "title", type: "text" }] }],
+    singles: [
+      {
+        slug: "dup",
+        description: singleDescription,
+        fields: [{ name: "heading", type: "text" }],
+      },
+    ],
+  });
+  await writeFile(join(dir, "ui-schema.json"), JSON.stringify(parsed));
+}
+
+const dupConfig = defineConfig({
+  collections: [
+    defineCollection({ slug: "dup", fields: [text({ name: "headline" })] }),
+  ],
+  db: { migrationsDir: "./migrations" },
+});
+
+describe("a Builder entity's registry row is shadowed per kind", () => {
+  it("a Single sharing a shadowed collection's slug still carries its row", async () => {
+    await dupManifest("The home page");
+    expect(await migrateCreate(dupConfig)).toBeUndefined();
+
+    await dupManifest("The front page");
+    expect(await migrateCreate(dupConfig)).toBeUndefined();
+
+    const newest = migrationFiles().sort().at(-1)!;
+    const sql = await readFile(join(dir, "migrations", newest), "utf-8");
+    expect(sql).toContain("-- Settings: dup (single): description");
+    expect(sql).toMatch(/INSERT INTO "dynamic_singles"[^;]*'The front page'/);
+    // The shadowed Builder collection's row is the code-first one's to write.
+    expect(sql).not.toContain('INSERT INTO "dynamic_collections"');
   });
 });
