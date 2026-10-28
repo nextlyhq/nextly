@@ -154,7 +154,7 @@ async function resolvePluginRouteAuth(
   if (isErrorResponse(authResult)) {
     return { error: toNextlyAuthError(authResult) };
   }
-  return authenticatedCaller(authResult);
+  return authenticatedCaller(authResult, self);
 }
 
 /**
@@ -251,7 +251,8 @@ function authenticatedCaller(
   authResult: Exclude<
     Awaited<ReturnType<typeof requireAuthentication>>,
     { statusCode: number }
-  >
+  >,
+  self: PluginSelf
 ): RouteAuth & { user: AuthUser; caller: PluginRouteCaller } {
   const user: AuthUser = {
     id: authResult.userId as AuthUser["id"],

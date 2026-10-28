@@ -27,6 +27,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
+import type { PluginRoute } from "../route-types";
 
 const PLUGIN = "@test/manage-asker";
 const RETIRED = [
@@ -41,20 +42,18 @@ const asker = definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.1",
   contributes: {
-    routes: RETIRED.flatMap(resource => [
+    routes: RETIRED.flatMap((resource): PluginRoute[] => [
       {
-        method: "POST" as const,
+        method: "POST",
         path: `/gate/${resource}`,
         requiredPermission: `manage-${resource}`,
         handler: () => Response.json({ reached: true }),
       },
       {
-        method: "POST" as const,
+        method: "POST",
         path: `/can/${resource}`,
-        handler: async (
-          _req: Request,
-          ctx: { caller?: { can: (a: string, r: string) => Promise<boolean> } }
-        ) => Response.json({ may: await ctx.caller!.can("manage", resource) }),
+        handler: async (_req, ctx) =>
+          Response.json({ may: await ctx.caller!.can("manage", resource) }),
       },
     ]),
   },
@@ -131,12 +130,9 @@ describe("a plugin gate asking for a retired manage permission", () => {
     await seedPermissionsAndRolePresets();
     // The first user made is the super-admin, who may mint any key.
     const owner = await t.nextly.users.create({
-      data: {
-        email: "owner@manage-asker.test",
-        password: "Password123!",
-        name: "Owner",
-        isActive: true,
-      },
+      email: "owner@manage-asker.test",
+      password: "Password123!",
+      data: { name: "Owner", isActive: true },
     });
     ownerId = String((owner.item as { id: string | number }).id);
     setNextlyLogger({
