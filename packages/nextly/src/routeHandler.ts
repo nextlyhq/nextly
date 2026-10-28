@@ -1959,7 +1959,7 @@ function actionsForAudience<
   W extends {
     id: string;
     actions?: readonly WidgetAction[];
-    empty?: { message?: string; action?: { requiredPermission?: string } };
+    empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
@@ -1983,11 +1983,20 @@ function actionsForAudience<
  * A declared widget's empty state with its action withheld from a reader who
  * may not take it; the same object when there is nothing to withhold.
  */
-function emptyForAudience<
-  E extends { message?: string; action?: { requiredPermission?: string } },
->(empty: E | undefined, audience: WidgetAudience): E | undefined {
+function emptyForAudience<E extends { message?: string; action?: object }>(
+  empty: E | undefined,
+  audience: WidgetAudience
+): E | undefined {
   if (empty?.action === undefined) return empty;
-  if (audience.holds(empty.action.requiredPermission)) return empty;
+  // A link's permission, when it names one; an action opening the card's own settings has none,
+  // since the admin offers it only where the reader can change that card's settings.
+  const { action } = empty;
+  const gate =
+    "requiredPermission" in action &&
+    typeof action.requiredPermission === "string"
+      ? action.requiredPermission
+      : undefined;
+  if (audience.holds(gate)) return empty;
   const { action: _withheld, ...rest } = empty;
   return rest as E;
 }

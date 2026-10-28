@@ -136,6 +136,11 @@ export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesPg as nextlyNotices } from "../notices/postgres";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsPg as nextlyDashboardPins } from "../dashboard-pins/postgres";
+export { nextlyDashboardPreferencesPg as nextlyDashboardPreferences } from "../dashboard-preferences/postgres";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

@@ -79,10 +79,16 @@ describe("the media page's pager", () => {
     fireEvent.click(next);
 
     await waitFor(() => expect(api.fetchMedia).toHaveBeenCalledTimes(2));
-    expect(
-      within(
-        screen.getByRole("navigation", { name: "Media list pagination" })
-      ).getByRole("button", { name: /next page/i })
-    ).toBeDisabled();
+    // The request starts before the render that holds the pager, so the held
+    // state is awaited too; asserting it at once raced that render on a busy
+    // machine. The second request never settles, so the old result's live
+    // pager can't satisfy this by being drawn again.
+    await waitFor(() =>
+      expect(
+        within(
+          screen.getByRole("navigation", { name: "Media list pagination" })
+        ).getByRole("button", { name: /next page/i })
+      ).toBeDisabled()
+    );
   });
 });

@@ -250,11 +250,18 @@ export interface WidgetEmpty {
   /** One line saying why there is nothing, in place of the frame's own. */
   message?: string;
   /**
-   * The empty state's single action, such as "Add a product": a path relative
-   * to the admin, offered only to a person holding `permission` when it names
-   * one, so nobody is shown a step they cannot take.
+   * The empty state's single action, one of two:
+   *
+   * - a link, such as "Add a product": a path relative to the admin, offered
+   *   only to a person holding `permission` when it names one, so nobody is
+   *   shown a step they cannot take;
+   * - `opens: "settings"`, such as "Choose a collection": a button opening
+   *   this card's own settings, with focus on its first field, offered only
+   *   where the person can change them. The widget must declare settings.
    */
-  action?: { label: string; link: string; permission?: string };
+  action?:
+    | { label: string; link: string; permission?: string }
+    | { label: string; opens: "settings" };
 }
 
 /**
