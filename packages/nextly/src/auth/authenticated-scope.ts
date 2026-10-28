@@ -21,7 +21,10 @@ import type { AccessTarget } from "./access/decide";
 import { onceForRequest } from "./access/request-memo";
 import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
-import { SESSION_CUTOFF_SECONDS } from "./session/session-standing";
+import {
+  SESSION_CUTOFF_SECONDS,
+  SESSION_STANDING_TTL_MS,
+} from "./session/session-standing";
 
 /**
  * One permission the caller holds, as the row it was resolved from.
@@ -99,13 +102,18 @@ export interface AuthenticatedScope {
  * The authority is the maker's standing when the key was authenticated, so a
  * scope kept past its request (a plugin storing it, a Direct API `actor`
  * reused later) holds it no longer than a session would go on holding a
- * standing that changed: for {@link SESSION_CUTOFF_SECONDS}. After that it is
- * judged on its grants alone, and the key's next authentication asks again.
- * Timed on a monotonic clock, so setting the wall clock back cannot stretch it.
+ * standing that changed: within {@link SESSION_CUTOFF_SECONDS} of the change,
+ * and never past the soonest expiry among the maker's roles, where a
+ * session's access token ends too. The standing that admitted the key may be
+ * up to {@link SESSION_STANDING_TTL_MS} old when the scope is made, so the
+ * scope holds the authority for what is left of the cutoff after that. After that it is judged on its grants alone, and the key's next
+ * authentication asks again. Timed on a monotonic clock, so setting the wall
+ * clock back cannot stretch it once it is made.
  */
 const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, number>();
 
-const SUPER_ADMIN_SCOPE_LIFETIME_MS = SESSION_CUTOFF_SECONDS * 1000;
+const SUPER_ADMIN_SCOPE_LIFETIME_MS =
+  SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS;
 
 /**
  * Whether `scope` carries super-admin authority: authentication made it for a
@@ -179,6 +187,11 @@ export function apiKeyScopeFrom(caller: {
    * carries none.
    */
   keyHoldsSuperAdmin?: boolean;
+  /**
+   * The soonest expiry among the maker's roles (epoch ms), read with the
+   * authority, or absent where none expires. The authority ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
 }): AuthenticatedScope {
   const scope = caller.grants
     ? apiKeyScope(caller.grants, caller.roles)
@@ -192,10 +205,18 @@ export function apiKeyScopeFrom(caller: {
         ...(caller.roles ? { roles: [...caller.roles] } : {}),
       });
   if (caller.keyHoldsSuperAdmin === true) {
-    SUPER_ADMIN_SCOPES.set(
-      scope,
-      performance.now() + SUPER_ADMIN_SCOPE_LIFETIME_MS
-    );
+    // The role's expiry is wall-clock time, turned into how long is left of it
+    // now, so the deadline itself stays on the monotonic clock.
+    const lifetime =
+      caller.keyHoldsSuperAdminUntil === undefined
+        ? SUPER_ADMIN_SCOPE_LIFETIME_MS
+        : Math.min(
+            SUPER_ADMIN_SCOPE_LIFETIME_MS,
+            caller.keyHoldsSuperAdminUntil - Date.now()
+          );
+    // A role already expired leaves nothing to carry.
+    if (lifetime > 0)
+      SUPER_ADMIN_SCOPES.set(scope, performance.now() + lifetime);
   }
   return scope;
 }
@@ -334,7 +355,10 @@ export function slugGrants(
  * back to its normal RBAC resolution (the owner's / session's database grants).
  * Returns a boolean for an API key: the stamped scope is authoritative, in both
  * directions — a key without the grant is denied however privileged its owner,
- * and a key with it is allowed however unprivileged.
+ * and a key with it is allowed however unprivileged. The one exception is a
+ * scope carrying its maker's super-admin authority, which is allowed whatever
+ * its grants say, as every other way in allows it: its grant list may lag a
+ * permission added since it was read.
  */
 export function apiKeyScopeAllows(
   scope: AuthenticatedScope | undefined,
@@ -342,6 +366,7 @@ export function apiKeyScopeAllows(
   resource: string
 ): boolean | null {
   if (scope?.actorType !== "apiKey") return null;
+  if (scopeHoldsSuperAdmin(scope)) return true;
   return scope.permissions.includes(permissionSlug(operation, resource));
 }
 

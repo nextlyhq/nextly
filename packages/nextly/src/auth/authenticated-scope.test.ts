@@ -22,7 +22,10 @@ import {
   scopeGrants,
   scopeHoldsSuperAdmin,
 } from "./authenticated-scope";
-import { SESSION_CUTOFF_SECONDS } from "./session/session-standing";
+import {
+  SESSION_CUTOFF_SECONDS,
+  SESSION_STANDING_TTL_MS,
+} from "./session/session-standing";
 
 describe("apiKeyScopeAllows", () => {
   it("allows when the API key holds the `{operation}-{resource}` grant", () => {
@@ -217,5 +220,73 @@ describe("a key's super-admin authority over time", () => {
     runWithAccessMemo(() => {
       expect(scopeHoldsSuperAdmin(scope)).toBe(false);
     });
+  });
+
+  it("ends within the cutoff of a deactivation the standing it was made on had not yet seen", () => {
+    // The standing that admitted the key may have been read up to one
+    // standing lifetime before the scope was made, and the maker deactivated
+    // just after that read. The scope must not carry the authority past the
+    // cutoff counted from then.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+    });
+
+    vi.advanceTimersByTime(
+      SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS + 1
+    );
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
+  it("lapses at its maker's next role expiry where that comes before the bound", () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date"] });
+    const grants = [{ slug: "read-posts", action: "read", resource: "posts" }];
+    const lapsing = apiKeyScopeFrom({
+      grants,
+      keyHoldsSuperAdmin: true,
+      keyHoldsSuperAdminUntil: Date.now() + 2_000,
+    });
+    // POPULATION CONTROL: the same scope with no expiry holds past it.
+    const lasting = apiKeyScopeFrom({ grants, keyHoldsSuperAdmin: true });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(lapsing)).toBe(true);
+      expect(scopeHoldsSuperAdmin(lasting)).toBe(true);
+    });
+    vi.advanceTimersByTime(2_001);
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(lapsing)).toBe(false);
+      expect(scopeHoldsSuperAdmin(lasting)).toBe(true);
+    });
+  });
+
+  it("is carried by no scope made after its maker's role expired", () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyHoldsSuperAdminUntil: Date.now() - 1,
+    });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+});
+
+describe("a key's own grants, for a scope carrying super-admin authority", () => {
+  it("allows what the grants leave out, as every other way in does", () => {
+    // The key's grant list may lag a permission seeded since it was read.
+    const carrying = apiKeyScopeFrom({ grants: [], keyHoldsSuperAdmin: true });
+    // POPULATION CONTROL: the same grants without the authority are refused.
+    const plain = apiKeyScopeFrom({ grants: [] });
+
+    expect(apiKeyScopeAllows(carrying, "publish", "content-releases")).toBe(
+      true
+    );
+    expect(apiKeyScopeAllows(plain, "publish", "content-releases")).toBe(false);
   });
 });

@@ -201,6 +201,12 @@ export interface AuthContext {
    */
   keyHoldsSuperAdmin?: boolean;
   /**
+   * The soonest expiry among the key maker's roles (epoch ms), set with
+   * `keyHoldsSuperAdmin`: a scope built from this context loses the authority
+   * there, as a session's token ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
+  /**
    * The authenticating API key's own id, present only for `api-key` requests.
    * Carried so a write can be attributed to the specific key rather than only
    * to the user that owns it.
@@ -269,6 +275,7 @@ export async function requireApiKeyAuth(req: Request): Promise<
       grants: readonly GrantedPermission[];
       roles: string[];
       keyHoldsSuperAdmin: boolean;
+      keyHoldsSuperAdminUntil?: number;
       apiKeyId: string;
     }
   | ErrorResponse
@@ -320,10 +327,8 @@ export async function requireApiKeyAuth(req: Request): Promise<
 
   // 5. Resolve effective permissions and roles for this token type, and
   //    whether the key carries its maker's super-admin authority.
-  const { grants, roles, keyHoldsSuperAdmin } = await resolveKeyCaller(
-    apiKeyService,
-    keyAuth
-  );
+  const { grants, roles, keyHoldsSuperAdmin, keyHoldsSuperAdminUntil } =
+    await resolveKeyCaller(apiKeyService, keyAuth);
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
@@ -333,6 +338,9 @@ export async function requireApiKeyAuth(req: Request): Promise<
     grants,
     roles,
     keyHoldsSuperAdmin,
+    ...(keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil }),
     apiKeyId: keyAuth.id,
   };
 }
@@ -433,6 +441,9 @@ export async function requireAuthentication(
     roles: apiKeyResult.roles,
     authMethod: "api-key",
     keyHoldsSuperAdmin: apiKeyResult.keyHoldsSuperAdmin,
+    ...(apiKeyResult.keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil: apiKeyResult.keyHoldsSuperAdminUntil }),
     apiKeyId: apiKeyResult.apiKeyId,
   };
 }

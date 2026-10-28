@@ -446,13 +446,26 @@ const LAST_USE_RESOLUTION_MS = 60_000;
  * a deactivated maker's key is refused before this is asked. Never read from
  * the grants cached for the key, which may outlast the maker's role. A
  * lookup that fails answers no.
+ *
+ * With the answer comes the soonest expiry among the maker's roles, which
+ * ends the authority on a scope kept past its request as it ends a session's
+ * token. Read BEFORE the role itself, as a session reads it: read after, a
+ * role lapsing between the two reads would leave the authority with no end.
  */
 async function keyHoldsSuperAdmin(
   tokenType: ApiKeyTokenType,
   userId: string
-): Promise<boolean> {
-  if (tokenType !== "full-access") return false;
-  return isSuperAdmin(userId);
+): Promise<{ holds: boolean; until?: number }> {
+  if (tokenType !== "full-access") return { holds: false };
+  let until: number | undefined;
+  try {
+    ({ validUntil: until } = await resolveUserRoles(userId));
+  } catch {
+    // An authority with no known end is not carried.
+    return { holds: false };
+  }
+  if (!(await isSuperAdmin(userId))) return { holds: false };
+  return until === undefined ? { holds: true } : { holds: true, until };
 }
 
 /** What a key authentication accepted is resolved to, for its request. */
@@ -460,6 +473,8 @@ export interface ResolvedKeyCaller {
   grants: readonly GrantedPermission[];
   roles: string[];
   keyHoldsSuperAdmin: boolean;
+  /** The soonest expiry among the maker's roles, where the authority ends. */
+  keyHoldsSuperAdminUntil?: number;
 }
 
 /**
@@ -477,12 +492,19 @@ export async function resolveKeyCaller(
     roleId: string | null;
   }
 ): Promise<ResolvedKeyCaller> {
-  const [grants, roles, holdsSuperAdmin] = await Promise.all([
+  const [grants, roles, superAdmin] = await Promise.all([
     service.resolveApiKeyGrants(key.tokenType, key.roleId, key.userId, key.id),
     service.resolveApiKeyRoles(key.tokenType, key.roleId, key.userId),
     keyHoldsSuperAdmin(key.tokenType, key.userId),
   ]);
-  return { grants, roles, keyHoldsSuperAdmin: holdsSuperAdmin };
+  return {
+    grants,
+    roles,
+    keyHoldsSuperAdmin: superAdmin.holds,
+    ...(superAdmin.until === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil: superAdmin.until }),
+  };
 }
 
 export class ApiKeyService extends BaseService {
