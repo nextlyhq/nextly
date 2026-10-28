@@ -351,6 +351,12 @@ function itemServices(
       unread(collection)
         ? Promise.resolve({ items: [] })
         : bound.find(collection, options),
+    // Passed through: the zero answer above is for the reads an item's count is
+    // made of, so an item counting several collections still counts the ones
+    // the reader may read. A grouping or a series of one they may not read is
+    // refused by their own check, as it is anywhere else, and discloses nothing.
+    groupBy: (collection, options) => bound.groupBy(collection, options),
+    timeseries: (collection, options) => bound.timeseries(collection, options),
   };
 }
 
