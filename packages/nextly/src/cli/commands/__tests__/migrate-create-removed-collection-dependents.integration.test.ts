@@ -228,6 +228,35 @@ describeEachDialect(
       expect(await migrationFiles()).toHaveLength(2);
     });
 
+    it("refuses to drop a collection whose slug is also a core table's name while a Single points at it", async () => {
+      // `audit_log` names a core table, but no relationship reaches that
+      // table: the Single's field points at the collection being removed.
+      const audits = defineCollection({
+        slug: "audit_log",
+        fields: [text({ name: "entry" })],
+      });
+      const pointsAtAudits = defineSingle({
+        slug: SETTINGS,
+        fields: [relationship({ name: "latest", relationTo: "audit_log" })],
+      });
+      await generate(dialect, "initial", {
+        collections: [audits],
+        singles: [pointsAtAudits],
+      });
+      const before = await migrationFiles();
+
+      const run = await generate(dialect, "drop_audits", {
+        collections: [],
+        singles: [pointsAtAudits],
+      });
+
+      expect(run.exited).toBe("process.exit(1)");
+      expect(run.errors.join("\n")).toContain(
+        `Fields that point at it: the Single ${SETTINGS}.latest.`
+      );
+      expect(await migrationFiles()).toEqual(before);
+    });
+
     it("refuses to drop a collection a plugin's declared foreign key points at", async () => {
       await generate(dialect, "initial", {
         collections: [plainTags],

@@ -19,7 +19,6 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import {
   assertNothingDependsOn,
   referencingFields,
@@ -35,6 +34,18 @@ import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
 } from "./generate";
+
+/**
+ * The collections Nextly provides itself, which a relationship or upload may
+ * name without the configuration declaring them. The same two the Builder's
+ * cross-file check and the plugin relation check accept. Only these: another
+ * core table's name, such as `audit_log`, is no relationship's target, and a
+ * collection of that slug is one like any other.
+ */
+const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
+  "users",
+  "media",
+]);
 
 /** Every collection's table starts with this, whatever its slug or `dbName`. */
 const COLLECTION_TABLE_PREFIX = "dc_";
@@ -146,7 +157,7 @@ function remainingFieldOwners(input: {
 
 /**
  * The collections remaining fields point at that are neither configured nor
- * one of Nextly's own, whose tables are core tables of the same name.
+ * one of Nextly's own (`BUILT_IN_RELATION_TARGETS`).
  */
 function targetsNoLongerConfigured(
   owners: readonly FieldOwner[],
@@ -157,7 +168,7 @@ function targetsNoLongerConfigured(
   for (const owner of owners) {
     for (const field of referencingFields(owner.fields)) {
       for (const slug of field.targets) {
-        if (!configured.has(slug) && !CORE_TABLE_NAMES.includes(slug)) {
+        if (!configured.has(slug) && !BUILT_IN_RELATION_TARGETS.has(slug)) {
           gone.add(slug);
         }
       }
