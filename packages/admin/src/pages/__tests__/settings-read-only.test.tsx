@@ -61,6 +61,7 @@ vi.mock("@admin/services/imageSizesApi", () => ({
   fetchImageSizes: () => Promise.resolve([thumbnail]),
   fetchImageSize: () => Promise.resolve(thumbnail),
   updateImageSize: vi.fn(),
+  createImageSize: vi.fn(),
   fetchImageProcessingAvailability: () => Promise.resolve({ available: true }),
   deleteImageSize: vi.fn(),
 }));
@@ -94,13 +95,16 @@ vi.mock("@admin/hooks/queries/useUserFields", () => ({
   }),
   useUserField: () => oneField,
   useUpdateUserField: () => ({ mutate: vi.fn(), isPending: false }),
+  useCreateUserField: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteUserField: () => ({ mutate: vi.fn(), isPending: false }),
   useReorderUserFields: () => ({ mutate: vi.fn() }),
 }));
 
 import SettingsGeneralPage from "../dashboard/settings/index";
 import ImageSizesSettingsPage from "../dashboard/settings/image-sizes/index";
+import CreateImageSizePage from "../dashboard/settings/image-sizes/create";
 import EditImageSizePage from "../dashboard/settings/image-sizes/edit/[id]";
+import CreateUserFieldPage from "../dashboard/users/fields/create";
 import EditUserFieldPage from "../dashboard/users/fields/edit/[id]";
 import UserFieldsPage from "../dashboard/users/fields/index";
 
@@ -239,4 +243,33 @@ describe("the edit pages", () => {
       screen.getByRole("button", { name: "Update Field" })
     ).toBeInTheDocument();
   });
+});
+
+describe("the create pages", () => {
+  // The route asks create; each page also asks read, which the list it is
+  // reached from and returns to after a create asks.
+  const PAGES = [
+    ["an image size", CreateImageSizePage, "Create Image Size"],
+    ["a user field", CreateUserFieldPage, "Create Field"],
+  ] as const;
+
+  for (const [what, Page, save] of PAGES) {
+    it(`refuses ${what}'s form to a role that may create settings but not read them`, () => {
+      holding("create-settings");
+      render(<Page />);
+      expect(
+        screen.getByText("You don't have access to this page")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: save })
+      ).not.toBeInTheDocument();
+    });
+
+    it(`offers ${what}'s form to a role that may read and create settings`, () => {
+      // The control: the same page with read as well.
+      holding("read-settings", "create-settings");
+      render(<Page />);
+      expect(screen.getByRole("button", { name: save })).toBeInTheDocument();
+    });
+  }
 });
