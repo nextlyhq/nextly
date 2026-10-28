@@ -2129,6 +2129,128 @@ jobs:
         if: steps.decide.outputs.inert != 'true'
         run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
 
+  # The playground under Cache Components and Partial Prefetching, which its
+  # next.config turns on. nextly's route helpers must prerender a static shell
+  # and read the request only beneath the Suspense boundary they provide, so
+  # this builds on an empty database and on seeded content (a build that reads
+  # the request, the clock or the database above a boundary fails), then serves
+  # the seeded build and requests each kind of content route, failing on a 5xx
+  # or on Next.js reporting uncached data or the clock read too early.
+  #
+  # Advisory, and reported on main by `main-red`, as `dev-reload` is.
+  cache-components:
+    name: Playground builds and serves under Cache Components
+    needs: [ci]
+    runs-on: ubuntu-latest
+    # Whether its check ran; see `dev-reload`.
+    outputs:
+      tested: ${{ steps.decide.outputs.inert != 'true' }}
+    environment:
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+      DB_DIALECT: sqlite
+      # A literal test secret, for the reason `e2e/production-server.ts` gives:
+      # production refuses to boot without one.
+      NEXTLY_SECRET: cache-components-check-secret-not-a-real-deployment-key
+      NEXT_PUBLIC_APP_URL: http://localhost:3300
+      NEXTLY_GENERATED_FILES_WRITE: "0"
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Cache Components scope
+          # An inclusion list: what renders the playground's content routes.
+          INERT_PATHS: '^(?!(packages/nextly/src/runtime/.*|packages/nextly/src/domains/(collections/services/collection-query-service|singles/services/single-query-service)\.ts|packages/nextly/src/domains/releases/.*|packages/blocks-react/src/.*|apps/playground/.*|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
+        run: node scripts/change-scope.mjs
+
+      - name: Setup pnpm
+        if: steps.decide.outputs.inert != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js with the pnpm cache
+        if: steps.decide.outputs.inert != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        if: steps.decide.outputs.inert != 'true'
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Build on an empty database
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
+        run: pnpm --filter playground exec next build
+
+      - name: Build on seeded content
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-seeded.db
+        run: |
+          pnpm --filter playground exec tsx scripts/seed.ts
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec next build
+
+      # The two content routes the seed fills must answer 200. The others may
+      # answer a not-found page, so they need only not fail.
+      - name: Serve the seeded build
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-seeded.db
+          LOG: ${{ runner.temp }}/cache-components-server.log
+        run: |
+          # Through the app's own `next`, which execs the server, so `$!` is the
+          # server itself and the trap stops it rather than a wrapper.
+          (cd apps/playground && exec ./node_modules/.bin/next start -p 3300) > "$LOG" 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          for _ in $(seq 1 120); do
+            curl -sf -o /dev/null http://localhost:3300/api/health && break
+            sleep 1
+          done
+          failed=0
+          for path in / /blocks/kitchen-sink /landing /blocks /a-page-that-does-not-exist; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3300$path")
+            echo "$path $status"
+            case "$path:$status" in
+              /:200 | /blocks/kitchen-sink:200) ;;
+              /:* | /blocks/kitchen-sink:*) failed=1 ;;
+              *:5*) failed=1 ;;
+            esac
+          done
+          if grep -nE 'uncached or runtime data|unstable value' "$LOG"; then
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            cat "$LOG"
+            exit 1
+          fi
+
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh
   # installs. Runs after the main `ci` job to avoid wasting minutes when
@@ -2599,6 +2721,7 @@ jobs:
       - e2e
       - e2e-production
       - dev-reload
+      - cache-components
       - scaffold-smoke
       - dev-script-smoke
     runs-on: ubuntu-latest

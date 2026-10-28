@@ -3,7 +3,8 @@
  * support: no per-API feature detection, no branch on a Next.js or React
  * version, and no fallback for Next.js 14 or 15 or React 18. nextly imports the
  * supported releases' APIs directly, through `runtime/next-api.ts` where it must
- * load them lazily, and refuses any other release when it starts.
+ * load them lazily, and refuses any other release when it starts. Nor do they
+ * call `unstable_noStore`, whose job under Cache Components is `connection()`'s.
  *
  * A scan over source, so each pattern carries its own positive control: a
  * pattern that matches nothing passes this check for ever.
@@ -47,6 +48,22 @@ export const OLD_FRAMEWORK_PATTERNS = [
       'const { draftMode } = await import("next/headers")',
       'typeof afterward === "function"',
       'typeof after === "function"',
+    ],
+  },
+  {
+    // A call or a load by name. Prose naming it in backticks is not one, so a
+    // comment explaining what replaced it stays legal.
+    name: "a call to unstable_noStore",
+    pattern: /\bunstable_noStore\s*\(|["']unstable_noStore["']/,
+    finds: [
+      'requireNextApi(mod, "next/cache", "unstable_noStore")',
+      "unstable_noStore();",
+      "const noStore = mod['unstable_noStore'];",
+    ],
+    passes: [
+      'requireNextApi(mod, "next/server", "connection")',
+      "opts out with `unstable_noStore`, the model it replaces",
+      "noStore: true",
     ],
   },
   {
