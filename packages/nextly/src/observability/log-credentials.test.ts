@@ -470,6 +470,32 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("settings.settings.token=");
   });
 
+  it("judges a single word longer than 256 characters by its tail", () => {
+    // No word starts inside it, so it can only be judged by the characters
+    // nearest its separator: bare, as a JSON name, and as an escaped one.
+    const name = `${"a".repeat(292)}password`;
+    const ordinary = "a".repeat(300);
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", {
+      bare: `${name}=opaque-long-value next=1`,
+      json: `{"${name}":"opaque-json-value","page":2}`,
+      escaped: `{\\"${name}\\":\\"opaque-escaped-value\\",\\"page\\":2}`,
+      // The control: a long name that says nothing keeps its value.
+      kept: `${ordinary}=kept-value next=1`,
+    });
+    expect(received[0]).toEqual({
+      bare: `${name}=[redacted] next=1`,
+      json: `{"${name}":"[redacted]","page":2}`,
+      escaped: `{\\"${name}\\":\\"[redacted]\\",\\"page\\":2}`,
+      kept: `${ordinary}=kept-value next=1`,
+    });
+  });
+
   it.each([
     ['retrying with token="unterminated-secret-1', "unterminated-secret-1"],
     ["retrying with password='unterminated-secret-2", "unterminated-secret-2"],

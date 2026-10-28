@@ -561,6 +561,14 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * line cost its length squared. A longer credential name is still found,
  * from a word within 256 characters of its separator (`…token=`).
  *
+ * A name longer than either bound with no word starting near its end (one
+ * long word, bare or quoted) is judged by its last 256 characters instead:
+ * at a separator no other form reached, the name is read backwards from it,
+ * through an optional closing quote and any bracketed parts, so a name
+ * ending in `password` or `token` is judged by that ending. It is read only
+ * where a separator could follow and only back to the start of the name, so
+ * each name is read once and a long line still costs its length.
+ *
  * An escaped JSON name is a JSON string inside another one, so it is read
  * as the outer quoting wrote the inner one's characters: a plain character,
  * an inner escape (`\\` and what follows it, where an inner quote is `\\\"`
@@ -569,12 +577,13 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * and a name ending in an inner backslash still ends at its own `\"`.
  *
  * Groups: an escaped JSON name's quote and text, a JSON name's quote and
- * text, any other name's quote and text, and the separator. The value is read
+ * text, any other name's quote and text, a long name's last 256 characters
+ * and the quote after them, and the separator. The value is read
  * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=[\w.-]([\w.-]{256}(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
@@ -598,6 +607,8 @@ function parameterName(match: RegExpExecArray): {
   if (jsonQuote !== undefined) {
     return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
   }
+  const [, , , , , , , tail, tailQuote] = match;
+  if (tail !== undefined) return { nameQuote: tailQuote ?? "", name: tail };
   return { nameQuote: quote ?? "", name: name ?? "" };
 }
 
@@ -720,7 +731,7 @@ function redactCredentialParameters(text: string): string {
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
     const [prefix] = match;
-    const separator = match[7] ?? "";
+    const separator = match[9] ?? "";
     const { nameQuote, name } = parameterName(match);
     if (
       !isCredentialName(name) &&
