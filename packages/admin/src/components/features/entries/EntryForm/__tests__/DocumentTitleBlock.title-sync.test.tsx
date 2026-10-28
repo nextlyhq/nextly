@@ -1,8 +1,8 @@
 /**
- * The header's title shows what the FORM holds, not a copy it keeps itself.
+ * The editor's title shows what the FORM holds, not a copy it keeps itself.
  *
- * A takeover surface — the page builder — covers this header while editing, and
- * its settings panel can rename the document. The header stays mounted behind
+ * A takeover surface — the page builder — covers this editor while editing, and
+ * its settings panel can rename the document. The title stays mounted behind
  * it. While this input kept its own copy of the value, a rename made through
  * that panel never reached it: the author left the editor, saw the old name,
  * and the next keystroke here saved the old name back over the rename.
@@ -13,32 +13,21 @@
  * is that the edit arrives through the form rather than through this input, and
  * a second control is the smallest thing that does that faithfully.
  *
- * @module components/features/entries/EntryForm/__tests__/EntrySystemHeader.title-sync.test
+ * @module components/features/entries/EntryForm/__tests__/DocumentTitleBlock.title-sync.test
  */
 import { useForm, FormProvider, Controller } from "react-hook-form";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { DocumentTitleBlock } from "../DocumentTitleBlock";
 
-/** The header, plus a second surface editing the same field through the form. */
+/** The title, plus a second surface editing the same field through the form. */
 function Harness() {
   const methods = useForm({ defaultValues: { title: "About Us" } });
   return (
     <FormProvider {...methods}>
-      <EntrySystemHeader
-        mode="edit"
-        hasStatus
-        entry={{ id: "about", status: "draft", title: "About Us" }}
-        collectionSlug="pages"
-        scope="single"
-        onSaveDraft={vi.fn()}
-        onPublish={vi.fn()}
-        onSaveChanges={vi.fn()}
-        onUnpublish={vi.fn()}
-        onCancel={vi.fn()}
-      />
+      <DocumentTitleBlock mode="edit" />
       <Controller
         name="title"
         control={methods.control}
@@ -54,9 +43,9 @@ function Harness() {
   );
 }
 
-const headerTitle = () => screen.getByLabelText("Title") as HTMLInputElement;
+const editorTitle = () => screen.getByLabelText("Title") as HTMLInputElement;
 
-describe("the header's title and another surface editing the same field", () => {
+describe("the editor's title and another surface editing the same field", () => {
   it("shows a rename made through the OTHER surface", () => {
     /*
      * The defect, stated as the property it violated. Before this input read
@@ -64,13 +53,13 @@ describe("the header's title and another surface editing the same field", () => 
      * with — while the form already held the new one.
      */
     render(<Harness />);
-    expect(headerTitle().value).toBe("About Us");
+    expect(editorTitle().value).toBe("About Us");
 
     fireEvent.change(screen.getByLabelText("settings panel title"), {
       target: { value: "Our Story" },
     });
 
-    expect(headerTitle().value).toBe("Our Story");
+    expect(editorTitle().value).toBe("Our Story");
   });
 
   it("sends its own edits the other way", () => {
@@ -84,10 +73,10 @@ describe("the header's title and another surface editing the same field", () => 
       "settings panel title"
     ) as HTMLInputElement;
 
-    fireEvent.change(headerTitle(), { target: { value: "Renamed Here" } });
+    fireEvent.change(editorTitle(), { target: { value: "Renamed Here" } });
 
     expect(other.value).toBe("Renamed Here");
-    expect(headerTitle().value).toBe("Renamed Here");
+    expect(editorTitle().value).toBe("Renamed Here");
   });
 
   it("still reports an empty title as empty rather than as the seeded value", () => {
@@ -96,9 +85,9 @@ describe("the header's title and another surface editing the same field", () => 
     // the failure mode a `value ?? initial` fallback produces.
     render(<Harness />);
 
-    fireEvent.change(headerTitle(), { target: { value: "" } });
+    fireEvent.change(editorTitle(), { target: { value: "" } });
 
-    expect(headerTitle().value).toBe("");
+    expect(editorTitle().value).toBe("");
   });
 
   it("shows a NUMERIC title, which a code-first schema may legitimately declare", () => {
@@ -113,24 +102,13 @@ describe("the header's title and another surface editing the same field", () => 
       const methods = useForm({ defaultValues: { title: 42 } });
       return (
         <FormProvider {...methods}>
-          <EntrySystemHeader
-            mode="edit"
-            hasStatus
-            entry={{ id: "n", status: "draft", title: 42 }}
-            collectionSlug="pages"
-            scope="single"
-            onSaveDraft={vi.fn()}
-            onPublish={vi.fn()}
-            onSaveChanges={vi.fn()}
-            onUnpublish={vi.fn()}
-            onCancel={vi.fn()}
-          />
+          <DocumentTitleBlock mode="edit" />
         </FormProvider>
       );
     }
 
     render(<NumericHarness />);
-    expect(headerTitle().value).toBe("42");
+    expect(editorTitle().value).toBe("42");
   });
 
   it("shows a BOOLEAN title, which a checkbox owning the column produces", () => {
@@ -145,24 +123,13 @@ describe("the header's title and another surface editing the same field", () => 
       const methods = useForm({ defaultValues: { title: true } });
       return (
         <FormProvider {...methods}>
-          <EntrySystemHeader
-            mode="edit"
-            hasStatus
-            entry={{ id: "b", status: "draft" }}
-            collectionSlug="pages"
-            scope="single"
-            onSaveDraft={vi.fn()}
-            onPublish={vi.fn()}
-            onSaveChanges={vi.fn()}
-            onUnpublish={vi.fn()}
-            onCancel={vi.fn()}
-          />
+          <DocumentTitleBlock mode="edit" />
         </FormProvider>
       );
     }
 
     render(<BooleanHarness />);
-    expect(headerTitle().value).toBe("true");
+    expect(editorTitle().value).toBe("true");
   });
 
   it("still shows nothing for a value no text input can draw", () => {
@@ -175,23 +142,12 @@ describe("the header's title and another surface editing the same field", () => 
       });
       return (
         <FormProvider {...methods}>
-          <EntrySystemHeader
-            mode="edit"
-            hasStatus
-            entry={{ id: "o", status: "draft" }}
-            collectionSlug="pages"
-            scope="single"
-            onSaveDraft={vi.fn()}
-            onPublish={vi.fn()}
-            onSaveChanges={vi.fn()}
-            onUnpublish={vi.fn()}
-            onCancel={vi.fn()}
-          />
+          <DocumentTitleBlock mode="edit" />
         </FormProvider>
       );
     }
 
     render(<ObjectHarness />);
-    expect(headerTitle().value).toBe("");
+    expect(editorTitle().value).toBe("");
   });
 });
