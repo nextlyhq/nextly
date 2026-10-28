@@ -17,7 +17,10 @@ import {
   definePlugin,
   type PluginDefinition,
 } from "../../../../plugins/plugin-context";
+import { CORE_DEFAULT_LAYOUT } from "../../core-widgets/ids";
+import { defaultLayoutPlan } from "../../default-layout";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
+import { siteDashboardContext } from "../site-dashboard";
 
 import { dashboard, revenue } from "./plugin/widgets";
 
@@ -95,7 +98,7 @@ describe("a site config that names what exists", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "site-dashboard-keys-not-applied",
-        keys: ["hide", "overrides", "defaultLayout", "suggestions", "replace"],
+        keys: ["hide", "overrides", "replace"],
       })
     );
   });
@@ -111,15 +114,16 @@ describe("a site config that names what exists", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "site-dashboard-keys-not-applied",
-        keys: ["widgets", "defaultLayout"],
+        keys: ["widgets"],
       })
     );
   });
 
-  it("starts with a generated card's id it cannot see yet, still checking the config's own shape", () => {
-    // 🔴 Generated cards are derived when the dashboard is first read, after
-    // this check: refused as unknown, a valid config would not start.
-    expect(() =>
+  it("refuses an id in a retired per-collection namespace, naming it and what replaced it", () => {
+    // 🔴 Core no longer makes a card per collection or per Single, so an id in
+    // `collection/` or `single/` names nothing, wherever the config names it:
+    // `hide`, `overrides` and `defaultLayout` alike.
+    const message = refusal(() =>
       resetWidgetRegistries([shop], {
         hide: ["single/home-card"],
         overrides: {
@@ -127,35 +131,57 @@ describe("a site config that names what exists", () => {
         },
         defaultLayout: [{ widget: "collection/posts-count", w: 6, h: 3 }],
       })
-    ).not.toThrow();
-    // Its shape is still checked: a key the entry does not take is refused,
-    // so is a size the grid cannot draw, and so is placing a hidden
-    // generated card.
+    );
+    // The collection's card is told the widgets that replace it and the
+    // collection to set them to, the slug its id was minted from.
+    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.`;
+    // A Single's card is never told to pick a collection: the widgets with a
+    // Collection setting offer collections only.
+    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;
+    expect(message).toContain(`hide names "single/home-card", ${toldSingle}`);
+    expect(message).toContain(
+      `overrides names "collection/posts-count", ${told}`
+    );
+    expect(message).toContain(
+      `defaultLayout names "collection/posts-count", ${told}`
+    );
+    // The control: an unknown id outside those namespaces gets the ordinary
+    // refusal, so the wording above is the namespace's and not every unknown
+    // id's.
+    expect(
+      refusal(() => resetWidgetRegistries([shop], { hide: ["collections/x"] }))
+    ).toContain('hide names "collections/x", which no widget declares');
+  });
+
+  it("refuses a retired id in defaultLayout even as an optional card", () => {
+    // An optional card may name a widget the install lacks and is left out
+    // without a word, but no install has a retired card: left out quietly, the
+    // site would never be told what replaced it.
     const message = refusal(() =>
       resetWidgetRegistries([shop], {
-        hide: ["collection/pages-count"],
-        overrides: {
-          "collection/posts-count": {
-            widht: "half",
-            size: { default: { w: 13, h: 4 } },
-          },
-        },
         defaultLayout: [
-          "collection/pages-count",
-          { widget: "collection/posts-count", w: 0 },
+          { widget: "core/team" },
+          { widget: "collection/posts-count", optional: true },
+          { widget: "single/home-card", optional: true },
         ],
       })
     );
-    expect(message).toContain('overrides entry has "widht"');
     expect(message).toContain(
-      'overrides.size.default must be { w, h } with w a whole number from 1 to 12 and h a whole number from 2 to 12, got {"w":13,"h":4}'
+      'defaultLayout names "collection/posts-count", which is a retired card'
     );
     expect(message).toContain(
-      'defaultLayout places "collection/pages-count", which hide hides'
+      'defaultLayout names "single/home-card", which is a retired card'
     );
-    expect(message).toContain(
-      "defaultLayout w must be a whole number from 1 to 12, got 0"
-    );
+    // The control: an optional card naming any other absent widget is still
+    // left out without a fault.
+    expect(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "core/team" },
+          { widget: "acme/absent", optional: true },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it("says nothing when it sets no key", () => {
@@ -174,7 +200,7 @@ describe("a site config with faults", () => {
         hide: ["core/teem"],
         overrides: {
           "acme/orders-by-state": {
-            description: "x".repeat(81),
+            description: "Orders by state\nand by region",
             size: { min: { w: 3, h: 3 } },
             settings: { top: "many", colour: "red" },
           },
@@ -186,7 +212,7 @@ describe("a site config with faults", () => {
     for (const expected of [
       'the site config, widget "site/revenue": title must be a non-empty string',
       'the site config, widget "core/teem": hide names "core/teem", which no widget declares; did you mean "core/team"?',
-      'the site config, widget "acme/orders-by-state": overrides.description must be at most 80 characters, has 81',
+      'the site config, widget "acme/orders-by-state": overrides.description must be one line',
       'the site config, widget "acme/orders-by-state": overrides.size.min { w: 3, h: 3 } widens the smallest size; the widget allows from { w: 4, h: 3 } to { w: 8, h: 6 }, and an override may only narrow that',
       'the site config, widget "acme/orders-by-state": overrides.settings sets "colour", which the widget does not declare',
       'the site config, widget "acme/orders-by-state": overrides.settings: setting "top"',
@@ -210,7 +236,10 @@ describe("a site config with faults", () => {
     );
     expect(() =>
       resetWidgetRegistries([shop], {
-        defaultLayout: ["acme/recent-orders", "acme/recent-orders"],
+        defaultLayout: [
+          "acme/recent-orders",
+          { widget: "acme/recent-orders", id: "recent-orders-2" },
+        ],
       })
     ).not.toThrow();
   });
@@ -231,18 +260,76 @@ describe("a site config with faults", () => {
     );
   });
 
+  it("refuses a further card of one widget that names no id of its own, showing the entry to write", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: ["acme/recent-orders", "acme/recent-orders"],
+        })
+      )
+    ).toContain(
+      'the site config, widget "acme/recent-orders": defaultLayout places "acme/recent-orders" again (entry 2) with no id of its own: name the card, as { widget: "acme/recent-orders", id: "recent-orders-2" }'
+    );
+  });
+
+  it("refuses two cards under one id, and a card named after a widget", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "acme/recent-orders", id: "orders" },
+          { widget: "acme/recent-orders", id: "orders" },
+          { widget: "acme/recent-orders", id: "core/team" },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'defaultLayout names two cards "orders": each card needs an id of its own'
+    );
+    expect(message).toContain(
+      'defaultLayout names a card "core/team", which is a widget\'s id; give it a name no widget has'
+    );
+  });
+
   it("refuses a default with more cards than a dashboard holds", () => {
     expect(
       refusal(() =>
         resetWidgetRegistries([shop], {
-          defaultLayout: Array.from(
-            { length: 201 },
-            () => "acme/recent-orders"
-          ),
+          defaultLayout: Array.from({ length: 201 }, (_, index) => ({
+            widget: "acme/recent-orders",
+            id: `orders-${index}`,
+          })),
         })
       )
     ).toContain(
-      "defaultLayout holds 201 cards, and a dashboard holds at most 200"
+      "defaultLayout places 201 cards, and a dashboard holds at most 200"
+    );
+  });
+
+  it("counts against that room only the cards it places, never an optional one whose widget is absent", () => {
+    const full = Array.from({ length: 200 }, (_, index) => ({
+      widget: "acme/recent-orders",
+      id: `orders-${index}`,
+    }));
+    expect(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          ...full,
+          { widget: "other/not-installed", optional: true },
+        ],
+      })
+    ).not.toThrow();
+    // An optional card whose widget IS installed is placed, and counted.
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            ...full,
+            { widget: "acme/recent-orders", optional: true },
+          ],
+        })
+      )
+    ).toContain(
+      "defaultLayout places 201 cards, and a dashboard holds at most 200"
     );
   });
 
@@ -454,6 +541,167 @@ describe("a plugin's suggestions and alternatives", () => {
     );
     expect(message).toContain(
       'plugin "@other/stats", widget "other/revenue": offers "other/revenue" in place of "core/nothing", which is not a built-in widget'
+    );
+  });
+});
+
+describe("the default the site config asks for", () => {
+  it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
+    resetWidgetRegistries([shop], {
+      defaultLayout: [
+        "core/team",
+        { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
+      ],
+      suggestions: false,
+    });
+    expect(defaultLayoutPlan()).toEqual({
+      cards: [
+        { widget: "core/team" },
+        { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
+      ],
+      suggestions: false,
+      suggested: ["acme/orders-by-state"],
+    });
+  });
+
+  it("is core's own defaultLayout, with suggestions on, when the site gives none", () => {
+    resetWidgetRegistries([shop], {});
+    expect(defaultLayoutPlan()).toEqual({
+      cards: CORE_DEFAULT_LAYOUT,
+      suggestions: true,
+      suggested: ["acme/orders-by-state"],
+    });
+  });
+
+  it("starts, saying nothing, with an optional card whose widget is not installed", () => {
+    resetWidgetRegistries([], {
+      defaultLayout: [
+        { widget: "acme/orders-by-state", optional: true },
+        "core/team",
+      ],
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(defaultLayoutPlan().cards).toEqual([
+      { widget: "acme/orders-by-state", optional: true },
+      { widget: "core/team" },
+    ]);
+  });
+
+  it("refuses a card not marked optional whose widget is not installed, and an optional that is not true or false", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([], {
+        defaultLayout: [
+          { widget: "acme/orders-by-state" },
+          { widget: "core/team", optional: "yes" },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'the site config, widget "acme/orders-by-state": defaultLayout names "acme/orders-by-state", which no widget declares'
+    );
+    expect(message).toContain(
+      'the site config, widget "core/team": defaultLayout optional must be true or false, got "yes"'
+    );
+  });
+
+  it("still checks an optional card's size when its widget is installed", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "acme/orders-by-state", optional: true, w: 12 },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'the site config, widget "acme/orders-by-state": defaultLayout w is 12, which the widget does not allow (from 4 to 8)'
+    );
+  });
+});
+
+describe("a list with an empty slot", () => {
+  // `[a, , b]`: every reading of the list skips the hole, so an entry lost to
+  // a stray comma would vanish without a word.
+  /** A list of `length` with `entries` at their places and a hole at every other. */
+  const holed = (length: number, entries: Record<number, unknown>) => {
+    const list = new Array<unknown>(length);
+    for (const [index, entry] of Object.entries(entries)) {
+      list[Number(index)] = entry;
+    }
+    return list;
+  };
+
+  it("is refused in each list of the site config, naming the list", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        hide: holed(3, { 0: "core/team", 2: "core/content" }),
+        defaultLayout: holed(3, { 0: "core/content", 2: "core/team" }),
+        widgets: holed(2, { 0: { ...revenue, id: "site/revenue" } }),
+      })
+    );
+    for (const expected of [
+      'the site config, widget "(hide)": hide has an empty slot at position 2; remove the extra comma',
+      'the site config, widget "(defaultLayout)": defaultLayout has an empty slot at position 2; remove the extra comma',
+      'the site config, widget "(widgets)": widgets has an empty slot at position 2; remove the extra comma',
+    ]) {
+      expect(message).toContain(expected);
+    }
+  });
+
+  it("is refused in each list of a plugin's contribution, naming the list", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/stats", {
+          widgets: holed(2, { 1: { ...revenue, id: "other/revenue" } }),
+          suggest: holed(3, { 0: "other/revenue", 2: "other/revenue" }),
+        }),
+      ])
+    );
+    for (const expected of [
+      'plugin "@other/stats", widget "(widgets)": widgets has an empty slot at position 1',
+      'plugin "@other/stats", widget "(suggest)": suggest has an empty slot at position 2',
+    ]) {
+      expect(message).toContain(expected);
+    }
+  });
+});
+
+describe("a plugin that adds only Needs attention items", () => {
+  it("starts with no widgets declared, reading none as declaring none", () => {
+    expect(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/inbox", { attention: dashboard.attention }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("is refused when its widgets are null, which is a list that is not one, not none", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([plainPlugin("@other/inbox", { widgets: null })])
+      )
+    ).toContain(
+      'plugin "@other/inbox", widget "(none)": its dashboard widgets must be a list of widget declarations'
+    );
+  });
+});
+
+describe("startup's warnings", () => {
+  it("go through the registration's logger, and never the process-wide one", () => {
+    const registration = { warn: vi.fn() };
+    resetWidgetRegistries([shop], { hide: ["core/team"] }, registration);
+    expect(registration.warn).toHaveBeenCalledWith(
+      "admin.dashboard.hide is accepted but not applied yet in this version.",
+      { kind: "site-dashboard-keys-not-applied", keys: ["hide"] }
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("core's ids", () => {
+  it("are the one set registration derives, handed to the site config's check", () => {
+    const coreIds = new Set(["core/team"]);
+    expect(siteDashboardContext(new Map(), new Map(), coreIds).coreIds).toBe(
+      coreIds
     );
   });
 });

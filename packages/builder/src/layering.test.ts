@@ -79,6 +79,10 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // The ROOT entry only. `@nextlyhq/blocks-react/next` imports `nextly/runtime`,
   // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
+  // The document and window the canvas hands the blocks it draws, which block
+  // code reads through `useBlockEnvironment`. A client entry of its own, and
+  // React alone: it reaches neither `next/*` nor the CMS.
+  "@nextlyhq/blocks-react/environment",
   "@nextlyhq/ui",
   // The `cn` helper only. A separate subpath because the root barrel carries a
   // `"use client"` banner and this one is plain string joining.

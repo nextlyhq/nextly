@@ -246,6 +246,27 @@ export type WidgetSlot =
        * Absent for every other failure, which the card shows as an error with Retry.
        */
       code?: "unavailable";
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The card's widget cannot be loaded until a setting has a value: its `load` was not
+       * run, and the card asks its reader for the setting rather than showing an error. Not a
+       * failure, so never a Retry.
+       */
+      code: "needs-setting";
+      /** The setting's label, as the card's settings name it. */
+      setting: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The widget's own `shows` answered no for this person: the card is left out of their
+       * dashboard, neither drawn nor counted, and its `load` was not run. Not a failure.
+       */
+      code: "not-shown";
     };
 
 /**

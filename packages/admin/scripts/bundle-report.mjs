@@ -326,35 +326,6 @@ export function measureBundle({
   const reachableSet = reachableClosure(graph, entryChunk);
   const otherEntrySet = otherEntryClosure(graph, entryChunk);
 
-  // What a DIRECT visit to each lazily loaded route must fetch before that
-  // route renders: the route root's static closure, shared shell included.
-  // The entry's eager graph alone understates that visit, which fetches the
-  // route's closure too before it can show anything.
-  const routeRoots = (graph.get(entryChunk)?.dynamicImports ?? []).filter(
-    root => graph.has(root)
-  );
-  const routes = routeRoots
-    .map(root => {
-      const closure = closureFrom(graph, root, ["staticImports"]);
-      const chunks = [...closure];
-      const minifiedBytes = chunks.reduce(
-        (sum, rel) => sum + graph.get(rel).minifiedBytes,
-        0
-      );
-      const gzippedBytes = chunks.reduce(
-        (sum, rel) => sum + graph.get(rel).gzippedBytes,
-        0
-      );
-      return {
-        root,
-        chunks: chunks.length,
-        minifiedBytes,
-        gzippedBytes,
-        beyondFirstScreen: [...closure].filter(rel => !firstScreenSet.has(rel)),
-      };
-    })
-    .sort((a, b) => b.minifiedBytes - a.minifiedBytes);
-
   const buckets = {
     "first-screen": [],
     "route-later": [],
@@ -402,6 +373,74 @@ export function measureBundle({
   const otherEntryTotal = sumBytes(buckets["other-entry"]);
   const unreachableTotal = sumBytes(buckets.unreachable);
   const cliTotal = sumBytes(buckets.cli);
+
+  // The shell is the first-screen bucket the shell budget reads: each
+  // route's direct visit is that total plus what the route adds, so the two
+  // can never disagree about which chunks the shell holds.
+  const shellSet = new Set(buckets["first-screen"].map(node => node.rel));
+
+  // What a DIRECT visit to each lazily loaded route must fetch before that
+  // route renders: the route root's static closure, shared shell included.
+  // The entry's eager graph alone understates that visit, which fetches the
+  // route's closure too before it can show anything.
+  //
+  // Route roots are every dynamic-import target anywhere in the entry's
+  // reachable graph, not just the entry chunk's own direct ones: the bundler
+  // hoists shared registries into eager chunks, so a page the entry reaches
+  // only through such a chunk would otherwise vanish from the route list.
+  const routeRoots = [];
+  for (const rel of reachableSet) {
+    for (const target of graph.get(rel).dynamicImports) {
+      if (graph.has(target) && !routeRoots.includes(target)) {
+        routeRoots.push(target);
+      }
+    }
+  }
+  const routes = routeRoots
+    .map(root => {
+      const closure = closureFrom(graph, root, ["staticImports"]);
+      const chunks = [...closure];
+      const minifiedBytes = chunks.reduce(
+        (sum, rel) => sum + graph.get(rel).minifiedBytes,
+        0
+      );
+      const gzippedBytes = chunks.reduce(
+        (sum, rel) => sum + graph.get(rel).gzippedBytes,
+        0
+      );
+      const beyond = [...closure].filter(rel => !shellSet.has(rel));
+      const beyondGzipped = beyond.reduce(
+        (sum, rel) => sum + graph.get(rel).gzippedBytes,
+        0
+      );
+      const beyondMinified = beyond.reduce(
+        (sum, rel) => sum + graph.get(rel).minifiedBytes,
+        0
+      );
+      return {
+        root,
+        chunks: chunks.length,
+        minifiedBytes,
+        gzippedBytes,
+        beyondFirstScreen: beyond,
+        // A direct visit downloads the shell once and then this route's own
+        // remainder: the union of the entry's pre-render closure and the
+        // route's closure. Shared chunks count once — the browser fetches
+        // them once — so a route is judged by the union, not by a closure
+        // that double-counts everything the shell already carried.
+        directVisit: {
+          minifiedBytes: firstScreenTotal.minifiedBytes + beyondMinified,
+          gzippedBytes: firstScreenTotal.gzippedBytes + beyondGzipped,
+        },
+        // What this route adds to the shell: the part of its direct visit
+        // that is its own, which the budgets hold each route to.
+        beyondShell: {
+          minifiedBytes: beyondMinified,
+          gzippedBytes: beyondGzipped,
+        },
+      };
+    })
+    .sort((a, b) => b.minifiedBytes - a.minifiedBytes);
 
   const browserChunks = [
     ...buckets["first-screen"],
@@ -542,8 +581,10 @@ export function formatReport(result, { json = false } = {}) {
     );
     lines.push("-".repeat(72));
     for (const route of result.routes) {
-      const min = `${formatKB(route.minifiedBytes)} KB`.padStart(11);
-      const gz = `${formatKB(route.gzippedBytes)} KB gzip`.padStart(16);
+      // The direct visit, shell included, as the heading says and as the
+      // budgets measure it; the route's own closure alone is smaller.
+      const min = `${formatKB(route.directVisit.minifiedBytes)} KB`.padStart(11);
+      const gz = `${formatKB(route.directVisit.gzippedBytes)} KB gzip`.padStart(16);
       const beyond = route.beyondFirstScreen.length;
       lines.push(
         `  ${route.root.padEnd(42)} ${min}  (${gz})` +
@@ -604,12 +645,12 @@ export function parseArgs(argv) {
 }
 
 /**
- * The committer date of `commit` as a millisecond timestamp, or Infinity
- * when it cannot be read — the staleness warning then stays silent rather
- * than firing on a guess.
+ * The committer date of `commit` as a millisecond timestamp, or -Infinity
+ * when it cannot be read: no build time is before it, so the staleness
+ * warning stays silent rather than firing on a guess.
  */
 function commitTimeMs(commit) {
-  if (commit === "unversioned") return Infinity;
+  if (commit === "unversioned") return -Infinity;
   try {
     const ms = Number(
       execFileSync("git", ["show", "-s", "--format=%ct", commit], {
@@ -618,10 +659,30 @@ function commitTimeMs(commit) {
         stdio: ["pipe", "pipe", "ignore"],
       }).trim()
     );
-    return Number.isFinite(ms) ? ms * 1000 : Infinity;
+    return Number.isFinite(ms) ? ms * 1000 : -Infinity;
   } catch {
-    return Infinity;
+    return -Infinity;
   }
+}
+
+/**
+ * Whether a measured dist predates the commit its report is labelled with:
+ * built before that commit, or stamped by a build of a different commit. The
+ * one answer the report's warning and the budget pins both use, so a stale
+ * dist can neither wear a fresh label nor become a pin.
+ */
+export function distStaleness(result) {
+  const builtMs = Date.parse(result.builtAt);
+  const timeStale =
+    Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
+  // The build's own stamp is the stronger half: a dist from a different
+  // commit is mismatched even when its build time is newer than the
+  // labelled commit — an older checkout keeps a gitignored dist.
+  const provenanceMismatch =
+    result.buildInfo !== undefined &&
+    result.buildInfo.commit !== "unversioned" &&
+    result.buildInfo.commit !== result.commit;
+  return { timeStale, provenanceMismatch, stale: timeStale || provenanceMismatch };
 }
 
 /**
@@ -654,17 +715,8 @@ if (invokedAsScript()) {
     // when the bytes predate it, so a stale dist cannot wear a fresh commit
     // unnoticed — in the text, in the JSON, and on stderr where automation
     // looks.
-    const builtMs = Date.parse(result.builtAt);
-    const timeStale =
-      Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
-    // The build's own stamp is the stronger half: a dist from a different
-    // commit is mismatched even when its build time is newer than the
-    // labelled commit — an older checkout keeps a gitignored dist.
-    const provenanceMismatch =
-      result.buildInfo !== undefined &&
-      result.buildInfo.commit !== "unversioned" &&
-      result.buildInfo.commit !== result.commit;
-    result.stale = timeStale || provenanceMismatch;
+    const { timeStale, provenanceMismatch, stale } = distStaleness(result);
+    result.stale = stale;
     if (provenanceMismatch) {
       console.error(
         `bundle-report warning: the dist was built from commit ${(result.buildInfo.commit || "").slice(0, 12)}, not the ${result.commit.slice(0, 12)} this report labels. Rebuild for a fresh attribution.`

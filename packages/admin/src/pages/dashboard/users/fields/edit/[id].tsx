@@ -19,6 +19,7 @@ import {
   useUserField,
   useUpdateUserField,
 } from "@admin/hooks/queries/useUserFields";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -41,6 +42,8 @@ export default function EditUserFieldPage(): JSX.Element {
     error: fetchError,
     refetch,
   } = useUserField(fieldId || undefined);
+  // The tab names the field being edited once it has arrived.
+  useDocumentTitle(userField?.label);
 
   // Update mutation
   const { mutate: updateField, isPending } = useUpdateUserField();

@@ -24,7 +24,7 @@ import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
-import { settings } from "../../domains/widgets/declaration/setting-builders";
+import { setting } from "../../domains/widgets/declaration/setting-builders";
 import { clearSources } from "../../domains/widgets/sources";
 import { definePlugin } from "../../plugins/plugin-context";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
@@ -85,9 +85,16 @@ const shop = definePlugin({
           description: "Orders waiting to be sent",
           category: "Shop",
           size: { default: { w: 12, h: 3 }, min: { w: 6, h: 3 } },
-          permission: `read-${ORDERS}`,
-          settings: { items: settings.items({ default: 5 }) },
-          data: async ({ settings: values, services, signal }) => {
+          access: `read-${ORDERS}`,
+          settings: {
+            items: setting.number({
+              label: "Number of items",
+              defaultValue: 5,
+              min: 1,
+              max: 10,
+            }),
+          },
+          load: async ({ settings: values, services, signal }) => {
             reads.push({ widget: "acme/open-orders", signal });
             const found = await services.find(ORDERS, {
               where: { state: { equals: "open" } },
@@ -95,9 +102,9 @@ const shop = definePlugin({
             });
             return { total: found.items.length };
           },
-          display: "metric",
+          view: "figure",
+          isEmpty: data => data.total === 0,
           empty: {
-            when: data => data.total === 0,
             message: "No open orders",
             action: {
               label: "Add an order",
@@ -114,8 +121,8 @@ const shop = definePlugin({
           description: "Orders beside the notes desk",
           category: "Shop",
           size: { default: { w: 12, h: 3 } },
-          permission: `read-${NOTES}`,
-          data: async ({ services }) => ({
+          access: `read-${NOTES}`,
+          load: async ({ services }) => ({
             // Options a plain JavaScript caller may pass anyway. None of them
             // is read: the services are already bound to the person.
             total: await services.count(ORDERS, {
@@ -124,7 +131,7 @@ const shop = definePlugin({
               as: "system",
             } as unknown as Parameters<typeof services.count>[1]),
           }),
-          display: "metric",
+          view: "figure",
         }),
         defineWidget({
           id: "acme/slow",
@@ -132,9 +139,9 @@ const shop = definePlugin({
           description: "Answers only when given up",
           category: "Shop",
           size: { default: { w: 12, h: 3 } },
-          permission: `read-${ORDERS}`,
-          data: async ({ signal }) => untilGivenUp(signal),
-          display: "metric",
+          access: `read-${ORDERS}`,
+          load: async ({ signal }) => untilGivenUp(signal),
+          view: "figure",
         }),
       ],
     },

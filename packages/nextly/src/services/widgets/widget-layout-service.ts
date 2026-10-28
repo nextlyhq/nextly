@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import {
   readStoredLayout,
   serializeLayout,
@@ -21,9 +22,9 @@ import {
 } from "../../domains/widgets/layout";
 import { NextlyError } from "../../errors/nextly-error";
 import { layoutRowId, type LayoutScopeKind } from "../../schemas/widget-layout";
-import { nextlyWidgetLayout as layoutMysql } from "../../schemas/widget-layout/mysql";
-import { nextlyWidgetLayout as layoutPg } from "../../schemas/widget-layout/postgres";
-import { nextlyWidgetLayout as layoutSqlite } from "../../schemas/widget-layout/sqlite";
+import type { nextlyWidgetLayout as layoutMysql } from "../../schemas/widget-layout/mysql";
+import type { nextlyWidgetLayout as layoutPg } from "../../schemas/widget-layout/postgres";
+import type { nextlyWidgetLayout as layoutSqlite } from "../../schemas/widget-layout/sqlite";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -71,11 +72,11 @@ type LayoutTable = typeof layoutPg | typeof layoutMysql | typeof layoutSqlite;
 function layoutTableFor(dialect: SupportedDialect): LayoutTable {
   switch (dialect) {
     case "postgresql":
-      return layoutPg;
     case "mysql":
-      return layoutMysql;
     case "sqlite":
-      return layoutSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.nextlyWidgetLayout;
     default: {
       const exhaustive: never = dialect;
       throw NextlyError.internal({
