@@ -164,6 +164,14 @@ describe("looksLikeSecret", () => {
     ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJlLXZhbHVl"],
     [jwtWithHeader('{ "alg":"HS256"}')],
     [jwtWithHeader('{\n  "alg": "none"\n}')],
+    // An empty claims set (`e30`), and an unsecured JWT's empty signature.
+    [shaped(Buffer.from('{"alg":"HS256"}').toString("base64url"), ".e30.c2ln")],
+    [shaped(Buffer.from('{"alg":"none"}').toString("base64url"), ".e30.")],
+    [shaped("xa", "pp-", "1-A0123-4567-abcdef")],
+    [shaped("xw", "fp-", "1-A0123-4567-abcdef")],
+    [shaped("xoxe.", "xa", "pp-", "1-abcdef")],
+    [shaped("gl", "dt-", "abcdefghijklmnopqrst")],
+    [shaped("gl", "agent-", "abcdefghijklmnopqrst")],
     ["whsec_abcdef123456"],
     ["whsec_YQ=="],
     [shaped("sk_", "live_", "4eC39HqLyjWDarjtT1zdp7dc")],
@@ -189,6 +197,8 @@ describe("looksLikeSecret", () => {
     // Three long dotted parts, which a JWT has too, but no JOSE header: a
     // name, and a cursor whose first part is JSON with no `alg`.
     ["plugin-accounts.identity.unlinked"],
+    ["plugin-accounts.id.x"],
+    ["configuration.."],
     [
       shaped(
         Buffer.from('{"page":2}').toString("base64url"),

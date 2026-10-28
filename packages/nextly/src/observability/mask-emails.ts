@@ -561,13 +561,20 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * line cost its length squared. A longer credential name is still found,
  * from a word within 256 characters of its separator (`…token=`).
  *
+ * An escaped JSON name is a JSON string inside another one, so it is read
+ * as the outer quoting wrote the inner one's characters: a plain character,
+ * an inner escape (`\\` and what follows it, where an inner quote is `\\\"`
+ * and an inner backslash `\\\\`), or an outer escape of any other character.
+ * Read that way, an inner quote stays part of the name (`password\"hint`),
+ * and a name ending in an inner backslash still ends at its own `\"`.
+ *
  * Groups: an escaped JSON name's quote and text, a JSON name's quote and
  * text, any other name's quote and text, and the separator. The value is read
  * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\(?!")[^\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes

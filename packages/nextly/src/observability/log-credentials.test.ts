@@ -366,6 +366,12 @@ describe("credentials anywhere in a log value", () => {
       'upstream said {\\"pass\\\\tword\\":\\"escaped-simple-secret-14\\",\\"page\\":2}',
       "escaped-simple-secret-14",
     ],
+    // GitLab's session cookie, the one entry in its token list with no
+    // shape: a session named as one.
+    [
+      "sent _gitlab_session=gl-session-secret-15 page=2",
+      "gl-session-secret-15",
+    ],
     // A quoted name holding a parameter of its own (a map keyed by URL) is
     // still searched as text, so the token in it is found.
     [
@@ -377,6 +383,26 @@ describe("credentials anywhere in a log value", () => {
     // POPULATION CONTROL: the parameter beside it remains.
     expect(out).toMatch(/page\W*[=:]\W*2/);
     expect(out).not.toContain(secret);
+  });
+
+  it("reads an escaped JSON name whole when it holds an escaped quote", () => {
+    // `{"password\"hint":"…"}` quoted inside a message: the name's own quote
+    // is `\\\"` there, and the name runs on past it to its closing `\"`.
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (_: string, m?: unknown) => received.push(m),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug("line", {
+      note: 'upstream said {\\"password\\\\\\"hint\\":\\"opaque-secret\\",\\"page\\":2}',
+      // A name ending in an escaped backslash still ends at its own quote.
+      kept: 'upstream said {\\"name\\\\\\\\\\":\\"Ada Lovelace\\",\\"page\\":2}',
+    });
+    expect(received[0]).toEqual({
+      note: 'upstream said {\\"password\\\\\\"hint\\":\\"[redacted]\\",\\"page\\":2}',
+      kept: 'upstream said {\\"name\\\\\\\\\\":\\"Ada Lovelace\\",\\"page\\":2}',
+    });
   });
 
   it("keeps the value of a quoted name that says nothing, and quoted prose", () => {
@@ -780,6 +806,25 @@ describe("credentials known by their shape, under any name", () => {
       "a JWT whose header is laid out on lines",
       jwtWithHeader('{\n  "alg": "HS256",\n  "typ": "JWT"\n}'),
     ],
+    // A claims set may be the empty object, `{}` (`e30`), and an unsecured
+    // JWT (`alg` "none") has an empty signature, so it ends at its last dot.
+    [
+      "a JWT with an empty claims set",
+      shaped(
+        Buffer.from('{"alg":"HS256"}').toString("base64url"),
+        ".e30.",
+        "c2lnbmF0dXJlLXZhbHVl"
+      ),
+    ],
+    [
+      "an unsecured JWT, its signature empty",
+      shaped(
+        Buffer.from('{"alg":"none"}').toString("base64url"),
+        ".",
+        "eyJzdWIiOiJ1c2VyLTEifQ",
+        "."
+      ),
+    ],
     ["a GitHub personal token", GITHUB],
     ["a GitHub OAuth token", shaped("gh", "o_", "c".repeat(36))],
     ["a GitHub user-to-server token", shaped("gh", "u_", "d".repeat(36))],
@@ -795,8 +840,54 @@ describe("credentials known by their shape, under any name", () => {
     // The webhook signer takes any `whsec_` whose rest decodes to one byte.
     ["a one-byte webhook signing secret", shaped("whsec_", "YQ==")],
     ["a one-byte webhook signing secret, unpadded", shaped("whsec_", "YQ")],
-    ["a GitLab token", shaped("gl", "pat-", "k".repeat(20))],
-    ["a Slack token", shaped("xo", "xb-", "1234567890-", "l".repeat(24))],
+    // Every prefix GitLab's token overview lists.
+    ...[
+      "glpat-",
+      "gloas-",
+      "gldt-",
+      "glrt-",
+      "glrtr-",
+      "glcbt-",
+      "glptt-",
+      "glft-",
+      "glimt-",
+      "glagent-",
+      "glwt-",
+      "glsoat-",
+      "glffct-",
+    ].map((prefix): [string, string] => [
+      `a GitLab ${prefix} token`,
+      shaped(prefix.slice(0, 2), prefix.slice(2), "k1_-".repeat(5), "z9"),
+    ]),
+    // Every prefix Slack's token documentation lists: bot, user, app-level
+    // and workflow tokens, the rotating access tokens behind `xoxe.`, and the
+    // refresh token.
+    ["a Slack bot token", shaped("xo", "xb-", "1234567890-", "l".repeat(24))],
+    [
+      "a Slack user token",
+      shaped("xo", "xp-", "111-222-333-", "d6bc".repeat(8)),
+    ],
+    [
+      "a Slack app-level token",
+      shaped("xa", "pp-", "1-A0123-4567-", "a1".repeat(16)),
+    ],
+    [
+      "a Slack workflow token",
+      shaped("xw", "fp-", "1-A0123-4567-", "b2".repeat(16)),
+    ],
+    [
+      "a rotating Slack bot token",
+      shaped("xoxe.", "xo", "xb-", "1-", "c3".repeat(16)),
+    ],
+    [
+      "a rotating Slack user token",
+      shaped("xoxe.", "xo", "xp-", "1-1234-", "d4".repeat(16)),
+    ],
+    [
+      "a rotating Slack app-level token",
+      shaped("xoxe.", "xa", "pp-", "1-", "e5".repeat(16)),
+    ],
+    ["a Slack refresh token", shaped("xo", "xe-", "1-", "f6".repeat(16))],
     ["a Google OAuth token", shaped("ya", "29.", "m".repeat(40))],
   ])("takes %s out of a neutral field and out of text", (_, credential) => {
     const { text, fields } = receivedAs(
@@ -907,6 +998,13 @@ describe("credentials known by their shape, under any name", () => {
       ),
       prose: "the token expired, so a new token was requested",
       mention: "signing secrets start with whsec_ and keys with sk_live_",
+      mentionMore:
+        "runner tokens start with glrt-, deploy tokens with gldt- and app tokens with xapp-",
+      slackWord: "xwfp-step-two",
+      // A JWT's later parts may be short or empty, so dotted runs whose
+      // first part is no JOSE header stay too: short parts, and an ellipsis.
+      shortParts: "plugin-accounts.id.x",
+      ellipsis: "loading configuration... done",
       word: "xoxo-gossip",
       shortKey: "AKIA-short",
       opaque: "order-42",

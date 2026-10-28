@@ -67,10 +67,18 @@ type CredentialShape =
 const B64URL = "[A-Za-z0-9_-]";
 
 /**
- * A JWT: three base64url segments separated by dots. One definition, used on
- * its own and inside a token that embeds one.
+ * A JWT in its compact form: three base64url segments separated by dots. One
+ * definition, used on its own and inside a token that embeds one.
+ *
+ * Only the header has a floor. The shortest JOSE header, `{"alg":"none"}`,
+ * is 19 characters, so 8 passes every real one and rules out most short
+ * dotted words before any decoding; whether it IS a header is decided by
+ * decoding it (`hasJoseHeader`). The others may be short or empty, as RFC
+ * 7515 and 7519 allow: an empty claims set, `{}`, is `e30`, a JWS with
+ * detached content has an empty payload, and an unsecured JWT (`alg`
+ * "none") has an empty signature, so it ends at its second dot.
  */
-const JWT_TOKEN = `${B64URL}{8,}\\.${B64URL}{8,}\\.${B64URL}{8,}`;
+const JWT_TOKEN = `${B64URL}{8,}\\.${B64URL}*\\.${B64URL}*`;
 
 /**
  * The longest JWT header read, in base64url characters (12 KiB decoded).
@@ -127,12 +135,13 @@ const CREDENTIAL_SHAPES: readonly CredentialShape[] = [
   // A JWT: three base64url segments separated by dots, the first a JOSE
   // header. A dotted name such as `plugin-accounts.identity.unlinked` has
   // three long parts too, and its first part decodes to no JSON. In text it
-  // is a whole base64url run; its pattern's own floor is 26 characters.
+  // is a whole base64url run. Its length is no test: the floor is the
+  // pattern's own, a header of 8 and two dots, and the header decides.
   {
     token: JWT_TOKEN,
     value: "is",
     accept: hasJoseHeader,
-    inText: { minLength: 26, notAfter: "-" },
+    inText: { minLength: 10, notAfter: "-" },
   },
   // An HTTP authorization value carrying its scheme. In text, the `Bearer`
   // and `Basic` rule beside the other text rules reads it, keeping the scheme.
@@ -171,7 +180,7 @@ const CREDENTIAL_SHAPES: readonly CredentialShape[] = [
   // id, an underscore, then a whole JWT, taken as one token so neither the id
   // nor the JWT is left behind. GitHub's documented characters for it are
   // letters, digits, `.`, `-` and `_`; the id holds neither separator, the
-  // `_` before the JWT nor the JWT's `.`. Its pattern's floor is 32.
+  // `_` before the JWT nor the JWT's `.`. A real one is well over 20.
   {
     token: `ghs_[A-Za-z0-9-]+_${JWT_TOKEN}`,
     value: "starts",
@@ -189,16 +198,27 @@ const CREDENTIAL_SHAPES: readonly CredentialShape[] = [
     value: "starts",
     inText: { minLength: MIN_PREFIXED_TOKEN },
   },
-  // GitLab personal access tokens: the prefix and 20 characters or more.
+  // GitLab tokens, every prefix its token overview lists: personal, project,
+  // group and impersonation (`glpat-`), OAuth application secret (`gloas-`),
+  // deploy (`gldt-`), runner (`glrt-`, `glrtr-`), CI/CD job (`glcbt-`),
+  // trigger (`glptt-`), feed (`glft-`), incoming mail (`glimt-`), agent for
+  // Kubernetes (`glagent-`), workspace (`glwt-`), SCIM (`glsoat-`) and
+  // feature flags client (`glffct-`); the prefix and 20 characters or more.
+  // Its session cookie, `_gitlab_session`, is a session by its name.
   {
-    token: "glpat-[A-Za-z0-9_-]*",
+    token:
+      "(?:glpat|gloas|gldt|glrtr?|glcbt|glptt|glft|glimt|glagent|glwt|glsoat|glffct)-[A-Za-z0-9_-]*",
     value: "starts",
     inText: { minLength: MIN_PREFIXED_TOKEN },
   },
-  // Slack bot, user and other `xox?-` tokens: dash-separated ids and a
-  // secret, 50 characters or more.
+  // Slack tokens: dash-separated ids and a secret, 23 characters or more (an
+  // old user token's secret is 6). Slack's token documentation lists bot
+  // (`xoxb-`), user (`xoxp-`), app-level (`xapp-`) and workflow (`xwfp-`)
+  // tokens; the rotating access tokens, `xoxe.` before a bot, user or
+  // app-level prefix, taken whole; and the refresh token (`xoxe-`). The
+  // older `xoxa-`, `xoxo-`, `xoxr-` and `xoxs-` forms stay recognised.
   {
-    token: "xox[abposre]-[A-Za-z0-9-]*",
+    token: "(?:xoxe\\.(?:xox[bp]|xapp)|xox[abposre]|xapp|xwfp)-[A-Za-z0-9-]*",
     value: "starts",
     inText: { minLength: MIN_PREFIXED_TOKEN },
   },
