@@ -14,7 +14,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { rolesHoldingRetiredManage } from "../../../domains/auth/retired-manage";
-import { RolePermissionService } from "../../../domains/auth/services/role-permission-service";
 import { consoleLogger } from "../../../services/shared";
 import type { UpgradeStep, UpgradeStepContext } from "../upgrade-step";
 
@@ -26,6 +25,12 @@ export const retiredManageStep: UpgradeStep = {
   pending: async context =>
     (await rolesHoldingRetiredManage(adapterOf(context))).length,
   run: async context => {
+    // Loaded when the step runs rather than with the upgrade command: the
+    // role writers reach the service graph, which nothing else in the
+    // command needs, and every test of the command would load it too.
+    const { RolePermissionService } = await import(
+      "../../../domains/auth/services/role-permission-service"
+    );
     const adapter = adapterOf(context);
     const roles = new RolePermissionService(adapter, consoleLogger);
     let converted = 0;

@@ -24,7 +24,7 @@ import {
 } from "../../../users/services/last-super-admin";
 import { PUBLIC_ROLE_SLUG, refuseLinkingPublicRole } from "../public-role";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
-import { storedAsPlain } from "../role-permission-service";
+import { storedAsPlain } from "../stored-as-plain";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";

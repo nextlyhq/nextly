@@ -9,10 +9,7 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
-import {
-  MANAGE_BRIDGED_ACTIONS,
-  MANAGE_BRIDGED_RESOURCES,
-} from "../../../auth/access/manage-bridge";
+import { MANAGE_BRIDGED_ACTIONS } from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -20,6 +17,7 @@ import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 import { afterRoleGrantsChanged } from "./role-grants-changed";
+import { batches, isRetiredManage, storedAsPlain } from "./stored-as-plain";
 
 /**
  * The transaction methods this service calls.
@@ -611,81 +609,6 @@ function named(
         ]
       : []
   );
-}
-
-/** `items` in runs of at most `size`, and never less than one per run. */
-/** Whether a permission is a retired `manage-` one: bridged, and stored as the plain four. */
-function isRetiredManage(action: string, resource: string): boolean {
-  return action === "manage" && MANAGE_BRIDGED_RESOURCES.includes(resource);
-}
-
-/** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
-type PermissionReader = Pick<TransactionContext, "select">;
-
-/** A permission row as `storedAsPlain` reads it. */
-type PermissionRow = { id: unknown; action: string; resource: string };
-
-/**
- * The permission ids as a role stores them: each retired `manage-` one
- * replaced by the plain read, create, update and delete on its resource, and
- * every other id as it is. Where a resource lacks one of the plain four, its
- * `manage-` id is kept, so the role loses nothing; the bridge still counts it
- * until `nextly upgrade` converts it once they exist.
- */
-export async function storedAsPlain(
-  reader: PermissionReader,
-  permissionIds: readonly string[],
-  maxParams: number
-): Promise<string[]> {
-  const ids = [...new Set(permissionIds.map(String))];
-  if (ids.length === 0) return ids;
-  const rows: PermissionRow[] = [];
-  for (const batch of batches(ids, maxParams)) {
-    rows.push(
-      ...(await reader.select<PermissionRow>("permissions", {
-        columns: ["id", "action", "resource"],
-        where: { and: [{ column: "id", op: "IN", value: batch }] },
-      }))
-    );
-  }
-  const retired = rows.filter(row => isRetiredManage(row.action, row.resource));
-  if (retired.length === 0) return ids;
-  const resources = [...new Set(retired.map(row => row.resource))];
-  const plain = await reader.select<PermissionRow>("permissions", {
-    columns: ["id", "action", "resource"],
-    where: {
-      and: [
-        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
-        { column: "resource", op: "IN", value: resources },
-      ],
-    },
-  });
-  const replaced = new Set<string>();
-  const added: string[] = [];
-  for (const resource of resources) {
-    const four = plain.filter(row => row.resource === resource);
-    if (
-      !MANAGE_BRIDGED_ACTIONS.every(action =>
-        four.some(row => row.action === action)
-      )
-    ) {
-      continue;
-    }
-    for (const row of retired) {
-      if (row.resource === resource) replaced.add(String(row.id));
-    }
-    added.push(...four.map(row => String(row.id)));
-  }
-  return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
-}
-
-function batches<T>(items: readonly T[], size: number): T[][] {
-  const step = Math.max(1, Math.floor(size));
-  const runs: T[][] = [];
-  for (let start = 0; start < items.length; start += step) {
-    runs.push(items.slice(start, start + step));
-  }
-  return runs;
 }
 
 /** Whether two sets hold the same members. */
