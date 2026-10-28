@@ -11,10 +11,9 @@
  * reader's own removed cards, which the arrangement already names, and a card
  * listed there keeps the group it would otherwise have.
  *
- * A card core derives from a collection has no group at all and is never
- * offered: those cards are retired in favour of the catalogue's content
- * widgets, which are what the Content group is for. One already placed is
- * still drawn; it is simply not offered again.
+ * Every widget the install has is offered somewhere: each is declared, by
+ * core, a plugin or the site, and a card about one collection is a Content
+ * widget set to it rather than a widget of its own.
  *
  * @module domains/widgets/add-panel
  */
@@ -83,20 +82,15 @@ function isCoreWidgetId(id: string): id is CoreWidgetId {
   return Object.prototype.hasOwnProperty.call(CORE_GROUPS, id);
 }
 
-/**
- * The group and sub-group, before the labels are added, or `undefined` for a
- * widget the panel does not offer.
- */
+/** The group and sub-group, before the labels are added. */
 function placeOf(
   widget: CanonicalWidget
-): Pick<AddPanelFacts, "group" | "subgroup"> | undefined {
+): Pick<AddPanelFacts, "group" | "subgroup"> {
   // A plugin's widget first: a plugin that overrides a built-in's id is still
   // the plugin's, and is found under it.
   if (widget.plugin !== undefined) {
     return { group: "plugins", subgroup: widget.plugin };
   }
-  // Retired, so not offered; see the module note.
-  if (widget.generated === true) return undefined;
   // Offered inside each collection's part of the Content group: the admin
   // lists it once per collection the reader may read, from the collections it
   // already holds, so no collection is named here.
@@ -106,17 +100,10 @@ function placeOf(
   return { group: "overview" };
 }
 
-/**
- * Where the panel lists `widget`, and what it shows beside its name, or
- * `undefined` when the panel does not offer it.
- */
-export function addPanelFacts(
-  widget: CanonicalWidget
-): AddPanelFacts | undefined {
-  const place = placeOf(widget);
-  if (place === undefined) return undefined;
+/** Where the panel lists `widget`, and what it shows beside its name. */
+export function addPanelFacts(widget: CanonicalWidget): AddPanelFacts {
   return {
-    ...place,
+    ...placeOf(widget),
     ...(widget.description === undefined
       ? {}
       : { description: widget.description }),
@@ -156,10 +143,7 @@ function keyOf(
   return coreIndex === undefined ? [rank, "1", index] : [rank, "0", coreIndex];
 }
 
-/**
- * The widgets the panel offers, in the order it lists them. A widget it does
- * not offer is left out.
- */
+/** The widgets the panel offers, every one of them, in the order it lists them. */
 export function inAddPanelOrder<W extends CanonicalWidget>(
   widgets: readonly W[]
 ): W[] {
@@ -169,12 +153,10 @@ export function inAddPanelOrder<W extends CanonicalWidget>(
       pluginOrder.set(widget.plugin, pluginOrder.size);
     }
   }
-  const keyed = widgets.flatMap((widget, index) => {
-    const place = placeOf(widget);
-    return place === undefined
-      ? []
-      : [{ widget, key: keyOf(place, widget, index, pluginOrder) }];
-  });
+  const keyed = widgets.map((widget, index) => ({
+    widget,
+    key: keyOf(placeOf(widget), widget, index, pluginOrder),
+  }));
   keyed.sort(
     (a, b) =>
       a.key[0] - b.key[0] ||

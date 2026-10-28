@@ -15,7 +15,7 @@ const { cardIsShownTo, cardBatchFor, refreshContentSources, declaredWidget } =
   }));
 vi.mock("./widget-cards", () => ({ cardIsShownTo }));
 vi.mock("./widget-query", () => ({ cardBatchFor }));
-vi.mock("../domains/widgets/collection-widgets", () => ({
+vi.mock("../domains/widgets/content-sources", () => ({
   refreshContentSources,
 }));
 vi.mock("../domains/widgets/declaration/declared-widgets", () => ({

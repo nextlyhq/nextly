@@ -29,14 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-A dashboard load asks for each thing it reads once.
-
-Three reads were asked twice on every load:
-
-- **The collections:** the Create card asked with its own query, beside the navigation's. It now uses the navigation's, so its shortcuts follow the navigation's name order.
-- **The layout:** the Get started card read it again as it mounted. It now uses the read the grid has just made.
-- **The permission list:** every caller asked again as it mounted. An answer now counts for two seconds, so one screen's callers share it and the next screen asks afresh, where a changed role is seen.
-
-That is three fewer requests per dashboard load, for every reader.
-
-A card missing a setting now says "No collection chosen yet" beside its "Choose collection" button, so the message no longer repeats the button.
+The dashboard asks for its collections, its layout and your permissions once per load instead of twice, and each screen you open asks for your permissions afresh. A card missing a setting says "No collection chosen yet" beside its "Choose collection" button, or, where no button is shown, to choose it in the card's settings.

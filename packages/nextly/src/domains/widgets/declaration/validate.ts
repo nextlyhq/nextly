@@ -20,7 +20,13 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isAdminRelativePath } from "../admin-path";
 import { isValidWidgetId } from "../definition";
 import { sizeDeclarationProblems } from "../grid-size";
-import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
+import { RETIRED_WIDGET_NAMESPACES } from "../retired-widget-namespaces";
+import {
+  SETTING_NOT_AN_OBJECT,
+  startingValueProblem,
+  widgetSettingsProblems,
+  type AnyWidgetSetting,
+} from "../settings";
 
 import { cardAnswerProblem } from "./card-answer";
 import {
@@ -59,11 +65,13 @@ export interface WidgetDeclarationGroup {
 }
 
 /**
- * Namespaces core keeps for itself: its own widgets, and the cards it generates
- * per collection and per Single. A declared widget there would take an id core
- * may hand out tomorrow.
+ * Namespaces core keeps for itself: its own widgets, and the namespaces of the
+ * per-collection and per-Single cards it once made. A declared widget in
+ * `core/` would take an id core may hand out tomorrow; one in a retired
+ * namespace would be dropped from every saved layout that held it, since a
+ * layout read drops those cards by namespace.
  */
-const RESERVED_NAMESPACES = ["core", "collection", "single"] as const;
+const RESERVED_NAMESPACES = ["core", ...RETIRED_WIDGET_NAMESPACES] as const;
 
 /** The fields a declaration may carry. Anything else is named as a mistake. */
 const FIELDS = new Set([
@@ -184,7 +192,7 @@ const CHECKS: readonly ((
   d => viewProblem(d.view),
   d => isEmptyProblem(d.isEmpty, d.view),
   d => emptyProblems(d.empty, d.settings),
-  d => previewProblems(d.preview, d.view),
+  d => previewProblems(d.preview, d.view, d.settings),
   d => summaryProblems(d.summary),
 ];
 
@@ -251,9 +259,15 @@ function accessProblem(access: unknown): string | undefined {
  * Every problem with a widget's preview cases. Each is drawn as the card's
  * ready state on the preview page, so its data is held to the rule every
  * card's data is held to (`cardAnswerProblem`): it reaches the browser as
- * itself, and a core view's data has the shape that view draws.
+ * itself, and a core view's data has the shape that view draws. Its settings
+ * are what the case is drawn with, so each must be one the widget declares,
+ * with a value that setting accepts (`previewSettingsProblems`).
  */
-function previewProblems(preview: unknown, view: unknown): string[] {
+function previewProblems(
+  preview: unknown,
+  view: unknown,
+  settings: unknown
+): string[] {
   if (preview === undefined) return [];
   if (!Array.isArray(preview)) {
     return ["preview must be a list of cases, each { name, data, settings? }"];
@@ -272,6 +286,10 @@ function previewProblems(preview: unknown, view: unknown): string[] {
     } else names.add(name.data);
     if (entry.settings !== undefined && !isRecord(entry.settings)) {
       problems.push(`${at}.settings must be an object of setting values`);
+    } else if (entry.settings !== undefined) {
+      problems.push(
+        ...previewSettingsProblems(`${at}.settings`, entry.settings, settings)
+      );
     }
     const problem = cardAnswerProblem(display, entry.data);
     if (problem !== undefined) {
@@ -282,6 +300,41 @@ function previewProblems(preview: unknown, view: unknown): string[] {
       );
     }
     return problems;
+  });
+}
+
+/**
+ * Why each of a preview case's setting values cannot be drawn: a name the
+ * widget does not declare, or a value its setting would refuse as a starting
+ * value (`startingValueProblem`), the rule a site dashboard's starting values
+ * are held to, so a case never shows a card no reader could set up.
+ *
+ * Judged only once the widget's own settings are sound: their faults are
+ * reported as themselves, and a value cannot be judged against a setting
+ * that is not one.
+ */
+function previewSettingsProblems(
+  where: string,
+  values: Record<string, unknown>,
+  settings: unknown
+): string[] {
+  const declared = isRecord(settings) ? settings : {};
+  const named = Object.entries(declared).map(([name, setting]) =>
+    isRecord(setting) ? { ...setting, name } : setting
+  );
+  // The shared rules passing is what makes each entry a setting.
+  const sound =
+    widgetSettingsProblems(named).length === 0
+      ? (named as AnyWidgetSetting[])
+      : undefined;
+  return Object.entries(values).flatMap(([name, value]) => {
+    if (!Object.hasOwn(declared, name)) {
+      return [`${where} sets "${name}", which the widget does not declare`];
+    }
+    const setting = sound?.find(candidate => candidate.name === name);
+    if (setting === undefined) return [];
+    const problem = startingValueProblem(setting, value);
+    return problem === undefined ? [] : [`${where}: ${problem}`];
   });
 }
 
@@ -319,7 +372,7 @@ function idProblem(id: unknown, inCore: boolean): string | undefined {
   }
   const namespace = id.slice(0, id.indexOf("/"));
   // Core's own widgets live in `core/`, and only there: the per-collection and
-  // per-Single namespaces are for the cards core generates.
+  // per-Single namespaces are retired, and nobody's.
   if (inCore) {
     return namespace === "core"
       ? undefined
@@ -365,12 +418,14 @@ const optional = (problem: string | undefined): string[] =>
 /**
  * Every problem with a declaration's settings.
  *
- * Judged by the registry's own rules (`widgetSettingsProblems`), all eight
- * types alike, each setting with its key as its name: a declaration and a
- * stored definition cannot be judged by two rules, the dependency rule (a
- * filter, sort or grouping names one of the widget's own Collection settings)
- * included. What only a declaration can get wrong, a setting that is not an
- * object at all, is named here first.
+ * Judged by the registry's own rules (`widgetSettingsProblems`), every type
+ * alike, each setting with its key as its name: a declaration and a stored
+ * definition cannot be judged by two rules, the dependency rule (a filter,
+ * sort or grouping names one of the widget's own Collection settings)
+ * included. What only a declaration can get wrong is named here first: a
+ * setting that is not an object at all, and one without a label. The builders'
+ * types require a label, so this is the refusal plain JavaScript meets; a
+ * stored definition may still omit one, and its sheet falls back to the name.
  */
 function settingsProblems(settings: unknown): string[] {
   if (settings === undefined) return [];
@@ -381,6 +436,15 @@ function settingsProblems(settings: unknown): string[] {
   const malformed = entries
     .filter(([, setting]) => !isRecord(setting))
     .map(([name]) => `setting "${name}" must be a setting declaration`);
+  const unlabelled = entries
+    .filter(
+      ([, setting]) =>
+        isRecord(setting) && !nonBlank.safeParse(setting.label).success
+    )
+    .map(
+      ([name]) =>
+        `setting "${name}" needs a label: the settings sheet names every setting by what its label says, never by its key`
+    );
   /*
    * 🔴 Every entry goes to the shared rules, the malformed ones included, so
    * the limit on how many there are and every well-formed sibling are still
@@ -392,7 +456,7 @@ function settingsProblems(settings: unknown): string[] {
       isRecord(setting) ? { ...setting, name } : setting
     )
   ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
-  return [...malformed, ...shared];
+  return [...malformed, ...unlabelled, ...shared];
 }
 
 /**

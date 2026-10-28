@@ -68,9 +68,11 @@ const CORE_IDS: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
  * here is an optional plugin widget, or a card core generates for content
  * since deleted.
  *
- * The placement id is the widget id here, and only here, so repeated reads of
- * an unsaved dashboard return identical ids; a widget placed twice is re-keyed
- * stably where the arrangement is read (`partitionPlacements`).
+ * Each card's placement id is the one its entry names, or else its widget's,
+ * so repeated reads of an unsaved dashboard return identical ids. A widget the
+ * base places more than once names an id for each further card (startup
+ * refuses a repeat that does not), so a card's id never depends on another
+ * card, or on which cards a reader may see.
  *
  * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
  * and this materialization is caller-independent; capping it would let cards a
@@ -117,15 +119,11 @@ function suggestedWidgets(
 /**
  * Whether a widget of the older shape is suggested by being declared: one
  * placed on the default before suggestions existed. Never one of core's, whose
- * place is the base's to give, nor one core generated or one offered (per
- * collection, or on request), which are offered and never placed.
+ * place is the base's to give, nor one offered (per collection, or on
+ * request), which is offered and never placed.
  */
 function suggestedByItsShape(widget: CanonicalWidget): boolean {
-  return (
-    !CORE_IDS.has(widget.id) &&
-    widget.generated !== true &&
-    placedByDefault(widget)
-  );
+  return !CORE_IDS.has(widget.id) && placedByDefault(widget);
 }
 
 /**
@@ -149,11 +147,11 @@ function byDefaultOrder(a: CanonicalWidget, b: CanonicalWidget): number {
  */
 function placementOf(
   widget: CanonicalWidget,
-  card: Pick<DefaultLayoutCard, "w" | "h" | "settings">
+  card: Pick<DefaultLayoutCard, "id" | "w" | "h" | "settings">
 ): WidgetPlacement {
   const starting = sizeFacts(widget).size.default;
   return {
-    id: widget.id,
+    id: card.id ?? widget.id,
     widgetId: widget.id,
     // The size travels WITH the placement: the first save stores it, so a
     // later change to the widget's default does not resize a saved card.

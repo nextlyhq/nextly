@@ -2130,7 +2130,7 @@ jobs:
         run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
 
   # The playground under Cache Components and Partial Prefetching, which its
-  # next.config turns on. nextly's route helpers must prerender a static shell
+  # next.config turns on when NEXTLY_PLAYGROUND_CACHE_COMPONENTS is set. nextly's route helpers must prerender a static shell
   # and read the request only beneath the Suspense boundary they provide, so
   # this builds on an empty database and on seeded content (a build that reads
   # the request, the clock or the database above a boundary fails), then serves
@@ -2157,6 +2157,9 @@ jobs:
       NEXTLY_SECRET: cache-components-check-secret-not-a-real-deployment-key
       NEXT_PUBLIC_APP_URL: http://localhost:3300
       NEXTLY_GENERATED_FILES_WRITE: "0"
+      # The playground builds with Cache Components only when asked; this job is
+      # what it is turned on for.
+      NEXTLY_PLAYGROUND_CACHE_COMPONENTS: "1"
     timeout-minutes: 25
 
     steps:
