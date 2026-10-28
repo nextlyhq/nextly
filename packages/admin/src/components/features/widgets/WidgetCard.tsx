@@ -51,7 +51,9 @@ import type { ListDensity } from "nextly/config";
 import {
   useCallback,
   useContext,
+  useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -59,6 +61,7 @@ import {
 } from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -71,6 +74,9 @@ import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
   CardFooterSlotProvider,
+  drawnClaim,
+  type CardFooterClaims,
+  type FooterClaimRank,
 } from "./frame/footer-slot";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
@@ -167,6 +173,8 @@ export interface WidgetCardProps {
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
+  /** The widget's id, named in a development warning about what its body draws in the footer. */
+  widgetId?: string;
   /** The size the answer drawn in the body was fetched at; provided as `AnswerSizeContext`. */
   answerSize?: AnswerSize;
   /**
@@ -289,7 +297,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
-  const footer = useFooterClaims();
+  const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
@@ -362,7 +370,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
                     <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claim}>
+                      <CardFooterClaimProvider value={footer.claims}>
                         {props.children}
                       </CardFooterClaimProvider>
                     </CardFooterSlotProvider>
@@ -584,16 +592,38 @@ function WidgetCardHeader({
 }
 
 /**
- * Whether a body's link holds the card's footer, and how one claims it while it is drawn: the
- * footer holds one link, so while any is held the widget's own is not drawn.
+ * Whether a body's link holds the card's footer, and the claims it is drawn by: the footer holds
+ * one link, so while any is held the widget's own is not drawn, and of the body's, one is
+ * (`drawnClaim`).
  */
-function useFooterClaims(): { held: boolean; claim: () => () => void } {
-  const [claims, setClaims] = useState(0);
-  const claim = useCallback(() => {
-    setClaims(count => count + 1);
-    return () => setClaims(count => count - 1);
+function useFooterClaims(widgetId: string | undefined): {
+  held: boolean;
+  claims: CardFooterClaims;
+} {
+  const [held, setHeld] = useState<{ id: number; rank: FooterClaimRank }[]>([]);
+  const next = useRef(0);
+  const claim = useCallback((rank: FooterClaimRank) => {
+    next.current += 1;
+    const id = next.current;
+    setHeld(claims => [...claims, { id, rank }]);
+    return {
+      id,
+      release: () => setHeld(claims => claims.filter(c => c.id !== id)),
+    };
   }, []);
-  return { held: claims > 0, claim };
+  const drawn = drawnClaim(held);
+  const explicit = held.filter(c => c.rank === "explicit").length;
+  // A widget's body names one link for its footer; a second is a mistake its author should hear
+  // of, while developing, and the footer still draws one (the last).
+  useEffect(() => {
+    if (explicit > 1 && isDevelopmentRuntime()) {
+      console.warn(
+        `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
+      );
+    }
+  }, [explicit, widgetId]);
+  const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
+  return { held: held.length > 0, claims };
 }
 
 /** The widget's own footer link, where the frame draws a footer and no body's link holds it. */

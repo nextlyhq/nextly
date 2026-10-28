@@ -123,6 +123,59 @@ describe("Widget.FooterLink", () => {
     expect(within(footer).getAllByRole("link")).toHaveLength(1);
     expect(within(footer).getByRole("link")).toHaveTextContent("All orders");
   });
+
+  it("is the one link drawn beside a list's View all, wherever it stands", () => {
+    // 🔴 A single claim: the explicit link outranks the list's "View all", which the footer would
+    // otherwise draw beside it. Both orders, so the rank decides and not who drew first.
+    const card = (body: ReactNode) => (
+      <WidgetCard title="Orders" h={4}>
+        {body}
+      </WidgetCard>
+    );
+    const footerLink = (
+      <Widget.FooterLink href="/admin/collections/orders" label="All orders" />
+    );
+    const viewAll = (
+      <Widget.List
+        rows={orders}
+        title={row => row.title}
+        total={{ count: 12 }}
+        viewAllHref="/admin/collections/orders?view=all"
+      />
+    );
+    for (const body of [
+      [footerLink, viewAll],
+      [viewAll, footerLink],
+    ]) {
+      const { unmount } = render(card(<>{body}</>));
+      const footer = screen.getByTestId("widget-card-footer");
+      expect(within(footer).getAllByRole("link")).toHaveLength(1);
+      expect(within(footer).getByRole("link")).toHaveTextContent("All orders");
+      unmount();
+    }
+  });
+
+  it("draws one of two FooterLinks, and tells the widget's author once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(
+        <WidgetCard title="Orders" widgetId="acme/orders">
+          <Widget.FooterLink href="/a" label="First" />
+          <Widget.FooterLink href="/b" label="Second" />
+        </WidgetCard>
+      );
+      const footer = screen.getByTestId("widget-card-footer");
+      expect(within(footer).getAllByRole("link")).toHaveLength(1);
+      expect(within(footer).getByRole("link")).toHaveTextContent("Second");
+      const told = warn.mock.calls.filter(([message]) =>
+        String(message).includes("Widget.FooterLink")
+      );
+      expect(told).toHaveLength(1);
+      expect(String(told[0]?.[0])).toContain('"acme/orders"');
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe("Widget.List", () => {
