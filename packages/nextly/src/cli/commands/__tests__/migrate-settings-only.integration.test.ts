@@ -333,6 +333,12 @@ describe.each(getConfiguredTestDialects())(
       const code = await exiting(() => runMigrateDown({ cwd: dir }, context));
       expect(code, said.join("\n")).toBeUndefined();
       expect(await applied(instance!, dialect, file)).toBe(false);
+      // Rolled back means the row's settings went back with it: the DOWN
+      // writes the row as the previous snapshot recorded the entity.
+      const after = await db.select().from(table);
+      expect(after.find(r => r.slug === "so_events")?.description).toBe(
+        "Things that happen"
+      );
     });
   }
 );

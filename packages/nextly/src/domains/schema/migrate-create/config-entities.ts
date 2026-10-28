@@ -96,3 +96,27 @@ export function withBuilderSettings(
     };
   });
 }
+
+/** `withBuilderSettings` for each kind of a merge, from the manifest it merged. */
+export function withBuilderSettingsAll(
+  merged: {
+    collections: readonly MinimalConfigEntity[];
+    singles: readonly MinimalConfigEntity[];
+    components: readonly MinimalConfigEntity[];
+  },
+  manifest: {
+    collections: readonly { slug: string }[];
+    singles: readonly { slug: string }[];
+    components: readonly { slug: string }[];
+  }
+): {
+  collections: MinimalConfigEntity[];
+  singles: MinimalConfigEntity[];
+  components: MinimalConfigEntity[];
+} {
+  return {
+    collections: withBuilderSettings(merged.collections, manifest.collections),
+    singles: withBuilderSettings(merged.singles, manifest.singles),
+    components: withBuilderSettings(merged.components, manifest.components),
+  };
+}

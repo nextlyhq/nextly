@@ -2,7 +2,7 @@
  * `nextly migrate:check`.
  *
  * CI-friendly integrity verification for migration files. Does NOT
- * connect to a database. Five checks run in order; first failure
+ * connect to a database. Six checks run in order; first failure
  * exits non-zero with a specific error code:
  *
  *   1. CHECKSUM_MISMATCH  - A `.sql` file's content differs from the
@@ -18,6 +18,9 @@
  *   5. SCHEMA_DRIFT       - `nextly.config.ts` has uncommitted changes
  *      relative to the latest snapshot (operator forgot to run
  *      `migrate:create` after editing config).
+ *   6. SETTINGS_DRIFT     - An entity's settings (labels, description, admin
+ *      options, a field's help text...) differ from the latest snapshot's
+ *      record of them. Skipped when that snapshot predates the record.
  *
  * Before the drift check it also warns, without failing, about each file
  * holding a statement `nextly migrate` or `migrate:down` would refuse
@@ -64,7 +67,15 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  toMinimalEntities,
+  withBuilderSettingsAll,
+} from "../../domains/schema/migrate-create/config-entities";
+import {
+  describeSettingsChange,
+  settingsChangesFor,
+} from "../../domains/schema/migrate-create/entity-settings";
+import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
@@ -290,6 +301,8 @@ export async function runMigrateCheck(
     desiredSnapshot,
     appStream,
     dialect,
+    // Each entity with its settings, as `migrate:create` records them.
+    entities: withBuilderSettingsAll(merged, manifest),
     logger,
   });
 }
@@ -314,6 +327,15 @@ export async function runChecks(args: {
    * check is skipped.
    */
   dialect?: SupportedDialect;
+  /**
+   * The declared entities with their settings, compared with the newest
+   * snapshot's settings record. Omitted, settings are not checked.
+   */
+  entities?: {
+    collections: readonly MinimalConfigEntity[];
+    singles: readonly MinimalConfigEntity[];
+    components: readonly MinimalConfigEntity[];
+  };
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -430,8 +452,9 @@ export async function runChecks(args: {
   // here as pending.
   let previousSnapshot: NextlySchemaSnapshot;
   let desiredSnapshot: NextlySchemaSnapshot;
+  let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
-    const latest = await loadLatestSnapshot(metaDir);
+    latest = await loadLatestSnapshot(metaDir);
     const stream = appStreamSnapshots({
       previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
       previousContributions: latest?.data.contributions ?? {},
@@ -465,6 +488,32 @@ export async function runChecks(args: {
     );
     process.exit(1);
     return;
+  }
+
+  // Check 5: settings changed with no migration for them. The delta is the
+  // one `migrate:create` writes a migration for. A newest snapshot written
+  // before settings were recorded says nothing about them, so its silence is
+  // never a difference: there is nothing to compare until the first
+  // `migrate:create` after upgrading records them.
+  const recorded = latest?.data.entities;
+  if (args.entities !== undefined && recorded !== undefined) {
+    const changes = settingsChangesFor(args.entities, recorded);
+    if (changes.length > 0) {
+      logger.error(
+        `SETTINGS_DRIFT: ${changes.length} entit${changes.length === 1 ? "y's" : "ies'"} settings changed with no migration.`
+      );
+      for (const change of changes.slice(0, 10)) {
+        logger.error(`  ~ ${describeSettingsChange(change)}`);
+      }
+      if (changes.length > 10) {
+        logger.error(`  ... and ${changes.length - 10} more`);
+      }
+      logger.error(
+        'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
+      );
+      process.exit(1);
+      return;
+    }
   }
 
   logger.success(

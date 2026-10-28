@@ -95,7 +95,7 @@ import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
 import {
   describeSettingsChange,
-  settingsChanges,
+  settingsChangesFor,
   settingsRecordOf,
   type EntitySettingsChange,
   type RecordedEntitySettings,
@@ -195,6 +195,12 @@ export interface GenerateArgs {
    * settings reach a deployed registry.
    */
   metadataUpserts?: { tableName: string; sql: string }[];
+  /**
+   * The same upserts built from the PREVIOUS snapshot's record of each Builder
+   * entity, so a migration that writes a row for its settings alone can write
+   * it back on the way down.
+   */
+  previousMetadataUpserts?: { tableName: string; sql: string }[];
   /**
    * Default locale for localized collections (from `config.localization.defaultLocale`).
    * Used as the `_locale` value when seeding existing rows into the companion table on
@@ -374,14 +380,9 @@ export async function generateMigration(
   //     the record says nothing about settings, so each entity is named as
   //     recorded for the first time (`settingsChanges`).
   const settingsRecord = settingsRecordOf(args);
-  const changedSettings = settingsChanges(
-    previous === null ? null : previous.data.entities,
-    settingsRecord,
-    {
-      collection: new Set(args.collections.map(e => e.slug)),
-      single: new Set(args.singles.map(e => e.slug)),
-      fieldGroup: new Set(args.components.map(e => e.slug)),
-    }
+  const changedSettings = settingsChangesFor(
+    args,
+    previous === null ? null : previous.data.entities
   );
   const hasSettingsChanges = changedSettings.length > 0;
 
@@ -481,6 +482,14 @@ export async function generateMigration(
       if (touched.has(m.tableName) || settingsTables.has(m.tableName)) {
         sqlStatements.push(m.sql);
       }
+    }
+  }
+  // A row that travels only because its settings changed goes back with the
+  // rollback: the DOWN writes it as the previous snapshot recorded it. A row
+  // the previous snapshot has no record of has nothing to go back to.
+  for (const m of args.previousMetadataUpserts ?? []) {
+    if (settingsTables.has(m.tableName) && !touched.has(m.tableName)) {
+      downSqlStatements.push(m.sql);
     }
   }
 

@@ -28,6 +28,8 @@
  * @module domains/schema/migrate-create/entity-settings
  */
 
+import { canonicalJson } from "../../../shared/lib/canonical-json";
+
 /** A JSON value, as a snapshot file stores it. */
 export type SettingsValue =
   | string
@@ -174,7 +176,10 @@ function normalizeObject(
   isDeclaration: boolean,
   path: Set<object>
 ): SettingsObject | typeof DROPPED {
-  const out: SettingsObject = {};
+  // A null prototype, so an own `__proto__` key (a parsed manifest can hold
+  // one in plugin options) is recorded as a key rather than setting the
+  // accumulator's prototype and vanishing.
+  const out = Object.create(null) as SettingsObject;
   let dropped = 0;
   for (const [key, child] of Object.entries(value)) {
     if (isDeclaration && key === "access") continue;
@@ -271,6 +276,29 @@ export function settingsChanges(
   return changes;
 }
 
+/**
+ * What changed in the settings of `entities` since `previous`: the one delta
+ * `migrate:create` writes a migration for and `migrate:check` reports as not
+ * yet written. Which slugs each kind declares is read from the lists, so an
+ * entity whose settings are unknown this run is never named removed.
+ */
+export function settingsChangesFor(
+  entities: {
+    collections: readonly EntityWithSettings[];
+    singles: readonly EntityWithSettings[];
+    components: readonly EntityWithSettings[];
+  },
+  previous: EntitySettingsRecord | null | undefined
+): EntitySettingsChange[] {
+  const slugs = (list: readonly EntityWithSettings[]) =>
+    new Set(list.map(entity => entity.slug));
+  return settingsChanges(previous, settingsRecordOf(entities), {
+    collection: slugs(entities.collections),
+    single: slugs(entities.singles),
+    fieldGroup: slugs(entities.components),
+  });
+}
+
 /** One entity's changes; see `settingsChanges` for what each word means. */
 function entityChanges(
   was: RecordedEntitySettings | undefined,
@@ -304,22 +332,9 @@ function isObject(value: SettingsValue | undefined): value is SettingsObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/**
- * Whether two recorded values are the same, key order aside: compared as JSON
- * with every object's keys sorted, the form the snapshot file is written in.
- */
+/** Whether two recorded values are the same, key order aside (`canonicalJson`). */
 function sameValue(a: SettingsValue, b: SettingsValue): boolean {
-  return a === b || canonical(a) === canonical(b);
-}
-
-function canonical(value: SettingsValue): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v !== null && typeof v === "object" && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
-        )
-      : v
-  );
+  return a === b || canonicalJson(a) === canonicalJson(b);
 }
 
 /**

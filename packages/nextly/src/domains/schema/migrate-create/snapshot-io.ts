@@ -340,8 +340,9 @@ function sortedKeysReplacer(_key: string, value: unknown): unknown {
     !Array.isArray(value) &&
     !(value instanceof Date)
   ) {
-    // After narrowing, Object.keys accepts `value` directly.
-    const sorted: Record<string, unknown> = {};
+    // After narrowing, Object.keys accepts `value` directly. A null prototype
+    // keeps an own `__proto__` key (plugin options can hold one) a key.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(value).sort()) {
       sorted[k] = (value as Record<string, unknown>)[k];
     }

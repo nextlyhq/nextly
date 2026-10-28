@@ -408,4 +408,35 @@ describe("every snapshot records every entity's full settings", () => {
     expect(sql).toContain("-- Settings: posts: settings recorded");
     expect(upStatements(sql)).toEqual([]);
   });
+
+  it("records an own `__proto__` key, so a change under it is a change", async () => {
+    // JSON.parse makes `__proto__` an own key, as a parsed manifest holds it.
+    const options = (value: number) =>
+      JSON.parse(`{"__proto__": {"size": ${value}}}`) as Record<
+        string,
+        unknown
+      >;
+    const widget = (value: number) =>
+      defineCollection({
+        slug: "widgets",
+        fields: [
+          text({ name: "headline" }),
+          { ...text({ name: "label" }), pluginOptions: options(value) },
+        ] as never,
+      });
+    const first = await written(
+      await generate({ collections: [widget(1)] }, "create")
+    );
+    const label =
+      first.snapshot.entities.collections.widgets.settings.fields.find(
+        (f: { name: string }) => f.name === "label"
+      );
+    expect(Object.keys(label.pluginOptions)).toEqual(["__proto__"]);
+
+    const { sql } = await written(await generate({ collections: [widget(2)] }));
+
+    expect(sql).toContain(
+      "-- Settings: widgets: fields.label.pluginOptions.__proto__.size"
+    );
+  });
 });
