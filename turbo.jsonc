@@ -203,6 +203,7 @@
     "USE_HTTPS", // nextly HMR listener: dev server protocol
     "__NEXT_ASSET_PREFIX", // nextly HMR listener: Next.js asset prefix
     "__NEXT_CACHE_COMPONENTS", // nextly release window: Cache Components on, as Next.js inlines it
+    "NEXTLY_PLAYGROUND_CACHE_COMPONENTS", // playground next.config: build with Cache Components on
     "NEXTLY_DISABLE_HMR", // nextly HMR listener: opt-out escape hatch
     "NEXTLY_HMR_URL_OVERRIDE", // nextly HMR listener: custom URL for proxy setups
     "NEXTLY_GENERATED_FILES_WRITE" // checkAdminComponents: 0 or false stops the running app rewriting generated files
