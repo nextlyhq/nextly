@@ -13,7 +13,7 @@
  * create, so the refresh did see the new collection, and the unchanged ids
  * are not a refresh that read nothing.
  */
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { readAccessCaller } from "../../../api/authenticated-read";
 import { defineCollection, text } from "../../../config";
@@ -37,12 +37,10 @@ describeEachDialect("adding a collection adds no widget", dialect => {
   let owner: ReadCaller;
   // The Schema Builder's create runs its migration only in development, so
   // the new collection's table, and with it its widget source, exist only
-  // there.
-  let previousNodeEnv: string | undefined;
+  // there. `vi.stubEnv` sets it for this file's cases and puts it back after.
 
   beforeEach(async () => {
-    previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
+    vi.stubEnv("NODE_ENV", "development");
     handle = await createTestNextly({
       dialect,
       collections: [
@@ -58,7 +56,7 @@ describeEachDialect("adding a collection adds no widget", dialect => {
     clearSources();
     await handle?.destroy();
     handle = undefined;
-    process.env.NODE_ENV = previousNodeEnv;
+    vi.unstubAllEnvs();
   });
 
   /** The widget ids the registry has, and the ones this reader is told about. */
