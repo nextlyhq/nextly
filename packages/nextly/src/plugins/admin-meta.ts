@@ -10,6 +10,7 @@ import type {
   FieldStoragePrimitive,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
+import { withSiteOverride } from "../domains/widgets/site-rules";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -444,7 +445,10 @@ export function buildPluginAdminMeta(
       // accept what boot rejected; called again here because the reduced value
       // is what publishes.
       const widgets = validatedAdminWidgets(plugin);
-      if (widgets && widgets.length > 0) meta.widgets = widgets;
+      // As the site's `overrides` change each one, the same application every
+      // other reading of a widget takes.
+      if (widgets && widgets.length > 0)
+        meta.widgets = widgets.map(widget => withSiteOverride(widget));
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)

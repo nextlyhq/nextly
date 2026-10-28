@@ -20,6 +20,7 @@ import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 } from "../domains/auth/services/public-read-grant";
 import {
   PUBLIC_ROLE_SLUG,
@@ -33,6 +34,7 @@ import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import { collectPublicGrants } from "../plugins/public-grants/collect-public-grants";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
@@ -260,12 +262,21 @@ async function seedEverything(): Promise<void> {
       throw error;
     }
   });
-  // Public's read where code lets anyone read, granted once per entity so an
-  // owner's change to it stands, and the startup listing of what it lacks.
-  // Only after every permission seeded: a read whose permission is missing
-  // could be neither granted nor listed, so a later boot does it whole.
+  // Public's read where code lets anyone read, and what plugins declare for
+  // it, each granted once so an owner's change to it stands, and the startup
+  // listing of what it lacks. Only after every permission seeded: a grant
+  // whose permission is missing could be neither made nor listed, so a later
+  // boot does it whole.
   if (publicRoleSeeded && permissionsSeeded) {
-    await seedingStep("public role's reads", seedPublicRoleReads);
+    await seedingStep("public role's grants", () =>
+      seedPublicReadGrants(publicGrantSeeding())
+    );
+  } else if (publicRoleSeeded) {
+    // Taking back a plugin grant no enabled plugin declares any longer needs
+    // no permission made, so it is not left for a later boot.
+    await seedingStep("public role's undeclared plugin grants", () =>
+      withdrawUndeclaredPluginGrants(publicGrantSeeding())
+    );
   }
   // A plugin role is created once and never revisited: a later boot skips a
   // role whose slug exists, so as not to undo an administrator's edits. Created
@@ -284,11 +295,12 @@ async function seedEverything(): Promise<void> {
   });
 }
 
-function seedPublicRoleReads(): Promise<void> {
+/** What the Public role's grant steps need, from the registered services. */
+function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
   const adapter = getService("adapter");
   const logger = getService("logger");
   const grants = new RolePermissionService(adapter, logger);
-  return seedPublicReadGrants({
+  return {
     // Only once the Public role is made and recorded: before that, another
     // boot may still be moving a site's own role off the slug.
     publicRoleId: async () =>
@@ -334,11 +346,14 @@ function seedPublicRoleReads(): Promise<void> {
           permissionSlug(action, resource)
         )
       ),
+    declared: () => collectPublicGrants(getService("config").plugins ?? []),
     addOnce: (roleId, wanted, pick) =>
       grants.addRolePermissionsOnce(roleId, wanted, pick),
+    withdraw: (roleId, unwanted, pick) =>
+      grants.withdrawRolePermissions(roleId, unwanted, pick),
     meta: getService("metaService"),
     logger,
-  });
+  };
 }
 
 /**

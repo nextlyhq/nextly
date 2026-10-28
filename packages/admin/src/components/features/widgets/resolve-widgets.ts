@@ -206,8 +206,15 @@ function resolveTitle(title: string | undefined, id: string): string {
  */
 function declaredWidgets(
   plugins: PluginMetadata[] | undefined
-): ReadableWidgetDeclaration[] {
-  return (plugins ?? []).flatMap(plugin => plugin.widgets ?? []);
+): (ReadableWidgetDeclaration & { owner?: string })[] {
+  // Each carries the plugin that declared it, worded as core's own faults name an owner
+  // (`plugin "<name>"`), so a card whose component is missing can say whose it is.
+  return (plugins ?? []).flatMap(plugin =>
+    (plugin.widgets ?? []).map(widget => ({
+      ...widget,
+      owner: `plugin "${plugin.name}"`,
+    }))
+  );
 }
 
 /**
@@ -240,7 +247,7 @@ function boundsOf(
  * mounted must not cause a request on the user's behalf.
  */
 function resolveOne(
-  meta: ReadableWidgetDeclaration,
+  meta: ReadableWidgetDeclaration & { owner?: string },
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
   if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
@@ -259,6 +266,9 @@ function resolveOne(
     query: meta.query,
     settings: meta.settings,
     component: meta.component,
+    ...(meta.component !== undefined && meta.owner !== undefined
+      ? { owner: meta.owner }
+      : {}),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -316,6 +326,7 @@ function resolveRegistered(
     ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
+    ...(meta.owner === undefined ? {} : { owner: meta.owner }),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -368,9 +379,9 @@ function preferRegistered<T>(
 }
 
 function mergeCollision(
-  contribution: ReadableWidgetDeclaration,
+  contribution: ReadableWidgetDeclaration & { owner?: string },
   registration: RegisteredWidgetMeta
-): ReadableWidgetDeclaration {
+): ReadableWidgetDeclaration & { owner?: string } {
   return {
     id: registration.id,
     // Named field by field rather than spread. `{ ...contribution,
@@ -401,6 +412,10 @@ function mergeCollision(
     settings: preferRegistered(registration.settings, contribution.settings),
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
+    // Core's published owner where there is one, else the contributing plugin's.
+    ...((registration.owner ?? contribution.owner) === undefined
+      ? {}
+      : { owner: registration.owner ?? contribution.owner }),
     actions: preferRegistered(registration.actions, contribution.actions),
     // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
     // a contributed stats card colliding with a registered metric would hand
@@ -582,20 +597,32 @@ export function resolveDashboardWidgets(
 
 /**
  * A declared widget's empty state as its card draws it: the declared message as
- * the empty state's title, and its action with its link made an href. An action
- * whose link is not a path relative to the admin is not drawn.
+ * the empty state's title, and its action with its link made an href, or the
+ * card's settings. An action whose link is not a path relative to the admin is
+ * not drawn.
  */
+/** A declared empty action as the card offers it, or none when its link leads nowhere here. */
+function declaredActionOf(
+  action: NonNullable<RegisteredWidgetMeta["empty"]>["action"]
+): NonNullable<DashboardWidget["declaredEmpty"]>["action"] {
+  if (action === undefined) return undefined;
+  // By the value, as the server published it; never by the key alone.
+  if ("opens" in action && action.opens === "settings") {
+    return { label: action.label, opensSettings: true };
+  }
+  if (!("link" in action)) return undefined;
+  const href = adminHref(action.link);
+  return href === undefined ? undefined : { label: action.label, href };
+}
+
 function declaredEmptyOf(
   empty: RegisteredWidgetMeta["empty"]
 ): Pick<DashboardWidget, "declaredEmpty"> {
   if (empty === undefined) return {};
-  const href =
-    empty.action === undefined ? undefined : adminHref(empty.action.link);
+  const action = declaredActionOf(empty.action);
   const declared = {
     ...(empty.message === undefined ? {} : { title: empty.message }),
-    ...(empty.action === undefined || href === undefined
-      ? {}
-      : { action: { label: empty.action.label, href } }),
+    ...(action === undefined ? {} : { action }),
   };
   return Object.keys(declared).length === 0 ? {} : { declaredEmpty: declared };
 }

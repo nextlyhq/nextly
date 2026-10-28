@@ -62,9 +62,14 @@ declare module "@acme/shop/admin" {
  * version. Errors in anything else the program reads are not the pair's.
  */
 function compileErrors(map: string, list: string): string[] {
+  return compileErrorsWith(map, list, STUB_SOURCE);
+}
+
+/** {@link compileErrors}, with the declarations the map's imports resolve to. */
+function compileErrorsWith(map: string, list: string, stubs: string): string[] {
   const dir = mkdtempSync(join(tmpdir(), "component-map-"));
   try {
-    const files = { [MAP]: map, [LIST]: list, [STUBS]: STUB_SOURCE };
+    const files = { [MAP]: map, [LIST]: list, [STUBS]: stubs };
     for (const [name, text] of Object.entries(files)) {
       writeFileSync(join(dir, name), text);
     }
@@ -162,5 +167,111 @@ describe("a pair edited by hand", () => {
       "NEXTLY_ADMIN_COMPONENT_MAP_MISMATCH"
     );
     expect((thrown as Error).message).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+  });
+});
+
+/*
+ * A site whose plugins contribute blocks: the map hands each declared editor
+ * entry, and each declared block inspector, to the page builder, and the entry
+ * is listed beside the components so the same agreement holds for it.
+ */
+const blocks = {
+  name: "@acme/blocks",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": {
+        blocks: [
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/editor#Hero" },
+          },
+        ],
+        editorEntry: "@acme/blocks/editor#editorBlocks",
+      },
+    },
+  },
+} as unknown as PluginDefinition;
+const pageBuilder = {
+  name: "@nextlyhq/plugin-page-builder",
+  version: "1.0.0",
+  nextly: "*",
+} as unknown as PluginDefinition;
+
+const BLOCK_STUBS = `
+declare module "@nextlyhq/admin" {
+  export function registerComponents(map: Record<string, unknown>): void;
+}
+declare module "@nextlyhq/plugin-page-builder/admin" {
+  export function registerBlockEditorModules(modules: {
+    entries?: Record<string, unknown>;
+    components?: Record<string, unknown>;
+  }): void;
+}
+declare module "@acme/blocks/editor" {
+  export const Hero: unknown;
+  export const editorBlocks: unknown;
+}
+`;
+
+describe("a map handing block modules to the page builder", () => {
+  const blockMap = buildComponentImportMap([pageBuilder, blocks]);
+  const blockList = buildComponentPathsModule([pageBuilder, blocks]);
+
+  /** Runs the map with both registrars stubbed. */
+  function loadBlocks(map: string, listed: readonly string[]) {
+    const registerComponents = vi.fn();
+    const registerBlockEditorModules = vi.fn();
+    const modules: Record<string, unknown> = {
+      "@nextlyhq/admin": { registerComponents },
+      "@nextlyhq/plugin-page-builder/admin": { registerBlockEditorModules },
+      "@acme/blocks/editor": { Hero: "Hero", editorBlocks: "editorBlocks" },
+      "./plugin-admin-components.generated": {
+        registeredComponentPaths: listed,
+      },
+    };
+    const { code } = transformSync(map, {
+      loader: "ts",
+      format: "cjs",
+      target: "es2022",
+    });
+    const run = new Function("require", "module", "exports", code);
+    const module = { exports: {} };
+    run((name: string) => modules[name], module, module.exports);
+    return { registerComponents, registerBlockEditorModules };
+  }
+
+  it("lists the entry, compiles, and hands the entry and the inspector over", () => {
+    expect(blockList).toContain('"@acme/blocks/editor#editorBlocks"');
+    expect(compileErrorsWith(blockMap, blockList, BLOCK_STUBS)).toEqual([]);
+
+    const { registerComponents, registerBlockEditorModules } = loadBlocks(
+      blockMap,
+      ["@acme/blocks/editor#Hero", "@acme/blocks/editor#editorBlocks"]
+    );
+    // The entry exports definitions, not a component, so the component
+    // registry never receives it.
+    expect(registerComponents).toHaveBeenCalledWith({
+      "@acme/blocks/editor#Hero": "Hero",
+    });
+    expect(registerBlockEditorModules).toHaveBeenCalledWith({
+      entries: { "@acme/blocks/editor#editorBlocks": "editorBlocks" },
+      components: { "@acme/blocks/editor#Hero": "Hero" },
+    });
+  });
+
+  it("holds the entry to the list, at build and at load", () => {
+    const listMissingEntry = blockList.replace(
+      '"@acme/blocks/editor#editorBlocks",',
+      ""
+    );
+    expect(listMissingEntry).not.toBe(blockList);
+    expect(
+      compileErrorsWith(blockMap, listMissingEntry, BLOCK_STUBS).join("\n")
+    ).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+    expect(() => loadBlocks(blockMap, ["@acme/blocks/editor#Hero"])).toThrow(
+      COMPONENT_MAP_MISMATCH_MESSAGE
+    );
   });
 });

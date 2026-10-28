@@ -132,9 +132,9 @@ describe("canReadSystemResource — the decision", () => {
     // media is still refused.
     grantsSpy.mockResolvedValue([grant("manage", "settings")]);
 
-    await expect(
-      canReadSystemResource("media", "u1", undefined)
-    ).resolves.toBe(false);
+    await expect(canReadSystemResource("media", "u1", undefined)).resolves.toBe(
+      false
+    );
   });
 });
 

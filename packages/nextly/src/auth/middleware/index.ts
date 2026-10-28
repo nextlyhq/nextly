@@ -27,6 +27,7 @@ import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
+import { rememberRouteVerdict } from "../access/request-memo";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -38,10 +39,14 @@ import {
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
+  currentRuleLanguage,
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -456,9 +461,11 @@ export async function requirePermission(
 }
 
 /**
- * Every one of `permissions`, each asked as {@link requirePermission} asks
- * one: for a change that is several kinds of change at once. The first one
- * refused answers, so a caller is told the first permission it lacks.
+ * Every one of `permissions`: for a change that is several kinds of change at
+ * once. Each is asked by grant, as the any-of gates ask a list of one, so no
+ * entity's rule is read: a collection that happens to be named after a system
+ * resource does not judge it. The first one refused answers, so a caller is
+ * told the first permission it lacks.
  */
 export async function requireAllPermissions(
   req: Request,
@@ -471,7 +478,9 @@ export async function requireAllPermissions(
   }
 
   for (const { action, resource } of permissions) {
-    const answer = await authorizeCaller(authResult, action, resource);
+    const answer = await authorizeCallerForAny(authResult, [
+      { action, resource },
+    ]);
     if (isErrorResponse(answer)) return answer;
   }
   return authResult;
@@ -491,12 +500,25 @@ export function authorizeCaller(
   action: string,
   resource: string,
   // Whether the request names one entry, so the refusal says "this post".
-  scope: RefusalScope = "all"
+  scope: RefusalScope = "all",
+  // Whether the route's handler applies a read rule's filter to what it
+  // reads, which lets a caller through whose rule answers one.
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+  // Told whether the route's handler applies a read rule's filter, so a rule
+  // answering one is handed back to be kept rather than refused.
+  return authorizeBy(
+    (auth, asked, slug, rules) =>
+      routeGateVerdict(auth, asked, slug, rules, appliesFilter),
+    authResult,
+    action,
+    resource,
+    scope,
+    appliesFilter
+  );
 }
 
 /**
@@ -525,14 +547,51 @@ async function authorizeBy(
   authResult: AuthContext,
   action: string,
   resource: string,
-  scope: RefusalScope
+  scope: RefusalScope,
+  // Whether the route's handler applies a read rule's filter: only such a
+  // route keeps its verdict.
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
-  const verdict = await verdictOf(
+  const answered = await verdictOf(
     authResult,
     action,
     resource,
     getRBACService()
   );
+  // A route whose handler applies a read rule's filter keeps its verdict for
+  // the request, every entry or the entries the filter matches, so the read
+  // it authorizes applies it without asking the rule again. A request that
+  // cannot keep a filter refuses the caller, as a route that applies no
+  // filter does, rather than let the read run unfiltered. A route that
+  // applies no filter keeps nothing: its rule is asked afresh, and an allow
+  // kept from it could overwrite a filter another route in the request kept
+  // for the same caller; no kept verdict already means every entry.
+  const question = {
+    userId: authResult.userId,
+    // A key is kept apart from its user's other keys and sessions by the
+    // scope its rule is told.
+    ...(authResult.authMethod === "api-key"
+      ? { scope: apiKeyScopeFrom(authResult) }
+      : {}),
+    slug: resource,
+    action,
+    language: currentRuleLanguage(),
+  };
+  if (appliesFilter && answered.allowed) {
+    rememberRouteVerdict(question, { all: true });
+  }
+  if (
+    appliesFilter &&
+    !answered.allowed &&
+    answered.refusal === "only-matching-entries"
+  ) {
+    const kept = rememberRouteVerdict(question, { filter: answered.filter });
+    if (kept) return authResult;
+  }
+  const verdict: GateVerdict =
+    !answered.allowed && answered.refusal === "only-matching-entries"
+      ? { allowed: false, refusal: "insufficient" }
+      : answered;
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
@@ -842,6 +901,14 @@ export interface RouteOperation {
    * query may carry an `entryId` that names nothing.
    */
   namesOne?: boolean;
+  /**
+   * The route's handler reads through the query service's filtered read,
+   * which limits what it reads to the entries a read rule's filter matches,
+   * so a caller whose rule answers one is let through. Set only by a route
+   * that does: every other route refuses such a caller, as it cannot apply
+   * the filter to what it reads.
+   */
+  appliesReadFilter?: boolean;
 }
 
 /**
@@ -883,7 +950,8 @@ export async function requireCollectionAccess(
       collectionSlug,
       // A route naming one entry is refused about that entry. Named by the
       // route, never by a parameter: a query can carry an `entryId` too.
-      operation?.namesOne ? "one" : "all"
+      operation?.namesOne ? "one" : "all",
+      action === "read" && operation?.appliesReadFilter === true
     )
   );
 }

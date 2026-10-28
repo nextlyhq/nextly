@@ -42,18 +42,7 @@ import {
   uniqueIndex as sqliteUniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-import * as auditMysql from "../../../schemas/audit/mysql";
-import * as auditPg from "../../../schemas/audit/postgres";
-import * as auditSqlite from "../../../schemas/audit/sqlite";
-import * as jobsMysql from "../../../schemas/jobs/mysql";
-import * as jobsPg from "../../../schemas/jobs/postgres";
-import * as jobsSqlite from "../../../schemas/jobs/sqlite";
-import * as mediaMysql from "../../../schemas/media/mysql";
-import * as mediaPg from "../../../schemas/media/postgres";
-import * as mediaSqlite from "../../../schemas/media/sqlite";
-import * as usersMysql from "../../../schemas/users/mysql";
-import * as usersPg from "../../../schemas/users/postgres";
-import * as usersSqlite from "../../../schemas/users/sqlite";
+import { loadedDialect } from "../../../database/dialect-tables";
 import type { ExtensionColumn } from "../extension/types";
 import type { TableSpec } from "../pipeline/diff/types";
 
@@ -70,79 +59,109 @@ interface CoreTableFactories {
 }
 
 /**
- * The factories of every core table a hook may extend, per dialect, by SQL
+ * The factories of every core table a hook may extend, for a dialect, by SQL
  * name. The set is `EXTENDABLE_CORE_TABLES`; a test holds the two equal.
+ *
+ * Read from the loaded dialect's column modules, so only that dialect's files
+ * are imported; `createAdapter` loads them.
  */
-export const EXTENDABLE_CORE_TABLE_FACTORIES: Readonly<
-  Record<SupportedDialect, Readonly<Record<string, CoreTableFactories>>>
-> = {
-  postgresql: {
-    users: {
-      columns: usersPg.usersColumns,
-      extraConfig: usersPg.usersExtraConfig,
-    },
-    media: {
-      columns: mediaPg.mediaColumns,
-      extraConfig: mediaPg.mediaExtraConfig,
-    },
-    nextly_jobs: {
-      columns: jobsPg.nextlyJobsPgColumns,
-      extraConfig: jobsPg.nextlyJobsPgExtraConfig,
-    },
-    audit_log: {
-      columns: auditPg.auditLogColumns,
-      extraConfig: auditPg.auditLogExtraConfig,
-    },
-    activity_log: {
-      columns: auditPg.activityLogColumns,
-      extraConfig: auditPg.activityLogExtraConfig,
-    },
-  },
-  mysql: {
-    users: {
-      columns: usersMysql.usersColumns,
-      extraConfig: usersMysql.usersExtraConfig,
-    },
-    media: {
-      columns: mediaMysql.mediaColumns,
-      extraConfig: mediaMysql.mediaExtraConfig,
-    },
-    nextly_jobs: {
-      columns: jobsMysql.nextlyJobsMysqlColumns,
-      extraConfig: jobsMysql.nextlyJobsMysqlExtraConfig,
-    },
-    audit_log: {
-      columns: auditMysql.auditLogColumns,
-      extraConfig: auditMysql.auditLogExtraConfig,
-    },
-    activity_log: {
-      columns: auditMysql.activityLogColumns,
-      extraConfig: auditMysql.activityLogExtraConfig,
-    },
-  },
-  sqlite: {
-    users: {
-      columns: usersSqlite.usersColumns,
-      extraConfig: usersSqlite.usersExtraConfig,
-    },
-    media: {
-      columns: mediaSqlite.mediaColumns,
-      extraConfig: mediaSqlite.mediaExtraConfig,
-    },
-    nextly_jobs: {
-      columns: jobsSqlite.nextlyJobsSqliteColumns,
-      extraConfig: jobsSqlite.nextlyJobsSqliteExtraConfig,
-    },
-    audit_log: {
-      columns: auditSqlite.auditLogColumns,
-      extraConfig: auditSqlite.auditLogExtraConfig,
-    },
-    activity_log: {
-      columns: auditSqlite.activityLogColumns,
-      extraConfig: auditSqlite.activityLogExtraConfig,
-    },
-  },
-};
+export function extendableCoreTableFactories(
+  dialect: SupportedDialect
+): Readonly<Record<string, CoreTableFactories>> {
+  const loaded = loadedDialect(dialect);
+  switch (loaded.dialect) {
+    case "postgresql": {
+      const {
+        audit: auditPg,
+        jobs: jobsPg,
+        media: mediaPg,
+        users: usersPg,
+      } = loaded.columnModules;
+      return {
+        users: {
+          columns: usersPg.usersColumns,
+          extraConfig: usersPg.usersExtraConfig,
+        },
+        media: {
+          columns: mediaPg.mediaColumns,
+          extraConfig: mediaPg.mediaExtraConfig,
+        },
+        nextly_jobs: {
+          columns: jobsPg.nextlyJobsPgColumns,
+          extraConfig: jobsPg.nextlyJobsPgExtraConfig,
+        },
+        audit_log: {
+          columns: auditPg.auditLogColumns,
+          extraConfig: auditPg.auditLogExtraConfig,
+        },
+        activity_log: {
+          columns: auditPg.activityLogColumns,
+          extraConfig: auditPg.activityLogExtraConfig,
+        },
+      };
+    }
+    case "mysql": {
+      const {
+        audit: auditMysql,
+        jobs: jobsMysql,
+        media: mediaMysql,
+        users: usersMysql,
+      } = loaded.columnModules;
+      return {
+        users: {
+          columns: usersMysql.usersColumns,
+          extraConfig: usersMysql.usersExtraConfig,
+        },
+        media: {
+          columns: mediaMysql.mediaColumns,
+          extraConfig: mediaMysql.mediaExtraConfig,
+        },
+        nextly_jobs: {
+          columns: jobsMysql.nextlyJobsMysqlColumns,
+          extraConfig: jobsMysql.nextlyJobsMysqlExtraConfig,
+        },
+        audit_log: {
+          columns: auditMysql.auditLogColumns,
+          extraConfig: auditMysql.auditLogExtraConfig,
+        },
+        activity_log: {
+          columns: auditMysql.activityLogColumns,
+          extraConfig: auditMysql.activityLogExtraConfig,
+        },
+      };
+    }
+    case "sqlite": {
+      const {
+        audit: auditSqlite,
+        jobs: jobsSqlite,
+        media: mediaSqlite,
+        users: usersSqlite,
+      } = loaded.columnModules;
+      return {
+        users: {
+          columns: usersSqlite.usersColumns,
+          extraConfig: usersSqlite.usersExtraConfig,
+        },
+        media: {
+          columns: mediaSqlite.mediaColumns,
+          extraConfig: mediaSqlite.mediaExtraConfig,
+        },
+        nextly_jobs: {
+          columns: jobsSqlite.nextlyJobsSqliteColumns,
+          extraConfig: jobsSqlite.nextlyJobsSqliteExtraConfig,
+        },
+        audit_log: {
+          columns: auditSqlite.auditLogColumns,
+          extraConfig: auditSqlite.auditLogExtraConfig,
+        },
+        activity_log: {
+          columns: auditSqlite.activityLogColumns,
+          extraConfig: auditSqlite.activityLogExtraConfig,
+        },
+      };
+    }
+  }
+}
 
 /** A column in a table's extra-config argument, as far as naming it goes. */
 interface NamedColumn {
@@ -164,7 +183,7 @@ export function coreTableWithLiveContributions(
   contributed: readonly ExtensionColumn[],
   dialect: SupportedDialect
 ): unknown {
-  const factories = EXTENDABLE_CORE_TABLE_FACTORIES[dialect][name];
+  const factories = extendableCoreTableFactories(dialect)[name];
   if (factories === undefined) return undefined;
   const liveColumns = new Set(live.columns.map(column => column.name));
 

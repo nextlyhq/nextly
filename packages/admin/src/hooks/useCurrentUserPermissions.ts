@@ -240,6 +240,22 @@ export function buildCapabilities(
  */
 const UNANSWERED_RECHECK_MS = 60_000;
 
+/**
+ * The screen each query client last asked `/me/permissions` for, by pathname.
+ *
+ * 🔴 An answer is the SCREEN's own, not a time window's. A screen's callers do
+ * not mount in one commit: the dashboard's cards mount once its layout has
+ * answered, after the shell's navigation has asked, however long that takes.
+ * So an answer is kept for every caller on its screen (`staleTime: Infinity`)
+ * and asked again once when the pathname changes, by whichever caller sees the
+ * new one first; the rest find it recorded here and ask nothing. The next
+ * screen therefore always asks afresh, so a changed role is seen there, and an
+ * answer past its end is never counted, however recently it was asked
+ * (`askedAt`). Kept per client, so two admins in one page, or two tests, never
+ * share a screen.
+ */
+const permissionsScreenOf = new WeakMap<QueryClient, string>();
+
 /** The longest delay a browser timer holds without overflowing. */
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -326,6 +342,13 @@ type AnswerState = {
    * assignment it was given for ends.
    */
   hasAnswer: boolean;
+  /**
+   * Whether the answer on screen belongs to another language, the one the
+   * screen moved from, kept while this language's is asked so the page stays
+   * mounted. It is not an answer for the language on screen: `hasAnswer` is
+   * false, so nothing is allowed on its word.
+   */
+  isPlaceholder: boolean;
 };
 
 /** What {@link useCurrentUserPermissions} returns. */
@@ -355,6 +378,32 @@ type CurrentUserPermissions = AnswerState & {
    */
   can: (permission: string) => boolean;
 };
+
+/**
+ * The capabilities answer last received in any language that still holds,
+ * kept on screen while another language's is asked: a placeholder, which
+ * grants nothing (see `isPlaceholder`). Taken from the cache rather than from
+ * the component asking, since one mounted during the switch (an editor mounted
+ * again for the document in the new language) has no previous answer of its
+ * own. An answer a change has invalidated may no longer describe the caller's
+ * access, so it is never one: the page waits instead.
+ */
+function latestAnswerHeld<T>(client: QueryClient): T | undefined {
+  let latest: { data: T; at: number } | undefined;
+  for (const query of client
+    .getQueryCache()
+    .findAll({ queryKey: CURRENT_USER_CAPABILITIES_KEY })) {
+    const { data, dataUpdatedAt, isInvalidated } = query.state;
+    if (
+      data !== undefined &&
+      !isInvalidated &&
+      (latest === undefined || dataUpdatedAt > latest.at)
+    ) {
+      latest = { data: data as T, at: dataUpdatedAt };
+    }
+  }
+  return latest?.data;
+}
 
 /** Whether the content answer has failed and has never answered. */
 function contentUnanswered(
@@ -552,7 +601,7 @@ function latestPassed(ends: readonly number[], now: number): number | null {
 function answerState(
   query: Pick<
     UseQueryResult<{ askedAt?: number }>,
-    "data" | "error" | "isFetching" | "isPending"
+    "data" | "error" | "isFetching" | "isPending" | "isPlaceholderData"
   >,
   endedAt: number | null,
   invalidated: boolean
@@ -567,7 +616,13 @@ function answerState(
       query.isPending ||
       (unusable && (query.isFetching || query.error === null)),
     error: query.error,
-    hasAnswer: query.data !== undefined && !unusable,
+    hasAnswer:
+      query.data !== undefined && !unusable && !query.isPlaceholderData,
+    // Only another language's answer is kept on screen, and only while it
+    // holds: one that no longer does (this language's own, or the one moved
+    // from once a change invalidates it) may have stopped holding because
+    // access changed, and is waited on rather than kept.
+    isPlaceholder: query.isPlaceholderData && !unusable,
   };
 }
 
@@ -601,7 +656,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   // without the gate, `refetchOnWindowFocus` could fire `/me/permissions`
   // on a route where 401s are expected by design, surfacing benign errors
   // to operators.
-  const { route } = useRouter();
+  const { route, pathname } = useRouter();
   const isPrivateRoute = route?.routeType === "private";
   const queryClient = useQueryClient();
   // The content language on screen: a rule can answer by language, so the
@@ -627,9 +682,15 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         protectedApi.get<UserPermissionsResponse>("/me/permissions")
       ),
     enabled: isPrivateRoute,
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
+    // Kept for the screen; a new screen marks it stale (the effect below).
+    staleTime: Infinity,
+    refetchOnMount: true,
+    // Asked again whenever the admin regains focus or the connection returns,
+    // however fresh: an answer kept for the screen is never stale, so the
+    // default (refetch only when stale) would keep a role changed elsewhere
+    // until the next screen.
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
     // Asked again on the schedule when its own refresh failed with no answer
     // that counts, and while the content answer has none, whose end it
     // would otherwise be told.
@@ -640,6 +701,22 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         : false,
   });
   const { data, refetch } = permissionsQuery;
+
+  // A new screen asks again, once: the first caller to see its pathname
+  // records it and invalidates the answer, refetching it for every caller
+  // mounted; a caller that finds the pathname recorded asks nothing. The
+  // first screen of all is the query's first fetch, so it only records.
+  useEffect(() => {
+    if (!isPrivateRoute || pathname === "") return;
+    const asked = permissionsScreenOf.get(queryClient);
+    if (asked === pathname) return;
+    permissionsScreenOf.set(queryClient, pathname);
+    if (asked === undefined) return;
+    void queryClient.invalidateQueries({
+      queryKey: CURRENT_USER_PERMISSIONS_KEY,
+      exact: true,
+    });
+  }, [isPrivateRoute, pathname, queryClient]);
 
   // What the server decides the user may do with each collection and Single,
   // code rules included. One answer covers every entity, so it is costly to
@@ -658,6 +735,9 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         )
       ),
     enabled: isPrivateRoute,
+    // The language moved from keeps the page mounted while the new one is
+    // asked; it counts as no answer (see `isPlaceholder`).
+    placeholderData: () => latestAnswerHeld(queryClient),
     staleTime: Infinity,
     refetchOnWindowFocus: "always",
     // A failed answer is asked again on the schedule below and on focus, not

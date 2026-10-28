@@ -27,6 +27,8 @@ import {
   useGeneralSettings,
   useUpdateGeneralSettings,
 } from "@admin/hooks/queries/useGeneralSettings";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 
 import { GeneralSettingsSkeleton } from "./components/GeneralSettingsSkeleton";
 
@@ -142,6 +144,10 @@ type FormValues = z.infer<typeof formSchema>;
 const SettingsGeneralPage: React.FC = () => {
   const { data: settings, isLoading } = useGeneralSettings();
   const { mutate: updateSettings, isPending } = useUpdateGeneralSettings();
+  // A reader without `update-settings` sees the settings read-only: the server
+  // refuses their save, so none is offered.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayUpdate = settingsChangesAllowed(hasPermission).update;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -238,7 +244,7 @@ const SettingsGeneralPage: React.FC = () => {
                         <Select
                           onValueChange={field.onChange}
                           value={field.value ?? ""}
-                          disabled={isLoading}
+                          disabled={isLoading || !mayUpdate}
                         >
                           <SelectTrigger
                             id={id}
@@ -273,7 +279,7 @@ const SettingsGeneralPage: React.FC = () => {
                         <Select
                           onValueChange={field.onChange}
                           value={field.value ?? ""}
-                          disabled={isLoading}
+                          disabled={isLoading || !mayUpdate}
                         >
                           <SelectTrigger
                             id={id}
@@ -308,7 +314,7 @@ const SettingsGeneralPage: React.FC = () => {
                         <Select
                           onValueChange={field.onChange}
                           value={field.value ?? ""}
-                          disabled={isLoading}
+                          disabled={isLoading || !mayUpdate}
                         >
                           <SelectTrigger
                             id={id}
@@ -333,9 +339,11 @@ const SettingsGeneralPage: React.FC = () => {
             )}
 
             <FormActions dirty={form.formState.isDirty}>
-              <Button type="submit" disabled={isPending || isLoading}>
-                {isPending ? "Saving…" : "Save Changes"}
-              </Button>
+              {mayUpdate && (
+                <Button type="submit" disabled={isPending || isLoading}>
+                  {isPending ? "Saving…" : "Save Changes"}
+                </Button>
+              )}
             </FormActions>
           </SettingsLayout>
         </form>
