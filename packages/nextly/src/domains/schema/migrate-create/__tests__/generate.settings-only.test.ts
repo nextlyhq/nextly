@@ -368,7 +368,9 @@ describe("every snapshot records every entity's full settings", () => {
   it("records no function and no code-defined access", async () => {
     const guarded = defineCollection({
       slug: "guarded",
-      access: { read: () => true },
+      // A rule that is a plain value as well as one that is a function: the
+      // first survives serialising, so only leaving `access` out drops it.
+      access: { read: true, update: () => true },
       hooks: { beforeChange: [({ data }: { data: unknown }) => data] },
       fields: [text({ name: "headline", validate: () => true })],
     } as never);
