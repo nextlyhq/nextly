@@ -182,4 +182,27 @@ describe("one default for everyone", () => {
       defaultLayoutPlacements(core, p)
     );
   });
+
+  it("keeps each card under the id its entry names, a card that names none under its widget's", () => {
+    const p = plan({
+      cards: [
+        { widget: "site/many" },
+        { widget: "site/one" },
+        { widget: "site/many", id: "pages-count" },
+        { widget: "site/many", id: "posts-count" },
+      ],
+    });
+    const widgets = [widget("site/many"), widget("site/one")];
+    expect(defaultLayoutPlacements(widgets, p).map(each => each.id)).toEqual([
+      "site/many",
+      "site/one",
+      "pages-count",
+      "posts-count",
+    ]);
+    // Named, never derived from a position: a card left out changes no other.
+    const withoutFirst = plan({ cards: p.cards.slice(1) });
+    expect(
+      defaultLayoutPlacements(widgets, withoutFirst).map(each => each.id)
+    ).toEqual(["site/one", "pages-count", "posts-count"]);
+  });
 });

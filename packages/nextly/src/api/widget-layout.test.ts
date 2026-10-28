@@ -2716,7 +2716,7 @@ describe("the one default", () => {
           { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
         ],
         version: 0,
-        scope: scopeFor(),
+        scope: body.scope,
       })
     );
     // Kept in the row, where the day it is shown it comes back.
@@ -2748,5 +2748,202 @@ describe("the one default", () => {
     // The card answers for itself; the default handed for a reset leaves it out.
     expect(body.placements?.map(p => p.widgetId)).toEqual(["acme/quiet"]);
     expect(body.defaultPlacements).toEqual([]);
+  });
+
+  it("refuses a first save staged before a card's own rule changed its verdict, which would drop the card", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Shown from now on: the save below never held it.
+    defaultCardsNotShown.mockResolvedValue(new Set());
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: handed.placements,
+        version: 0,
+        scope: handed.scope,
+      })
+    );
+
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+    // The reset checks the same token, and a fresh read's is accepted.
+    const fresh = await bodyOf(await getWidgetLayout(getReq()));
+    expect(fresh.scope).not.toBe(handed.scope);
+    const reset = await deleteWidgetLayout(
+      deleteReq({ version: "0", scope: fresh.scope ?? "" })
+    );
+    expect(reset.status).toBe(200);
+  });
+
+  it("judges a card of a row following the default with the settings the row gave it", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    stored = unarrangedRow([
+      {
+        id: "acme/quiet",
+        widgetId: "acme/quiet",
+        w: 12,
+        h: 3,
+        removed: false,
+        config: { hide: true },
+      },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // Drawn with the stored setting, so judged with it.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // The default a reset returns to keeps its own setting, and the card.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("hands a reader who may not see the first card the second under its own id, whatever another reader sees", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+    defaultCardsNotShown.mockResolvedValue(new Set(["site/many"]));
+    const withheld = await bodyOf(await getWidgetLayout(getReq()));
+    defaultCardsNotShown.mockResolvedValue(new Set());
+    const shown = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The second card is "many-2" either way: its id says nothing of the first.
+    expect(withheld.placements?.map(p => p.id)).toEqual(["many-2"]);
+    expect(shown.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+  });
+
+  it("answers a setting change with the token the next write is checked against", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    const [quiet, a] = handed.placements ?? [];
+
+    // Outside customise mode, a setting its own rule reads: the card is now
+    // one this reader is not shown.
+    const first = await itemOf(
+      await putWidgetLayout(
+        putReq({
+          placements: [{ ...quiet, config: { hide: true } }, a],
+          version: 0,
+          scope: handed.scope,
+          arranged: false,
+        })
+      )
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    saved = undefined;
+
+    const second = await putWidgetLayout(
+      putReq({
+        placements: [{ ...a, removed: true }],
+        version: first.version,
+        scope: first.scope,
+        arranged: false,
+      })
+    );
+    expect(second.status).toBe(200);
+    expect(saved).toBeDefined();
+  });
+
+  it("keeps two cards of one widget apart through a save, each with its own settings and removal", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Two cards, two identities: one id would make them one card to the admin.
+    expect(handed.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+
+    // A change to the second card alone, outside customise mode: the row
+    // still follows the default.
+    const [first, second] = handed.placements ?? [];
+    await putWidgetLayout(
+      putReq({
+        placements: [first, { ...second, config: { top: 20 } }],
+        version: 0,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    const afterChange = await bodyOf(await getWidgetLayout(getReq()));
+    expect(afterChange.placements?.map(p => p.config)).toEqual([
+      { top: 5 },
+      { top: 20 },
+    ]);
+
+    // Then the first removed: the second stays.
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { ...afterChange.placements?.[0], removed: true },
+          afterChange.placements?.[1],
+        ],
+        version: 1,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? [], 2);
+    const afterRemoval = await bodyOf(await getWidgetLayout(getReq()));
+    expect(
+      afterRemoval.placements?.map(p => [p.id, p.removed, p.config])
+    ).toEqual([
+      ["site/many", true, { top: 5 }],
+      ["many-2", false, { top: 20 }],
+    ]);
   });
 });
