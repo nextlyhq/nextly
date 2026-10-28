@@ -46,6 +46,26 @@ interface PermissionGuardProps {
  *   at the address that was asked for. It never redirects: a silent trip to
  *   the dashboard reads as a broken link rather than as a refusal.
  */
+/**
+ * Whether the route opens: a collection or Single route as the server's answer
+ * about its entity says, any other as the permission list does, any one of
+ * several slugs sufficing.
+ */
+function routeAllows(
+  entity: EntityAccess | undefined,
+  requiredPermission: string | string[],
+  canAccessCollection: (
+    slug: string,
+    action: EntityAccess["action"]
+  ) => boolean,
+  hasPermission: (slug: string) => boolean
+): boolean {
+  if (entity) return canAccessCollection(entity.slug, entity.action);
+  return Array.isArray(requiredPermission)
+    ? requiredPermission.some(hasPermission)
+    : hasPermission(requiredPermission);
+}
+
 export function PermissionGuard({
   requiredPermission,
   subject,
@@ -60,11 +80,12 @@ export function PermissionGuard({
   // failure of either leaves the pages the other decides open.
   const decidedBy = entity ? content : access;
   const { hasAnswer, error } = decidedBy;
-  const hasAccess = entity
-    ? canAccessCollection(entity.slug, entity.action)
-    : Array.isArray(requiredPermission)
-      ? requiredPermission.some(hasPermission)
-      : hasPermission(requiredPermission);
+  const hasAccess = routeAllows(
+    entity,
+    requiredPermission,
+    canAccessCollection,
+    hasPermission
+  );
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -75,7 +96,12 @@ export function PermissionGuard({
     }
   }, []);
 
-  const isLoading = decidedBy.isLoading || isForceLoading;
+  // While a change of content language is answered, the answer on screen is
+  // the language moved from (`content.isPlaceholder`). A collection or Single
+  // route waits for the new one, as on a first visit: its page reads the new
+  // language's document, which that old answer does not let it show.
+  const switching = entity !== undefined && content.isPlaceholder;
+  const isLoading = decidedBy.isLoading || isForceLoading || switching;
 
   if (isLoading) {
     return (

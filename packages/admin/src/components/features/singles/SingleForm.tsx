@@ -101,8 +101,8 @@ import {
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import {
@@ -182,6 +182,14 @@ export interface SingleFormProps {
    * which an author cannot tell from a feature that does not exist.
    */
   documentActions?: readonly ContributedAction[];
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn in
+   * the editor's column directly under the header. Given here rather than
+   * placed above the form by the page: the editor's row pulls itself up over
+   * the page's top inset, so anything placed before it slides under the
+   * sticky header.
+   */
+  documentBanner?: React.ReactNode;
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -462,6 +470,7 @@ export function SingleForm({
   sourceValues,
   className,
   documentActions,
+  documentBanner,
   documentView,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
@@ -585,7 +594,15 @@ export function SingleForm({
    */
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
-  const readOnlyForReader = useReadOnlyForReader(schema.slug);
+  const updateAnswer = useUpdateAnswer(schema.slug);
+  const readOnlyForReader = updateAnswer === "refused";
+  // While a language switch's answer is on its way, nothing that saves is
+  // offered and a submit is held, though the page is not read-only.
+  const mayEdit = editsOffered(updateAnswer);
+  // What changing the Single needs is held with it: previewing and sharing a
+  // preview (minting a link needs it on the server) and a version's restore,
+  // for a reader and while a language switch's answer is on its way.
+  const updatesHeld = !mayEdit;
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
@@ -628,10 +645,10 @@ export function SingleForm({
   // screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
-  const editsHeld = writesHeld || readOnlyForReader;
+  const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
-  const versionWritesHeld = lock.actionsDisabled || readOnlyForReader;
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld;
 
   //
   // The synchronous half of the same gate. `isSubmitting` is render state: it
@@ -923,8 +940,9 @@ export function SingleForm({
     // rule, and the entry editor records on exactly the same terms. A
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
-    // Nor is a reader's form recorded: it cannot change the document.
-    enabled: !readOnlyForReader && mayRecordRecovery(busy, viewingVersion),
+    // Nor is a reader's form recorded, which cannot change the document, nor
+    // one whose language's answer is on its way, which may not yet.
+    enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
   });
@@ -983,7 +1001,7 @@ export function SingleForm({
     // A colleague's claim, which withholds every write: a reader's read-only
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
-    canEdit: !readOnlyForReader,
+    canEdit: mayEdit,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1043,7 +1061,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView && !readOnlyForReader}
+                open={previewPane.open && !documentView && !updatesHeld}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1075,6 +1093,10 @@ export function SingleForm({
                         recovery={recovery}
                         viewingVersion={viewingVersion}
                         fields={schema.fields}
+                        // A document view has no header, so the banner goes
+                        // in among its own: an author working in the view
+                        // still sees the document is in a scheduled release.
+                        banner={documentBanner}
                       />
                     ) : (
                       <div className={cn("space-y-0", className)}>
@@ -1132,13 +1154,12 @@ export function SingleForm({
                                   // Sharing a preview needs the permission to change
                                   // the Single on the server, so a reader is not offered it.
                                   isLinkAvailable={
-                                    previewLink.isAvailable &&
-                                    !readOnlyForReader
+                                    previewLink.isAvailable && !updatesHeld
                                   }
                                   // Withheld from a reader, so the share
                                   // popover cannot stay mounted for them.
                                   {...(previewLink.shareDocument ===
-                                    undefined || readOnlyForReader
+                                    undefined || updatesHeld
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1154,9 +1175,7 @@ export function SingleForm({
                                   // share link beside it: opening one mints a
                                   // credential the server grants only to a
                                   // user who may change the Single.
-                                  {...(readOnlyForReader
-                                    ? {}
-                                    : previewPane.toggle)}
+                                  {...(updatesHeld ? {} : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
@@ -1174,6 +1193,10 @@ export function SingleForm({
                                   isRailCollapsed={railCollapsed}
                                   onToggleRail={toggleRail}
                                 />
+                                {/* Directly under the header, as in the entry
+                                    editor: a fact about the whole Single is
+                                    read before the details of its address. */}
+                                {documentBanner}
                                 <EntryMetaStrip
                                   slugField={slugField}
                                   hasStatus={hasStatus}

@@ -235,9 +235,6 @@ bound visitor read related returns-true at population  # visitor-public-default
 bound visitor read related returns-filter at population  # visitor-public-default
 bound visitor read related async-filter at population  # visitor-public-default
 bound visitor read related true at population  # visitor-public-default
-service key-super-admin update providers none at route  # manage-not-counted
-service key-super-admin update providers none at can  # manage-not-counted
-service key-super-admin update providers none at widget  # manage-not-counted
 service key-read-only read collection false at widget  # holds-permission-key-skips-rules
 service key-full-access read collection false at widget  # holds-permission-key-skips-rules
 service key-role-based read collection false at widget  # holds-permission-key-skips-rules

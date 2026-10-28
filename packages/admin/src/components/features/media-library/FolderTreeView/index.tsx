@@ -19,11 +19,7 @@ import {
   Trash2,
   Folder as FolderIconDefault,
 } from "@admin/components/icons";
-import {
-  useFolderContents,
-  useRootFolders,
-  useSubfolders,
-} from "@admin/hooks/queries/useMedia";
+import { useRootFolders, useSubfolders } from "@admin/hooks/queries/useMedia";
 import { cn } from "@admin/lib/utils";
 import type { MediaFolder } from "@admin/types/media";
 
@@ -185,17 +181,28 @@ function FolderTreeItem({
   onKeyDown,
 }: FolderTreeItemProps) {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
-  // Fetch subfolders to determine if we have children and for expansion
-  const { data: subfoldersData } = useSubfolders(folder.id);
-  const hasSubfolders = (subfoldersData?.length ?? 0) > 0;
+  // Subfolders are asked for only when the folder is opened. Asking for every
+  // folder up front (and for each one's whole contents, to draw a count) cost
+  // two requests per folder on every visit, each downloading every file the
+  // folder held. The answer stays cached under the folder's id after closing.
+  const {
+    data: subfoldersData,
+    isFetched,
+    isError,
+    refetch,
+  } = useSubfolders(folder.id, { enabled: isExpanded });
+  // Until a folder has been opened it may have subfolders, so it keeps its
+  // expander; once the answer says none, the expander goes. An open folder
+  // keeps it whatever the answer, so "No subfolders" or a failed lookup can
+  // still be closed. Creating a subfolder adds it to this cached answer, so a
+  // folder found empty earlier gets its expander back.
+  // A failed lookup keeps it too, so a folder closed before retrying can be
+  // opened again to retry.
+  const hasSubfolders =
+    isExpanded || !isFetched || isError || (subfoldersData?.length ?? 0) > 0;
 
   // Use the fetched data for expansion if active
   const subfolders = isExpanded ? subfoldersData : undefined;
-
-  // Still fetch contents for the item count
-  const { data: contents } = useFolderContents(folder.id);
-  const itemCount =
-    (contents?.subfolders?.length ?? 0) + (contents?.mediaFiles?.length ?? 0);
 
   const ExpandIcon = isExpanded ? ChevronDown : ChevronRight;
 
@@ -249,19 +256,6 @@ function FolderTreeItem({
             )}
           />
           <span className="truncate text-xs">{folder.name}</span>
-
-          {itemCount > 0 && (
-            <span
-              className={cn(
-                "shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-xs font-bold tabular-nums transition-all duration-200",
-                isActive
-                  ? "bg-primary/20 text-primary"
-                  : "bg-primary/5 text-muted-foreground group-hover:bg-primary/5 group-hover:text-primary"
-              )}
-            >
-              {itemCount}
-            </span>
-          )}
         </div>
 
         {/* Context Menu (Optional/Simplified) */}
@@ -316,7 +310,18 @@ function FolderTreeItem({
       {/* Recursive Sub-folders */}
       {isExpanded && (
         <div className="animate-in slide-in-from-top-1 duration-200">
-          {!subfolders ? (
+          {isError && !subfolders ? (
+            <div className="flex items-center gap-2 py-2 pl-12 text-xs text-muted-foreground">
+              <span>Couldn&apos;t load subfolders.</span>
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                className="font-medium text-foreground underline underline-offset-2"
+              >
+                Try again
+              </button>
+            </div>
+          ) : !subfolders ? (
             <div className="py-2 pl-12 text-xs text-muted-foreground italic">
               Loading subfolders...
             </div>

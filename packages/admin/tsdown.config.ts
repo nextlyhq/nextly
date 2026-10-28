@@ -116,6 +116,24 @@ function matches(id: string, patterns: readonly (string | RegExp)[]): boolean {
   );
 }
 
+/** Where the admin's pages live; a chunk whose entry is one of them is a route. */
+const PAGES_DIR = `${path.join(__dirname, "src", "pages")}${path.sep}`;
+
+/**
+ * A chunk's file name: `page.<path under src/pages>-<hash>.mjs` for a lazily
+ * loaded page, the default `[name]-[hash].mjs` for anything else.
+ */
+function pageChunkFileName(facadeModuleId: string | null): string {
+  if (!facadeModuleId?.startsWith(PAGES_DIR)) return "[name]-[hash].mjs";
+  const page = facadeModuleId
+    .slice(PAGES_DIR.length)
+    .replace(/\.(tsx?|jsx?)$/, "")
+    .split(path.sep)
+    .join(".")
+    .replace(/[^\w.-]/g, "_");
+  return `page.${page}-[hash].mjs`;
+}
+
 export default defineConfig([
   // Main admin bundle - ESM only due to top-level await in Lexical
   // Note: CSS is built separately by scripts/build-css.mjs using Tailwind CLI
@@ -207,6 +225,14 @@ export default defineConfig([
       ),
     },
     minify: true,
+    // A lazily loaded page's chunk is named after its source path
+    // (`page.dashboard.users.create-<hash>.mjs`) rather than its file name,
+    // which many pages share (`index`, `create`, `[id]`). The bundle budgets
+    // pin each route by this name, so it has to be unique and survive a
+    // rebuild; every other chunk keeps the default name.
+    outputOptions: {
+      chunkFileNames: chunk => pageChunkFileName(chunk.facadeModuleId),
+    },
     plugins: [stylesheetImportsAreEmpty],
     onSuccess: () => {
       const distDir = path.join(process.cwd(), "dist");

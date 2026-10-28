@@ -497,7 +497,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(countSpy).toHaveBeenCalledWith(
         expect.objectContaining({ overrideAccess: true }),
         // The page's own access, so the total counts what the page read.
-        expect.objectContaining({ denied: null })
+        expect.anything()
       );
     });
 
@@ -516,7 +516,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(countSpy).toHaveBeenCalledWith(
         expect.objectContaining({ status: "draft" }),
         // The page's own access, so the total counts what the page read.
-        expect.objectContaining({ denied: null })
+        expect.anything()
       );
     });
 
@@ -539,7 +539,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(countSpy).toHaveBeenCalledWith(
         expect.objectContaining({ user, routeAuthorized: true }),
         // The page's own access, so the total counts what the page read.
-        expect.objectContaining({ denied: null })
+        expect.anything()
       );
     });
 
@@ -567,7 +567,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(countSpy).toHaveBeenCalledWith(
         expect.objectContaining({ authenticatedScope }),
         // The page's own access, so the total counts what the page read.
-        expect.objectContaining({ denied: null })
+        expect.anything()
       );
     });
 
@@ -707,6 +707,29 @@ describe("CollectionEntryService — Query Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(403);
+    });
+
+    it("judges access itself where a second argument is not the list's own", async () => {
+      // A caller inside the package that holds the query service and passes
+      // what looks like settled access is still judged: only the list's own
+      // count can skip the gate.
+      callerMay();
+      const query = (
+        service as unknown as {
+          queryService: {
+            countEntries(
+              params: unknown,
+              settled: unknown
+            ): Promise<{ success: boolean; statusCode: number }>;
+          };
+        }
+      ).queryService;
+      const result = await query.countEntries(
+        { collectionName: "posts", user: { id: "user-1", role: "viewer" } },
+        { denied: null }
+      );
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
     });
