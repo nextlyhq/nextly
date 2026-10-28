@@ -352,6 +352,20 @@ describe("credentials anywhere in a log value", () => {
       'upstream said {"\\u0074oken":"unicode-secret-10","page":2}',
       "unicode-secret-10",
     ],
+    // An escaped JSON name (a body quoted inside a message) is decoded as a
+    // plain one is, a level of quoting at a time, as are the simple escapes.
+    [
+      'upstream said {\\"\\\\u0074oken\\":\\"escaped-unicode-secret-12\\",\\"page\\":2}',
+      "escaped-unicode-secret-12",
+    ],
+    [
+      'upstream said {"pass\\tword":"simple-escape-secret-13","page":2}',
+      "simple-escape-secret-13",
+    ],
+    [
+      'upstream said {\\"pass\\\\tword\\":\\"escaped-simple-secret-14\\",\\"page\\":2}',
+      "escaped-simple-secret-14",
+    ],
     // A quoted name holding a parameter of its own (a map keyed by URL) is
     // still searched as text, so the token in it is found.
     [
@@ -369,10 +383,16 @@ describe("credentials anywhere in a log value", () => {
     const out = receivedBy({
       note: 'upstream said {"display name":"Ada Lovelace","2nd line":"Flat 4","page":2}',
       prose: 'the "session" ended: "kept-after-prose" and "token" was fine',
+      // Names that decode to something ordinary, plain and escaped.
+      decoded: 'upstream said {"\\u006eame":"Grace Hopper","page":2}',
+      escapedDecoded:
+        'upstream said {\\"\\\\u006eame\\":\\"Alan Turing\\",\\"page\\":2}',
     });
     expect(out).toContain("Ada Lovelace");
     expect(out).toContain("Flat 4");
     expect(out).toContain("kept-after-prose");
+    expect(out).toContain("Grace Hopper");
+    expect(out).toContain("Alan Turing");
   });
 
   it("takes them out of what a toJSON method would write", () => {
@@ -748,6 +768,21 @@ describe("credentials known by their shape, under any name", () => {
     expect(printed).toContain("value:");
   });
 
+  it("takes a stateless GitHub installation token out whole: prefix, app id and JWT", () => {
+    // GitHub's stateless installation token, `ghs_<APPID>_<JWT>`.
+    const appPart = shaped("gh", "s_", "123456");
+    const stateless = shaped(appPart, "_", JWT);
+    const { printed } = logged(`upstream rejected ${stateless} today`, {
+      value: stateless,
+    });
+    expect(printed).not.toContain(appPart);
+    expect(printed).not.toContain(JWT);
+    // POPULATION CONTROL: the words around it, and the field, remain.
+    expect(printed).toContain("upstream rejected");
+    expect(printed).toContain("today");
+    expect(printed).toContain("value:");
+  });
+
   it("takes a PEM block out whole, its body as well as its header", () => {
     // Read from what the logger received rather than from a printed form,
     // which escapes the block's line breaks and so could never contain it.
@@ -815,6 +850,7 @@ describe("credentials known by their shape, under any name", () => {
       // word, not a token: one with more after it, one with more before.
       longerRun: shaped("AK", "IA", "ABCDEFGHIJKLMNOP", "QRS"),
       snakeId: shaped("job_", "gh", "p_", "a".repeat(30)),
+      snakeStateless: shaped("job_", "gh", "s_", "123456_", JWT),
     };
     const { printed, json } = logged(
       "the token expired at version 1.2.3 for plugin-accounts.identity.unlinked",

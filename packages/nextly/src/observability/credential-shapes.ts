@@ -51,6 +51,12 @@ type CredentialShape =
 const B64URL = "[A-Za-z0-9_-]";
 
 /**
+ * A JWT: three base64url segments separated by dots. One definition, used on
+ * its own and inside a token that embeds one.
+ */
+const JWT_TOKEN = `${B64URL}{8,}\\.${B64URL}{8,}\\.${B64URL}{8,}`;
+
+/**
  * Every recognised shape. The user documentation lists the audit trail's set
  * exactly, so this promises what it does and no more.
  */
@@ -60,7 +66,7 @@ const CREDENTIAL_SHAPES: readonly CredentialShape[] = [
   // dotted name such as `plugin-accounts.identity.unlinked` has three long
   // parts too.
   {
-    token: `${B64URL}{8,}\\.${B64URL}{8,}\\.${B64URL}{8,}`,
+    token: JWT_TOKEN,
     value: "is",
     inText: { lead: "eyJ" },
   },
@@ -89,6 +95,16 @@ const CREDENTIAL_SHAPES: readonly CredentialShape[] = [
     inText: {},
   },
   { token: "whsec_[A-Za-z0-9+/=]*", value: "starts", inText: {} },
+  // A stateless GitHub App installation token, `ghs_<APPID>_<JWT>`: the app's
+  // id, an underscore, then a whole JWT, taken as one token so neither the id
+  // nor the JWT is left behind. GitHub's documented characters for it are
+  // letters, digits, `.`, `-` and `_`; the id holds neither separator, the
+  // `_` before the JWT nor the JWT's `.`.
+  {
+    token: `ghs_[A-Za-z0-9-]+_${JWT_TOKEN}`,
+    value: "starts",
+    inText: {},
+  },
   // GitHub tokens: personal, OAuth, user-to-server, server-to-server, refresh,
   // and fine-grained personal.
   { token: "gh[pousr]_[A-Za-z0-9]{20,}", value: "starts", inText: {} },

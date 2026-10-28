@@ -562,7 +562,10 @@ const TEXT_PARAMETER =
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
  * are decoded as JSON decodes them, so `"\u0074oken"` is judged as `token`;
- * one JSON would refuse is judged as written.
+ * one JSON would refuse is judged as written. An escaped JSON name is a JSON
+ * string inside another one, so it is decoded a level at a time by the same
+ * decoder: `\"\\u0074oken\"` loses the outer quoting's escapes first, then
+ * its own, and is judged as `token` too.
  */
 function parameterName(match: RegExpExecArray): {
   nameQuote: string;
@@ -570,7 +573,10 @@ function parameterName(match: RegExpExecArray): {
 } {
   const [, escapedQuote, escapedName, jsonQuote, jsonName, quote, name] = match;
   if (escapedQuote !== undefined) {
-    return { nameQuote: escapedQuote, name: escapedName ?? "" };
+    return {
+      nameQuote: escapedQuote,
+      name: decodedJsonName(decodedJsonName(escapedName ?? "")),
+    };
   }
   if (jsonQuote !== undefined) {
     return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
