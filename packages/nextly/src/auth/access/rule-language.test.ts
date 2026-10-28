@@ -13,13 +13,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 
 const { container } = vi.hoisted(() => ({
-  container: { config: undefined as unknown },
+  container: {
+    config: undefined as unknown,
+    // The language registry, as a site whose languages are stored in Settings registers it.
+    languageRegistry: undefined as unknown,
+  },
 }));
 
 vi.mock("../../di/container", () => ({
   container: {
-    has: (name: string) => name === "config" && container.config !== undefined,
-    get: () => container.config,
+    has: (name: string) =>
+      (name === "config" && container.config !== undefined) ||
+      (name === "languageRegistry" && container.languageRegistry !== undefined),
+    get: (name: string) =>
+      name === "languageRegistry"
+        ? container.languageRegistry
+        : container.config,
   },
 }));
 
@@ -62,6 +71,7 @@ const contextNow = () => buildRuleContext(caller, readPosts);
 
 afterEach(() => {
   container.config = undefined;
+  container.languageRegistry = undefined;
 });
 
 describe("readLanguagesFor and writeLanguagesFor", () => {
@@ -202,6 +212,14 @@ describe("the languages a rule is told", () => {
     const ctx = contextNow();
     expect(ctx.locale).toBeUndefined();
     expect(ctx.locales).toEqual(["en", "fr", "de"]);
+  });
+
+  // A site whose languages are stored in Settings has no `localization` block: the list is the
+  // language registry's, and a rule must be told it, or `locales.every(...)` passes over none.
+  it("are every language the site stores, where the configuration declares none", () => {
+    container.config = { localization: undefined };
+    container.languageRegistry = { current: () => LOCALISED };
+    expect(contextNow().locales).toEqual(["en", "fr", "de"]);
   });
 
   it("are none where the site has no languages", () => {

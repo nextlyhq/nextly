@@ -11,6 +11,7 @@ import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { setSiteDashboardRules } from "../domains/widgets/site-rules";
 
 import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
@@ -644,6 +645,27 @@ describe("a card's load, judged before it runs", () => {
       settings: { items: 5 },
       user: { id: "reader" },
     });
+  });
+
+  it("is handed the starting value the site's override gives a setting the card leaves unset", async () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/maybe", { settings: { items: 7 } }]]),
+    });
+    try {
+      await answered("acme/maybe");
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    const [shown] = showsPredicate.mock.calls[0] as [Record<string, unknown>];
+    expect(shown).toMatchObject({ settings: { items: 7 } });
   });
 });
 

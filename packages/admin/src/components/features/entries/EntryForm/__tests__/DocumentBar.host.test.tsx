@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { DocumentBar } from "../DocumentBar";
 
 function Form({ children }: { children: ReactNode }) {
   const methods = useForm({ defaultValues: { title: "" } });
@@ -21,7 +21,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("EntrySystemHeader outside a document editor", () => {
+describe("DocumentBar outside a document editor", () => {
   it("fails loudly, naming the missing host", () => {
     // React reports the thrown render error as well; it is the expected one.
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -29,7 +29,7 @@ describe("EntrySystemHeader outside a document editor", () => {
     expect(() =>
       render(
         <Form>
-          <EntrySystemHeader mode="edit" collectionSlug="posts" />
+          <DocumentBar mode="edit" collectionSlug="posts" />
         </Form>
       )
     ).toThrow(/DocumentActionsHost/);
