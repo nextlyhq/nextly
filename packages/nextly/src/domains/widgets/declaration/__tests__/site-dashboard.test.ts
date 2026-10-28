@@ -17,7 +17,10 @@ import {
   definePlugin,
   type PluginDefinition,
 } from "../../../../plugins/plugin-context";
+import { CORE_DEFAULT_LAYOUT } from "../../core-widgets/ids";
+import { defaultLayoutPlan } from "../../default-layout";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
+import { siteDashboardContext } from "../site-dashboard";
 
 import { dashboard, revenue } from "./plugin/widgets";
 
@@ -95,7 +98,7 @@ describe("a site config that names what exists", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "site-dashboard-keys-not-applied",
-        keys: ["hide", "overrides", "defaultLayout", "suggestions", "replace"],
+        keys: ["hide", "overrides", "replace"],
       })
     );
   });
@@ -111,7 +114,7 @@ describe("a site config that names what exists", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "site-dashboard-keys-not-applied",
-        keys: ["widgets", "defaultLayout"],
+        keys: ["widgets"],
       })
     );
   });
@@ -454,6 +457,157 @@ describe("a plugin's suggestions and alternatives", () => {
     );
     expect(message).toContain(
       'plugin "@other/stats", widget "other/revenue": offers "other/revenue" in place of "core/nothing", which is not a built-in widget'
+    );
+  });
+});
+
+describe("the default the site config asks for", () => {
+  it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
+    resetWidgetRegistries([shop], {
+      defaultLayout: [
+        "core/team",
+        { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
+      ],
+      suggestions: false,
+    });
+    expect(defaultLayoutPlan()).toEqual({
+      cards: [
+        { widget: "core/team" },
+        { widget: "acme/orders-by-state", w: 4, settings: { top: 3 } },
+      ],
+      suggestions: false,
+      suggested: ["acme/orders-by-state"],
+    });
+  });
+
+  it("is core's own defaultLayout, with suggestions on, when the site gives none", () => {
+    resetWidgetRegistries([shop], {});
+    expect(defaultLayoutPlan()).toEqual({
+      cards: CORE_DEFAULT_LAYOUT,
+      suggestions: true,
+      suggested: ["acme/orders-by-state"],
+    });
+  });
+
+  it("starts, saying nothing, with an optional card whose widget is not installed", () => {
+    resetWidgetRegistries([], {
+      defaultLayout: [
+        { widget: "acme/orders-by-state", optional: true },
+        "core/team",
+      ],
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(defaultLayoutPlan().cards).toEqual([
+      { widget: "acme/orders-by-state", optional: true },
+      { widget: "core/team" },
+    ]);
+  });
+
+  it("refuses a card not marked optional whose widget is not installed, and an optional that is not true or false", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([], {
+        defaultLayout: [
+          { widget: "acme/orders-by-state" },
+          { widget: "core/team", optional: "yes" },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'the site config, widget "acme/orders-by-state": defaultLayout names "acme/orders-by-state", which no widget declares'
+    );
+    expect(message).toContain(
+      'the site config, widget "core/team": defaultLayout optional must be true or false, got "yes"'
+    );
+  });
+
+  it("still checks an optional card's size when its widget is installed", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "acme/orders-by-state", optional: true, w: 12 },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'the site config, widget "acme/orders-by-state": defaultLayout w is 12, which the widget does not allow (from 4 to 8)'
+    );
+  });
+});
+
+describe("a list with an empty slot", () => {
+  // `[a, , b]`: every reading of the list skips the hole, so an entry lost to
+  // a stray comma would vanish without a word.
+  /** A list of `length` with `entries` at their places and a hole at every other. */
+  const holed = (length: number, entries: Record<number, unknown>) => {
+    const list = new Array<unknown>(length);
+    for (const [index, entry] of Object.entries(entries)) {
+      list[Number(index)] = entry;
+    }
+    return list;
+  };
+
+  it("is refused in each list of the site config, naming the list", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        hide: holed(3, { 0: "core/team", 2: "core/content" }),
+        defaultLayout: holed(3, { 0: "core/content", 2: "core/team" }),
+        widgets: holed(2, { 0: { ...revenue, id: "site/revenue" } }),
+      })
+    );
+    for (const expected of [
+      'the site config, widget "(hide)": hide has an empty slot at position 2; remove the extra comma',
+      'the site config, widget "(defaultLayout)": defaultLayout has an empty slot at position 2; remove the extra comma',
+      'the site config, widget "(widgets)": widgets has an empty slot at position 2; remove the extra comma',
+    ]) {
+      expect(message).toContain(expected);
+    }
+  });
+
+  it("is refused in each list of a plugin's contribution, naming the list", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/stats", {
+          widgets: holed(2, { 1: { ...revenue, id: "other/revenue" } }),
+          suggest: holed(3, { 0: "other/revenue", 2: "other/revenue" }),
+        }),
+      ])
+    );
+    for (const expected of [
+      'plugin "@other/stats", widget "(widgets)": widgets has an empty slot at position 1',
+      'plugin "@other/stats", widget "(suggest)": suggest has an empty slot at position 2',
+    ]) {
+      expect(message).toContain(expected);
+    }
+  });
+});
+
+describe("a plugin that adds only Needs attention items", () => {
+  it("starts with no widgets declared, reading none as declaring none", () => {
+    expect(() =>
+      resetWidgetRegistries([
+        plainPlugin("@other/inbox", { attention: dashboard.attention }),
+      ])
+    ).not.toThrow();
+  });
+});
+
+describe("startup's warnings", () => {
+  it("go through the registration's logger, and never the process-wide one", () => {
+    const registration = { warn: vi.fn() };
+    resetWidgetRegistries([shop], { hide: ["core/team"] }, registration);
+    expect(registration.warn).toHaveBeenCalledWith(
+      "admin.dashboard.hide is accepted but not applied yet in this version.",
+      { kind: "site-dashboard-keys-not-applied", keys: ["hide"] }
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("core's ids", () => {
+  it("are the one set registration derives, handed to the site config's check", () => {
+    const coreIds = new Set(["core/team"]);
+    expect(siteDashboardContext(new Map(), new Map(), coreIds).coreIds).toBe(
+      coreIds
     );
   });
 });

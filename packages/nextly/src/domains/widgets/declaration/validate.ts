@@ -525,6 +525,44 @@ function opensActionProblems(
 }
 
 /**
+ * Why a list has an empty slot, naming the list and the first slot, or
+ * `undefined`: `[a, , b]` holds a hole every reading of it skips, so an entry
+ * left out by a stray comma would otherwise vanish without a word.
+ */
+export function sparseListProblem(
+  list: readonly unknown[],
+  name: string
+): string | undefined {
+  for (let index = 0; index < list.length; index++) {
+    if (!(index in list)) {
+      return `${name} has an empty slot at position ${index + 1}; remove the extra comma`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Why an owner's declarations are not a list to check one by one: not a list at all, or one with
+ * an empty slot, which every reading of it would skip. `undefined` for a list.
+ */
+function groupShapeFault(
+  owner: string,
+  declarations: unknown
+): WidgetDeclarationFault | undefined {
+  if (!Array.isArray(declarations)) {
+    return {
+      owner,
+      widget: "(none)",
+      problem: "its dashboard widgets must be a list of widget declarations",
+    };
+  }
+  const sparse = sparseListProblem(declarations, "widgets");
+  return sparse === undefined
+    ? undefined
+    : { owner, widget: "(widgets)", problem: sparse };
+}
+
+/**
  * Every fault across every owner's declarations, a duplicate id included.
  *
  * A duplicate is reported against the later claimant, naming the earlier one,
@@ -537,15 +575,12 @@ export function collectWidgetDeclarationFaults(
   const claimed = new Map<string, string>();
   for (const group of groups) {
     const { owner, declarations } = group;
-    if (!Array.isArray(declarations)) {
-      faults.push({
-        owner,
-        widget: "(none)",
-        problem: "its dashboard widgets must be a list of widget declarations",
-      });
+    const shape = groupShapeFault(owner, declarations);
+    if (shape !== undefined) {
+      faults.push(shape);
       continue;
     }
-    for (const declaration of declarations) {
+    for (const declaration of declarations as readonly unknown[]) {
       faults.push(
         ...widgetDeclarationFaults(declaration, owner, group.core === true)
       );

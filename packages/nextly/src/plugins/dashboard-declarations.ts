@@ -17,7 +17,10 @@ import type {
 } from "../domains/widgets/declaration/declared-widgets";
 import { quote } from "../domains/widgets/declaration/quote";
 import { unknownKeyProblems } from "../domains/widgets/declaration/site-dashboard";
-import type { WidgetDeclarationFault } from "../domains/widgets/declaration/validate";
+import {
+  sparseListProblem,
+  type WidgetDeclarationFault,
+} from "../domains/widgets/declaration/validate";
 
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePluginSelf } from "./self";
@@ -81,7 +84,9 @@ export function pluginDashboardSnapshots(
       {
         owner: pluginOwner(plugin),
         widgets,
-        suggest: Array.isArray(suggest) ? [...(suggest as unknown[])] : suggest,
+        // Copied by `slice`, which keeps an empty slot where the list has one,
+        // so the check can name it; a spread would read it as `undefined`.
+        suggest: Array.isArray(suggest) ? suggest.slice() : suggest,
         alternatives: isRecord(alternatives)
           ? Object.fromEntries(Object.entries(alternatives))
           : alternatives,
@@ -108,7 +113,9 @@ export function pluginWidgetDeclarationGroups(
 ): DeclaredWidgetGroup[] {
   return dashboards.map(({ owner, widgets, collections }) => ({
     owner,
-    declarations: widgets,
+    // None at all is a plugin that adds only Needs attention items: it
+    // declares no widget, rather than a list that is not one.
+    declarations: widgets ?? [],
     ...(collections === undefined ? {} : { collections }),
   }));
 }
@@ -160,6 +167,10 @@ function suggestFaults(
         problem: "suggest must be a list of the plugin's own widget ids",
       },
     ];
+  }
+  const sparse = sparseListProblem(suggest, "suggest");
+  if (sparse !== undefined) {
+    return [{ owner, widget: "(suggest)", problem: sparse }];
   }
   return (suggest as readonly unknown[])
     .filter(id => typeof id !== "string" || !own.has(id))
@@ -232,6 +243,23 @@ export function pluginSuggestionFaults(
       ...alternativeFaults(dashboard, own, coreIds),
     ];
   });
+}
+
+/**
+ * The widgets the plugins suggest for the default dashboard, in the order the
+ * site lists its plugins, from the copies startup checked: each is one of its
+ * plugin's own widgets, or startup refused it.
+ */
+export function pluginSuggestions(
+  dashboards: readonly PluginDashboardSnapshot[]
+): string[] {
+  return dashboards.flatMap(({ suggest }) =>
+    Array.isArray(suggest)
+      ? (suggest as readonly unknown[]).filter(
+          (id): id is string => typeof id === "string"
+        )
+      : []
+  );
 }
 
 /**

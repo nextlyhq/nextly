@@ -23,6 +23,7 @@
  */
 
 import { getNextlyLogger } from "../../../observability/logger";
+import type { Logger } from "../../../shared/types";
 import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import {
@@ -329,6 +330,20 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
   };
 }
 
+/**
+ * What startup says its warnings through: the logger the app's registration
+ * was given, so they reach the same place as the rest of its boot.
+ */
+export type StartupLogger = Pick<Logger, "warn">;
+
+/**
+ * The process-wide logger, as a startup logger: where startup's warnings go
+ * when the caller hands none.
+ */
+export const NEXTLY_STARTUP_LOGGER: StartupLogger = {
+  warn: (message, meta) => getNextlyLogger().warn({ ...meta, message }),
+};
+
 const WARNED_LEGACY_IDS = new Set<string>();
 
 /** Forgets which shared old-shape ids were warned about, for tests. */
@@ -343,7 +358,10 @@ export function resetLegacyIdWarnings(): void {
  * shape must keep working as they do; the warning is what tells their authors
  * that the new shape refuses this.
  */
-function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
+function warnSharedLegacyIds(
+  legacy: readonly LegacyWidgetIds[],
+  logger: StartupLogger
+): void {
   const owners = new Map<string, string[]>();
   for (const { owner, ids } of legacy) {
     for (const id of ids) owners.set(id, [...(owners.get(id) ?? []), owner]);
@@ -351,15 +369,12 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
   for (const [id, plugins] of owners) {
     if (plugins.length < 2 || WARNED_LEGACY_IDS.has(id)) continue;
     WARNED_LEGACY_IDS.add(id);
-    getNextlyLogger().warn({
-      kind: "widget-id-shared-old-shape",
-      widget: id,
-      plugins,
-      message:
-        `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
+    logger.warn(
+      `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
         `shape. The first one is used, as before. Widgets declared with ` +
         `defineWidget() may not share an id: rename one before moving it.`,
-    });
+      { kind: "widget-id-shared-old-shape", widget: id, plugins }
+    );
   }
 }
 
@@ -390,6 +405,8 @@ export interface DashboardWidgets {
   ) => readonly WidgetDeclarationFault[];
   /** Declarations checked with the rest, duplicates and references included, but not kept or published. */
   checkedOnly?: readonly DeclaredWidgetGroup[];
+  /** Where startup's warnings go: the registration's logger, or the process-wide one. */
+  logger?: StartupLogger;
 }
 
 /**
@@ -407,6 +424,7 @@ export function registerDashboardWidgets({
   legacy = [],
   references,
   checkedOnly = [],
+  logger = NEXTLY_STARTUP_LOGGER,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
   const checked = [...groups, ...checkedOnly.map(snapshot)];
@@ -425,7 +443,7 @@ export function registerDashboardWidgets({
     faults.push(...references(declared, checked));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
-  warnSharedLegacyIds(legacy);
+  warnSharedLegacyIds(legacy, logger);
 
   for (const definition of core) {
     registerWidget(definition, { source: CORE_OWNER });

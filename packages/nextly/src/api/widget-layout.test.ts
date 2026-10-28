@@ -23,6 +23,13 @@ vi.mock("./authenticated-read", async importOriginal => {
 });
 
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+
+// Which of the default's cards their declared widgets' own rules would not
+// show the reader: the case states it, since that judgement has its own tests.
+const { defaultCardsNotShown } = vi.hoisted(() => ({
+  defaultCardsNotShown: vi.fn(),
+}));
+vi.mock("./default-cards-shown", () => ({ defaultCardsNotShown }));
 vi.mock("../di", () => ({ container: { get: containerGet } }));
 
 // `callerHoldsPermission` is the seam a caller is put on either side of.
@@ -73,6 +80,11 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import { CORE_DEFAULT_LAYOUT } from "../domains/widgets/core-widgets/ids";
+import {
+  setDefaultLayoutPlan,
+  type DefaultLayoutPlan,
+} from "../domains/widgets/default-layout";
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
@@ -237,6 +249,12 @@ beforeEach(() => {
   logged.length = 0;
   clearWidgets();
   setContributedWidgets([]);
+  setDefaultLayoutPlan({
+    cards: CORE_DEFAULT_LAYOUT,
+    suggestions: true,
+    suggested: [],
+  });
+  defaultCardsNotShown.mockResolvedValue(new Set());
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -2584,5 +2602,151 @@ describe("a card's note", () => {
     );
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+});
+
+describe("the one default", () => {
+  const plan = (patch: Partial<DefaultLayoutPlan>) =>
+    setDefaultLayoutPlan({
+      cards: [],
+      suggestions: true,
+      suggested: [],
+      ...patch,
+    });
+
+  it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/b", w: 6, h: 4, settings: { top: 5 } },
+        { widget: "site/a" },
+      ],
+      suggestions: false,
+    });
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements).toEqual([
+      {
+        id: "site/b",
+        widgetId: "site/b",
+        w: 6,
+        h: 4,
+        removed: false,
+        config: { top: 5 },
+      },
+      { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+    ]);
+    expect(body.defaultPlacements).toEqual(body.placements);
+  });
+
+  it("differs between two people with different permissions only by the cards one may not see", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(
+      widget({ id: "site/gated", requiredPermission: "read-secrets" })
+    );
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/gated" },
+        { widget: "site/a" },
+        { widget: "site/b" },
+      ],
+    });
+
+    const granted = await bodyOf(await getWidgetLayout(getReq()));
+    callerHoldsPermission.mockResolvedValue(false);
+    const refused = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(granted.placements?.map(p => p.widgetId)).toEqual([
+      "site/gated",
+      "site/a",
+      "site/b",
+    ]);
+    expect(refused.placements).toEqual(
+      granted.placements?.filter(p => p.widgetId !== "site/gated")
+    );
+  });
+
+  it("places a plugin's suggestion on the default, never on a saved dashboard, where it is offered", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/suggested" }));
+    plan({ cards: [{ widget: "site/a" }], suggested: ["acme/suggested"] });
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.available).toContain("acme/suggested");
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "site/a",
+      "acme/suggested",
+    ]);
+  });
+
+  it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // Asked of the default's cards the reader's view lets them see.
+    expect(defaultCardsNotShown).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      [
+        expect.objectContaining({ widgetId: "acme/quiet" }),
+        expect.objectContaining({ widgetId: "site/a" }),
+      ],
+      expect.any(AbortSignal)
+    );
+
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+        ],
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    // Kept in the row, where the day it is shown it comes back.
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("leaves a saved dashboard's cards as the reader arranged them", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        {
+          id: "acme/quiet",
+          widgetId: "acme/quiet",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The card answers for itself; the default handed for a reset leaves it out.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["acme/quiet"]);
+    expect(body.defaultPlacements).toEqual([]);
   });
 });

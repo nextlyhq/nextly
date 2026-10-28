@@ -645,9 +645,12 @@ export type {
 // against. Startup checks every declaration and reports each fault; the data
 // code stays on the server, and the admin is sent data only.
 export {
+  defineAttentionItem,
   defineWidget,
   settings as widgetSettings,
   type AnyWidget,
+  type AttentionCount,
+  type AttentionItem,
   type ComponentDisplay,
   type CoreDisplay,
   type CoreView,

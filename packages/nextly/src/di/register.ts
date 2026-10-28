@@ -327,6 +327,15 @@ import { getService } from "./service-access";
  */
 export interface NextlyServiceConfig {
   /**
+   * The directory of the app nextly runs in, whose installed Next.js, React
+   * and React DOM the start check judges. A relative path is resolved against
+   * `process.cwd()`. Defaults to the process's own directory, which is the
+   * app's for a server; the CLI passes the project it was pointed at with
+   * `--cwd`.
+   */
+  appRoot?: string;
+
+  /**
    * Database adapter for multi-database support.
    * If not provided, created automatically from environment variables.
    */
@@ -733,14 +742,6 @@ export async function registerServices(
   // same refusal at the migration phase.
   assertBootMigrationsNotRefused();
 
-  // Next.js / React version gate, here because every way of starting nextly
-  // registers services through this function: `getNextly()`, a route
-  // handler's request-path boot and the CLI. nextly imports the supported
-  // releases' APIs directly and carries no code for older ones, so an app
-  // outside the ranges is refused before an adapter connects, naming each
-  // installed version, rather than failing later at whichever API it lacks.
-  ensureSupportedFrameworkVersions(process.cwd());
-
   // Nothing awaits between the loop above finding no attempt in flight and
   // this line publishing one, so no other caller can start an attempt in
   // between.
@@ -803,6 +804,15 @@ async function runRegistrationAttempt(
     globalForReg.__nextly_servicesInTeardown = undefined;
     if (inTeardown !== undefined) container.withdraw(inTeardown.restored);
   }
+  // Next.js / React version gate, here because every way of starting nextly
+  // registers services through `registerServices()`, whose every attempt runs
+  // this: `getNextly()`, a route handler's request-path boot and the CLI. nextly imports the supported
+  // releases' APIs directly and carries no code for older ones, so an app
+  // outside the ranges is refused before an adapter connects, naming each
+  // installed version, rather than failing later at whichever API it lacks.
+  // After the teardown above, so a refused app never leaves the previous
+  // registration's plugins running.
+  ensureSupportedFrameworkVersions(config.appRoot ?? process.cwd());
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -948,7 +958,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    resolvedLogger
   );
 
   // Before any step that writes to the database or the registry: the Builder
