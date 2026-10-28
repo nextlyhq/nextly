@@ -1791,6 +1791,78 @@ function applyRenameDecisions(
   // last, which makes this function silently depend on that contract.
   if (renames.length === 0) return remaining;
 
+  // An index the renamed column already carries is carried BY the rename: every dialect renames the
+  // column inside the index. The diff, seeing the collapsed add's index under the same name with a
+  // new column, plans to create it again — which MySQL refuses as a duplicate key and PostgreSQL
+  // skips with IF NOT EXISTS — and, for a name Nextly manages, to drop the old one first, which would
+  // leave the table with no index at all once the create is gone. When the new index is exactly the
+  // previous one with the column renamed, both are dropped from the plan and the rename keeps it.
+  const carried = indexesCarriedByRenames(
+    effectiveAccepts.map(d => d.candidate),
+    previousSnapshot
+  );
+  const keptByRename = new Set(
+    remaining.flatMap(op =>
+      op.type === "add_index" &&
+      carried.get(`${op.tableName}::${op.index.name}`) === indexShape(op.index)
+        ? [`${op.tableName}::${op.index.name}`]
+        : []
+    )
+  );
+  // Placed first and filtered after: the kept index's create is what the renames are placed ahead
+  // of, so taking it out first would push them past a check that names the new column.
+  const placed = placeRenames(remaining, renames);
+  return keptByRename.size === 0
+    ? placed
+    : placed.filter(
+        op =>
+          !(
+            (op.type === "add_index" || op.type === "drop_index") &&
+            keptByRename.has(`${op.tableName}::${op.index.name}`)
+          )
+      );
+}
+
+/**
+ * The indexes on renamed columns, keyed by table and name, each with its shape as it reads once
+ * the renames have run (`indexShape`).
+ */
+function indexesCarriedByRenames(
+  renamed: readonly RenameCandidate[],
+  previousSnapshot: NextlySchemaSnapshot | undefined
+): Map<string, string> {
+  const carried = new Map<string, string>();
+  for (const table of previousSnapshot?.tables ?? []) {
+    const onTable = renamed.filter(c => c.tableName === table.name);
+    if (onTable.length === 0) continue;
+    const newName = (column: string): string =>
+      onTable.find(c => c.fromColumn === column)?.toColumn ?? column;
+    for (const index of table.indexes ?? []) {
+      if (!index.columns.some(column => newName(column) !== column)) continue;
+      carried.set(
+        `${table.name}::${index.name}`,
+        indexShape({ ...index, columns: index.columns.map(newName) })
+      );
+    }
+  }
+  return carried;
+}
+
+/** What an index is, beyond its name: the same text for two indexes that index alike. */
+function indexShape(index: IndexSpec): string {
+  return JSON.stringify([
+    index.columns,
+    index.unique,
+    index.where ?? null,
+    index.expression ?? null,
+  ]);
+}
+
+/** The operations with the renames placed ahead of the index tail. */
+function placeRenames(
+  remaining: Operation[],
+  renames: Operation[]
+): Operation[] {
   // The renames land ahead of the index tail, not at the very end. Collapsing a
   // (drop_column, add_column) pair removes the statement that would have
   // created the new column, so an index declared on it can only be created
