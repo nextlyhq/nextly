@@ -151,6 +151,11 @@ export interface FormatArgs {
    * wait for.
    */
   settingsChanges?: readonly string[];
+  /**
+   * Whether the file changes no table. Its UP may still hold statements: a
+   * Builder entity's registry row travels with its settings.
+   */
+  changesNoTable?: boolean;
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -180,14 +185,17 @@ export function formatMigrationFile(args: FormatArgs): string {
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
   // A file that changes settings alone has no table statement to undo, which
-  // is a different fact from a table change nobody wrote the reverse of.
+  // is a different fact from a table change nobody wrote the reverse of:
+  // `migrate:down` refuses a DOWN with no statement as irreversible, and this
+  // file must not stop a rollback reaching the migrations before it. So its
+  // DOWN is one statement that changes nothing, valid on every dialect.
   const settingsOnly =
-    args.sqlStatements.length === 0 && (args.settingsChanges ?? []).length > 0;
+    args.changesNoTable === true && (args.settingsChanges ?? []).length > 0;
   const downBody =
     args.downSqlStatements.length > 0
       ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
       : settingsOnly
-        ? "-- (no table statements: this migration changes settings only)"
+        ? "-- No table statements to undo: this migration changes settings only.\nSELECT 1;"
         : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}

@@ -304,24 +304,22 @@ function isObject(value: SettingsValue | undefined): value is SettingsObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Whether two recorded values are the same, key order aside: compared as JSON
+ * with every object's keys sorted, the form the snapshot file is written in.
+ */
 function sameValue(a: SettingsValue, b: SettingsValue): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return (
-      Array.isArray(a) &&
-      Array.isArray(b) &&
-      a.length === b.length &&
-      a.every((item, i) => sameValue(item, b[i]))
-    );
-  }
-  if (isObject(a) && isObject(b)) {
-    const keys = Object.keys(a);
-    return (
-      keys.length === Object.keys(b).length &&
-      keys.every(key => key in b && sameValue(a[key], b[key]))
-    );
-  }
-  return false;
+  return a === b || canonical(a) === canonical(b);
+}
+
+function canonical(value: SettingsValue): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+        )
+      : v
+  );
 }
 
 /**

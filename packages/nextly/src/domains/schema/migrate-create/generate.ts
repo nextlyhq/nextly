@@ -540,6 +540,7 @@ export async function generateMigration(
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
+    changesNoTable: operations.length === 0,
     now,
   });
 

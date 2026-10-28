@@ -46,6 +46,7 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { parseSqlSections, runMigrate } from "../migrate";
+import { runMigrateDown } from "../migrate-down";
 import { runMigrateCreate } from "../migrate-create";
 
 /** The config the commands load, set by each step before it runs them. */
@@ -254,6 +255,25 @@ describe.each(getConfiguredTestDialects())(
       expect(await applied(instance!, dialect, file)).toBe(true);
     });
 
+    it("migrate:down rolls a settings-only migration back, with no table to undo", async () => {
+      await migrateCreate(postsConfig("Blog posts"), "create_posts");
+      await migrate(postsConfig("Blog posts"));
+      await migrateCreate(postsConfig("Articles for the blog"), "describe");
+      await migrate(postsConfig("Articles for the blog"));
+      const { file } = await migrationNamed("describe");
+
+      loaded.config = postsConfig("Articles for the blog");
+      const { context, said } = command();
+      const code = await exiting(() => runMigrateDown({ cwd: dir }, context));
+
+      expect(code, said.join("\n")).toBeUndefined();
+      expect(await applied(instance!, dialect, file)).toBe(false);
+      // The step stopped at the settings-only file: the table migration before
+      // it is still applied, and its table is still there.
+      const { file: created } = await migrationNamed("create_posts");
+      expect(await applied(instance!, dialect, created)).toBe(true);
+    });
+
     it("a description edited in the Schema Builder", async () => {
       const created = uiSchemaManifest.parse({
         collections: [
@@ -306,6 +326,13 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.find(r => r.slug === "so_events")?.description).toBe(
         "Upcoming events"
       );
+
+      // And it rolls back like the code-first one: nothing about it is
+      // irreversible, since it changed no table.
+      const { context, said } = command();
+      const code = await exiting(() => runMigrateDown({ cwd: dir }, context));
+      expect(code, said.join("\n")).toBeUndefined();
+      expect(await applied(instance!, dialect, file)).toBe(false);
     });
   }
 );
