@@ -29,7 +29,10 @@ import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
 import type { PluginRoute } from "../route-types";
 
-const PLUGIN = "@test/manage-asker";
+// Two plugins, one asking by `requiredPermission` and one by `can()`, so
+// each way of asking is seen to warn on its own.
+const GATE_PLUGIN = "@test/manage-gate";
+const CAN_PLUGIN = "@test/manage-can";
 const RETIRED = [
   "media",
   "settings",
@@ -37,32 +40,42 @@ const RETIRED = [
   "email-templates",
 ] as const;
 
-const asker = definePlugin({
-  name: PLUGIN,
+const gateAsker = definePlugin({
+  name: GATE_PLUGIN,
   version: "1.0.0",
   nextly: ">=0.0.1",
   contributes: {
-    routes: RETIRED.flatMap((resource): PluginRoute[] => [
-      {
+    routes: RETIRED.map(
+      (resource): PluginRoute => ({
         method: "POST",
-        path: `/gate/${resource}`,
+        path: `/${resource}`,
         requiredPermission: `manage-${resource}`,
         handler: () => Response.json({ reached: true }),
-      },
-      {
-        method: "POST",
-        path: `/can/${resource}`,
-        handler: async (_req, ctx) =>
-          Response.json({ may: await ctx.caller!.can("manage", resource) }),
-      },
-    ]),
+      })
+    ),
   },
 });
 
-function post(sub: string, key: string): Promise<Response> {
-  const params = ["plugins", ...PLUGIN.split("/"), ...sub.split("/")];
+const canAsker = definePlugin({
+  name: CAN_PLUGIN,
+  version: "1.0.0",
+  nextly: ">=0.0.1",
+  contributes: {
+    routes: RETIRED.map(
+      (resource): PluginRoute => ({
+        method: "POST",
+        path: `/${resource}`,
+        handler: async (_req, ctx) =>
+          Response.json({ may: await ctx.caller!.can("manage", resource) }),
+      })
+    ),
+  },
+});
+
+function post(plugin: string, sub: string, key: string): Promise<Response> {
+  const params = ["plugins", ...plugin.split("/"), sub];
   return createDynamicHandlers().POST(
-    new Request(`http://localhost/api/plugins/${PLUGIN}/${sub}`, {
+    new Request(`http://localhost/api/plugins/${plugin}/${sub}`, {
       method: "POST",
       headers: { authorization: `Bearer ${key}` },
     }),
@@ -126,7 +139,10 @@ describe("a plugin gate asking for a retired manage permission", () => {
   }
 
   beforeAll(async () => {
-    t = await createTestNextly({ collections: [], plugins: [asker] });
+    t = await createTestNextly({
+      collections: [],
+      plugins: [gateAsker, canAsker],
+    });
     await seedPermissionsAndRolePresets();
     // The first user made is the super-admin, who may mint any key.
     const owner = await t.nextly.users.create({
@@ -158,33 +174,38 @@ describe("a plugin gate asking for a retired manage permission", () => {
 
     it("lets through a caller holding the plain four, at the route and by can()", async () => {
       const key = await keyHolding(plain);
-      expect((await post(`gate/${resource}`, key)).status).toBe(200);
-      expect(await (await post(`can/${resource}`, key)).json()).toEqual({
+      expect((await post(GATE_PLUGIN, resource, key)).status).toBe(200);
+      expect(await (await post(CAN_PLUGIN, resource, key)).json()).toEqual({
         may: true,
       });
     });
 
     it("refuses a caller holding three of them, at the route and by can()", async () => {
       const key = await keyHolding(plain.slice(0, 3));
-      expect((await post(`gate/${resource}`, key)).status).toBe(403);
-      expect(await (await post(`can/${resource}`, key)).json()).toEqual({
+      expect((await post(GATE_PLUGIN, resource, key)).status).toBe(403);
+      expect(await (await post(CAN_PLUGIN, resource, key)).json()).toEqual({
         may: false,
       });
     });
 
     it("lets through a role not yet converted, holding the retired permission", async () => {
       const key = await keyHolding([`manage-${resource}`]);
-      expect((await post(`gate/${resource}`, key)).status).toBe(200);
-      expect(await (await post(`can/${resource}`, key)).json()).toEqual({
+      expect((await post(GATE_PLUGIN, resource, key)).status).toBe(200);
+      expect(await (await post(CAN_PLUGIN, resource, key)).json()).toEqual({
         may: true,
       });
     });
 
-    it("tells the plugin once which permission to ask instead", () => {
-      const told = warned.filter(
-        line => line.includes(PLUGIN) && line.includes(`"manage-${resource}"`)
-      );
-      expect(told).toHaveLength(1);
-    });
+    it.each([GATE_PLUGIN, CAN_PLUGIN])(
+      "tells %s once which permission to ask instead",
+      plugin => {
+        const told = warned.filter(
+          line =>
+            line.includes(`"plugin":"${plugin}"`) &&
+            line.includes(`"manage-${resource}"`)
+        );
+        expect(told).toHaveLength(1);
+      }
+    );
   });
 });
