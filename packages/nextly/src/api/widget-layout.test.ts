@@ -930,6 +930,78 @@ describe("PUT /api/dashboard/layout", () => {
     ]);
   });
 
+  it("reads a retired per-collection card out of the row, and saves without it", async () => {
+    // 🔴 Dropped, unlike the gated card above: core makes no card in the
+    // `collection/` or `single/` namespace any more, so none can come back.
+    // `acme/x`, a card of a plugin this install does not have now, is the
+    // control: an unknown id is carried, so the drop is by namespace and not
+    // by "the registry does not know it".
+    registerWidget(widget({ id: "core/a" }));
+    const row = serializeLayout([
+      { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+      {
+        id: "p8",
+        widgetId: "collection/posts-count",
+        w: 3,
+        h: 2,
+        removed: false,
+      },
+      { id: "p9", widgetId: "acme/x", w: 12, h: 3, removed: false },
+    ]);
+    stored = { version: 2, layout: row };
+
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    expect(read.placements?.map(p => p.widgetId)).toEqual(["core/a"]);
+    // The read writes nothing: the row is as it was until the next save.
+    expect(saved).toBeUndefined();
+    expect(stored?.layout).toBe(row);
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "acme/x",
+    ]);
+  });
+
+  it("refuses a placement in a retired namespace, saying what replaced it in each", async () => {
+    // The refusal is the namespace's, not the unknown-widget rule's: it says
+    // what replaced the card, and for a Single never "that collection", since
+    // the widgets with a Collection setting offer collections only.
+    registerWidget(widget({ id: "core/a" }));
+    const refused = async (widgetId: string) => {
+      const res = await putWidgetLayout(
+        putReq({
+          placements: [
+            ...onePlacement,
+            { id: "p2", widgetId, w: 12, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+        })
+      );
+      expect(res.status).toBe(400);
+      return res.text();
+    };
+
+    const collection = await refused("collection/posts-count");
+    expect(collection).toContain(
+      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.'
+    );
+    const single = await refused("single/about-card");
+    expect(single).toContain(
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+    );
+    expect(single).not.toContain("Collection to");
+    expect(saved).toBeUndefined();
+  });
+
   it("does not echo the carried placement back to the caller", async () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(

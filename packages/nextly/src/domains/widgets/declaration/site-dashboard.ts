@@ -29,6 +29,10 @@ import {
 } from "../grid-size";
 import { MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
+import {
+  inRetiredWidgetNamespace,
+  retiredWidgetReplacement,
+} from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
 
 import type { DefaultLayoutCard } from "./dashboard";
@@ -45,12 +49,8 @@ export const SITE_CONFIG = "the site config";
 
 /** What the check needs to know of one widget. */
 export interface SiteWidgetFacts {
-  /**
-   * The sizes its cards may take, every end filled in. Absent for a generated
-   * card not derived yet, whose sizes the check cannot see: then only that a
-   * size is one the grid can draw is checked.
-   */
-  size?: WidgetSizeBounds;
+  /** The sizes its cards may take, every end filled in. */
+  size: WidgetSizeBounds;
   allowsSeveral: boolean;
   /** Its declared settings, or `undefined` where its declaration is not seen. */
   settings?: readonly AnyWidgetSetting[];
@@ -147,37 +147,6 @@ function editDistance(a: string, b: string): number {
   return previous[b.length] ?? 0;
 }
 
-/**
- * The namespaces of the cards core generates from the content itself, one per
- * collection or Single. They are derived when the dashboard is first read, after
- * startup checks the site config, so at startup an id in them may name a card
- * that does not exist yet without being a mistake.
- */
-const GENERATED_NAMESPACES = ["collection/", "single/"] as const;
-
-/**
- * What the check assumes of a generated card it cannot see yet: no sizes and
- * no settings it can judge, so only the config's own shape is checked.
- */
-const NOT_YET_GENERATED: SiteWidgetFacts = {
-  allowsSeveral: true,
-};
-
-/**
- * What the check knows of `id`: the install's widget, or, for an id in a
- * generated namespace not derived yet, `NOT_YET_GENERATED`.
- */
-function factsFor(
-  id: string,
-  ctx: SiteDashboardContext
-): SiteWidgetFacts | undefined {
-  const facts = ctx.factsOf(id);
-  if (facts !== undefined) return facts;
-  return GENERATED_NAMESPACES.some(namespace => id.startsWith(namespace))
-    ? NOT_YET_GENERATED
-    : undefined;
-}
-
 /** Why `id` names no widget, with its nearest match, or `undefined`. */
 function unknownWidget(
   where: string,
@@ -187,7 +156,14 @@ function unknownWidget(
   if (typeof id !== "string") {
     return `${where} must name a widget by its id, got ${quote(id)}`;
   }
-  if (factsFor(id, ctx) !== undefined) return undefined;
+  // 🔴 Refused by NAMESPACE, ahead of the lookup: core no longer makes a card
+  // per collection or per Single, so an id there names nothing, and the
+  // nearest-match hint would point at an unrelated widget. The author is told
+  // what replaced it instead.
+  const replacement = retiredWidgetReplacement(id);
+  if (replacement !== undefined)
+    return `${where} names "${id}", which ${replacement}`;
+  if (ctx.factsOf(id) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
 }
@@ -209,7 +185,7 @@ const fitsWithin = (a: GridSize, b: GridSize): boolean =>
  */
 function cardSizeProblems(
   card: Record<string, unknown>,
-  bounds: WidgetSizeBounds | undefined
+  bounds: WidgetSizeBounds
 ): string[] {
   const direction = (key: "w" | "h"): string | undefined => {
     const value = card[key];
@@ -248,9 +224,10 @@ function gridDirectionProblem(
 function boundsDirectionProblem(
   key: "w" | "h",
   value: number,
-  bounds: WidgetSizeBounds | undefined
+  bounds: WidgetSizeBounds
 ): string | undefined {
-  if (bounds === undefined) return undefined;
+  // Every widget the check knows states its bounds, so each drawable
+  // direction is judged against them.
   const low = bounds.min[key];
   const high = bounds.max[key];
   return value >= low && value <= high
@@ -310,8 +287,9 @@ function narrowedBounds(
   id: string,
   site: Record<string, unknown>,
   facts: SiteWidgetFacts
-): WidgetSizeBounds | undefined {
-  if (facts.size === undefined) return undefined;
+): WidgetSizeBounds {
+  // The widget's own bounds are always known: every id the check accepts
+  // names a widget the install declares.
   const overrides = isRecord(site.overrides) ? site.overrides : {};
   const override = overrides[id];
   const size = isRecord(override) ? overrideSize(override.size) : undefined;
@@ -367,7 +345,8 @@ function sizeOverrideProblems(size: unknown, facts: SiteWidgetFacts): string[] {
       `overrides.size.${key} must be { w, h } with w a whole number from 1 to ${GRID_COLUMNS} and h a whole number from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}, got ${quote(size[key])}`
   );
   const read = overrideSize(size);
-  if (read === undefined || facts.size === undefined) {
+  // Only an override that can be read is judged against the widget's bounds.
+  if (read === undefined) {
     return [...unknownKeys, ...shapes];
   }
   if (narrowedSizeBounds(facts.size, read) !== undefined) return unknownKeys;
@@ -469,7 +448,7 @@ function overridesFaults(
   return Object.entries(site.overrides).flatMap(([id, override]) => {
     const unknown = unknownWidget("overrides", id, ctx);
     if (unknown !== undefined) return [fault(id, unknown)];
-    const facts = factsFor(id, ctx) as SiteWidgetFacts;
+    const facts = ctx.factsOf(id) as SiteWidgetFacts;
     return overrideProblems(override, facts).map(problem => fault(id, problem));
   });
 }
@@ -497,16 +476,19 @@ function defaultCardProblems(
   const unknown = unknownWidget("defaultLayout", id, ctx);
   // An optional card names a widget the install may not have, such as a
   // plugin's on a site without the plugin: left out of the default, no fault.
+  // Never a retired card's id, which no install has: that is refused with the
+  // same message whether the card is optional or not.
   if (
     unknown !== undefined &&
     card.optional === true &&
-    typeof id === "string"
+    typeof id === "string" &&
+    !inRetiredWidgetNamespace(id)
   ) {
     return unknownKeys;
   }
   if (unknown !== undefined) return [...unknownKeys, unknown];
   const widget = id as string;
-  const facts = factsFor(widget, ctx) as SiteWidgetFacts;
+  const facts = ctx.factsOf(widget) as SiteWidgetFacts;
   return [
     ...unknownKeys,
     ...(hiddenIds(site).has(widget)

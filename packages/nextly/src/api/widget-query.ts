@@ -23,7 +23,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { createBatchScope } from "../domains/widgets/batch-scope";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../domains/widgets/content-sources";
 import {
   entityRead,
   resolveExecutableSource,

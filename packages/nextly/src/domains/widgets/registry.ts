@@ -18,6 +18,7 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import { validateWidgetDefinition, type WidgetDefinition } from "./definition";
 import { detachedSnapshot } from "./detached-snapshot";
+import { retiredWidgetReplacement } from "./retired-widget-namespaces";
 
 /** The fields a plugin may patch on someone else's widget. */
 export type WidgetPatch = Partial<
@@ -146,6 +147,16 @@ export function registerDeclaredDefinition(
 /** Validates and stores a new widget, refusing an id already taken. */
 function addToStore(def: WidgetDefinition, source: string): void {
   validateWidgetDefinition(def);
+  // 🔴 A retired namespace is refused here, where every registration passes,
+  // so the registry and the layout doors give one answer: a card registered
+  // there would be offered, then refused by every write and dropped by every
+  // read. Thrown at startup, where an app registers, with what replaced it.
+  const replacement = retiredWidgetReplacement(def.id);
+  if (replacement !== undefined) {
+    throw NextlyError.invalidInput({
+      message: `Widget "${def.id}" cannot be registered: "${def.id}" ${replacement}`,
+    });
+  }
   const existing = store().get(def.id);
   if (existing) {
     throw NextlyError.conflict({

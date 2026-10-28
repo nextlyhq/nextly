@@ -20,6 +20,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isAdminRelativePath } from "../admin-path";
 import { isValidWidgetId } from "../definition";
 import { sizeDeclarationProblems } from "../grid-size";
+import { RETIRED_WIDGET_NAMESPACES } from "../retired-widget-namespaces";
 import {
   SETTING_NOT_AN_OBJECT,
   startingValueProblem,
@@ -64,11 +65,13 @@ export interface WidgetDeclarationGroup {
 }
 
 /**
- * Namespaces core keeps for itself: its own widgets, and the cards it generates
- * per collection and per Single. A declared widget there would take an id core
- * may hand out tomorrow.
+ * Namespaces core keeps for itself: its own widgets, and the namespaces of the
+ * per-collection and per-Single cards it once made. A declared widget in
+ * `core/` would take an id core may hand out tomorrow; one in a retired
+ * namespace would be dropped from every saved layout that held it, since a
+ * layout read drops those cards by namespace.
  */
-const RESERVED_NAMESPACES = ["core", "collection", "single"] as const;
+const RESERVED_NAMESPACES = ["core", ...RETIRED_WIDGET_NAMESPACES] as const;
 
 /** The fields a declaration may carry. Anything else is named as a mistake. */
 const FIELDS = new Set([
@@ -369,7 +372,7 @@ function idProblem(id: unknown, inCore: boolean): string | undefined {
   }
   const namespace = id.slice(0, id.indexOf("/"));
   // Core's own widgets live in `core/`, and only there: the per-collection and
-  // per-Single namespaces are for the cards core generates.
+  // per-Single namespaces are retired, and nobody's.
   if (inCore) {
     return namespace === "core"
       ? undefined
