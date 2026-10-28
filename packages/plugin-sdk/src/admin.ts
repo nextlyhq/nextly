@@ -375,7 +375,8 @@ export type {
  *   (rows with one action each), `Widget.Table` (rows across named columns, a
  *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
  *   that take plain data, drawn in the shared chart colours, with an optional
- *   `unit` for their tooltips).
+ *   `unit` for their tooltips), and `Widget.FooterLink` (one link drawn in the
+ *   card's own footer, where core's cards draw "View all").
  *
  * The number and change formatters and the chart colour accessor are exported
  * from this package's root, not here: every module of the admin is a client

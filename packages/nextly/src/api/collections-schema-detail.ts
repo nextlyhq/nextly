@@ -23,6 +23,7 @@
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
@@ -51,8 +52,8 @@ import { simplePluralize } from "../shared/lib/pluralization";
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteCollectionAccess,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -153,7 +154,7 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a collection.
  *
- * Requires `manage-settings` (or super-admin). The registry throws
+ * Requires create, update and delete on settings (or super-admin). The registry throws
  * `NextlyError.forbidden` with `reason: "collection-locked"` if the
  * collection is locked (code-first collections cannot be modified via API).
  */
@@ -165,7 +166,11 @@ export const PATCH = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A definition change asks create, update and delete on settings.
+    await requireRouteAllPermissions(
+      request,
+      COLLECTION_DEFINITION_PERMISSIONS
+    );
 
     const { slug } = await context.params;
 
@@ -334,7 +339,7 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a collection.
  *
- * Requires `manage-settings` (or super-admin). The registry throws
+ * Requires create, update and delete on settings (or super-admin). The registry throws
  * `NextlyError.forbidden` with `reason: "collection-locked-delete"` if the
  * collection is locked (code-first collections cannot be deleted via API), and
  * a conflict naming what depends on it while anything does.
@@ -347,7 +352,11 @@ export const DELETE = withErrorHandler(
     // Initialize services first so the permission cache / DB is ready
     const registry = await getCollectionRegistry();
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A definition change asks create, update and delete on settings.
+    await requireRouteAllPermissions(
+      request,
+      COLLECTION_DEFINITION_PERMISSIONS
+    );
 
     const { slug } = await context.params;
 

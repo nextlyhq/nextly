@@ -79,6 +79,10 @@
       "types": "./dist/domains/widgets/attention-keys.d.mts",
       "import": "./dist/domains/widgets/attention-keys.mjs"
     },
+    "./card-geometry": {
+      "types": "./dist/domains/widgets/card-geometry.d.mts",
+      "import": "./dist/domains/widgets/card-geometry.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"
