@@ -24,7 +24,6 @@ import { and, count, eq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
-import { compileExtensionSchemaWith } from "../../domains/collections/services/collection-dependents-schema";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
@@ -419,13 +418,18 @@ export async function runPruneCommand(
       }),
       // Compiled here, not published: this command serves nothing, and only
       // reads what the configured plugins and the app declare.
-      extensionSchema: orphans =>
-        compileExtensionSchemaWith({
+      extensionSchema: async orphans => {
+        // Loaded when a prune that drops asks, not with every command.
+        const { compileExtensionSchemaWith } = await import(
+          "../../domains/collections/services/collection-dependents-schema"
+        );
+        return compileExtensionSchemaWith({
           config: configResult.config,
           dialect,
           removedCollections: orphans,
           logger: { warn: message => logger.warn(message) },
-        }),
+        });
+      },
     });
 
     // The listing and the consent that drops it were printed by the

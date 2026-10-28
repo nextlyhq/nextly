@@ -48,7 +48,6 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
-import { deleteResourcePermissions } from "../../collections/services/delete-resource-permissions";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -851,6 +850,10 @@ export class SingleRegistryService extends BaseRegistryService<
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
 
+      // Loaded when a delete runs, not with the registry.
+      const { deleteResourcePermissions } = await import(
+        "../../collections/services/delete-resource-permissions"
+      );
       await deleteResourcePermissions({
         service: this.permissionSeedService,
         slug,

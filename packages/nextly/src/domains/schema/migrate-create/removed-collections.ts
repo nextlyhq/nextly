@@ -27,13 +27,10 @@ import {
 import type { RemovedCollectionSeed } from "../../collections/services/collection-dependents-schema";
 import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import type { ExtensionSchemaRecord } from "../ownership/dependent-elements";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
-import {
-  buildDesiredSnapshotFromConfig,
-  type MinimalConfigEntity,
-} from "./generate";
+import type { MinimalConfigEntity } from "./generate";
+import { COLLECTION_TABLE_PREFIX } from "./removed-collection-tables";
 
 /**
  * The collections Nextly provides itself, which a relationship or upload may
@@ -46,35 +43,6 @@ const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
   "users",
   "media",
 ]);
-
-/** Every collection's table starts with this, whatever its slug or `dbName`. */
-const COLLECTION_TABLE_PREFIX = "dc_";
-
-/**
- * The collection tables the latest snapshot holds that the configuration no
- * longer declares: the tables the next migration would drop.
- */
-function removedCollectionTables(input: {
-  previous: NextlySchemaSnapshot;
-  collections: MinimalConfigEntity[];
-  singles: MinimalConfigEntity[];
-  components: MinimalConfigEntity[];
-  dialect: SupportedDialect;
-}): string[] {
-  const desired = new Set(
-    buildDesiredSnapshotFromConfig(
-      input.collections,
-      input.singles,
-      input.components,
-      input.dialect
-    ).tables.map(table => table.name)
-  );
-  return input.previous.tables
-    .map(table => table.name)
-    .filter(
-      name => name.startsWith(COLLECTION_TABLE_PREFIX) && !desired.has(name)
-    );
-}
 
 /**
  * Refuse to generate a migration that drops a collection something still
@@ -95,7 +63,8 @@ function removedCollectionTables(input: {
  *   collections seeded, so a hook that still extends one of them says what it adds
  */
 export async function assertRemovedCollectionsUnused(input: {
-  previous: NextlySchemaSnapshot;
+  /** The collection tables the migration would drop (`removedCollectionTables`). */
+  removedTables: readonly string[];
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
@@ -104,7 +73,7 @@ export async function assertRemovedCollectionsUnused(input: {
     removed: readonly RemovedCollectionSeed[]
   ) => Promise<ExtensionSchemaRecord | null>;
 }): Promise<void> {
-  const removedTables = removedCollectionTables(input);
+  const { removedTables } = input;
   if (removedTables.length === 0) return;
 
   const owners = remainingFieldOwners(input);

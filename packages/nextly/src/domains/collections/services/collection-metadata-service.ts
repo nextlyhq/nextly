@@ -17,17 +17,9 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
-
-import {
-  assertNothingDependsOn,
-  databaseDependentsSources,
-} from "./collection-dependents";
-import { dropOrder } from "./collection-drop-order";
-import { deleteResourcePermissions } from "./delete-resource-permissions";
 
 /** The parts of a collection's registry row its delete reads. */
 interface DeletedCollectionRow {
@@ -989,6 +981,17 @@ export class CollectionMetadataService extends BaseService {
     together?: readonly string[];
   }): Promise<MetadataServiceResult> {
     try {
+      // Loaded when a delete runs, not with the service: everything that
+      // constructs the service would otherwise load the delete's readers.
+      const [
+        { assertNothingDependsOn, databaseDependentsSources },
+        { dropOrder },
+        { collectionOwnTables },
+      ] = await Promise.all([
+        import("./collection-dependents"),
+        import("./collection-drop-order"),
+        import("../../dynamic-collections/services/collection-tables"),
+      ]);
       const slugs = [
         ...new Set([params.collectionName, ...(params.together ?? [])]),
       ];
@@ -1155,6 +1158,9 @@ export class CollectionMetadataService extends BaseService {
   /** Remove a dropped collection's registry row and its permissions. */
   private async unregister(slug: string): Promise<void> {
     await this.collectionService.unregisterCollection(slug);
+    const { deleteResourcePermissions } = await import(
+      "./delete-resource-permissions"
+    );
     await deleteResourcePermissions({
       service: this.permissionSeedService,
       slug,

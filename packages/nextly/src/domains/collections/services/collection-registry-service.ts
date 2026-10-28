@@ -35,7 +35,6 @@ import type {
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
-import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
@@ -51,10 +50,6 @@ import {
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import type { CollectionDbOptions } from "./collection-db-options";
-import {
-  assertNothingDependsOn,
-  databaseDependentsSources,
-} from "./collection-dependents";
 import { resolveDescription } from "./collection-sync-service";
 
 /** Options for updating a collection. */
@@ -594,6 +589,15 @@ export class CollectionRegistryService extends BaseRegistryService<
       extensionSchema?: () => Promise<ExtensionSchemaRecord | null>;
     } = {}
   ): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      { assertNothingDependsOn, databaseDependentsSources },
+      { collectionOwnTables },
+    ] = await Promise.all([
+      import("./collection-dependents"),
+      import("../../dynamic-collections/services/collection-tables"),
+    ]);
     const collections = [];
     for (const slug of slugs) {
       const record = await this.getCollection(slug);
