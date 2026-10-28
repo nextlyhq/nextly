@@ -137,6 +137,7 @@ import {
   SCHEMA_CHANGE_PERMISSIONS,
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
+  type RouteGrant,
 } from "./domains/auth/system-write-policy";
 import {
   appLocalization,
@@ -1118,20 +1119,18 @@ async function resolveAuthorization(
     // the descriptors describing which fields that provider requires --
     // leaving the grant unusable for exactly the contributed providers the
     // catalog exists to describe. It exposes definitions, never stored records.
-    if (method === "listProviderTypes") {
-      return requireListRead(req, SYSTEM_READ_POLICY.emailProviders.readTypes);
-    }
-
-    // The action its verb names, as the system policies declare it; a
-    // `manage-` permission counts as each plain one.
-    const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [{ action, resource: "email-providers" }]);
+    return requireListRead(
+      req,
+      emailGrant("emailProviders", method, httpMethod)
+    );
   }
 
   // --- Email templates → their own action on email-templates ---
   if (service === "emailTemplates") {
-    const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [{ action, resource: "email-templates" }]);
+    return requireListRead(
+      req,
+      emailGrant("emailTemplates", method, httpMethod)
+    );
   }
 
   // --- User fields → their own action on settings ---
@@ -2388,6 +2387,39 @@ async function handleAdminMetaWorkspaceRequest(
     buildAdminMeta(audience)
   );
   return withSessionCacheHeaders(respondAdminMeta(workspace));
+}
+
+/**
+ * The catch-all Email routes whose grant is not their verb's action, each the
+ * system policy's entry for what it does, as the standalone routes ask it:
+ * choosing a provider type is a read or a create, making a provider the
+ * default updates it, and a test send through a provider or a template
+ * preview creates nothing stored and asks create.
+ */
+const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
+  listProviderTypes: SYSTEM_READ_POLICY.emailProviders.readTypes,
+  setDefault: SYSTEM_WRITE_POLICY.emailProviders.makeDefault,
+  testProvider: SYSTEM_WRITE_POLICY.emailProviders.sendTest,
+  previewTemplate: SYSTEM_WRITE_POLICY.emailTemplates.preview,
+};
+
+/**
+ * The grant a catch-all Email route asks, read from the system policies:
+ * its method's own entry where it has one, else the entry for the action its
+ * verb names. A `manage-` permission counts as each plain one.
+ */
+function emailGrant(
+  resource: "emailProviders" | "emailTemplates",
+  method: string,
+  httpMethod: string
+): RouteGrant {
+  const named = EMAIL_METHOD_GRANTS[method];
+  if (named) return named;
+  const action = getActionFromMethod(httpMethod);
+  if (action === "create" || action === "update" || action === "delete") {
+    return SYSTEM_WRITE_POLICY[resource][action];
+  }
+  return SYSTEM_READ_POLICY[resource].read;
 }
 
 /**

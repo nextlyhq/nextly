@@ -456,9 +456,11 @@ export async function requirePermission(
 }
 
 /**
- * Every one of `permissions`, each asked as {@link requirePermission} asks
- * one: for a change that is several kinds of change at once. The first one
- * refused answers, so a caller is told the first permission it lacks.
+ * Every one of `permissions`: for a change that is several kinds of change at
+ * once. Each is asked by grant, as the any-of gates ask a list of one, so no
+ * entity's rule is read: a collection that happens to be named after a system
+ * resource does not judge it. The first one refused answers, so a caller is
+ * told the first permission it lacks.
  */
 export async function requireAllPermissions(
   req: Request,
@@ -471,7 +473,9 @@ export async function requireAllPermissions(
   }
 
   for (const { action, resource } of permissions) {
-    const answer = await authorizeCaller(authResult, action, resource);
+    const answer = await authorizeCallerForAny(authResult, [
+      { action, resource },
+    ]);
     if (isErrorResponse(answer)) return answer;
   }
   return authResult;
