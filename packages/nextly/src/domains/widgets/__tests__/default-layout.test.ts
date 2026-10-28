@@ -182,4 +182,26 @@ describe("one default for everyone", () => {
       defaultLayoutPlacements(core, p)
     );
   });
+
+  it("gives each further card of one widget an id of its own, derived from the widget's", () => {
+    const p = plan({
+      cards: [
+        { widget: "site/many" },
+        { widget: "site/one" },
+        { widget: "site/many" },
+        { widget: "site/many" },
+      ],
+    });
+    const widgets = [widget("site/many"), widget("site/one")];
+    expect(defaultLayoutPlacements(widgets, p).map(each => each.id)).toEqual([
+      "site/many",
+      "site/one",
+      "site/many~2",
+      "site/many~3",
+    ]);
+    // Derived, never minted: the same ids on every read.
+    expect(defaultLayoutPlacements(widgets, p)).toEqual(
+      defaultLayoutPlacements(widgets, p)
+    );
+  });
 });

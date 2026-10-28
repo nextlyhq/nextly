@@ -558,16 +558,26 @@ function defaultLayoutFaults(
   const sparse = sparseListProblem(site.defaultLayout, "defaultLayout");
   if (sparse !== undefined) return [fault("(defaultLayout)", sparse)];
   const entries: readonly unknown[] = site.defaultLayout;
+  const cards = entries.map(asCard);
+  // An optional card whose widget the install does not have is left out of
+  // the default (`defaultLayoutPlacements`), so it takes none of its room.
+  const placed = cards.filter(
+    card =>
+      !(
+        card?.optional === true &&
+        typeof card.widget === "string" &&
+        ctx.factsOf(card.widget) === undefined
+      )
+  ).length;
   const over =
-    entries.length > ctx.maxPlacements
+    placed > ctx.maxPlacements
       ? [
           fault(
             "(defaultLayout)",
-            `defaultLayout holds ${entries.length} cards, and a dashboard holds at most ${ctx.maxPlacements}`
+            `defaultLayout places ${placed} cards, and a dashboard holds at most ${ctx.maxPlacements}`
           ),
         ]
       : [];
-  const cards = entries.map(asCard);
   const each = cards.flatMap((card, index) => {
     if (card === undefined) {
       return [

@@ -245,7 +245,32 @@ describe("a site config with faults", () => {
         })
       )
     ).toContain(
-      "defaultLayout holds 201 cards, and a dashboard holds at most 200"
+      "defaultLayout places 201 cards, and a dashboard holds at most 200"
+    );
+  });
+
+  it("counts against that room only the cards it places, never an optional one whose widget is absent", () => {
+    const full = Array.from({ length: 200 }, () => "acme/recent-orders");
+    expect(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          ...full,
+          { widget: "other/not-installed", optional: true },
+        ],
+      })
+    ).not.toThrow();
+    // An optional card whose widget IS installed is placed, and counted.
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            ...full,
+            { widget: "acme/recent-orders", optional: true },
+          ],
+        })
+      )
+    ).toContain(
+      "defaultLayout places 201 cards, and a dashboard holds at most 200"
     );
   });
 
@@ -588,6 +613,16 @@ describe("a plugin that adds only Needs attention items", () => {
         plainPlugin("@other/inbox", { attention: dashboard.attention }),
       ])
     ).not.toThrow();
+  });
+
+  it("is refused when its widgets are null, which is a list that is not one, not none", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([plainPlugin("@other/inbox", { widgets: null })])
+      )
+    ).toContain(
+      'plugin "@other/inbox", widget "(none)": its dashboard widgets must be a list of widget declarations'
+    );
   });
 });
 

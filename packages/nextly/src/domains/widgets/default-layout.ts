@@ -22,7 +22,7 @@
 import { placedByDefault, sizeFacts, type CanonicalWidget } from "./canonical";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "./core-widgets/ids";
 import type { DefaultLayoutCard } from "./declaration/dashboard";
-import type { WidgetPlacement } from "./layout";
+import { resolvePlacementIds, type WidgetPlacement } from "./layout";
 
 /** What startup read from the site config and the plugins, for the default. */
 export interface DefaultLayoutPlan {
@@ -69,8 +69,10 @@ const CORE_IDS: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
  * since deleted.
  *
  * The placement id is the widget id here, and only here, so repeated reads of
- * an unsaved dashboard return identical ids; a widget placed twice is re-keyed
- * stably where the arrangement is read (`partitionPlacements`).
+ * an unsaved dashboard return identical ids. A widget the base places more than
+ * once gets an id of its own for each further card, derived from the widget's
+ * as a repeat is everywhere (`resolvePlacementIds`), so each card keeps its own
+ * removal and settings in a row that follows the default.
  *
  * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
  * and this materialization is caller-independent; capping it would let cards a
@@ -82,10 +84,12 @@ export function defaultLayoutPlacements(
   plan: DefaultLayoutPlan = defaultLayoutPlan()
 ): WidgetPlacement[] {
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const base = plan.cards.flatMap(card => {
-    const widget = byId.get(card.widget);
-    return widget === undefined ? [] : [placementOf(widget, card)];
-  });
+  const base = resolvePlacementIds(
+    plan.cards.flatMap(card => {
+      const widget = byId.get(card.widget);
+      return widget === undefined ? [] : [placementOf(widget, card)];
+    })
+  ).placements;
   if (!plan.suggestions) return base;
   const placed = new Set(base.map(placement => placement.widgetId));
   const suggested = suggestedWidgets(widgets, plan.suggested).filter(

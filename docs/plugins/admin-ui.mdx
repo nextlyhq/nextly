@@ -429,8 +429,9 @@ widget instead. A widget nobody suggests is offered and never placed.
 
 A site writes its own default as widget ids, or as cards with a size in grid units and
 starting settings. An entry marked `optional` is left out where its widget is not installed,
-such as a plugin's on a site without that plugin; any other entry must name a widget the
-install has, or startup refuses it:
+such as a plugin's on a site without that plugin, and takes none of the dashboard's room; any
+other entry must name a widget the install has, or startup refuses it. A widget that allows
+several cards may be listed more than once, and each card keeps its own settings:
 
 ```ts
 admin: {
