@@ -4,9 +4,10 @@
  * wrote the list on one line or a formatter laid it out a path a line, naming each component
  * missing (with its owner and widget) and each path no longer declared.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -20,6 +21,7 @@ import {
   buildImportMapArtifacts,
   COMPONENT_IMPORT_MAP_FILENAME,
   COMPONENT_PATHS_FILENAME,
+  configImportSpecifier,
   listedPathsOf,
   mapRegisteredPathsOf,
 } from "./component-import-map";
@@ -61,7 +63,11 @@ const mapOf = (paths: readonly string[]) =>
     "export const componentMapAgreesWithList = true;",
     "",
     "const registered = {",
-    ...paths.map((path, index) => `  ${JSON.stringify(path)}: _p0.C${index},`),
+    // Each under the member the generator writes for its path: what follows its `#`.
+    ...paths.map(
+      path =>
+        `  ${JSON.stringify(path)}: _p0.${path.split("#")[1] ?? "default"},`
+    ),
     "};",
     "",
   ].join("\n");
@@ -77,7 +83,21 @@ async function commit(paths: readonly string[]): Promise<void> {
   );
 }
 
-const check = () => checkComponentMapFiles([shop], TYPES, root);
+const check = () => checkComponentMapFiles([shop], TYPES, root, undefined);
+
+/** Writes the two files as the generator writes them for `plugins`, importing `configImport`. */
+async function generate(
+  plugins: PluginDefinition[],
+  configImport?: string
+): Promise<void> {
+  for (const artifact of buildImportMapArtifacts(
+    plugins,
+    TYPES,
+    configImport
+  )) {
+    await writeFile(join(root, artifact.path), artifact.code);
+  }
+}
 
 describe("a committed map that agrees with the config", () => {
   it("agrees when the list holds every declared component, laid out by a formatter", async () => {
@@ -89,9 +109,7 @@ describe("a committed map that agrees with the config", () => {
   });
 
   it("agrees with the files exactly as the generator writes them", async () => {
-    for (const artifact of buildImportMapArtifacts([shop], TYPES)) {
-      await writeFile(join(root, artifact.path), artifact.code);
-    }
+    await generate([shop]);
     expect(componentMapAgrees(await check())).toBe(true);
   });
 });
@@ -181,13 +199,7 @@ describe("a map that no longer registers what its list names", () => {
   });
 
   it("agrees with a map the generator wrote, its widget notes included", async () => {
-    for (const artifact of buildImportMapArtifacts(
-      [shop],
-      TYPES,
-      "../../nextly.config"
-    )) {
-      await writeFile(join(root, artifact.path), artifact.code);
-    }
+    await generate([shop], "../../nextly.config");
     expect((await check()).mapMatchesList).toBe(true);
   });
 });
@@ -220,6 +232,130 @@ describe("a map that hands the page builder its editor modules", () => {
     expect(
       mapRegisteredPathsOf(withEditorEntries("  blocks: somewhere,"))
     ).toBeUndefined();
+  });
+});
+
+describe("the config a map checks its widgets against", () => {
+  const config = () => join(root, "nextly.config.ts");
+  const importOf = (file: string) =>
+    configImportSpecifier(join(root, DIR), join(root, file));
+
+  it("agrees when the map imports the config the check loaded", async () => {
+    await generate([shop], importOf("nextly.config.ts"));
+    const found = await checkComponentMapFiles([shop], TYPES, root, config());
+    expect(found.otherConfig).toBeUndefined();
+    expect(componentMapAgrees(found)).toBe(true);
+  });
+
+  it("does not agree when the map was written for another config, naming both", async () => {
+    await generate([shop], importOf("other.config.ts"));
+    const found = await checkComponentMapFiles([shop], TYPES, root, config());
+    expect(found.otherConfig).toEqual({
+      written: "../../../other.config",
+      expected: "../../../nextly.config",
+    });
+    expect(componentMapAgrees(found)).toBe(false);
+  });
+
+  it("does not agree when the map imports no config though one was loaded, nor the reverse", async () => {
+    await generate([shop]);
+    expect(
+      (await checkComponentMapFiles([shop], TYPES, root, config())).otherConfig
+    ).toEqual({ written: undefined, expected: "../../../nextly.config" });
+    await generate([shop], importOf("nextly.config.ts"));
+    expect((await check()).otherConfig).toEqual({
+      written: "../../../nextly.config",
+      expected: undefined,
+    });
+  });
+
+  it("reads an import the map no longer checks against as no config at all", async () => {
+    await generate([shop], importOf("nextly.config.ts"));
+    const file = join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME);
+    const kept = (await readFile(file, "utf8")).replace(
+      "} satisfies DeclaredComponentMap<typeof siteConfig>;",
+      "};"
+    );
+    await writeFile(file, kept);
+    expect(
+      (await checkComponentMapFiles([shop], TYPES, root, config())).otherConfig
+    ).toEqual({ written: undefined, expected: "../../../nextly.config" });
+  });
+
+  it("asks for no config import where nothing declares a widget, whose props are all it checks", async () => {
+    const pagesOnly = {
+      ...shop,
+      contributes: { admin: shop.contributes?.admin },
+    } as PluginDefinition;
+    await generate([pagesOnly]);
+    const found = await checkComponentMapFiles(
+      [pagesOnly],
+      TYPES,
+      root,
+      config()
+    );
+    expect(found.otherConfig).toBeUndefined();
+    expect(componentMapAgrees(found)).toBe(true);
+  });
+
+  // The maps a scaffold ships are written before its layout fixes where its config sits, so they
+  // import none; a project made from either must pass the check it is told to run.
+  it.each([
+    ["base", "templates/base/src/types/generated"],
+    ["plugin", "templates/plugin/dev/src/types/generated"],
+  ])(
+    "holds the %s template's shipped map to a loaded config",
+    async (_, dir) => {
+      const shipped = fileURLToPath(
+        new URL(`../../../../../${dir}/`, import.meta.url)
+      );
+      for (const name of [
+        COMPONENT_IMPORT_MAP_FILENAME,
+        COMPONENT_PATHS_FILENAME,
+      ]) {
+        await writeFile(
+          join(root, DIR, name),
+          await readFile(join(shipped, name), "utf8")
+        );
+      }
+      expect(
+        (await checkComponentMapFiles([], TYPES, root, config())).otherConfig
+      ).toBeUndefined();
+    }
+  );
+});
+
+describe("a map whose components are exported under names in any script", () => {
+  const named = {
+    name: "@acme/intl",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      admin: {
+        pages: [
+          { path: "cv", component: "@acme/intl/admin#Résumé" },
+          { path: "parts", component: "@acme/intl/admin#组件" },
+        ],
+      },
+    },
+  } as unknown as PluginDefinition;
+
+  it("agrees with the files the generator wrote for them", async () => {
+    await generate([named]);
+    const found = await checkComponentMapFiles([named], TYPES, root, undefined);
+    expect(found.mapMatchesList).toBe(true);
+    expect(componentMapAgrees(found)).toBe(true);
+  });
+
+  it("does not read an entry registered under another member than its path names", async () => {
+    await generate([named]);
+    const file = join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME);
+    const code = await readFile(file, "utf-8");
+    await writeFile(file, code.replace("_p0.组件,", "_p0.Other,"));
+    expect(
+      (await checkComponentMapFiles([named], TYPES, root, undefined))
+        .mapMatchesList
+    ).toBe(false);
   });
 });
 

@@ -84,18 +84,28 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
  * answered. Checked on the value, not the type, since a JavaScript caller or a
  * spread of a published definition can carry it.
  */
-function refuseServerData(def: WidgetDefinition, door: string): void {
+function refuseServerData(
+  def: WidgetDefinition | WidgetPatch,
+  id: string,
+  door: string,
+  spreadWhole = false
+): void {
   // `owner` likewise: only core knows who declared a widget, and a registration naming one
   // would put a plugin's name on a card that plugin never declared.
   // Read as unknown values, not as their types, since a JavaScript caller or a spread can carry
   // anything under these keys.
   const carried = def as { serverData?: unknown; owner?: unknown };
   for (const field of ["serverData", "owner"] as const) {
-    const stated = carried[field];
-    if (stated === undefined) continue;
+    // A patch spread whole over the stored definition overwrites a field with the key alone,
+    // `undefined` included, so there the key is refused; on a whole definition an `undefined`
+    // field is the same as none.
+    const stated = spreadWhole
+      ? Object.hasOwn(carried, field)
+      : carried[field] !== undefined;
+    if (!stated) continue;
     throw NextlyError.invalidInput({
       message:
-        `Widget "${def.id}" cannot be given to ${door}() with ${field}: core sets it ` +
+        `Widget "${id}" cannot be given to ${door}() with ${field}: core sets it ` +
         `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
     });
   }
@@ -106,7 +116,7 @@ export function registerWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
-  refuseServerData(def, "registerWidget");
+  refuseServerData(def, def.id, "registerWidget");
   addToStore(def, opts.source ?? "unknown");
 }
 
@@ -166,7 +176,7 @@ export function overrideWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
-  refuseServerData(def, "overrideWidget");
+  refuseServerData(def, def.id, "overrideWidget");
   validateWidgetDefinition(def);
   if (def.id !== id) {
     throw NextlyError.invalidInput({
@@ -215,6 +225,10 @@ export function extendWidget(
   patch: WidgetPatch,
   opts: { source?: string } = {}
 ): void {
+  // A patch is spread whole into the stored definition, so the fields only core sets are refused
+  // on it as on a whole definition: an untyped patch naming an owner would otherwise put a
+  // plugin's name on a widget that plugin never declared.
+  refuseServerData(patch, id, "extendWidget", true);
   const existing = store().get(id);
   if (!existing) {
     throw NextlyError.notFound({
