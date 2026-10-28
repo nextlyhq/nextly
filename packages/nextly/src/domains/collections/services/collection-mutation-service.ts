@@ -549,9 +549,19 @@ interface DeleteEntryWriteParams {
 }
 
 /** The only things that differ between the two delete entry points. */
+/**
+ * A batch's delete gate, asked once before its transaction opened, where its
+ * rule answered a filter: each row is matched against it under its lock.
+ */
+export interface DeleteRowFilter {
+  readonly denied: null;
+  readonly filter: RuleFilter;
+  readonly read?: ReadReach;
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -14328,8 +14338,8 @@ export class CollectionMutationService extends BaseService {
 
       if (options.rowGate === "batch-hoisted") {
         // Nothing to re-check per row: the batch caller hoists the
-        // collection-level delete gate out of its loop, and no row-ownership
-        // rule remains for a safety net to compare against.
+        // collection-level delete gate out of its loop, and its rule answered
+        // no filter to match the row against.
       } else {
         // The transaction API asks the access service for the whole verdict,
         // with the caller's `overrideAccess` as the create and update paths
@@ -14345,9 +14355,14 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         };
-        const access = await this.accessService.checkCollectionWrite<{
-          deleted: boolean;
-        }>(accessParams);
+        // A batch asked its gate before its transaction opened and hands each
+        // row the filter it answered; anything else asks here.
+        const access =
+          options.rowGate === "access-service"
+            ? await this.accessService.checkCollectionWrite<{
+                deleted: boolean;
+              }>(accessParams)
+            : options.rowGate;
         if (access.denied) {
           return access.denied;
         }
@@ -14796,11 +14811,12 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: DeleteEntryWriteParams,
     entryId: string,
-    skipHooks: boolean
+    skipHooks: boolean,
+    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
-        rowGate: "batch-hoisted",
+        rowGate,
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to delete entry",

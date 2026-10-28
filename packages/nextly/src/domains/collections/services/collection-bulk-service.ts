@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import {
@@ -40,6 +41,7 @@ import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
   CollectionMutationService,
+  DeleteRowFilter,
   RowVerdict,
 } from "./collection-mutation-service";
 import { isWriteIntegrityFailure } from "./collection-mutation-service";
@@ -52,6 +54,7 @@ import type {
   CollectionServiceResult,
   UserContext,
 } from "./collection-types";
+import type { ReadReach } from "./write-filter-match";
 
 /**
  * Phase 4.5: decompose a legacy `{success, statusCode, message, data}`
@@ -470,6 +473,61 @@ function toBatchResult(state: LegacyBatchState): BatchOperationResult {
     result.revalidationIntents = state.intents;
   }
   return result;
+}
+
+/** An update batch's one gate, where its rule answered a filter. */
+interface UpdateRowFilter {
+  readonly filter?: RuleFilter;
+  readonly read?: ReadReach;
+}
+
+/**
+ * One row's verdict from an update batch's one gate whose rule answered a
+ * filter: the row is matched against it under its lock, and again after the
+ * write, as the single update matches its entry.
+ */
+function filteredUpdateVerdict(
+  params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  entryId: string,
+  access: UpdateRowFilter
+): RowVerdict {
+  return {
+    gate: "update",
+    denied: null,
+    filter: {
+      params: {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      },
+      access,
+    },
+  };
+}
+
+/**
+ * How each row of a delete batch is gated, from the batch's one gate: where
+ * its rule answered a filter, each row is matched against it under its lock;
+ * otherwise the gate decided for every row.
+ */
+function deleteRowGate(access: {
+  readonly filter?: RuleFilter;
+  readonly read?: ReadReach;
+}): "batch-hoisted" | DeleteRowFilter {
+  if (access.filter === undefined) return "batch-hoisted";
+  return {
+    denied: null,
+    filter: access.filter,
+    ...(access.read === undefined ? {} : { read: access.read }),
+  };
 }
 
 export class CollectionBulkService extends BaseService {
@@ -1565,9 +1623,10 @@ export class CollectionBulkService extends BaseService {
         ? undefined
         : await this.statusRowsGate(params.collectionName, entries)) ??
       "batch-hoisted";
+    let hoistedFilter: UpdateRowFilter | undefined;
     if (rowGate === "batch-hoisted") {
-      const accessDenied =
-        await this.accessService.checkCollectionAccess<BatchOperationResult>({
+      const access =
+        await this.accessService.checkCollectionWrite<BatchOperationResult>({
           collectionName: params.collectionName,
           operation: "update",
           user: accessUser,
@@ -1579,7 +1638,10 @@ export class CollectionBulkService extends BaseService {
           // without it).
           authenticatedScope: params.authenticatedScope,
         });
-      if (accessDenied) return everyItemRefused(accessDenied, entries.length);
+      if (access.denied) {
+        return everyItemRefused(access.denied, entries.length);
+      }
+      if (access.filter) hoistedFilter = access;
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
@@ -1615,7 +1677,22 @@ export class CollectionBulkService extends BaseService {
             { ...params, user: accessUser },
             entry.id,
             entry.data,
-            () => true
+            () => true,
+            undefined,
+            // A rule answering a filter is matched against the row under its
+            // lock, as the single write matches it.
+            true
+          )
+        );
+      }
+    } else if (hoistedFilter) {
+      for (const entry of entries) {
+        rowVerdicts.set(
+          entry,
+          filteredUpdateVerdict(
+            { ...params, user: accessUser },
+            entry.id,
+            hoistedFilter
           )
         );
       }
@@ -1748,9 +1825,12 @@ export class CollectionBulkService extends BaseService {
         entries,
         tx.getDrizzle()
       )) ?? "batch-hoisted";
+    // A rule answering a filter gives each row its own verdict, matched
+    // against the row under its lock as the single write matches it.
+    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
     if (rowGate === "batch-hoisted") {
-      const accessDenied =
-        await this.accessService.checkCollectionAccess<BatchOperationResult>({
+      const access =
+        await this.accessService.checkCollectionWrite<BatchOperationResult>({
           collectionName: params.collectionName,
           operation: "update",
           user: params.user,
@@ -1758,7 +1838,17 @@ export class CollectionBulkService extends BaseService {
           authenticatedScope: params.authenticatedScope,
           executor: tx.getDrizzle(),
         });
-      if (accessDenied) return everyItemRefused(accessDenied, entries.length);
+      if (access.denied) {
+        return everyItemRefused(access.denied, entries.length);
+      }
+      if (access.filter) {
+        for (const entry of entries) {
+          rowVerdicts.set(
+            entry,
+            filteredUpdateVerdict(params, entry.id, access)
+          );
+        }
+      }
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
@@ -1782,7 +1872,7 @@ export class CollectionBulkService extends BaseService {
       params,
       transitionAuth,
       entries,
-      { batchSize, stopOnError, skipHooks, rowGate },
+      { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
       state
     );
 
@@ -1847,13 +1937,14 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For delete, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+    const access =
+      await this.accessService.checkCollectionWrite<BatchOperationResult>({
         collectionName: params.collectionName,
         operation: "delete",
         user: params.user,
       });
-    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
+    if (access.denied) return everyItemRefused(access.denied, ids.length);
+    const rowGate = deleteRowGate(access);
 
     // Every companion verdict the batch needs, resolved on the pool before the shared
     // transaction opens. Inside it they can only be READ: resolving issues a query, and a query
@@ -1875,7 +1966,7 @@ export class CollectionBulkService extends BaseService {
             tx,
             params,
             ids,
-            { batchSize, stopOnError, skipHooks },
+            { batchSize, stopOnError, skipHooks, rowGate },
             state
           );
         } catch (innerError) {
@@ -2006,14 +2097,14 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+    const access =
+      await this.accessService.checkCollectionWrite<BatchOperationResult>({
         collectionName: params.collectionName,
         operation: "delete",
         user: params.user,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) return everyItemRefused(accessDenied, ids.length);
+    if (access.denied) return everyItemRefused(access.denied, ids.length);
 
     // The shared batch loop. The intents and outbox signal it accumulates are
     // surfaced on the result for the CALLER to flush after ITS commit — this
@@ -2023,7 +2114,7 @@ export class CollectionBulkService extends BaseService {
       tx,
       params,
       ids,
-      { batchSize, stopOnError, skipHooks },
+      { batchSize, stopOnError, skipHooks, rowGate: deleteRowGate(access) },
       state
     );
     // Unlike the self-transaction twin, a caller-owned batch reports the
@@ -2253,7 +2344,12 @@ export class CollectionBulkService extends BaseService {
       actor?: RequestActor;
     },
     ids: string[],
-    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    options: {
+      batchSize: number;
+      stopOnError: boolean;
+      skipHooks: boolean;
+      rowGate: "batch-hoisted" | DeleteRowFilter;
+    },
     state: LegacyBatchState
   ): Promise<void> {
     await runLegacyBatch(
@@ -2267,7 +2363,8 @@ export class CollectionBulkService extends BaseService {
             tx,
             params,
             entryId,
-            options.skipHooks
+            options.skipHooks,
+            options.rowGate
           );
         return deleteResult.success
           ? {
