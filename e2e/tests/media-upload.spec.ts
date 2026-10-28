@@ -1,10 +1,10 @@
 /**
  * Bulk upload against a real server: the failure classes here are exactly the
  * ones unit tests cannot see. A batch with one oversized file must upload the
- * valid files and report the bad one per-file (the old dropzone painted the
- * whole zone red and let the successes vanish), and a batch over the 10-file
- * cap must upload the first 10 and mark the rest skipped (react-dropzone's
- * `maxFiles` used to reject the entire batch as "Too many files").
+ * valid files and report the bad one on its own row (the old dropzone painted
+ * the whole zone red and let the successes vanish), and a batch of more than
+ * ten files must upload every one: there is no cap on a drop, and the upload
+ * queue sends three at a time.
  */
 import { expect } from "@playwright/test";
 
@@ -25,14 +25,15 @@ test("a batch with one oversized file uploads the rest and reports the failure p
     { name: "huge.png", buffer: pngBuffer(160, 11 * 1024 * 1024) },
   ]);
 
-  // Partial success is reported as such, never as a whole-batch error. The
+  // Partial success is reported as such, never as a whole-batch error, and
+  // the file refused before upload is counted apart from a failure. The
   // sr-only live region is the queue's single status source; the media
   // grid's loading skeleton also carries role=status, hence the filter. The
   // dev server compiles routes on first hit, so the settled summary can take
   // a while on a cold run.
   await expect(
     page.getByRole("status").filter({ hasText: /uploaded/ })
-  ).toContainText("3 uploaded, 1 failed", {
+  ).toContainText("3 uploaded, 1 refused", {
     timeout: 30_000,
   });
 
@@ -40,21 +41,13 @@ test("a batch with one oversized file uploads the rest and reports the failure p
   await expect(page.getByText("File is too large (max 10 MB)")).toBeVisible();
   await expect(page.getByText(/larger than \d+ bytes/)).toHaveCount(0);
 
-  // The drop target auto-collapsed when the upload started; the queue is the
-  // surviving surface.
-  await expect(
-    page.getByRole("button", { name: /Upload files\. Drag and drop/ })
-  ).toHaveCount(0);
-
   // The successes really landed: the grid shows the uploaded files.
   await expect(
     page.getByRole("button", { name: /ok-1\.png/ }).first()
   ).toBeVisible();
 });
 
-test("a batch over the 10-file cap uploads the first 10 and marks the rest skipped", async ({
-  page,
-}) => {
+test("a batch of more than ten files uploads every one", async ({ page }) => {
   await gotoAdmin(page, "/media");
 
   await dropFiles(
@@ -65,15 +58,13 @@ test("a batch over the 10-file cap uploads the first 10 and marks the rest skipp
     }))
   );
 
-  // Nothing valid is refused outright ("Too many files" is gone): the first
-  // 10 upload, the overflow is skipped and says so.
+  // Every file is taken and sent, three at a time: none is refused for the
+  // size of the batch.
   await expect(
     page.getByRole("status").filter({ hasText: /uploaded/ })
-  ).toContainText("10 uploaded, 2 skipped", {
-    timeout: 30_000,
+  ).toContainText("Upload finished. 12 uploaded.", {
+    timeout: 60_000,
   });
-  await expect(
-    page.getByText("Skipped: only 10 files can be uploaded at once")
-  ).toHaveCount(2);
+  await expect(page.getByText(/^Skipped/)).toHaveCount(0);
   await expect(page.getByText("Too many files")).toHaveCount(0);
 });

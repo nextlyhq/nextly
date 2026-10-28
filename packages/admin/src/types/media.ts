@@ -219,14 +219,15 @@ export interface UploadProgress {
   file: File;
   filename: string;
   /**
-   * `error` is a server-side failure (retryable); `rejected` is a client-side
-   * validation failure (too large, wrong type, over the batch cap) that would
-   * fail identically on retry.
+   * `pending` is waiting its turn in the queue. `error` is a failure on the
+   * way or at the server (retryable); `rejected` is refused before upload
+   * (too large, a type not allowed) and would be refused again on retry.
    */
   status: "pending" | "uploading" | "success" | "error" | "rejected";
   /**
-   * True for rejected rows that were dropped only because the batch exceeded
-   * the per-upload file cap (reported as "skipped", not "failed").
+   * Was true for rows past a per-drop file cap. A drop has no cap any more,
+   * so the admin never sets it; kept so existing readers of the type still
+   * compile.
    */
   skipped?: boolean;
   progress?: number; // 0-100
