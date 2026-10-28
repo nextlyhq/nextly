@@ -24,6 +24,38 @@ import {
   tablePresence,
 } from "./table-presence";
 
+/**
+ * The most pins one reader keeps. A short list of what to come back to: past
+ * it, pinning stops being a choice of what matters.
+ */
+export const MAX_PINS_PER_READER = 20;
+
+/**
+ * Whether the pins table exists yet, asked once per database and remembered
+ * once found ({@link tablePresence}). One answer per database for every
+ * caller: the repository, and each delete path that sweeps a deleted entry's
+ * or Single's pins, which asks BEFORE its transaction opens, so no statement
+ * against a missing table can abort that transaction on PostgreSQL.
+ */
+const presenceByDb = new WeakMap<TableProbe, () => Promise<boolean>>();
+
+export function dashboardPinsPresent(
+  db: TableProbe,
+  logger?: DashboardLogger
+): Promise<boolean> {
+  let present = presenceByDb.get(db);
+  if (present === undefined) {
+    present = tablePresence(
+      db,
+      DASHBOARD_PINS_TABLE,
+      "Dashboard pins are not being kept",
+      logger
+    );
+    presenceByDb.set(db, present);
+  }
+  return present();
+}
+
 /** What a pin names: an entry of a collection, or a Single. */
 export type PinTarget =
   | { targetType: "collection"; targetSlug: string; entryId: string }
@@ -63,11 +95,13 @@ export interface DashboardPinsDb extends TableProbe {
  * than NULL: the unique index over (reader, target) then holds on every
  * dialect without a partial index.
  */
-function targetColumns(target: PinTarget): {
+interface PinColumns {
   targetType: string;
   targetSlug: string;
   entryId: string;
-} {
+}
+
+function targetColumns(target: PinTarget): PinColumns {
   return {
     targetType: target.targetType,
     targetSlug: target.targetSlug,
@@ -92,17 +126,17 @@ export class DashboardPins {
     private readonly db: DashboardPinsDb,
     logger?: DashboardLogger
   ) {
-    this.present = tablePresence(
-      db,
-      DASHBOARD_PINS_TABLE,
-      "Dashboard pins are not being kept",
-      logger
-    );
+    this.present = () => dashboardPinsPresent(db, logger);
   }
 
   /**
    * Pin `target` for `userId`. Pinning what is already pinned keeps the one
-   * pin, and its time.
+   * pin, and its time. A new pin past {@link MAX_PINS_PER_READER} is refused,
+   * naming the limit, before anything is written.
+   *
+   * Two pins written at the same moment at the limit's edge can both pass the
+   * count; the list a reader is shown is still read whole, and the next pin
+   * is refused, so the overshoot is never more than those racing writes.
    */
   async pin(userId: string, target: PinTarget): Promise<void> {
     if (!(await this.present())) {
@@ -110,6 +144,27 @@ export class DashboardPins {
         publicMessage:
           "Pins are not available yet. Run `nextly migrate` to create the table they are kept in.",
         logContext: { table: DASHBOARD_PINS_TABLE },
+      });
+    }
+    const pinned = await this.db.select<{ id: string } & PinColumns>(
+      DASHBOARD_PINS_TABLE,
+      {
+        where: { and: [{ column: "userId", op: "=", value: userId }] },
+        limit: MAX_PINS_PER_READER + 1,
+      }
+    );
+    const columns = targetColumns(target);
+    const already = pinned.some(
+      row =>
+        row.targetType === columns.targetType &&
+        row.targetSlug === columns.targetSlug &&
+        row.entryId === columns.entryId
+    );
+    if (!already && pinned.length >= MAX_PINS_PER_READER) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message: `You can pin at most ${MAX_PINS_PER_READER} entries and Singles. Unpin one to pin another.`,
+        logContext: { userId, limit: MAX_PINS_PER_READER },
       });
     }
     // Insert, or keep the pin already there: an upsert that names nothing to
@@ -154,11 +209,40 @@ export class DashboardPins {
   }
 
   /**
-   * Remove every reader's pin of `target`, for an entry or Single that is
-   * being deleted; how many there were.
+   * Remove every reader's pin of `target`; how many there were. A deleted
+   * entry's or Single's pins go on the delete's own transaction instead
+   * ({@link deletePinsOfTarget}).
    */
   async unpinTarget(target: PinTarget): Promise<number> {
     if (!(await this.present())) return 0;
     return this.db.delete(DASHBOARD_PINS_TABLE, { and: targetWhere(target) });
   }
+}
+
+/**
+ * Remove every reader's pins of a deleted target, on the delete's own
+ * transaction: one entry (`entryId`), or every entry of a deleted collection,
+ * or a deleted Single (`entryId` absent). Skipped when `present` says the
+ * table does not exist yet: the caller asked before opening its transaction,
+ * where a statement against a missing table would abort it on PostgreSQL.
+ */
+export async function deletePinsOfTarget(
+  tx: Pick<DashboardPinsDb, "delete">,
+  present: boolean,
+  target: {
+    targetType: "collection" | "single";
+    targetSlug: string;
+    entryId?: string;
+  }
+): Promise<number> {
+  if (!present) return 0;
+  return tx.delete(DASHBOARD_PINS_TABLE, {
+    and: [
+      { column: "targetType", op: "=", value: target.targetType },
+      { column: "targetSlug", op: "=", value: target.targetSlug },
+      ...(target.entryId === undefined
+        ? []
+        : [{ column: "entryId", op: "=" as const, value: target.entryId }]),
+    ],
+  });
 }

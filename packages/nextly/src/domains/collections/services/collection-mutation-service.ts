@@ -136,6 +136,7 @@ import {
   type StatusMove,
   type WriteEventInput,
 } from "../../content-events/write-event";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   applyFieldGroupWriteAccessToDocument,
@@ -11382,6 +11383,10 @@ export class CollectionMutationService extends BaseService {
       // False when the collection opted out of recording, so the post-commit
       // drain is not scheduled for a delete that recorded nothing.
       let recorded = false;
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      };
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -11461,11 +11466,15 @@ export class CollectionMutationService extends BaseService {
         // So do the versions features have pinned against retention, and each
         // person's "last looked at" marker: nothing could release or read
         // either once the document is gone.
-        await sweepDeletedDocument(tx, {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId: params.entryId,
-        });
+        await sweepDeletedDocument(
+          tx,
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          tables
+        );
 
         // The document's last history event: the whole document, every
         // language, is gone. Its history is kept for the activity log's window
@@ -13694,12 +13703,15 @@ export class CollectionMutationService extends BaseService {
         entryId,
       });
 
-      // Pins and markers go with it; see the single-delete path.
-      await sweepDeletedDocument(tx, {
-        scopeKind: "collection",
-        scopeSlug: params.collectionName,
-        entryId,
-      });
+      // Pins and markers go with it; see the single-delete path. The caller
+      // owns this transaction, so the dashboard pins table's presence is asked
+      // here, on the adapter: a presence check reads the catalogue and cannot
+      // fail the way a statement against a missing table would.
+      await sweepDeletedDocument(
+        tx,
+        { scopeKind: "collection", scopeSlug: params.collectionName, entryId },
+        { dashboardPinsPresent: await dashboardPinsPresent(this.adapter) }
+      );
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {
