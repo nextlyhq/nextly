@@ -27,11 +27,14 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
   };
 });
 
+// One object for every render, as a query's cached data is: a new one each
+// time would have the page reset its form on every render.
+const generalSettings = vi.hoisted(() => ({
+  applicationName: "Site",
+  timezone: "UTC",
+}));
 vi.mock("@admin/hooks/queries/useGeneralSettings", () => ({
-  useGeneralSettings: () => ({
-    data: { applicationName: "Site", timezone: "UTC" },
-    isLoading: false,
-  }),
+  useGeneralSettings: () => ({ data: generalSettings, isLoading: false }),
   useUpdateGeneralSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
