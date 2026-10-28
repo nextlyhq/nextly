@@ -101,6 +101,33 @@ created — and only to a reader who may read that collection or single.
   not.
 </Callout>
 
+## A site's own widgets
+
+A site declares widgets of its own in its config, with `defineWidget` as a plugin does. They are
+checked, registered and offered in the add panel like a plugin's, and `defaultLayout` may place
+them. A widget drawn by its own component names it relative to the config file:
+
+```ts
+import { defineWidget } from "nextly";
+import { defineConfig } from "nextly/config";
+
+const notes = defineWidget({
+  id: "site/notes",
+  title: "Notes",
+  size: { default: { w: 6, h: 3 } },
+  load: async () => ({ notes: ["Ship the release notes"] }),
+  view: { component: "./dashboard/notes#NotesCard" },
+});
+
+export default defineConfig({ admin: { dashboard: { widgets: [notes] } } });
+```
+
+The generated component map imports `./dashboard/notes` from beside the config file, so the same
+spelling works in `next dev`, in `nextly generate:types` and in its `--check` in CI, whatever path
+aliases the app defines. A package name works as it does for a plugin. A path alias such as
+`@/dashboard/notes` is refused at startup, with the relative spelling to write instead, because
+nothing that writes or checks the map resolves it.
+
 ## Related
 
 - [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces

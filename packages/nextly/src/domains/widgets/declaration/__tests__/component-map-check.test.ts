@@ -122,6 +122,33 @@ describe("in production", () => {
 describe("in development", () => {
   beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
 
+  it("lists the site's own widgets beside the plugins', handing the writer the config's dashboard", async () => {
+    const dashboard = {
+      widgets: [
+        { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
+      ],
+    };
+    await checkAdminComponents({
+      // A plain object, as the fixture config above is: the check reads only
+      // the widgets' ids and components.
+      config: { ...config, admin: { dashboard } } as unknown as typeof config,
+      registeredComponentPaths: [],
+    });
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      expect.any(String),
+      process.cwd(),
+      undefined,
+      dashboard
+    );
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin-component-map-regenerated",
+        added: expect.arrayContaining(["./dashboard/notes#Notes"]),
+      })
+    );
+  });
+
   it("writes the map again and serves the admin", async () => {
     await expect(check([])).resolves.toBe(undefined);
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
@@ -129,6 +156,8 @@ describe("in development", () => {
       resolve(process.cwd(), "src/types/generated/nextly-types.ts"),
       process.cwd(),
       // No config file here, so the map is written without the config's check, as before.
+      undefined,
+      // And no widgets of the site's own.
       undefined
     );
     expect(info).toHaveBeenCalledWith(
@@ -287,7 +316,8 @@ describe("where the map is", () => {
       [shop],
       join(root, "types/generated/nextly-types.ts"),
       root,
-      join(root, "nextly.config.ts")
+      join(root, "nextly.config.ts"),
+      undefined
     );
 
     vi.stubEnv("NEXTLY_GENERATED_FILES_WRITE", "0");
@@ -327,7 +357,8 @@ describe("the config a development rewrite checks against", () => {
       [shop],
       join(root, "src/types/generated/nextly-types.ts"),
       root,
-      { import: "../../../config/site.config.mjs" }
+      { import: "../../../config/site.config.mjs" },
+      undefined
     );
   });
 });

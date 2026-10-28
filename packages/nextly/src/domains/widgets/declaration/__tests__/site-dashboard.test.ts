@@ -20,7 +20,7 @@ import {
 import { CORE_DEFAULT_LAYOUT } from "../../core-widgets/ids";
 import { defaultLayoutPlan } from "../../default-layout";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
-import { siteDashboardContext } from "../site-dashboard";
+import { SITE_CONFIG, siteDashboardContext } from "../site-dashboard";
 
 import { dashboard, revenue } from "./plugin/widgets";
 
@@ -103,19 +103,34 @@ describe("a site config that names what exists", () => {
     );
   });
 
-  it("checks the site's own widgets with the plugins', which the rest may name, and registers none yet", () => {
+  it("keeps the site's own widgets as a plugin's are, which the rest may name, and warns of none", () => {
     resetWidgetRegistries([shop], {
       widgets: [{ ...revenue, id: "site/revenue" }],
       defaultLayout: [{ widget: "site/revenue", w: 12 }],
     });
-    // Not kept until the admin's component map reads the site's widgets too,
-    // and said so at startup.
-    expect(declaredWidget("site/revenue")).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "site-dashboard-keys-not-applied",
-        keys: ["widgets"],
-      })
+    expect(declaredWidget("site/revenue")).toMatchObject({
+      owner: SITE_CONFIG,
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "site-dashboard-keys-not-applied" })
+    );
+  });
+
+  it("refuses a site widget whose component names a path alias, saying what to write", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([], {
+          widgets: [
+            {
+              ...revenue,
+              id: "site/revenue",
+              view: { component: "@/dashboard/revenue#Revenue" },
+            },
+          ],
+        })
+      )
+    ).toContain(
+      'the site config, widget "site/revenue": view.component "@/dashboard/revenue#Revenue" names a module the component map cannot resolve: write it relative to the config file: ./dashboard/revenue#Revenue'
     );
   });
 

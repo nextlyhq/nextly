@@ -167,6 +167,8 @@ export function resetWidgetRegistries(
     groups: [
       { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
       ...pluginWidgetDeclarationGroups(dashboards),
+      // The site's own widgets last, kept and published as a plugin's are.
+      ...siteWidgetGroup(site),
     ],
     legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
@@ -177,7 +179,6 @@ export function resetWidgetRegistries(
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
       ),
     ],
-    checkedOnly: siteWidgetGroup(site),
     logger,
   });
   // Only once the check above found no fault, so every item kept is whole.
@@ -204,9 +205,9 @@ export function resetWidgetRegistries(
 }
 
 /**
- * The site config's own widgets, as one more owner's declarations: checked
- * with the plugins', and not registered until the admin's component map also
- * reads them.
+ * The site config's own widgets, as one more owner's declarations: checked,
+ * kept and published as a plugin's are, and listed in the admin's component
+ * map beside them.
  */
 function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
   const widgets =

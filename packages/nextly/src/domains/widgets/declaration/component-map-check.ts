@@ -75,9 +75,11 @@ export async function checkAdminComponents(
   if (plugins === undefined) return;
 
   const registered = new Set(input.registeredComponentPaths);
+  // The site's own widgets draw through the map as the plugins' do.
+  const siteDashboard = input.config.admin?.dashboard;
   // Every use, not one per path: two widgets drawn with one missing component
   // are both named.
-  const uses = componentUses(plugins);
+  const uses = componentUses(plugins, siteDashboard);
   const missing = uses.filter(each => !registered.has(each.path));
   /*
    * 🔴 Compared in both directions. A plugin removed from the config leaves
@@ -94,7 +96,10 @@ export async function checkAdminComponents(
     warnStale({ missing, obsolete }, place, "write-off");
     return;
   }
-  await rewriteInDevelopment(plugins, place, missing, obsolete);
+  await rewriteInDevelopment(plugins, siteDashboard, place, {
+    missing,
+    obsolete,
+  });
 }
 
 /**
@@ -164,9 +169,15 @@ function mapFolder(config: AdminComponentCheckInput["config"]): MapFolder {
 /** Write the map again from the config, and warn instead where it cannot be written. */
 async function rewriteInDevelopment(
   plugins: readonly PluginDefinition[],
+  siteDashboard: unknown,
   place: MapFolder,
-  missing: readonly ComponentMapEntry[],
-  obsolete: readonly string[]
+  {
+    missing,
+    obsolete,
+  }: {
+    missing: readonly ComponentMapEntry[];
+    obsolete: readonly string[];
+  }
 ): Promise<void> {
   try {
     // The config the map already checks against, kept as it was written: `generate:types` may
@@ -182,7 +193,8 @@ async function rewriteInDevelopment(
       [...plugins],
       place.typesOutputPath,
       process.cwd(),
-      kept === undefined ? findConfigFile(process.cwd()) : { import: kept }
+      kept === undefined ? findConfigFile(process.cwd()) : { import: kept },
+      siteDashboard
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
