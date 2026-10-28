@@ -1,6 +1,7 @@
 // The standalone email-template handlers (`nextly/api/email-templates` and
-// `nextly/api/email-templates-detail`) take a template's description on create
-// and update and return it on every read, as the dispatcher routes do.
+// `nextly/api/email-templates-detail`) take a template's description, and a
+// written template's format and blocks, on create and update and return them
+// on every read, as the dispatcher routes and the Direct API do.
 //
 // The service is the real one on an in-memory SQLite table, so "stored" is
 // read back from the row rather than inferred from what a mock was handed.
@@ -214,6 +215,74 @@ describe("updating a template through the standalone detail handler", () => {
     expect(await service.getTemplate(id)).toMatchObject({
       subject: "Hi",
       description: "Sent monthly.",
+    });
+  });
+});
+
+const WRITTEN = {
+  version: 1,
+  blocks: [{ type: "heading", text: [{ type: "text", text: "Your order" }] }],
+};
+
+describe("a written template through the standalone handlers", () => {
+  it("is created written, from its blocks", async () => {
+    const { res, body } = await create({
+      ...newsletter,
+      htmlContent: "",
+      format: "written",
+      blocks: WRITTEN,
+    });
+
+    expect(res.status).toBe(201);
+    const stored = await service.getTemplate(body.item.id);
+    expect(stored).toMatchObject({ format: "written", blocks: WRITTEN });
+    expect(stored.htmlContent).toContain("Your order</h1>");
+  });
+
+  it("still needs HTML for a coded template", async () => {
+    const res = await list.POST(
+      request("POST", "", { ...newsletter, htmlContent: "" })
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { data: { errors: [{ path: "htmlContent" }] } },
+    });
+  });
+
+  it("takes new blocks on update", async () => {
+    const id = (
+      await service.createTemplate({
+        ...newsletter,
+        htmlContent: "",
+        format: "written",
+        blocks: WRITTEN as never,
+      })
+    ).id;
+    const next = {
+      version: 1,
+      blocks: [{ type: "heading", text: [{ type: "text", text: "Shipped" }] }],
+    };
+
+    const { res } = await patch(id, { blocks: next });
+
+    expect(res.status).toBe(200);
+    expect(await service.getTemplate(id)).toMatchObject({
+      format: "written",
+      blocks: next,
+    });
+  });
+
+  it("refuses blocks on a coded template instead of dropping them", async () => {
+    const id = await seed(null);
+
+    const { res, body } = await patch(id, { blocks: WRITTEN });
+
+    expect(res.status).toBe(422);
+    expect(body).toMatchObject({ error: { code: "BUSINESS_RULE_VIOLATION" } });
+    expect(await service.getTemplate(id)).toMatchObject({
+      format: "code",
+      htmlContent: "<p>Hi</p>",
     });
   });
 });
