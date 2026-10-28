@@ -34,7 +34,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text } from "../../../../config";
+import { defineCollection, group, number, text } from "../../../../config";
 import type { NumberFieldConfig } from "../../../../collections/fields/types/number";
 import { NextlyError } from "../../../../errors";
 import { getHookRegistry } from "../../../../hooks/hook-registry";
@@ -94,16 +94,23 @@ describe.each(getConfiguredTestDialects())(
                 name: "measure",
                 options: { format: "float" },
               } as Omit<NumberFieldConfig, "type">),
+              group({
+                name: "meta",
+                fields: [number({ name: "rating" })],
+              }),
             ],
           }),
         ],
       });
       collections = handle.getService("collectionService") as CollectionService;
 
-      // A beforeChange hook that transforms a whole value into a fraction —
+      // A beforeChange hook that transforms whole values into fractions —
       // the case the gate before the hooks cannot see. It fires only for the
       // titles the hook tests below use, so no other case meets it; a title
       // on the allow-list gets a whole value instead, the pass-through leg.
+      // The nested mutation runs where the hook runner recurses: a field
+      // hook on a group's child mutates that child's row in place, which the
+      // parent's reference does not show.
       getHookRegistry().register("beforeChange", SLUG, context => {
         const data = context.data as Record<string, unknown>;
         if (
@@ -114,6 +121,10 @@ describe.each(getConfiguredTestDialects())(
             data.quantity = 3;
           } else if (data.quantity === 2) {
             data.quantity = 2.5;
+          }
+          const meta = data.meta as Record<string, unknown> | undefined;
+          if (meta && meta.rating === 2) {
+            meta.rating = 2.5;
           }
         }
         return data;
@@ -292,15 +303,21 @@ describe.each(getConfiguredTestDialects())(
     it("a beforeChange hook that turns a whole value into a fraction is refused", async () => {
       // The hooks run after the validation gate, so the fraction they leave
       // behind is a write the gate never saw — judged after the last
-      // transforming hook, before any row is written.
+      // transforming hook, before any row is written. The hook transforms a
+      // top-level value AND a number nested in a group row (which it mutates
+      // in place, where the parent's reference does not move): both are
+      // judged, each path naming its own value.
       const error = await refusalOf(
         collections.createEntry(
           SLUG,
-          { title: "hookfrac-create", quantity: 2 },
+          { title: "hookfrac-create", quantity: 2, meta: { rating: 2 } },
           CONTEXT
         )
       );
       expectFractionRefusal(error, "quantity");
+      // The nested path names the value; the message uses the child field's
+      // own label, as the first gate's nested issues do.
+      expectFractionRefusal(error, "meta.rating", "rating");
 
       const listed = await collections.listEntries(SLUG, {}, CONTEXT);
       expect(
