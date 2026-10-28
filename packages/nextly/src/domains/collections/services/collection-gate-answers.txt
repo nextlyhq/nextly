@@ -223,12 +223,12 @@ service true key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service false visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service false user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -447,12 +447,12 @@ service returns-true key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-false visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service returns-false user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -559,10 +559,10 @@ service returns-false key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-null visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-null user-with
@@ -671,10 +671,10 @@ service returns-null key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-undefined visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-undefined user-with
@@ -783,10 +783,10 @@ service returns-undefined key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service returns-truthy visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-truthy user-with
@@ -895,12 +895,12 @@ service returns-truthy key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service throws visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service throws user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1119,12 +1119,12 @@ service async-true key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service role-name visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service role-name user-with
   create:A
   read:A
@@ -1231,12 +1231,12 @@ service role-name key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service permission-spelling visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service permission-spelling user-with
   create:403 You can't create posts.
   read:403 You can't see posts.
@@ -1343,12 +1343,12 @@ service permission-spelling key-in-the-request
   publish:403 You can't publish posts.
   unpublish:403 You can't unpublish posts.
 service signed-in visitor
-  create:403 You can't create posts.
+  create:401 Authentication required.
   read:403 You can't see posts.
-  update:403 You can't edit posts.
-  delete:403 You can't delete posts.
-  publish:403 You can't publish posts.
-  unpublish:403 You can't unpublish posts.
+  update:401 Authentication required.
+  delete:401 Authentication required.
+  publish:401 Authentication required.
+  unpublish:401 Authentication required.
 service signed-in user-with
   create:A
   read:A

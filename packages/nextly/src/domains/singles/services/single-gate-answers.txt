@@ -160,7 +160,7 @@ service true key-in-the-request
   unpublish:403 You can't unpublish home.
 service false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service false user-with
@@ -320,7 +320,7 @@ service returns-true key-in-the-request
   unpublish:403 You can't unpublish home.
 service returns-false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-false user-with
@@ -400,7 +400,7 @@ service returns-false key-in-the-request
   unpublish:404 Single "home" not found
 service returns-null visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-null user-with
@@ -480,7 +480,7 @@ service returns-null key-in-the-request
   unpublish:404 Single "home" not found
 service returns-undefined visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-undefined user-with
@@ -560,7 +560,7 @@ service returns-undefined key-in-the-request
   unpublish:404 Single "home" not found
 service returns-truthy visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service returns-truthy user-with
@@ -640,7 +640,7 @@ service returns-truthy key-in-the-request
   unpublish:404 Single "home" not found
 service throws visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service throws user-with
@@ -800,7 +800,7 @@ service async-true key-in-the-request
   unpublish:403 You can't unpublish home.
 service role-name visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service role-name user-with
@@ -880,7 +880,7 @@ service role-name key-in-the-request
   unpublish:403 You can't unpublish home.
 service permission-spelling visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service permission-spelling user-with
@@ -960,7 +960,7 @@ service permission-spelling key-in-the-request
   unpublish:404 Single "home" not found
 service signed-in visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 service signed-in user-with
@@ -1280,7 +1280,7 @@ route-authorized true key-in-the-request
   unpublish:A
 route-authorized false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized false user-with
@@ -1440,7 +1440,7 @@ route-authorized returns-true key-in-the-request
   unpublish:A
 route-authorized returns-false visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized returns-false user-with
@@ -1520,7 +1520,7 @@ route-authorized returns-false key-in-the-request
   unpublish:A
 route-authorized returns-null visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized returns-null user-with
@@ -1600,7 +1600,7 @@ route-authorized returns-null key-in-the-request
   unpublish:A
 route-authorized returns-undefined visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized returns-undefined user-with
@@ -1680,7 +1680,7 @@ route-authorized returns-undefined key-in-the-request
   unpublish:A
 route-authorized returns-truthy visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized returns-truthy user-with
@@ -1760,7 +1760,7 @@ route-authorized returns-truthy key-in-the-request
   unpublish:A
 route-authorized throws visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized throws user-with
@@ -1920,7 +1920,7 @@ route-authorized async-true key-in-the-request
   unpublish:A
 route-authorized role-name visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized role-name user-with
@@ -2000,7 +2000,7 @@ route-authorized role-name key-in-the-request
   unpublish:A
 route-authorized permission-spelling visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized permission-spelling user-with
@@ -2080,7 +2080,7 @@ route-authorized permission-spelling key-in-the-request
   unpublish:A
 route-authorized signed-in visitor
   read:403 You can't see home.
-  update:403 You can't edit home.
+  update:401 Authentication required.
   publish:401 Authentication required.
   unpublish:401 Authentication required.
 route-authorized signed-in user-with

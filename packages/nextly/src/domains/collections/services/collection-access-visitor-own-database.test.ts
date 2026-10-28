@@ -98,7 +98,8 @@ describe("a visitor at the collection gate with no access-control service", () =
       ownDatabase([{ slug: "read-posts", action: "read", resource: "posts" }])
     );
 
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
     expect(result?.refusalReason).toBe(
       "read on pages requires an authenticated user"
     );
