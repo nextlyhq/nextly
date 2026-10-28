@@ -10,6 +10,10 @@
  * as items; one that would move an entry out of the filter refuses the whole
  * batch, with nothing changed.
  *
+ * An entry the caller may not read fails in the words a missing one gets. The
+ * filter matches each entry in the default language, as the
+ * per-entry write does, whatever another language holds.
+ *
  * @module domains/collections/__tests__/write-rule-filter-limits-bulk.integration.test
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -248,5 +252,125 @@ describe("a batch in one transaction", () => {
     expect(result).toMatchObject({ successful: 1, failed: 1 });
     expect(await stored(t, OPEN_POSTS, own)).toBeUndefined();
     expect(await stored(t, OPEN_POSTS, others)).toBeDefined();
+  });
+});
+
+describe("an entry the caller may not read", () => {
+  it("fails a batch item exactly as a missing entry does", async () => {
+    const t = await boot();
+    const { own, others } = await seed(t, POSTS);
+    const missing = "bulkfilter-no-such-entry";
+    const updated = await entriesOf(t).updateEntries(
+      { collectionName: POSTS, ...asAuthor } as never,
+      [
+        { id: own, data: { title: "renamed" } },
+        { id: others, data: { title: "renamed" } },
+        { id: missing, data: { title: "renamed" } },
+      ]
+    );
+    const deleted = await entriesOf(t).deleteEntries(
+      { collectionName: POSTS, user: { id: AUTHOR } } as never,
+      [others, missing]
+    );
+
+    // Each item names the id it was handed, so the words are compared apart
+    // from it.
+    const words = (error: string, id: string) => error.replace(id, "<id>");
+    expect(updated).toMatchObject({ successful: 1, failed: 2 });
+    const [hiddenUpdate, missingUpdate] = updated.errors;
+    expect(words(hiddenUpdate.error, others)).toBe(
+      words(missingUpdate.error, missing)
+    );
+    expect(deleted).toMatchObject({ successful: 0, failed: 2 });
+    expect(words(deleted.errors[0].error, others)).toBe(
+      words(deleted.errors[1].error, missing)
+    );
+    expect((await stored(t, POSTS, others))?.title).toBe("theirs");
+  });
+});
+
+describe("on a collection with languages", () => {
+  const LOCALIZED = "bulkfilter_localized_posts";
+
+  /** An entry the filter matches in the default language and not in German, and one the other way round. */
+  async function bootLocalized(): Promise<{
+    t: TestNextly;
+    english: string;
+    german: string;
+  }> {
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: LOCALIZED,
+          localized: true,
+          access: {
+            read: () => true,
+            update: () => ({ title: { equals: "mine" } }) as unknown as boolean,
+            delete: () => ({ title: { equals: "mine" } }) as unknown as boolean,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "note", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
+    for (const action of ["update", "delete"]) {
+      await grantTo(t, AUTHOR, action, [LOCALIZED]);
+    }
+    const make = async (title: string, germanTitle: string) => {
+      const id = String(
+        (
+          await t.nextly.create({
+            collection: LOCALIZED,
+            data: { title, note: "unchanged" },
+          })
+        ).item.id
+      );
+      await t.nextly.update({
+        collection: LOCALIZED,
+        id,
+        locale: "de",
+        data: { title: germanTitle },
+      } as never);
+      return id;
+    };
+    return {
+      t,
+      english: await make("mine", "theirs"),
+      german: await make("theirs", "mine"),
+    };
+  }
+
+  it("updates by query only the entries the filter matches in the default language", async () => {
+    const { t, english, german } = await bootLocalized();
+    const result = await entriesOf(t).bulkUpdateByQuery({
+      collectionName: LOCALIZED,
+      where: { note: { equals: "unchanged" } },
+      data: { note: "renamed" },
+      ...asAuthor,
+    } as never);
+
+    expect(result).toMatchObject({ successCount: 1, failedCount: 0 });
+    expect((await stored(t, LOCALIZED, english))?.note).toBe("renamed");
+    expect((await stored(t, LOCALIZED, german))?.note).toBe("unchanged");
+    expect(JSON.stringify(result)).not.toContain(german);
+  });
+
+  it("deletes by query only the entries the filter matches in the default language", async () => {
+    const { t, english, german } = await bootLocalized();
+    const result = await entriesOf(t).bulkDeleteByQuery({
+      collectionName: LOCALIZED,
+      where: { note: { equals: "unchanged" } },
+      ...asAuthor,
+    } as never);
+
+    expect(result).toMatchObject({ successCount: 1, failedCount: 0 });
+    expect(await stored(t, LOCALIZED, english)).toBeUndefined();
+    expect(await stored(t, LOCALIZED, german)).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain(german);
   });
 });

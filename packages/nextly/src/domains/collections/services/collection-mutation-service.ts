@@ -52,7 +52,7 @@ import { toDbError } from "../../../database/errors";
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
@@ -357,6 +357,27 @@ function emitCollectionEvent(
   } catch {
     // Best-effort — never surface event-dispatch failures to the caller.
   }
+}
+
+/** A write's words for an entry that is not there, naming it in a batch item. */
+function missingEntryMessage(entryId: string, identify: boolean): string {
+  return identify ? `Entry not found: ${entryId}` : "Entry not found";
+}
+
+/**
+ * A batch item's refusal answered as missing, in the words its missing entry
+ * gets, so an entry the caller may not read cannot be told apart from one
+ * that is not there. Any other refusal is returned as it is.
+ */
+function asMissingItem<T>(
+  refused: CollectionServiceResult<T>,
+  entryId: string,
+  identify: boolean
+): CollectionServiceResult<T> {
+  if (!identify || refused.statusCode !== NEXTLY_ERROR_STATUS.NOT_FOUND) {
+    return refused;
+  }
+  return { ...refused, message: missingEntryMessage(entryId, identify) };
 }
 
 /**
@@ -13067,7 +13088,9 @@ export class CollectionMutationService extends BaseService {
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
         if (gate !== "update") body = { status: body.status };
-        if (denied) return denied;
+        if (denied) {
+          return asMissingItem(denied, entryId, options.identifyMissingEntry);
+        }
         if (gate !== "update") rowAllowed = gate;
       }
 
@@ -13093,9 +13116,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -13106,7 +13127,9 @@ export class CollectionMutationService extends BaseService {
           rowFilter.access,
           filteredWrites
         );
-        if (outside) return outside;
+        if (outside) {
+          return asMissingItem(outside, entryId, options.identifyMissingEntry);
+        }
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -13627,9 +13650,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14325,9 +14346,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14364,7 +14383,11 @@ export class CollectionMutationService extends BaseService {
               }>(accessParams)
             : options.rowGate;
         if (access.denied) {
-          return access.denied;
+          return asMissingItem(
+            access.denied,
+            entryId,
+            options.identifyMissingEntry
+          );
         }
         // A delete rule's filter allows only the entries it matches. Matched on
         // the caller's transaction under the row lock, before any hook runs.
@@ -14372,7 +14395,13 @@ export class CollectionMutationService extends BaseService {
           const refused = await this.refusalOutsideFilterInTransaction<{
             deleted: boolean;
           }>(tx, tableName, entryId, access, accessParams);
-          if (refused) return refused;
+          if (refused) {
+            return asMissingItem(
+              refused,
+              entryId,
+              options.identifyMissingEntry
+            );
+          }
         }
       }
 
@@ -14469,9 +14498,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14513,9 +14540,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
