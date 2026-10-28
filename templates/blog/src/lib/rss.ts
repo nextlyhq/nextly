@@ -13,7 +13,8 @@ interface FeedItem {
   title: string;
   link: string;
   description?: string;
-  pubDate: string;
+  /** Omitted for a post with no publish date: RSS makes it optional. */
+  pubDate?: string;
   author?: string;
   categories?: string[];
 }
@@ -44,6 +45,10 @@ export function buildRss({
   description,
   items,
 }: FeedInput): string {
+  // The newest item's date rather than the clock: a feed changes when a post
+  // does, and a render that reads the clock cannot be prerendered under Cache
+  // Components.
+  const lastBuildDate = newestDate(items);
   const itemsXml = items
     .map(item => {
       const cats = (item.categories ?? [])
@@ -54,7 +59,7 @@ export function buildRss({
       <title>${escapeXml(item.title)}</title>
       <link>${escapeXml(item.link)}</link>
       <guid isPermaLink="true">${escapeXml(item.link)}</guid>
-      <pubDate>${new Date(item.pubDate).toUTCString()}</pubDate>
+      ${item.pubDate ? `<pubDate>${new Date(item.pubDate).toUTCString()}</pubDate>` : ""}
       ${item.author ? `<author>${escapeXml(item.author)}</author>` : ""}
       ${item.description ? `<description>${cdata(item.description)}</description>` : ""}
       ${cats}
@@ -69,9 +74,21 @@ export function buildRss({
     <link>${escapeXml(link)}</link>
     <description>${escapeXml(description)}</description>
     <language>en-us</language>
-    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${itemsXml}
+    ${lastBuildDate ? `<lastBuildDate>${lastBuildDate.toUTCString()}</lastBuildDate>` : ""}${itemsXml}
   </channel>
 </rss>`;
+}
+
+/** The latest publish date among `items`, or none when no item has one. */
+function newestDate(items: FeedItem[]): Date | undefined {
+  let newest: Date | undefined;
+  for (const item of items) {
+    if (!item.pubDate) continue;
+    const date = new Date(item.pubDate);
+    if (Number.isNaN(date.getTime())) continue;
+    if (!newest || date > newest) newest = date;
+  }
+  return newest;
 }
 
 /**
@@ -83,7 +100,7 @@ export function postsToFeedItems(posts: Post[]): FeedItem[] {
     title: post.title,
     link: absoluteUrl(`/blog/${post.slug}`),
     description: post.excerpt ?? undefined,
-    pubDate: post.publishedAt ?? new Date().toISOString(),
+    ...(post.publishedAt ? { pubDate: post.publishedAt } : {}),
     author: post.author?.name,
     categories: [
       ...(post.categories?.map(c => c.name) ?? []),
