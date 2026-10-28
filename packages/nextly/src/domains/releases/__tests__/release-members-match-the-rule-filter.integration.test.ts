@@ -18,6 +18,7 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
+import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -30,8 +31,18 @@ import {
 // own collection slug.
 const POSTS = "releasefilter_posts";
 
+// Rules that let everything through, so a member is decided by grants alone.
+const PLAIN = "releasefilter_plain";
+// The same publish rule over entries a read rule of its own limits to the
+// public team, so the author may publish an entry they may not read.
+const TEAM_POSTS = "releasefilter_team_posts";
+
 const AUTHOR = "releasefilter-author";
 const OTHER = "releasefilter-other";
+// Grants on PLAIN: the author holds read, update and publish; the publisher
+// read and publish; the updater read and update.
+const PUBLISHER = "releasefilter-publisher";
+const UPDATER = "releasefilter-updater";
 
 /** "Only the caller's own": a filter over the entry's `owner`. */
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
@@ -59,16 +70,53 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" }), text({ name: "owner" })],
       }),
+      defineCollection({
+        slug: TEAM_POSTS,
+        status: true,
+        access: {
+          read: () => ({ team: { equals: "public" } }) as unknown as boolean,
+          update: () => true,
+          publish: ownEntries,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "owner" }),
+          text({ name: "team" }),
+        ],
+      }),
+      defineCollection({
+        slug: PLAIN,
+        status: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   // A code rule only narrows a permission, so the author holds the
   // document's and the release's.
-  await userWhoMay(current, AUTHOR, "read", [POSTS, "content-releases"]);
-  for (const action of ["publish", "unpublish"]) {
-    await grantTo(current, AUTHOR, action, [POSTS, "content-releases"]);
-  }
-  for (const action of ["create", "update"]) {
-    await grantTo(current, AUTHOR, action, ["content-releases"]);
+  // One role per action, since each grant names its role by the two.
+  await userWhoMay(current, AUTHOR, "read", [
+    POSTS,
+    PLAIN,
+    TEAM_POSTS,
+    "content-releases",
+  ]);
+  await grantTo(current, AUTHOR, "publish", [
+    POSTS,
+    PLAIN,
+    TEAM_POSTS,
+    "content-releases",
+  ]);
+  await grantTo(current, AUTHOR, "unpublish", [POSTS, "content-releases"]);
+  await grantTo(current, AUTHOR, "update", [PLAIN, "content-releases"]);
+  await grantTo(current, AUTHOR, "create", ["content-releases"]);
+  for (const [who, verb] of [
+    [PUBLISHER, "publish"],
+    [UPDATER, "update"],
+  ] as const) {
+    await userWhoMay(current, who, "read", [PLAIN, "content-releases"]);
+    await grantTo(current, who, "create", ["content-releases"]);
+    await grantTo(current, who, verb, [PLAIN]);
   }
   return current;
 }
@@ -158,16 +206,15 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const { own, others } = await seed(t);
       const release = await t.nextly.releases.create({ title: "Launch" });
+      // With its grant rows, as authentication resolves a key: a scope of
+      // slugs alone cannot be matched against a rule's filter.
       const asKey = {
-        authenticatedScope: {
-          actorType: "apiKey" as const,
-          permissions: [
-            "read-content-releases",
-            "create-content-releases",
-            `read-${POSTS}`,
-            `publish-${POSTS}`,
-          ],
-        },
+        authenticatedScope: keyHolding(
+          "read-content-releases",
+          "create-content-releases",
+          `read-${POSTS}`,
+          `publish-${POSTS}`
+        ),
         apiKeyId: "releasefilter-key",
       };
 
@@ -221,6 +268,43 @@ describe.each(getConfiguredTestDialects())(
       expect(flagged).not.toContain(mine.id);
     });
 
+    it("flags a member its author's filter matches but who may not read it, as a gone one", async () => {
+      // Matched or not, an entry the author may not read is answered as one
+      // that is not there, so a release cannot tell the two apart.
+      const t = await boot(dialect);
+      const create = (team: string) =>
+        t.nextly.create({
+          collection: TEAM_POSTS,
+          data: { title: team, owner: AUTHOR, team, status: "draft" },
+        });
+      const seen = String((await create("public")).item.id);
+      const unseen = String((await create("private")).item.id);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const add = (entryId: string) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: TEAM_POSTS,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: AUTHOR,
+          overrideAccess: true,
+        });
+      const readable = await add(seen);
+      const unreadable = await add(unseen);
+
+      const readiness = await t.nextly.releases.readiness({
+        releaseId: release.id,
+      });
+
+      const flagged = readiness.hard
+        .filter(finding => finding.code === "AUTHOR_MAY_NOT_ACT")
+        .map(finding => finding.memberId);
+      expect(flagged).toEqual([unreadable.id]);
+      expect(flagged).not.toContain(readable.id);
+    });
+
     it("does not run a release holding a member its author may not act on", async () => {
       const t = await boot(dialect);
       const { own, others } = await seed(t);
@@ -245,6 +329,94 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.releases.publishNow({ id: release.id });
 
       expect(await statusOf(t, own)).toBe("published");
+    });
+  }
+);
+
+/** A key's scope with its grant rows, as authentication resolves one. */
+function keyHolding(...slugs: string[]) {
+  return apiKeyScope(
+    slugs.map(slug => {
+      const at = slug.indexOf("-");
+      return { slug, action: slug.slice(0, at), resource: slug.slice(at + 1) };
+    })
+  );
+}
+
+describe.each(getConfiguredTestDialects())(
+  "the document authority a release member is admitted on (%s)",
+  dialect => {
+    /** A draft of PLAIN added going live by `userId`, as `key` where given. */
+    async function add(
+      t: TestNextly,
+      userId: string,
+      key?: ReturnType<typeof keyHolding>
+    ): Promise<string> {
+      const draft = await t.nextly.create({
+        collection: PLAIN,
+        data: { title: "Draft", status: "draft" },
+      });
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      return t.nextly.releases
+        .addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: PLAIN,
+          entryId: String(draft.item.id),
+          locale: null,
+          action: "publish",
+          userId,
+          overrideAccess: false,
+          ...(key ? { authenticatedScope: key, apiKeyId: "plain-key" } : {}),
+        })
+        .then(
+          () => "added",
+          (error: { code?: string }) => String(error.code)
+        );
+    }
+
+    const RELEASES = ["read-content-releases", "create-content-releases"];
+
+    it("admits a person who may publish and not update, as the run's write needs", async () => {
+      const t = await boot(dialect);
+      expect(await add(t, PUBLISHER)).toBe("added");
+    });
+
+    it("refuses a person who may update and not publish", async () => {
+      const t = await boot(dialect);
+      expect(await add(t, UPDATER)).toBe("FORBIDDEN");
+    });
+
+    it("admits a key holding the lifecycle verb without update", async () => {
+      const t = await boot(dialect);
+      const key = keyHolding(...RELEASES, `read-${PLAIN}`, `publish-${PLAIN}`);
+      expect(await add(t, AUTHOR, key)).toBe("added");
+    });
+
+    it("refuses a key holding update and not the lifecycle verb", async () => {
+      const t = await boot(dialect);
+      const key = keyHolding(...RELEASES, `read-${PLAIN}`, `update-${PLAIN}`);
+      expect(await add(t, AUTHOR, key)).toBe("FORBIDDEN");
+    });
+
+    it("refuses a key without the document grant, however privileged its maker", async () => {
+      const t = await boot(dialect);
+      expect(
+        await add(t, AUTHOR, keyHolding(...RELEASES, `read-${PLAIN}`))
+      ).toBe("FORBIDDEN");
+    });
+
+    it("refuses when the author may not publish, however granted the key", async () => {
+      // The author is who the run acts as: a member admitted on the key's
+      // grants alone is one the run refuses at its instant.
+      const t = await boot(dialect);
+      const key = keyHolding(
+        ...RELEASES,
+        `read-${PLAIN}`,
+        `update-${PLAIN}`,
+        `publish-${PLAIN}`
+      );
+      expect(await add(t, UPDATER, key)).toBe("FORBIDDEN");
     });
   }
 );

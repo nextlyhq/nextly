@@ -245,10 +245,13 @@ describe("ReleasesService add-time document check", () => {
     // publish something else entirely.
     const { svc, deps } = service({ holds: ["create"] });
     await svc.addMember("r1", { ...MEMBER, action: "unpublish" }, ADMIN);
+    // The document itself, which a rule answering a filter is matched against.
     expect(deps.canActOnDocument).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "u1",
+        scopeKind: "collection",
         scopeSlug: "posts",
+        entryId: "e1",
         action: "unpublish",
       })
     );

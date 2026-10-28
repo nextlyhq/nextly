@@ -11788,12 +11788,89 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     match: FilteredWriteMatch
   ): Promise<ReturnType<typeof writeMatchOf>> {
-    const [row] = await db
-      .select({ writes: match.columns.writes, reads: match.columns.reads })
+    const found = await this.storedWriteMatches(db, schema, [entryId], match);
+    return found.get(entryId) ?? writeMatchOf(undefined);
+  }
+
+  /**
+   * How the stored rows of `entryIds`, read on `db`, match a write's filter
+   * and the caller's read access, keyed by id, in one select: the question
+   * {@link storedWriteMatch} asks of one entry, asked of many. An id with no
+   * row is left out.
+   */
+  private async storedWriteMatches(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryIds: readonly string[],
+    match: FilteredWriteMatch
+  ): Promise<Map<string, ReturnType<typeof writeMatchOf>>> {
+    if (entryIds.length === 0) return new Map();
+    const rows: { id: unknown; writes: unknown; reads: unknown }[] = await db
+      .select({
+        id: schema.id,
+        writes: match.columns.writes,
+        reads: match.columns.reads,
+      })
       .from(schema)
-      .where(eq(schema.id as never, entryId))
-      .limit(1);
-    return writeMatchOf(row);
+      .where(inArray(schema.id as never, [...entryIds]));
+    return new Map(rows.map(row => [String(row.id), writeMatchOf(row)]));
+  }
+
+  /**
+   * Which of `entryIds` a write of `action` by this caller would find inside
+   * its rule's filter, judged now and without writing: the gate's refusal, or
+   * the entries the caller may write. Every entry where the rule answers no
+   * filter; with one, an entry whose stored row the filter matches and the
+   * caller may read, so an entry the caller may not read is left out as one
+   * that is gone is. Matched as a write to every language is, in the default
+   * language; the write itself judges each entry again under its row lock.
+   *
+   * Asked of a named caller, never as route-authorized: a release asks it of
+   * the author its run will act as, and of the key that adds a document.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(params: {
+    collectionName: string;
+    action: FilteredWrite;
+    entryIds: readonly string[];
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<
+    | { readonly denied: CollectionServiceResult }
+    | { readonly within: ReadonlySet<string> }
+  > {
+    const access = await this.accessService.checkCollectionWrite({
+      collectionName: params.collectionName,
+      operation: params.action,
+      user: params.user,
+      overrideAccess: false,
+      routeAuthorized: false,
+      ...(params.authenticatedScope
+        ? { authenticatedScope: params.authenticatedScope }
+        : {}),
+    });
+    if (access.denied !== null) return { denied: access.denied };
+    const ids = [...new Set(params.entryIds)];
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      params.action,
+      schema,
+      access
+    );
+    if (!match) return { within: new Set(ids) };
+    const found = await this.storedWriteMatches(this.db, schema, ids, match);
+    return {
+      within: new Set(
+        ids.filter(id => {
+          const entry = found.get(id);
+          return entry !== undefined && entry.writes && entry.reads;
+        })
+      ),
+    };
   }
 
   /**
